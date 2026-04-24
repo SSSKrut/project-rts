@@ -2,10 +2,10 @@ package ecs
 
 import "time"
 
-// UpdateContext provides read-only access to the current world and a command buffer for writes.
+// UpdateContext provides mutable access to the world state and a deferred buffer for structural changes.
 type UpdateContext struct {
-	Current  *WorldState
-	Commands *CommandBuffer
+	State    *WorldState
+	Deferred *CommandBuffer
 	Delta    time.Duration
 	Now      time.Duration
 	Phase    Phase

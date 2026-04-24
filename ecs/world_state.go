@@ -2,7 +2,7 @@ package ecs
 
 import "reflect"
 
-// WorldState is an immutable snapshot for systems and a mutable target for command application.
+// WorldState is the mutable game state that systems read from and write to directly.
 type WorldState struct {
 	nextEntity EntityID
 	entities   map[EntityID]struct{}

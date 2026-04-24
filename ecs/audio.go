@@ -94,8 +94,8 @@ func (sys SpatialAudioSystem) Update(ctx UpdateContext) {
 	var anchorID EntityID
 	var anchorPos Position3D
 	found := false
-	for _, id := range ctx.Current.Query(TypeOf[LODAnchor](), TypeOf[Position3D]()) {
-		anchorPos, _ = Get[Position3D](ctx.Current, id)
+	for _, id := range ctx.State.Query(TypeOf[LODAnchor](), TypeOf[Position3D]()) {
+		anchorPos, _ = Get[Position3D](ctx.State, id)
 		anchorID = id
 		found = true
 		break
@@ -107,17 +107,17 @@ func (sys SpatialAudioSystem) Update(ctx UpdateContext) {
 	// 1. Collect all playing audio candidates grouped by SoundID and ChunkID
 	chunks := make(map[ChunkID]map[string][]audioCandidate)
 
-	for _, id := range QueryLOD(ctx.Current, ctx.LOD, TypeOf[Position3D](), TypeOf[AudioSource]()) {
+	for _, id := range QueryLOD(ctx.State, ctx.LOD, TypeOf[Position3D](), TypeOf[AudioSource]()) {
 		if id == anchorID {
 			continue // usually we don't handle listener's own ambient audio this way, but we could.
 		}
 
-		source, _ := Get[AudioSource](ctx.Current, id)
+		source, _ := Get[AudioSource](ctx.State, id)
 		if !source.IsPlaying {
 			continue
 		}
 
-		pos, _ := Get[Position3D](ctx.Current, id)
+		pos, _ := Get[Position3D](ctx.State, id)
 		dx := pos.X - anchorPos.X
 		dy := pos.Y - anchorPos.Y
 		dz := pos.Z - anchorPos.Z
@@ -127,7 +127,7 @@ func (sys SpatialAudioSystem) Update(ctx UpdateContext) {
 			continue // Completely inaudible
 		}
 
-		chunk := ctx.Current.Grid.PosToChunk(pos.X, pos.Y, pos.Z)
+		chunk := ctx.State.Grid.PosToChunk(pos.X, pos.Y, pos.Z)
 		if chunks[chunk] == nil {
 			chunks[chunk] = make(map[string][]audioCandidate)
 		}

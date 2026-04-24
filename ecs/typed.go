@@ -24,12 +24,3 @@ func Remove[T Component](state *WorldState, id EntityID) {
 	state.RemoveComponent(id, TypeOf[T]())
 }
 
-// BufferSet schedules a typed component write.
-func BufferSet[T Component](buffer *CommandBuffer, id EntityID, comp T) {
-	buffer.SetComponent(id, comp)
-}
-
-// BufferRemove schedules a typed component removal.
-func BufferRemove[T Component](buffer *CommandBuffer, id EntityID) {
-	buffer.RemoveComponent(id, TypeOf[T]())
-}

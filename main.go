@@ -14,13 +14,6 @@ const (
 )
 
 
-
-// LODAnchor marks an entity as the focus point for LOD decisions.
-type LODAnchor struct{}
-
-// AlwaysActive pins an entity in the active LOD bucket.
-type AlwaysActive struct{}
-
 // LODSystem assigns LOD levels based on distance to the anchor.
 type LODSystem struct {
 	ActiveRadius   float32
@@ -59,8 +52,8 @@ func (system LODSystem) Update(ctx ecs.UpdateContext) {
 		anchor   ecs.Position3D
 		found    bool
 	)
-	for _, id := range ctx.Current.Query(ecs.TypeOf[ecs.LODAnchor](), ecs.TypeOf[ecs.Position3D]()) {
-		position, ok := ecs.Get[ecs.Position3D](ctx.Current, id)
+	for _, id := range ctx.State.Query(ecs.TypeOf[ecs.LODAnchor](), ecs.TypeOf[ecs.Position3D]()) {
+		position, ok := ecs.Get[ecs.Position3D](ctx.State, id)
 		if !ok {
 			continue
 		}
@@ -90,18 +83,18 @@ func (system LODSystem) Update(ctx ecs.UpdateContext) {
 	relevantIn2 := relevantIn * relevantIn
 	relevantOut2 := relevantOut * relevantOut
 
-	for _, id := range ctx.Current.Query(ecs.TypeOf[ecs.Position3D]()) {
+	for _, id := range ctx.State.Query(ecs.TypeOf[ecs.Position3D]()) {
 		if id == anchorID {
 			continue
 		}
-		if _, ok := ctx.Current.GetComponent(id, ecs.TypeOf[ecs.AlwaysActive]()); ok {
-			if ecs.LODLevelForEntity(ctx.Current, id) != ecs.LODActive {
-				ecs.BufferSet(ctx.Commands, id, ecs.LOD{Level: ecs.LODActive})
+		if _, ok := ctx.State.GetComponent(id, ecs.TypeOf[ecs.AlwaysActive]()); ok {
+			if ecs.LODLevelForEntity(ctx.State, id) != ecs.LODActive {
+				ecs.Set(ctx.State, id, ecs.LOD{Level: ecs.LODActive})
 			}
 			continue
 		}
 
-		position, ok := ecs.Get[ecs.Position3D](ctx.Current, id)
+		position, ok := ecs.Get[ecs.Position3D](ctx.State, id)
 		if !ok {
 			continue
 		}
@@ -110,7 +103,7 @@ func (system LODSystem) Update(ctx ecs.UpdateContext) {
 		dz := position.Z - anchor.Z
 		dist2 := dx*dx + dy*dy + dz*dz
 
-		currentLOD := ecs.LODLevelForEntity(ctx.Current, id)
+		currentLOD := ecs.LODLevelForEntity(ctx.State, id)
 		nextLOD := currentLOD
 		switch currentLOD {
 		case ecs.LODActive:
@@ -130,7 +123,7 @@ func (system LODSystem) Update(ctx ecs.UpdateContext) {
 		}
 
 		if nextLOD != currentLOD {
-			ecs.BufferSet(ctx.Commands, id, ecs.LOD{Level: nextLOD})
+			ecs.Set(ctx.State, id, ecs.LOD{Level: nextLOD})
 		}
 	}
 }
@@ -160,13 +153,13 @@ func (MovementSystem) Writes() []ecs.ComponentType {
 
 func (MovementSystem) Update(ctx ecs.UpdateContext) {
 	dt := float32(ctx.Delta.Seconds())
-	bounds := float32(300.0)
-	for _, id := range ecs.QueryLOD(ctx.Current, ctx.LOD, ecs.TypeOf[ecs.Position3D](), ecs.TypeOf[ecs.Velocity3D]()) {
-		position, ok := ecs.Get[ecs.Position3D](ctx.Current, id)
+	bounds := float32(30.0)
+	for _, id := range ecs.QueryLOD(ctx.State, ctx.LOD, ecs.TypeOf[ecs.Position3D](), ecs.TypeOf[ecs.Velocity3D]()) {
+		position, ok := ecs.Get[ecs.Position3D](ctx.State, id)
 		if !ok {
 			continue
 		}
-		velocity, ok := ecs.Get[ecs.Velocity3D](ctx.Current, id)
+		velocity, ok := ecs.Get[ecs.Velocity3D](ctx.State, id)
 		if !ok {
 			continue
 		}
@@ -189,7 +182,7 @@ func (MovementSystem) Update(ctx ecs.UpdateContext) {
 			position.Z = -bounds
 		}
 
-		ecs.BufferSet(ctx.Commands, id, position)
+		ecs.Set(ctx.State, id, position)
 	}
 }
 
@@ -247,7 +240,7 @@ func main() {
 	ecs.Set(world.Current(), anchor, ecs.AlwaysActive{})
 
 	// Add multiple 3D entities
-	for i := 0; i < 50; i++ {
+	for i := 0; i < 300; i++ {
 		entity := world.Current().NewEntity()
 		ecs.Set(world.Current(), entity, ecs.LOD{Level: ecs.LODRelevant})
 		ecs.Set(world.Current(), entity, ecs.Position3D{
@@ -273,7 +266,6 @@ func main() {
 		if rl.IsKeyDown(rl.KeyUp) { anchorPos.Z -= moveSpeed }
 		if rl.IsKeyDown(rl.KeyDown) { anchorPos.Z += moveSpeed }
 		
-		// apply immediately for input responsiveness (ignoring command buffer here for simplicity)
 		ecs.Set(world.Current(), anchor, anchorPos)
 		
 		camera.Target = rl.Vector3{X: anchorPos.X, Y: anchorPos.Y, Z: anchorPos.Z}

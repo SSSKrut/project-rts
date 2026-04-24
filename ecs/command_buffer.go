@@ -40,20 +40,6 @@ func (b *CommandBuffer) RemoveEntity(id EntityID) {
 	})
 }
 
-// SetComponent schedules a component write.
-func (b *CommandBuffer) SetComponent(id EntityID, comp Component) {
-	b.enqueue(func(state *WorldState) {
-		state.SetComponent(id, comp)
-	})
-}
-
-// RemoveComponent schedules a component removal.
-func (b *CommandBuffer) RemoveComponent(id EntityID, ct ComponentType) {
-	b.enqueue(func(state *WorldState) {
-		state.RemoveComponent(id, ct)
-	})
-}
-
 // Apply executes all queued commands on the provided state.
 func (b *CommandBuffer) Apply(state *WorldState) {
 	b.mu.Lock()

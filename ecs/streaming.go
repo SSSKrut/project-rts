@@ -82,8 +82,8 @@ func (StreamingSystem) Update(ctx UpdateContext) {
 	foundAnchor := false
 
 	// Normally there's one anchor, or multiple if multiplayer
-	for _, id := range ctx.Current.Query(TypeOf[LODAnchor](), TypeOf[NodeEntity]()) {
-		nodeEnt, ok := Get[NodeEntity](ctx.Current, id)
+	for _, id := range ctx.State.Query(TypeOf[LODAnchor](), TypeOf[NodeEntity]()) {
+		nodeEnt, ok := Get[NodeEntity](ctx.State, id)
 		if ok {
 			anchorNode = nodeEnt.NodeID
 			foundAnchor = true
@@ -100,8 +100,8 @@ func (StreamingSystem) Update(ctx UpdateContext) {
 	var sMapID EntityID
 	foundMap := false
 
-	for _, id := range ctx.Current.Query(TypeOf[StreamingMap]()) {
-		sMap, _ = Get[StreamingMap](ctx.Current, id)
+	for _, id := range ctx.State.Query(TypeOf[StreamingMap]()) {
+		sMap, _ = Get[StreamingMap](ctx.State, id)
 		sMapID = id
 		foundMap = true
 		break
@@ -126,33 +126,28 @@ func (StreamingSystem) Update(ctx UpdateContext) {
 
 	// Any node not in newStates becomes Unloaded
 
-	// We apply states to the singleton
-	// Shallow copy of maps isn't completely safe for Double Buffering,
-	// so we create a new map for States.
-	updatedMap := StreamingMap{
-		Nodes: sMap.Nodes, // Assuming graph geometry is static
+	Set(ctx.State, sMapID, StreamingMap{
+		Nodes:  sMap.Nodes,
 		States: newStates,
-	}
-	BufferSet(ctx.Commands, sMapID, updatedMap)
+	})
 
 	// Now update LODs of entities based on their Node
-	for _, id := range ctx.Current.Query(TypeOf[NodeEntity]()) {
-		nodeEnt, _ := Get[NodeEntity](ctx.Current, id)
-		state := newStates[nodeEnt.NodeID]
+	for _, id := range ctx.State.Query(TypeOf[NodeEntity]()) {
+		nodeEnt, _ := Get[NodeEntity](ctx.State, id)
+		ns := newStates[nodeEnt.NodeID]
 
-		// Bypass always active etc. (simplification)
-		switch state {
+		switch ns {
 		case NodeStateActive:
-			if LODLevelForEntity(ctx.Current, id) != LODActive {
-				BufferSet(ctx.Commands, id, LOD{Level: LODActive})
+			if LODLevelForEntity(ctx.State, id) != LODActive {
+				Set(ctx.State, id, LOD{Level: LODActive})
 			}
 		case NodeStateLoaded:
-			if LODLevelForEntity(ctx.Current, id) != LODRelevant {
-				BufferSet(ctx.Commands, id, LOD{Level: LODRelevant})
+			if LODLevelForEntity(ctx.State, id) != LODRelevant {
+				Set(ctx.State, id, LOD{Level: LODRelevant})
 			}
 		default: // Unloaded
-			if LODLevelForEntity(ctx.Current, id) != LODDormant {
-				BufferSet(ctx.Commands, id, LOD{Level: LODDormant})
+			if LODLevelForEntity(ctx.State, id) != LODDormant {
+				Set(ctx.State, id, LOD{Level: LODDormant})
 			}
 		}
 	}

@@ -9,10 +9,11 @@ type systemEntry struct {
 
 // World owns the active state and runs systems in ordered phases.
 type World struct {
-	current *WorldState
-	systems []systemEntry
-	phases  []Phase
-	elapsed time.Duration
+	current  *WorldState
+	systems  []systemEntry
+	phases   []Phase
+	elapsed  time.Duration
+	schedule *schedule
 }
 
 // NewWorld creates a new ECS world.
@@ -26,6 +27,7 @@ func NewWorld() *World {
 // SetPhases overrides the execution order of system phases.
 func (w *World) SetPhases(phases []Phase) {
 	w.phases = append([]Phase(nil), phases...)
+	w.schedule = nil
 }
 
 // Current returns the active world state.
@@ -39,6 +41,19 @@ func (w *World) AddSystem(system System) {
 		system:  system,
 		lastRun: make(map[LODLevel]time.Duration),
 	})
+	w.schedule = nil
+}
+
+func (w *World) ensureSchedule() *schedule {
+	if w.schedule == nil {
+		phases := w.phases
+		if len(phases) == 0 {
+			phases = DefaultPhases()
+		}
+		s := buildSchedule(w.systems, phases)
+		w.schedule = &s
+	}
+	return w.schedule
 }
 
 // Tick advances the world by one step.
@@ -49,9 +64,10 @@ func (w *World) Tick(delta time.Duration) {
 	w.elapsed += delta
 	now := w.elapsed
 
-	current := w.current
-	next := current.Clone()
-	buffer := NewCommandBuffer(current.NextEntityID())
+	state := w.current
+	buffer := NewCommandBuffer(state.NextEntityID())
+
+	sched := w.ensureSchedule()
 
 	phases := w.phases
 	if len(phases) == 0 {
@@ -59,12 +75,9 @@ func (w *World) Tick(delta time.Duration) {
 	}
 
 	for _, phase := range phases {
-		for i := range w.systems {
-			entry := &w.systems[i]
+		for _, idx := range sched.order[phase] {
+			entry := &w.systems[idx]
 			system := entry.system
-			if system.Phase() != phase {
-				continue
-			}
 
 			policy := system.LODPolicy()
 			for _, level := range lodLevels {
@@ -84,8 +97,8 @@ func (w *World) Tick(delta time.Duration) {
 						step = now - last
 					}
 					system.Update(UpdateContext{
-						Current:  current,
-						Commands: buffer,
+						State:    state,
+						Deferred: buffer,
 						Delta:    step,
 						Now:      now,
 						Phase:    phase,
@@ -95,8 +108,9 @@ func (w *World) Tick(delta time.Duration) {
 				}
 			}
 		}
-	}
 
-	buffer.Apply(next)
-	w.current = next
+		// Sync point: apply structural changes between phases
+		buffer.Apply(state)
+		buffer = NewCommandBuffer(state.NextEntityID())
+	}
 }
