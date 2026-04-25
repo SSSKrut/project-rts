@@ -1,30 +1,24 @@
-package ecs
+package systems
 
 import (
-"math"
-"sort"
+	"math"
+	"sort"
 
-rl "github.com/gen2brain/raylib-go/raylib"
+	rl "github.com/gen2brain/raylib-go/raylib"
+
+	"rts-go/components"
+	"rts-go/ecs"
 )
-
-// AudioSource represents a continuous or spatial sound attached to an entity.
-type AudioSource struct {
-	SoundID     string
-	IsPlaying   bool
-	IsLooping   bool
-	MaxDistance float32
-	Volume      float32 // 0.0 to 1.0
-}
 
 // AudioVoice tracks a hardware playback channel for a specific sound.
 type AudioVoice struct {
 	HardwareSound rl.Sound
-	Owner         EntityID // 0 if free
+	Owner         ecs.EntityID // 0 if free
 	IsPlaying     bool
 	Vol           float32
 }
 
-// AudioManager pre-allocates raylib Sound objects to allow independent 
+// AudioManager pre-allocates raylib Sound objects to allow independent
 // volume and panning for multiple instances of the same loaded Wave.
 type AudioManager struct {
 	MaxVoicesPerSound int
@@ -65,37 +59,37 @@ type SpatialAudioSystem struct {
 }
 
 func (SpatialAudioSystem) Name() string { return "spatial_audio" }
-func (SpatialAudioSystem) Phase() Phase { return PhasePostPhysics }
+func (SpatialAudioSystem) Phase() ecs.Phase { return ecs.PhasePostPhysics }
 
-func (SpatialAudioSystem) LODPolicy() LODPolicy {
-	return LODPolicy{
+func (SpatialAudioSystem) LODPolicy() ecs.LODPolicy {
+	return ecs.LODPolicy{
 		ActiveEvery:   0, // Smooth panning/volume changes in near-field
-		RelevantEvery: LODDisabled, // We could enable Relevant, but often we only want audio near the camera.
-		DormantEvery:  LODDisabled,
+		RelevantEvery: ecs.LODDisabled,
+		DormantEvery:  ecs.LODDisabled,
 	}
 }
 
-func (SpatialAudioSystem) Reads() []ComponentType {
-	return []ComponentType{TypeOf[Position3D](), TypeOf[AudioSource](), TypeOf[LODAnchor]()}
+func (SpatialAudioSystem) Reads() []ecs.ComponentType {
+	return []ecs.ComponentType{ecs.TypeOf[components.Position3D](), ecs.TypeOf[components.AudioSource](), ecs.TypeOf[components.LODAnchor]()}
 }
-func (SpatialAudioSystem) Writes() []ComponentType {
-	return []ComponentType{TypeOf[AudioSource]()}
+func (SpatialAudioSystem) Writes() []ecs.ComponentType {
+	return []ecs.ComponentType{ecs.TypeOf[components.AudioSource]()}
 }
 
 // audioCandidate groups entity info for spatial filtering
 type audioCandidate struct {
-	id     EntityID
-	pos    Position3D
+	id     ecs.EntityID
+	pos    components.Position3D
 	dist   float32
-	source AudioSource
+	source components.AudioSource
 }
 
-func (sys SpatialAudioSystem) Update(ctx UpdateContext) {
-	var anchorID EntityID
-	var anchorPos Position3D
+func (sys SpatialAudioSystem) Update(ctx ecs.UpdateContext) {
+	var anchorID ecs.EntityID
+	var anchorPos components.Position3D
 	found := false
-	for _, id := range ctx.State.Query(TypeOf[LODAnchor](), TypeOf[Position3D]()) {
-		anchorPos, _ = Get[Position3D](ctx.State, id)
+	for _, id := range ctx.State.Query(ecs.TypeOf[components.LODAnchor](), ecs.TypeOf[components.Position3D]()) {
+		anchorPos, _ = ecs.Get[components.Position3D](ctx.State, id)
 		anchorID = id
 		found = true
 		break
@@ -105,26 +99,26 @@ func (sys SpatialAudioSystem) Update(ctx UpdateContext) {
 	}
 
 	// 1. Collect all playing audio candidates grouped by SoundID and ChunkID
-	chunks := make(map[ChunkID]map[string][]audioCandidate)
+	chunks := make(map[ecs.ChunkID]map[string][]audioCandidate)
 
-	for _, id := range QueryLOD(ctx.State, ctx.LOD, TypeOf[Position3D](), TypeOf[AudioSource]()) {
+	for _, id := range ecs.QueryLOD(ctx.State, ctx.LOD, ecs.TypeOf[components.Position3D](), ecs.TypeOf[components.AudioSource]()) {
 		if id == anchorID {
-			continue // usually we don't handle listener's own ambient audio this way, but we could.
+			continue
 		}
 
-		source, _ := Get[AudioSource](ctx.State, id)
+		source, _ := ecs.Get[components.AudioSource](ctx.State, id)
 		if !source.IsPlaying {
 			continue
 		}
 
-		pos, _ := Get[Position3D](ctx.State, id)
+		pos, _ := ecs.Get[components.Position3D](ctx.State, id)
 		dx := pos.X - anchorPos.X
 		dy := pos.Y - anchorPos.Y
 		dz := pos.Z - anchorPos.Z
 		dist := float32(math.Sqrt(float64(dx*dx + dy*dy + dz*dz)))
 
 		if dist > source.MaxDistance {
-			continue // Completely inaudible
+			continue
 		}
 
 		chunk := ctx.State.Grid.PosToChunk(pos.X, pos.Y, pos.Z)
@@ -132,8 +126,8 @@ func (sys SpatialAudioSystem) Update(ctx UpdateContext) {
 			chunks[chunk] = make(map[string][]audioCandidate)
 		}
 		chunks[chunk][source.SoundID] = append(chunks[chunk][source.SoundID], audioCandidate{
-id: id, pos: pos, dist: dist, source: source,
-})
+			id: id, pos: pos, dist: dist, source: source,
+		})
 	}
 
 	// 2. Select permitted candidates (Enforce Per-Chunk Limit)
@@ -141,7 +135,7 @@ id: id, pos: pos, dist: dist, source: source,
 	for _, soundMap := range chunks {
 		for _, candidates := range soundMap {
 			sort.Slice(candidates, func(i, j int) bool {
-return candidates[i].dist < candidates[j].dist
+				return candidates[i].dist < candidates[j].dist
 			})
 			limit := sys.MaxPerChunk
 			if len(candidates) < limit {
@@ -153,57 +147,48 @@ return candidates[i].dist < candidates[j].dist
 		}
 	}
 
-	// 3. Allocate hardware voices globally by distance (if we have more allowed than voices)
+	// 3. Allocate hardware voices globally by distance
 	sort.Slice(allowed, func(i, j int) bool {
-return allowed[i].dist < allowed[j].dist
+		return allowed[i].dist < allowed[j].dist
 	})
 
-	// To quickly check who gets a voice this frame
-	awardedVoices := make(map[EntityID]audioCandidate)
+	awardedVoices := make(map[ecs.EntityID]audioCandidate)
+	allocatedPerSound := make(map[string]int)
 
-	// Keep track of how many voices we've allocated per sound this frame
-allocatedPerSound := make(map[string]int)
+	for _, cand := range allowed {
+		soundID := cand.source.SoundID
+		pool, exists := sys.Manager.voices[soundID]
+		if !exists {
+			continue
+		}
+		if allocatedPerSound[soundID] < len(pool) {
+			awardedVoices[cand.id] = cand
+			allocatedPerSound[soundID]++
+		}
+	}
 
-for _, cand := range allowed {
-soundID := cand.source.SoundID
-pool, exists := sys.Manager.voices[soundID]
-if !exists {
-continue
-}
-if allocatedPerSound[soundID] < len(pool) {
-awardedVoices[cand.id] = cand
-allocatedPerSound[soundID]++
-}
-}
+	// 4. Update the actual Hardware Voices
+	for soundID, pool := range sys.Manager.voices {
+		for i := range pool {
+			voice := &pool[i]
 
-// 4. Update the actual Hardware Voices
-for soundID, pool := range sys.Manager.voices {
-for i := range pool {
-voice := &pool[i]
-
-// If this voice has an owner from last frame, check if they still get to play
-if voice.Owner != 0 {
-cand, getsVoice := awardedVoices[voice.Owner]
-if getsVoice {
-// Update volume & panning
-sys.updateVoiceState(voice, cand, anchorPos)
-// Remove from map so we know it's handled
+			if voice.Owner != 0 {
+				cand, getsVoice := awardedVoices[voice.Owner]
+				if getsVoice {
+					sys.updateVoiceState(voice, cand, anchorPos)
 					delete(awardedVoices, cand.id)
 				} else {
-					// Entity stopped playing or moved out of chunk limits
 					rl.StopSound(voice.HardwareSound)
 					voice.IsPlaying = false
 					voice.Owner = 0
 				}
 			}
 		}
-		
-		// Map remaining unassigned candidates to free voices in the pool
+
 		for candID, cand := range awardedVoices {
 			if cand.source.SoundID != soundID {
 				continue
 			}
-			// Find free voice
 			for i := range pool {
 				voice := &pool[i]
 				if voice.Owner == 0 {
@@ -216,20 +201,17 @@ sys.updateVoiceState(voice, cand, anchorPos)
 	}
 }
 
-func (sys SpatialAudioSystem) updateVoiceState(voice *AudioVoice, cand audioCandidate, anchorPos Position3D) {
-	// Attenuation
+func (sys SpatialAudioSystem) updateVoiceState(voice *AudioVoice, cand audioCandidate, anchorPos components.Position3D) {
 	vol := cand.source.Volume * (1.0 - (cand.dist / cand.source.MaxDistance))
 	if vol < 0 {
 		vol = 0
 	}
 
-	// Simple 3D panning mapped to 2D Stereo (Right relative to anchor assuming looking down -Z)
-	// If looking down -Z, the "Right" vector is (1, 0, 0)
 	dirX := float32(0.0)
 	if cand.dist > 0.01 {
 		dirX = (cand.pos.X - anchorPos.X) / cand.dist
 	}
-	pan := 0.5 + (dirX * 0.5) // Maps -1..1 to 0..1
+	pan := 0.5 + (dirX * 0.5)
 
 	rl.SetSoundVolume(voice.HardwareSound, vol)
 	rl.SetSoundPan(voice.HardwareSound, pan)
@@ -238,11 +220,9 @@ func (sys SpatialAudioSystem) updateVoiceState(voice *AudioVoice, cand audioCand
 		rl.PlaySound(voice.HardwareSound)
 		voice.IsPlaying = true
 	} else if !cand.source.IsLooping && !rl.IsSoundPlaying(voice.HardwareSound) {
-		// It's a one-shot or non-looping that finished
-voice.Owner = 0
-voice.IsPlaying = false
-} else if cand.source.IsLooping && !rl.IsSoundPlaying(voice.HardwareSound) {
-// Restart loop
-rl.PlaySound(voice.HardwareSound)
-}
+		voice.Owner = 0
+		voice.IsPlaying = false
+	} else if cand.source.IsLooping && !rl.IsSoundPlaying(voice.HardwareSound) {
+		rl.PlaySound(voice.HardwareSound)
+	}
 }
