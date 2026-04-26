@@ -28,7 +28,7 @@ func (b *CommandBuffer) NextEntityID() EntityID {
 func (b *CommandBuffer) CreateEntity() EntityID {
 	id := EntityID(b.nextEntityID.Add(1) - 1)
 	b.enqueue(func(state *WorldState) {
-		state.ensureEntity(id)
+		_ = state.NewEntity()
 	})
 	return id
 }
@@ -53,7 +53,7 @@ func (b *CommandBuffer) Apply(state *WorldState) {
 	state.nextEntity = b.NextEntityID()
 }
 
-// Ensure Enqueue is exported so systems can queue custom logic.
+// Enqueue exports so systems can queue custom logic.
 func (b *CommandBuffer) Enqueue(command func(*WorldState)) {
 	b.enqueue(command)
 }

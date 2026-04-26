@@ -7,18 +7,73 @@ import (
 // ChunkID represents a unique spatial bucket in 3D space.
 type ChunkID [3]int32
 
+// entitySet is a simple set for entity IDs.
+type entitySet struct {
+	entities []EntityID
+	index    map[EntityID]int
+}
+
+// newEntitySet creates a new entity set.
+func newEntitySet() *entitySet {
+	return &entitySet{
+		entities: make([]EntityID, 0),
+		index:    make(map[EntityID]int),
+	}
+}
+
+// Set adds an entity to the set.
+func (s *entitySet) Set(id EntityID) {
+	if _, ok := s.index[id]; ok {
+		return
+	}
+	s.index[id] = len(s.entities)
+	s.entities = append(s.entities, id)
+}
+
+// Remove removes an entity from the set.
+func (s *entitySet) Remove(id EntityID) {
+	idx, ok := s.index[id]
+	if !ok {
+		return
+	}
+	last := len(s.entities) - 1
+	if idx != last {
+		s.entities[idx] = s.entities[last]
+		s.index[s.entities[idx]] = idx
+	}
+	s.entities = s.entities[:last]
+	delete(s.index, id)
+}
+
+// Entities returns all entity IDs in the set.
+func (s *entitySet) Entities() []EntityID {
+	return s.entities
+}
+
+// Clone creates a shallow copy of the set.
+func (s *entitySet) Clone() *entitySet {
+	clone := &entitySet{
+		entities: make([]EntityID, len(s.entities)),
+		index:    make(map[EntityID]int, len(s.index)),
+	}
+	copy(clone.entities, s.entities)
+	for id, idx := range s.index {
+		clone.index[id] = idx
+	}
+	return clone
+}
+
 // SpatialGrid maps entities into cubic chunks to avoid O(N) distance checks.
 type SpatialGrid struct {
 	CellSize float32
-	buckets  map[ChunkID]*SparseSet
-	entityTo ChunkID // Could also be a component. Kept here for clarity.
+	buckets  map[ChunkID]*entitySet
 }
 
 // NewSpatialGrid creates a new spatial grid with specified cell size.
 func NewSpatialGrid(cellSize float32) *SpatialGrid {
 	return &SpatialGrid{
 		CellSize: cellSize,
-		buckets:  make(map[ChunkID]*SparseSet),
+		buckets:  make(map[ChunkID]*entitySet),
 	}
 }
 
@@ -43,7 +98,7 @@ func (g *SpatialGrid) PosToChunk(x, y, z float32) ChunkID {
 // Add places an entity into the grid bucket.
 func (g *SpatialGrid) Add(id EntityID, x, y, z float32) {
 	chunk := g.PosToChunk(x, y, z)
-	g.ensureBucket(chunk).Set(id, nil)
+	g.ensureBucket(chunk).Set(id)
 }
 
 // Remove removes an entity from a specific bucket.
@@ -62,7 +117,7 @@ func (g *SpatialGrid) Update(id EntityID, oldX, oldY, oldZ, newX, newY, newZ flo
 		if bucket, ok := g.buckets[oldC]; ok {
 			bucket.Remove(id)
 		}
-		g.ensureBucket(newC).Set(id, nil)
+		g.ensureBucket(newC).Set(id)
 	}
 }
 
@@ -84,10 +139,10 @@ func (g *SpatialGrid) QueryRadius(x, y, z, radius float32) []EntityID {
 	return result
 }
 
-func (g *SpatialGrid) ensureBucket(id ChunkID) *SparseSet {
+func (g *SpatialGrid) ensureBucket(id ChunkID) *entitySet {
 	bucket, ok := g.buckets[id]
 	if !ok {
-		bucket = NewSparseSet()
+		bucket = newEntitySet()
 		g.buckets[id] = bucket
 	}
 	return bucket

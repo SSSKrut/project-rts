@@ -66,7 +66,7 @@ func main() {
 	ecs.Set(world.Current(), anchor, components.LODAnchor{})
 	ecs.Set(world.Current(), anchor, components.AlwaysActive{})
 
-	for i := 0; i < 30000; i++ {
+	for i := 0; i < 30; i++ {
 		entity := world.Current().NewEntity()
 		ecs.Set(world.Current(), entity, ecs.LOD{Level: ecs.LODRelevant})
 		ecs.Set(world.Current(), entity, components.Position3D{
@@ -116,31 +116,25 @@ func main() {
 
 		rl.DrawCube(rl.Vector3{X: anchorPos.X, Y: anchorPos.Y, Z: anchorPos.Z}, 1, 1, 1, rl.Blue)
 
-		for _, id := range state.Query(ecs.TypeOf[components.Position3D]()) {
+		// Use ForEach2 for rendering - more cache-friendly iteration
+		ecs.ForEach2[components.Position3D, ecs.LOD](state, func(id ecs.EntityID, pos *components.Position3D, lod *ecs.LOD) {
 			if id == anchor {
-				continue
+				return
 			}
 
-			position, ok := ecs.Get[components.Position3D](state, id)
-			if !ok {
-				continue
-			}
-
-			lod := ecs.LODLevelForEntity(state, id)
 			color := rl.Gray
-			switch lod {
+			switch lod.Level {
 			case ecs.LODActive:
 				color = rl.Red
 			case ecs.LODRelevant:
 				color = rl.Green
 			case ecs.LODDormant:
-				color = rl.LightGray
-				continue
+				return // Skip dormant entities
 			}
 
-			rl.DrawCube(rl.Vector3{X: position.X, Y: position.Y, Z: position.Z}, 0.5, 0.5, 0.5, color)
-			rl.DrawCubeWires(rl.Vector3{X: position.X, Y: position.Y, Z: position.Z}, 0.5, 0.5, 0.5, rl.Maroon)
-		}
+			rl.DrawCube(rl.Vector3{X: pos.X, Y: pos.Y, Z: pos.Z}, 0.5, 0.5, 0.5, color)
+			rl.DrawCubeWires(rl.Vector3{X: pos.X, Y: pos.Y, Z: pos.Z}, 0.5, 0.5, 0.5, rl.Maroon)
+		})
 
 		rl.EndMode3D()
 

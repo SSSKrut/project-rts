@@ -39,14 +39,12 @@ func (StreamingSystem) Update(ctx ecs.UpdateContext) {
 	var anchorNode components.NodeID
 	foundAnchor := false
 
-	for _, id := range ctx.State.Query(ecs.TypeOf[components.LODAnchor](), ecs.TypeOf[components.NodeEntity]()) {
-		nodeEnt, ok := ecs.Get[components.NodeEntity](ctx.State, id)
-		if ok {
+	ecs.ForEach2[components.LODAnchor, components.NodeEntity](ctx.State, func(_ ecs.EntityID, _ *components.LODAnchor, nodeEnt *components.NodeEntity) {
+		if !foundAnchor {
 			anchorNode = nodeEnt.NodeID
 			foundAnchor = true
-			break
 		}
-	}
+	})
 
 	if !foundAnchor {
 		return
@@ -56,12 +54,13 @@ func (StreamingSystem) Update(ctx ecs.UpdateContext) {
 	var sMapID ecs.EntityID
 	foundMap := false
 
-	for _, id := range ctx.State.Query(ecs.TypeOf[components.StreamingMap]()) {
-		sMap, _ = ecs.Get[components.StreamingMap](ctx.State, id)
-		sMapID = id
-		foundMap = true
-		break
-	}
+	ecs.ForEach[components.StreamingMap](ctx.State, func(id ecs.EntityID, m *components.StreamingMap) {
+		if !foundMap {
+			sMap = *m
+			sMapID = id
+			foundMap = true
+		}
+	})
 
 	if !foundMap {
 		return
@@ -81,23 +80,22 @@ func (StreamingSystem) Update(ctx ecs.UpdateContext) {
 		States: newStates,
 	})
 
-	for _, id := range ctx.State.Query(ecs.TypeOf[components.NodeEntity]()) {
-		nodeEnt, _ := ecs.Get[components.NodeEntity](ctx.State, id)
+	ecs.ForEach2[components.NodeEntity, ecs.LOD](ctx.State, func(id ecs.EntityID, nodeEnt *components.NodeEntity, lod *ecs.LOD) {
 		ns := newStates[nodeEnt.NodeID]
 
 		switch ns {
 		case components.NodeStateActive:
-			if ecs.LODLevelForEntity(ctx.State, id) != ecs.LODActive {
+			if lod.Level != ecs.LODActive {
 				ecs.Set(ctx.State, id, ecs.LOD{Level: ecs.LODActive})
 			}
 		case components.NodeStateLoaded:
-			if ecs.LODLevelForEntity(ctx.State, id) != ecs.LODRelevant {
+			if lod.Level != ecs.LODRelevant {
 				ecs.Set(ctx.State, id, ecs.LOD{Level: ecs.LODRelevant})
 			}
 		default:
-			if ecs.LODLevelForEntity(ctx.State, id) != ecs.LODDormant {
+			if lod.Level != ecs.LODDormant {
 				ecs.Set(ctx.State, id, ecs.LOD{Level: ecs.LODDormant})
 			}
 		}
-	}
+	})
 }

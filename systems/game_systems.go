@@ -45,16 +45,15 @@ func (system LODSystem) Update(ctx ecs.UpdateContext) {
 		anchor   components.Position3D
 		found    bool
 	)
-	for _, id := range ctx.State.Query(ecs.TypeOf[components.LODAnchor](), ecs.TypeOf[components.Position3D]()) {
-		position, ok := ecs.Get[components.Position3D](ctx.State, id)
-		if !ok {
-			continue
+
+	// Find the LOD anchor
+	ecs.ForEach2[components.LODAnchor, components.Position3D](ctx.State, func(id ecs.EntityID, _ *components.LODAnchor, pos *components.Position3D) {
+		if !found {
+			anchor = *pos
+			anchorID = id
+			found = true
 		}
-		anchor = position
-		anchorID = id
-		found = true
-		break
-	}
+	})
 	if !found {
 		return
 	}
@@ -76,27 +75,25 @@ func (system LODSystem) Update(ctx ecs.UpdateContext) {
 	relevantIn2 := relevantIn * relevantIn
 	relevantOut2 := relevantOut * relevantOut
 
-	for _, id := range ctx.State.Query(ecs.TypeOf[components.Position3D]()) {
+	ecs.ForEach2[components.Position3D, ecs.LOD](ctx.State, func(id ecs.EntityID, pos *components.Position3D, lod *ecs.LOD) {
 		if id == anchorID {
-			continue
+			return
 		}
-		if _, ok := ctx.State.GetComponent(id, ecs.TypeOf[components.AlwaysActive]()); ok {
-			if ecs.LODLevelForEntity(ctx.State, id) != ecs.LODActive {
+
+		// Check for AlwaysActive
+		if ecs.Has[components.AlwaysActive](ctx.State, id) {
+			if lod.Level != ecs.LODActive {
 				ecs.Set(ctx.State, id, ecs.LOD{Level: ecs.LODActive})
 			}
-			continue
+			return
 		}
 
-		position, ok := ecs.Get[components.Position3D](ctx.State, id)
-		if !ok {
-			continue
-		}
-		dx := position.X - anchor.X
-		dy := position.Y - anchor.Y
-		dz := position.Z - anchor.Z
+		dx := pos.X - anchor.X
+		dy := pos.Y - anchor.Y
+		dz := pos.Z - anchor.Z
 		dist2 := dx*dx + dy*dy + dz*dz
 
-		currentLOD := ecs.LODLevelForEntity(ctx.State, id)
+		currentLOD := lod.Level
 		nextLOD := currentLOD
 		switch currentLOD {
 		case ecs.LODActive:
@@ -118,7 +115,7 @@ func (system LODSystem) Update(ctx ecs.UpdateContext) {
 		if nextLOD != currentLOD {
 			ecs.Set(ctx.State, id, ecs.LOD{Level: nextLOD})
 		}
-	}
+	})
 }
 
 // MovementSystem updates positions based on velocity.
@@ -147,34 +144,27 @@ func (MovementSystem) Writes() []ecs.ComponentType {
 func (MovementSystem) Update(ctx ecs.UpdateContext) {
 	dt := float32(ctx.Delta.Seconds())
 	bounds := float32(30.0)
-	for _, id := range ecs.QueryLOD(ctx.State, ctx.LOD, ecs.TypeOf[components.Position3D](), ecs.TypeOf[components.Velocity3D]()) {
-		position, ok := ecs.Get[components.Position3D](ctx.State, id)
-		if !ok {
-			continue
-		}
-		velocity, ok := ecs.Get[components.Velocity3D](ctx.State, id)
-		if !ok {
-			continue
-		}
 
-		position.X += velocity.X * dt
-		position.Y += velocity.Y * dt
-		position.Z += velocity.Z * dt
+	// Process entities at the current LOD level
+	ecs.ForEach3LOD[components.Position3D, components.Velocity3D, ecs.LOD](ctx.State, ctx.LOD, func(id ecs.EntityID, pos *components.Position3D, vel *components.Velocity3D, _ *ecs.LOD) {
+		pos.X += vel.X * dt
+		pos.Y += vel.Y * dt
+		pos.Z += vel.Z * dt
 
 		// Simple wrap around grid bounds
-		if position.X < -bounds {
-			position.X = bounds
+		if pos.X < -bounds {
+			pos.X = bounds
 		}
-		if position.X > bounds {
-			position.X = -bounds
+		if pos.X > bounds {
+			pos.X = -bounds
 		}
-		if position.Z < -bounds {
-			position.Z = bounds
+		if pos.Z < -bounds {
+			pos.Z = bounds
 		}
-		if position.Z > bounds {
-			position.Z = -bounds
+		if pos.Z > bounds {
+			pos.Z = -bounds
 		}
 
-		ecs.Set(ctx.State, id, position)
-	}
+		ecs.Set(ctx.State, id, *pos)
+	})
 }

@@ -88,12 +88,14 @@ func (sys SpatialAudioSystem) Update(ctx ecs.UpdateContext) {
 	var anchorID ecs.EntityID
 	var anchorPos components.Position3D
 	found := false
-	for _, id := range ctx.State.Query(ecs.TypeOf[components.LODAnchor](), ecs.TypeOf[components.Position3D]()) {
-		anchorPos, _ = ecs.Get[components.Position3D](ctx.State, id)
-		anchorID = id
-		found = true
-		break
-	}
+
+	ecs.ForEach2[components.LODAnchor, components.Position3D](ctx.State, func(id ecs.EntityID, _ *components.LODAnchor, pos *components.Position3D) {
+		if !found {
+			anchorPos = *pos
+			anchorID = id
+			found = true
+		}
+	})
 	if !found {
 		return
 	}
@@ -101,24 +103,22 @@ func (sys SpatialAudioSystem) Update(ctx ecs.UpdateContext) {
 	// 1. Collect all playing audio candidates grouped by SoundID and ChunkID
 	chunks := make(map[ecs.ChunkID]map[string][]audioCandidate)
 
-	for _, id := range ecs.QueryLOD(ctx.State, ctx.LOD, ecs.TypeOf[components.Position3D](), ecs.TypeOf[components.AudioSource]()) {
+	ecs.ForEach3LOD[components.Position3D, components.AudioSource, ecs.LOD](ctx.State, ctx.LOD, func(id ecs.EntityID, pos *components.Position3D, source *components.AudioSource, _ *ecs.LOD) {
 		if id == anchorID {
-			continue
+			return
 		}
 
-		source, _ := ecs.Get[components.AudioSource](ctx.State, id)
 		if !source.IsPlaying {
-			continue
+			return
 		}
 
-		pos, _ := ecs.Get[components.Position3D](ctx.State, id)
 		dx := pos.X - anchorPos.X
 		dy := pos.Y - anchorPos.Y
 		dz := pos.Z - anchorPos.Z
 		dist := float32(math.Sqrt(float64(dx*dx + dy*dy + dz*dz)))
 
 		if dist > source.MaxDistance {
-			continue
+			return
 		}
 
 		chunk := ctx.State.Grid.PosToChunk(pos.X, pos.Y, pos.Z)
@@ -126,9 +126,9 @@ func (sys SpatialAudioSystem) Update(ctx ecs.UpdateContext) {
 			chunks[chunk] = make(map[string][]audioCandidate)
 		}
 		chunks[chunk][source.SoundID] = append(chunks[chunk][source.SoundID], audioCandidate{
-			id: id, pos: pos, dist: dist, source: source,
+			id: id, pos: *pos, dist: dist, source: *source,
 		})
-	}
+	})
 
 	// 2. Select permitted candidates (Enforce Per-Chunk Limit)
 	var allowed []audioCandidate

@@ -51,11 +51,7 @@ func (p LODPolicy) Interval(level LODLevel) time.Duration {
 
 // LODLevelForEntity returns the LOD level for an entity.
 func LODLevelForEntity(state *WorldState, id EntityID) LODLevel {
-	comp, ok := state.GetComponent(id, TypeOf[LOD]())
-	if !ok {
-		return LODActive
-	}
-	lod, ok := comp.(LOD)
+	lod, ok := Get[LOD](state, id)
 	if !ok {
 		return LODActive
 	}
@@ -63,18 +59,26 @@ func LODLevelForEntity(state *WorldState, id EntityID) LODLevel {
 }
 
 // QueryLOD returns entities matching component types and the given LOD level.
+// This is the legacy API, prefer ForEachLOD variants for better performance.
 func QueryLOD(state *WorldState, level LODLevel, types ...ComponentType) []EntityID {
-	ids := state.Query(types...)
-	if len(ids) == 0 {
-		return nil
-	}
-	filtered := make([]EntityID, 0, len(ids))
-	for _, id := range ids {
-		if LODLevelForEntity(state, id) == level {
-			filtered = append(filtered, id)
+	lodCT := TypeOf[LOD]()
+	allTypes := append([]ComponentType{lodCT}, types...)
+
+	var ids []EntityID
+	for _, arch := range state.graph.ArchetypesWith(allTypes...) {
+		lodIdx, ok := arch.typeIndex[lodCT]
+		if !ok {
+			continue
+		}
+
+		for row := 0; row < arch.Len(); row++ {
+			lodComp := arch.columns[lodIdx][row]
+			if lod, ok := lodComp.(LOD); ok && lod.Level == level {
+				ids = append(ids, arch.EntityAt(row))
+			}
 		}
 	}
-	return filtered
+	return ids
 }
 
 var lodLevels = []LODLevel{LODActive, LODRelevant, LODDormant}
