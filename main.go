@@ -42,20 +42,14 @@ func main() {
 	audioManager.RegisterWave("engine", wave)
 	defer audioManager.Unload()
 
-	camera := rl.Camera3D{
-		Position:   rl.Vector3{X: 0.0, Y: 15.0, Z: 20.0},
-		Target:     rl.Vector3{X: 0.0, Y: 0.0, Z: 0.0},
-		Up:         rl.Vector3{X: 0.0, Y: 1.0, Z: 0.0},
-		Fovy:       45.0,
-		Projection: rl.CameraPerspective,
-	}
+	// Camera will be provided by ECS camera system; systems.CurrentCamera is used for rendering.
 
 	app := core.NewApp()
 
 	// Create systems and initialize their Filters/Maps
 	lodSys := &systems.LODSystem{
-		ActiveRadius:   10,
-		RelevantRadius: 20,
+		ActiveRadius:   30,
+		RelevantRadius: 60,
 		Hysteresis:     2,
 	}
 	lodSys.InitUI(app.World)
@@ -77,6 +71,16 @@ func main() {
 	app.AddSystem(audioSys)
 	app.AddSystem(streamingSys)
 
+	// Create camera entity and systems (ECS-integrated orbital camera)
+	orbitSys := &systems.OrbitSystem{}
+	orbitSys.InitUI(app.World)
+
+	cameraSys := &systems.CameraSystem{}
+	cameraSys.InitUI(app.World)
+
+	app.AddSystem(orbitSys)
+	app.AddSystem(cameraSys)
+
 	// Maps for entity creation
 	posMap := ecs.NewMap[components.Position3D](app.World)
 	velMap := ecs.NewMap[components.Velocity3D](app.World)
@@ -92,6 +96,30 @@ func main() {
 	lodActiveMap.Add(anchor, &components.LODActive{})
 	lodAnchorMap.Add(anchor, &components.LODAnchor{})
 	alwaysActiveMap.Add(anchor, &components.AlwaysActive{})
+
+	// Create camera entity that orbits the anchor
+	camPosMap := ecs.NewMap[components.Position3D](app.World)
+	camCompMap := ecs.NewMap[components.Camera](app.World)
+	orbitMap := ecs.NewMap[components.OrbitController](app.World)
+	activeCamMap := ecs.NewMap[components.ActiveCamera](app.World)
+
+	camEnt := app.World.NewEntity()
+	// initial position relative to anchor
+	camPosMap.Add(camEnt, &components.Position3D{X: 0, Y: 15.0, Z: 20.0})
+	camCompMap.Add(camEnt, &components.Camera{Fovy: 45.0, Perspective: true})
+	orbitMap.Add(camEnt, &components.OrbitController{
+		Target:           anchor,
+		Yaw:              0,
+		Pitch:            -0.6,
+		Radius:           25.0,
+		MinRadius:        5.0,
+		MaxRadius:        100.0,
+		SensitivityYaw:   0.01,
+		SensitivityPitch: 0.01,
+		SensitivityZoom:  1.0,
+		Smooth:           0,
+	})
+	activeCamMap.Add(camEnt, &components.ActiveCamera{})
 
 	// Create mobile entities at Relevant LOD
 	for i := 0; i < 300; i++ {
@@ -132,15 +160,12 @@ func main() {
 			anchorPos.Z += moveSpeed
 		}
 
-		camera.Target = rl.Vector3{X: anchorPos.X, Y: anchorPos.Y, Z: anchorPos.Z}
-		camera.Position = rl.Vector3{X: anchorPos.X, Y: anchorPos.Y + 15.0, Z: anchorPos.Z + 20.0}
-
 		app.Tick(dt)
 
 		rl.BeginDrawing()
 		rl.ClearBackground(rl.RayWhite)
 
-		rl.BeginMode3D(camera)
+		rl.BeginMode3D(systems.CurrentCamera)
 		rl.DrawGrid(60, 1.0)
 
 		rl.DrawCube(rl.Vector3{X: anchorPos.X, Y: anchorPos.Y, Z: anchorPos.Z}, 1, 1, 1, rl.Blue)
