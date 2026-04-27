@@ -1,7 +1,5 @@
 package components
 
-import "rts-go/ecs"
-
 // Position3D stores a 3D position.
 type Position3D struct {
 	X float32
@@ -24,6 +22,12 @@ type AudioSource struct {
 	MaxDistance float32
 	Volume      float32 // 0.0 to 1.0
 }
+
+// LOD marker components — archetype-level filtering.
+// Adding/removing these triggers archetype change for cache-friendly iteration.
+type LODActive struct{}
+type LODRelevant struct{}
+type LODDormant struct{}
 
 // LODAnchor marks an entity as the focus point for LOD decisions.
 type LODAnchor struct{}
@@ -67,14 +71,3 @@ func NewStreamingMap() StreamingMap {
 		States: make(map[NodeID]NodeState),
 	}
 }
-
-// Ensure types implement ecs.Component (no-op, just documentation)
-var (
-	_ ecs.Component = Position3D{}
-	_ ecs.Component = Velocity3D{}
-	_ ecs.Component = AudioSource{}
-	_ ecs.Component = LODAnchor{}
-	_ ecs.Component = AlwaysActive{}
-	_ ecs.Component = NodeEntity{}
-	_ ecs.Component = StreamingMap{}
-)

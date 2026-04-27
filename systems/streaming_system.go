@@ -3,68 +3,72 @@ package systems
 import (
 	"time"
 
+	"github.com/mlange-42/ark/ecs"
 	"rts-go/components"
-	"rts-go/ecs"
+	"rts-go/core"
 )
 
 // StreamingSystem updates the state of nodes based on the player's current node.
-type StreamingSystem struct{}
+type StreamingSystem struct {
+	// Pre-built Filters and Maps
+	anchorNodeFilter   *ecs.Filter2[components.LODAnchor, components.NodeEntity]
+	streamingMapRes    ecs.Resource[components.StreamingMap]
+	nodeEntityFilter   *ecs.Filter2[components.NodeEntity, components.LODActive]
+	nodeRelevantFilter *ecs.Filter2[components.NodeEntity, components.LODRelevant]
+	nodeDormantFilter  *ecs.Filter2[components.NodeEntity, components.LODDormant]
+	lodActiveMap       *ecs.Map[components.LODActive]
+	lodRelevantMap     *ecs.Map[components.LODRelevant]
+	lodDormantMap      *ecs.Map[components.LODDormant]
+	nodeEntityMap      *ecs.Map[components.NodeEntity]
+	streamingMapMap    *ecs.Map[components.StreamingMap]
+}
+
+func (sys *StreamingSystem) InitUI(w *ecs.World) {
+	sys.anchorNodeFilter = ecs.NewFilter2[components.LODAnchor, components.NodeEntity](w)
+	sys.streamingMapRes = ecs.NewResource[components.StreamingMap](w)
+	sys.nodeEntityFilter = ecs.NewFilter2[components.NodeEntity, components.LODActive](w)
+	sys.nodeRelevantFilter = ecs.NewFilter2[components.NodeEntity, components.LODRelevant](w)
+	sys.nodeDormantFilter = ecs.NewFilter2[components.NodeEntity, components.LODDormant](w)
+	sys.lodActiveMap = ecs.NewMap[components.LODActive](w)
+	sys.lodRelevantMap = ecs.NewMap[components.LODRelevant](w)
+	sys.lodDormantMap = ecs.NewMap[components.LODDormant](w)
+	sys.nodeEntityMap = ecs.NewMap[components.NodeEntity](w)
+	sys.streamingMapMap = ecs.NewMap[components.StreamingMap](w)
+}
 
 func (StreamingSystem) Name() string { return "streaming" }
-func (StreamingSystem) Phase() ecs.Phase { return ecs.PhaseLogic }
-func (StreamingSystem) LODPolicy() ecs.LODPolicy {
-	return ecs.LODPolicy{
+
+func (StreamingSystem) LODPolicy() core.LODPolicy {
+	return core.LODPolicy{
 		ActiveEvery:   250 * time.Millisecond,
-		RelevantEvery: ecs.LODDisabled,
-		DormantEvery:  ecs.LODDisabled,
+		RelevantEvery: core.LODDisabled,
+		DormantEvery:  core.LODDisabled,
 	}
 }
 
-func (StreamingSystem) Reads() []ecs.ComponentType {
-	return []ecs.ComponentType{
-		ecs.TypeOf[components.LODAnchor](),
-		ecs.TypeOf[components.NodeEntity](),
-		ecs.TypeOf[components.StreamingMap](),
-	}
-}
-
-func (StreamingSystem) Writes() []ecs.ComponentType {
-	return []ecs.ComponentType{
-		ecs.TypeOf[components.StreamingMap](),
-		ecs.TypeOf[ecs.LOD](),
-	}
-}
-
-func (StreamingSystem) Update(ctx ecs.UpdateContext) {
+func (sys StreamingSystem) Update(ctx core.UpdateContext) {
 	var anchorNode components.NodeID
 	foundAnchor := false
 
-	ecs.ForEach2[components.LODAnchor, components.NodeEntity](ctx.State, func(_ ecs.EntityID, _ *components.LODAnchor, nodeEnt *components.NodeEntity) {
+	q := sys.anchorNodeFilter.Query()
+	for q.Next() {
 		if !foundAnchor {
+			_, nodeEnt := q.Get()
 			anchorNode = nodeEnt.NodeID
 			foundAnchor = true
 		}
-	})
+	}
 
 	if !foundAnchor {
 		return
 	}
 
-	var sMap components.StreamingMap
-	var sMapID ecs.EntityID
-	foundMap := false
-
-	ecs.ForEach[components.StreamingMap](ctx.State, func(id ecs.EntityID, m *components.StreamingMap) {
-		if !foundMap {
-			sMap = *m
-			sMapID = id
-			foundMap = true
-		}
-	})
-
-	if !foundMap {
+	// Use Resource for singleton StreamingMap — no ForEach search needed
+	sMapPtr := sys.streamingMapRes.Get()
+	if sMapPtr == nil {
 		return
 	}
+	sMap := *sMapPtr
 
 	newStates := make(map[components.NodeID]components.NodeState)
 	newStates[anchorNode] = components.NodeStateActive
@@ -75,27 +79,78 @@ func (StreamingSystem) Update(ctx ecs.UpdateContext) {
 		}
 	}
 
-	ecs.Set(ctx.State, sMapID, components.StreamingMap{
+	// Update the StreamingMap resource
+	sys.streamingMapRes.Add(&components.StreamingMap{
 		Nodes:  sMap.Nodes,
 		States: newStates,
 	})
 
-	ecs.ForEach2[components.NodeEntity, ecs.LOD](ctx.State, func(id ecs.EntityID, nodeEnt *components.NodeEntity, lod *ecs.LOD) {
-		ns := newStates[nodeEnt.NodeID]
+	// Collect LOD changes for node entities — can't modify archetypes during iteration
+	type lodChange struct {
+		id     ecs.Entity
+		remove core.LODTier
+		add    core.LODTier
+	}
+	var changes []lodChange
 
-		switch ns {
-		case components.NodeStateActive:
-			if lod.Level != ecs.LODActive {
-				ecs.Set(ctx.State, id, ecs.LOD{Level: ecs.LODActive})
-			}
-		case components.NodeStateLoaded:
-			if lod.Level != ecs.LODRelevant {
-				ecs.Set(ctx.State, id, ecs.LOD{Level: ecs.LODRelevant})
-			}
-		default:
-			if lod.Level != ecs.LODDormant {
-				ecs.Set(ctx.State, id, ecs.LOD{Level: ecs.LODDormant})
-			}
+	// Iterate Active node entities
+	qActive := sys.nodeEntityFilter.Query()
+	for qActive.Next() {
+		nodeEnt, _ := qActive.Get()
+		ns := newStates[nodeEnt.NodeID]
+		if ns != components.NodeStateActive {
+			changes = append(changes, lodChange{qActive.Entity(), core.LODTierActive, tierForState(ns)})
 		}
-	})
+	}
+
+	// Iterate Relevant node entities
+	qRelevant := sys.nodeRelevantFilter.Query()
+	for qRelevant.Next() {
+		nodeEnt, _ := qRelevant.Get()
+		ns := newStates[nodeEnt.NodeID]
+		if ns != components.NodeStateLoaded {
+			changes = append(changes, lodChange{qRelevant.Entity(), core.LODTierRelevant, tierForState(ns)})
+		}
+	}
+
+	// Iterate Dormant node entities
+	qDormant := sys.nodeDormantFilter.Query()
+	for qDormant.Next() {
+		nodeEnt, _ := qDormant.Get()
+		ns := newStates[nodeEnt.NodeID]
+		if ns != components.NodeStateUnloaded {
+			changes = append(changes, lodChange{qDormant.Entity(), core.LODTierDormant, tierForState(ns)})
+		}
+	}
+
+	// Apply LOD changes outside iteration
+	for _, ch := range changes {
+		switch ch.remove {
+		case core.LODTierActive:
+			sys.lodActiveMap.Remove(ch.id)
+		case core.LODTierRelevant:
+			sys.lodRelevantMap.Remove(ch.id)
+		case core.LODTierDormant:
+			sys.lodDormantMap.Remove(ch.id)
+		}
+		switch ch.add {
+		case core.LODTierActive:
+			sys.lodActiveMap.Add(ch.id, &components.LODActive{})
+		case core.LODTierRelevant:
+			sys.lodRelevantMap.Add(ch.id, &components.LODRelevant{})
+		case core.LODTierDormant:
+			sys.lodDormantMap.Add(ch.id, &components.LODDormant{})
+		}
+	}
+}
+
+func tierForState(ns components.NodeState) core.LODTier {
+	switch ns {
+	case components.NodeStateActive:
+		return core.LODTierActive
+	case components.NodeStateLoaded:
+		return core.LODTierRelevant
+	default:
+		return core.LODTierDormant
+	}
 }

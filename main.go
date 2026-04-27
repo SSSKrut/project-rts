@@ -6,8 +6,10 @@ import (
 	rl "github.com/gen2brain/raylib-go/raylib"
 
 	"rts-go/components"
-	"rts-go/ecs"
+	"rts-go/core"
 	"rts-go/systems"
+
+	"github.com/mlange-42/ark/ecs"
 )
 
 const (
@@ -48,43 +50,74 @@ func main() {
 		Projection: rl.CameraPerspective,
 	}
 
-	world := ecs.NewWorld()
-	world.AddSystem(systems.LODSystem{
+	app := core.NewApp()
+
+	// Create systems and initialize their Filters/Maps
+	lodSys := &systems.LODSystem{
 		ActiveRadius:   10,
 		RelevantRadius: 20,
 		Hysteresis:     2,
-	})
-	world.AddSystem(systems.MovementSystem{})
-	world.AddSystem(systems.SpatialAudioSystem{
+	}
+	lodSys.InitUI(app.World)
+
+	movementSys := &systems.MovementSystem{}
+	movementSys.InitUI(app.World)
+
+	audioSys := &systems.SpatialAudioSystem{
 		Manager:     audioManager,
 		MaxPerChunk: 2,
-	})
+	}
+	audioSys.InitUI(app.World)
 
-	anchor := world.Current().NewEntity()
-	ecs.Set(world.Current(), anchor, components.Position3D{X: 0, Y: 0, Z: 0})
-	ecs.Set(world.Current(), anchor, ecs.LOD{Level: ecs.LODActive})
-	ecs.Set(world.Current(), anchor, components.LODAnchor{})
-	ecs.Set(world.Current(), anchor, components.AlwaysActive{})
+	streamingSys := &systems.StreamingSystem{}
+	streamingSys.InitUI(app.World)
 
-	for i := 0; i < 30; i++ {
-		entity := world.Current().NewEntity()
-		ecs.Set(world.Current(), entity, ecs.LOD{Level: ecs.LODRelevant})
-		ecs.Set(world.Current(), entity, components.Position3D{
+	app.AddSystem(lodSys)
+	app.AddSystem(movementSys)
+	app.AddSystem(audioSys)
+	app.AddSystem(streamingSys)
+
+	// Maps for entity creation
+	posMap := ecs.NewMap[components.Position3D](app.World)
+	velMap := ecs.NewMap[components.Velocity3D](app.World)
+	lodActiveMap := ecs.NewMap[components.LODActive](app.World)
+	lodRelevantMap := ecs.NewMap[components.LODRelevant](app.World)
+	lodAnchorMap := ecs.NewMap[components.LODAnchor](app.World)
+	alwaysActiveMap := ecs.NewMap[components.AlwaysActive](app.World)
+	posMap2 := ecs.NewMap[components.Position3D](app.World) // separate instance for anchor query
+
+	// Create anchor entity
+	anchor := app.World.NewEntity()
+	posMap.Add(anchor, &components.Position3D{X: 0, Y: 0, Z: 0})
+	lodActiveMap.Add(anchor, &components.LODActive{})
+	lodAnchorMap.Add(anchor, &components.LODAnchor{})
+	alwaysActiveMap.Add(anchor, &components.AlwaysActive{})
+
+	// Create mobile entities at Relevant LOD
+	for i := 0; i < 300; i++ {
+		entity := app.World.NewEntity()
+		lodRelevantMap.Add(entity, &components.LODRelevant{})
+		posMap.Add(entity, &components.Position3D{
 			X: float32(rl.GetRandomValue(-30, 30)),
 			Y: 0,
 			Z: float32(rl.GetRandomValue(-30, 30)),
 		})
-		ecs.Set(world.Current(), entity, components.Velocity3D{
+		velMap.Add(entity, &components.Velocity3D{
 			X: float32(rl.GetRandomValue(-5, 5)),
 			Y: 0,
 			Z: float32(rl.GetRandomValue(-5, 5)),
 		})
 	}
 
+	// Pre-built Filters for rendering
+	activeRenderFilter := ecs.NewFilter2[components.Position3D, components.LODActive](app.World)
+	relevantRenderFilter := ecs.NewFilter2[components.Position3D, components.LODRelevant](app.World)
+
 	for !rl.WindowShouldClose() {
 		dt := time.Duration(float64(rl.GetFrameTime()) * float64(time.Second))
 
-		anchorPos, _ := ecs.Get[components.Position3D](world.Current(), anchor)
+		// Update anchor position
+		anchorPos := posMap2.Get(anchor)
 		moveSpeed := float32(10.0) * float32(dt.Seconds())
 		if rl.IsKeyDown(rl.KeyRight) {
 			anchorPos.X += moveSpeed
@@ -99,14 +132,10 @@ func main() {
 			anchorPos.Z += moveSpeed
 		}
 
-		ecs.Set(world.Current(), anchor, anchorPos)
-
 		camera.Target = rl.Vector3{X: anchorPos.X, Y: anchorPos.Y, Z: anchorPos.Z}
 		camera.Position = rl.Vector3{X: anchorPos.X, Y: anchorPos.Y + 15.0, Z: anchorPos.Z + 20.0}
 
-		world.Tick(dt)
-
-		state := world.Current()
+		app.Tick(dt)
 
 		rl.BeginDrawing()
 		rl.ClearBackground(rl.RayWhite)
@@ -116,25 +145,24 @@ func main() {
 
 		rl.DrawCube(rl.Vector3{X: anchorPos.X, Y: anchorPos.Y, Z: anchorPos.Z}, 1, 1, 1, rl.Blue)
 
-		// Use ForEach2 for rendering - more cache-friendly iteration
-		ecs.ForEach2[components.Position3D, ecs.LOD](state, func(id ecs.EntityID, pos *components.Position3D, lod *ecs.LOD) {
-			if id == anchor {
-				return
+		// Render Active entities (red)
+		q := activeRenderFilter.Query()
+		for q.Next() {
+			pos, _ := q.Get()
+			if q.Entity() == anchor {
+				continue
 			}
-
-			color := rl.Gray
-			switch lod.Level {
-			case ecs.LODActive:
-				color = rl.Red
-			case ecs.LODRelevant:
-				color = rl.Green
-			case ecs.LODDormant:
-				return // Skip dormant entities
-			}
-
-			rl.DrawCube(rl.Vector3{X: pos.X, Y: pos.Y, Z: pos.Z}, 0.5, 0.5, 0.5, color)
+			rl.DrawCube(rl.Vector3{X: pos.X, Y: pos.Y, Z: pos.Z}, 0.5, 0.5, 0.5, rl.Red)
 			rl.DrawCubeWires(rl.Vector3{X: pos.X, Y: pos.Y, Z: pos.Z}, 0.5, 0.5, 0.5, rl.Maroon)
-		})
+		}
+
+		// Render Relevant entities (green)
+		q2 := relevantRenderFilter.Query()
+		for q2.Next() {
+			pos, _ := q2.Get()
+			rl.DrawCube(rl.Vector3{X: pos.X, Y: pos.Y, Z: pos.Z}, 0.5, 0.5, 0.5, rl.Green)
+			rl.DrawCubeWires(rl.Vector3{X: pos.X, Y: pos.Y, Z: pos.Z}, 0.5, 0.5, 0.5, rl.Maroon)
+		}
 
 		rl.EndMode3D()
 
