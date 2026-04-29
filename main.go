@@ -110,7 +110,7 @@ func main() {
 	orbitMap.Add(camEnt, &components.OrbitController{
 		Target:           anchor,
 		Yaw:              0,
-		Pitch:            -0.6,
+		Pitch:            0.6,
 		Radius:           25.0,
 		MinRadius:        5.0,
 		MaxRadius:        100.0,
