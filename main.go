@@ -147,16 +147,16 @@ func main() {
 		// Update anchor position
 		anchorPos := posMap2.Get(anchor)
 		moveSpeed := float32(10.0) * float32(dt.Seconds())
-		if rl.IsKeyDown(rl.KeyRight) {
+		if rl.IsKeyDown(rl.KeyD) {
 			anchorPos.X += moveSpeed
 		}
-		if rl.IsKeyDown(rl.KeyLeft) {
+		if rl.IsKeyDown(rl.KeyA) {
 			anchorPos.X -= moveSpeed
 		}
-		if rl.IsKeyDown(rl.KeyUp) {
+		if rl.IsKeyDown(rl.KeyW) {
 			anchorPos.Z -= moveSpeed
 		}
-		if rl.IsKeyDown(rl.KeyDown) {
+		if rl.IsKeyDown(rl.KeyS) {
 			anchorPos.Z += moveSpeed
 		}
 
