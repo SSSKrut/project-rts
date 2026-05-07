@@ -59,14 +59,14 @@ type SpatialAudioSystem struct {
 	MaxPerChunk int
 
 	// Pre-built Filters and Maps
-	anchorFilter *ecs.Filter2[components.LODAnchor, components.Position3D]
-	activeFilter *ecs.Filter3[components.Position3D, components.AudioSource, components.LODActive]
+	anchorFilter *ecs.Filter2[components.LODAnchor, components.WorldPos]
+	activeFilter *ecs.Filter3[components.WorldPos, components.AudioSource, components.LODActive]
 	anchorMap    *ecs.Map[components.LODAnchor]
 }
 
 func (sys *SpatialAudioSystem) InitUI(w *ecs.World) {
-	sys.anchorFilter = ecs.NewFilter2[components.LODAnchor, components.Position3D](w)
-	sys.activeFilter = ecs.NewFilter3[components.Position3D, components.AudioSource, components.LODActive](w)
+	sys.anchorFilter = ecs.NewFilter2[components.LODAnchor, components.WorldPos](w)
+	sys.activeFilter = ecs.NewFilter3[components.WorldPos, components.AudioSource, components.LODActive](w)
 	sys.anchorMap = ecs.NewMap[components.LODAnchor](w)
 }
 
@@ -83,14 +83,15 @@ func (SpatialAudioSystem) LODPolicy() core.LODPolicy {
 // audioCandidate groups entity info for spatial filtering
 type audioCandidate struct {
 	id     ecs.Entity
-	pos    components.Position3D
+	pos    components.WorldPos
+	delta  rl.Vector3 // world-space vector from anchor to source
 	dist   float32
 	source components.AudioSource
 }
 
 func (sys SpatialAudioSystem) Update(ctx core.UpdateContext) {
 	var anchorID ecs.Entity
-	var anchorPos components.Position3D
+	var anchorPos components.WorldPos
 	found := false
 
 	q := sys.anchorFilter.Query()
@@ -106,8 +107,9 @@ func (sys SpatialAudioSystem) Update(ctx core.UpdateContext) {
 		return
 	}
 
-	// 1. Collect all playing audio candidates grouped by SoundID and ChunkID
-	chunks := make(map[[3]int]map[string][]audioCandidate)
+	// 1. Collect all playing audio candidates grouped by SoundID and Chunk(X,Z).
+	// One bucket per chunk — keeps voice-limit grain coupled to the world grid.
+	chunks := make(map[[2]int32]map[string][]audioCandidate)
 
 	q2 := sys.activeFilter.Query()
 	for q2.Next() {
@@ -121,21 +123,19 @@ func (sys SpatialAudioSystem) Update(ctx core.UpdateContext) {
 			continue
 		}
 
-		dx := pos.X - anchorPos.X
-		dy := pos.Y - anchorPos.Y
-		dz := pos.Z - anchorPos.Z
-		dist := float32(math.Sqrt(float64(dx*dx + dy*dy + dz*dz)))
+		delta := pos.Sub(anchorPos)
+		dist := float32(math.Sqrt(float64(delta.X*delta.X + delta.Y*delta.Y + delta.Z*delta.Z)))
 
 		if dist > source.MaxDistance {
 			continue
 		}
 
-		chunk := [3]int{int(pos.X / 50), int(pos.Y / 50), int(pos.Z / 50)}
-		if chunks[chunk] == nil {
-			chunks[chunk] = make(map[string][]audioCandidate)
+		key := [2]int32{pos.Chunk.X, pos.Chunk.Z}
+		if chunks[key] == nil {
+			chunks[key] = make(map[string][]audioCandidate)
 		}
-		chunks[chunk][source.SoundID] = append(chunks[chunk][source.SoundID], audioCandidate{
-			id: id, pos: *pos, dist: dist, source: *source,
+		chunks[key][source.SoundID] = append(chunks[key][source.SoundID], audioCandidate{
+			id: id, pos: *pos, delta: delta, dist: dist, source: *source,
 		})
 	}
 
@@ -184,7 +184,7 @@ func (sys SpatialAudioSystem) Update(ctx core.UpdateContext) {
 			if voice.Owner != (ecs.Entity{}) {
 				cand, getsVoice := awardedVoices[voice.Owner]
 				if getsVoice {
-					sys.updateVoiceState(voice, cand, anchorPos)
+					sys.updateVoiceState(voice, cand)
 					delete(awardedVoices, cand.id)
 				} else {
 					rl.StopSound(voice.HardwareSound)
@@ -202,7 +202,7 @@ func (sys SpatialAudioSystem) Update(ctx core.UpdateContext) {
 				voice := &pool[i]
 				if voice.Owner == (ecs.Entity{}) {
 					voice.Owner = candID
-					sys.updateVoiceState(voice, cand, anchorPos)
+					sys.updateVoiceState(voice, cand)
 					break
 				}
 			}
@@ -210,7 +210,7 @@ func (sys SpatialAudioSystem) Update(ctx core.UpdateContext) {
 	}
 }
 
-func (sys SpatialAudioSystem) updateVoiceState(voice *AudioVoice, cand audioCandidate, anchorPos components.Position3D) {
+func (sys SpatialAudioSystem) updateVoiceState(voice *AudioVoice, cand audioCandidate) {
 	vol := cand.source.Volume * (1.0 - (cand.dist / cand.source.MaxDistance))
 	if vol < 0 {
 		vol = 0
@@ -218,7 +218,7 @@ func (sys SpatialAudioSystem) updateVoiceState(voice *AudioVoice, cand audioCand
 
 	dirX := float32(0.0)
 	if cand.dist > 0.01 {
-		dirX = (cand.pos.X - anchorPos.X) / cand.dist
+		dirX = cand.delta.X / cand.dist
 	}
 	pan := 0.5 + (dirX * 0.5)
 

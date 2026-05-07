@@ -1,12 +1,5 @@
 package components
 
-// Position3D stores a 3D position.
-type Position3D struct {
-	X float32
-	Y float32
-	Z float32
-}
-
 // Velocity3D stores a 3D velocity.
 type Velocity3D struct {
 	X float32
@@ -28,6 +21,10 @@ type AudioSource struct {
 type LODActive struct{}
 type LODRelevant struct{}
 type LODDormant struct{}
+
+// TerrainChunk marks an entity as a terrain chunk. Its LOD is owned by
+// TerrainStreamingSystem (M1.x) — generic LODSystem must skip it via Without.
+type TerrainChunk struct{}
 
 // LODAnchor marks an entity as the focus point for LOD decisions.
 type LODAnchor struct{}

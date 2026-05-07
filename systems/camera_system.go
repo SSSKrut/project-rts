@@ -12,19 +12,25 @@ import (
 // updates this each frame based on ECS Camera/Transform state.
 var CurrentCamera rl.Camera3D
 
+// CurrentOriginChunk is the chunk that the render space is anchored to this
+// frame. Every drawn entity's WorldPos must be projected through
+// WorldPos.ToRenderSpace(CurrentOriginChunk) before being passed to raylib.
+// Updated together with CurrentCamera by CameraSystem.
+var CurrentOriginChunk components.ChunkCoord
+
 // CameraSystem synchronizes ECS camera components to a raylib Camera3D.
 type CameraSystem struct {
-	camFilter *ecs.Filter2[components.Camera, components.Position3D]
+	camFilter *ecs.Filter2[components.Camera, components.WorldPos]
 	activeMap *ecs.Map[components.ActiveCamera]
 	orbitMap  *ecs.Map[components.OrbitController]
-	posMap    *ecs.Map[components.Position3D]
+	posMap    *ecs.Map[components.WorldPos]
 }
 
 func (sys *CameraSystem) InitUI(w *ecs.World) {
-	sys.camFilter = ecs.NewFilter2[components.Camera, components.Position3D](w)
+	sys.camFilter = ecs.NewFilter2[components.Camera, components.WorldPos](w)
 	sys.activeMap = ecs.NewMap[components.ActiveCamera](w)
 	sys.orbitMap = ecs.NewMap[components.OrbitController](w)
-	sys.posMap = ecs.NewMap[components.Position3D](w)
+	sys.posMap = ecs.NewMap[components.WorldPos](w)
 }
 
 func (CameraSystem) Name() string { return "camera" }
@@ -38,11 +44,11 @@ func (sys CameraSystem) Update(ctx core.UpdateContext) {
 	q := sys.camFilter.Query()
 	var found bool
 	for q.Next() {
-		cam, pos := q.Get()
+		cam, camPos := q.Get()
 		id := q.Entity()
 		if sys.activeMap.Has(id) || !found {
-			// Determine target: if entity also has an OrbitController, use its target pos
-			var targetPos components.Position3D
+			// Determine target: if entity also has an OrbitController, use its target pos.
+			var targetPos components.WorldPos
 			if orb := sys.orbitMap.Get(id); orb != nil {
 				tptr := sys.posMap.Get(orb.Target)
 				if tptr != nil {
@@ -50,9 +56,13 @@ func (sys CameraSystem) Update(ctx core.UpdateContext) {
 				}
 			}
 
+			// Render origin = camera's chunk. The camera itself sits at
+			// camPos.Local in render space; the target is projected relative
+			// to that origin.
+			CurrentOriginChunk = camPos.Chunk
 			CurrentCamera = rl.Camera3D{
-				Position:   rl.Vector3{X: pos.X, Y: pos.Y, Z: pos.Z},
-				Target:     rl.Vector3{X: targetPos.X, Y: targetPos.Y, Z: targetPos.Z},
+				Position:   camPos.Local,
+				Target:     targetPos.ToRenderSpace(camPos.Chunk),
 				Up:         rl.Vector3{X: 0, Y: 1, Z: 0},
 				Fovy:       cam.Fovy,
 				Projection: rl.CameraPerspective,

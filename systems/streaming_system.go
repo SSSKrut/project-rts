@@ -11,7 +11,9 @@ import (
 // StreamingSystem updates the state of nodes based on the player's current node.
 type StreamingSystem struct {
 	// Pre-built Filters and Maps
-	anchorNodeFilter   *ecs.Filter2[components.LODAnchor, components.NodeEntity]
+	// The anchor filter requests WorldPos (canonical position type) even though
+	// this system doesn't read position fields — it reaches the anchor via NodeEntity.
+	anchorNodeFilter   *ecs.Filter3[components.LODAnchor, components.NodeEntity, components.WorldPos]
 	streamingMapRes    ecs.Resource[components.StreamingMap]
 	nodeEntityFilter   *ecs.Filter2[components.NodeEntity, components.LODActive]
 	nodeRelevantFilter *ecs.Filter2[components.NodeEntity, components.LODRelevant]
@@ -20,11 +22,10 @@ type StreamingSystem struct {
 	lodRelevantMap     *ecs.Map[components.LODRelevant]
 	lodDormantMap      *ecs.Map[components.LODDormant]
 	nodeEntityMap      *ecs.Map[components.NodeEntity]
-	streamingMapMap    *ecs.Map[components.StreamingMap]
 }
 
 func (sys *StreamingSystem) InitUI(w *ecs.World) {
-	sys.anchorNodeFilter = ecs.NewFilter2[components.LODAnchor, components.NodeEntity](w)
+	sys.anchorNodeFilter = ecs.NewFilter3[components.LODAnchor, components.NodeEntity, components.WorldPos](w)
 	sys.streamingMapRes = ecs.NewResource[components.StreamingMap](w)
 	sys.nodeEntityFilter = ecs.NewFilter2[components.NodeEntity, components.LODActive](w)
 	sys.nodeRelevantFilter = ecs.NewFilter2[components.NodeEntity, components.LODRelevant](w)
@@ -33,7 +34,6 @@ func (sys *StreamingSystem) InitUI(w *ecs.World) {
 	sys.lodRelevantMap = ecs.NewMap[components.LODRelevant](w)
 	sys.lodDormantMap = ecs.NewMap[components.LODDormant](w)
 	sys.nodeEntityMap = ecs.NewMap[components.NodeEntity](w)
-	sys.streamingMapMap = ecs.NewMap[components.StreamingMap](w)
 }
 
 func (StreamingSystem) Name() string { return "streaming" }
@@ -53,7 +53,7 @@ func (sys StreamingSystem) Update(ctx core.UpdateContext) {
 	q := sys.anchorNodeFilter.Query()
 	for q.Next() {
 		if !foundAnchor {
-			_, nodeEnt := q.Get()
+			_, nodeEnt, _ := q.Get()
 			anchorNode = nodeEnt.NodeID
 			foundAnchor = true
 		}
@@ -63,27 +63,23 @@ func (sys StreamingSystem) Update(ctx core.UpdateContext) {
 		return
 	}
 
-	// Use Resource for singleton StreamingMap — no ForEach search needed
-	sMapPtr := sys.streamingMapRes.Get()
-	if sMapPtr == nil {
+	// Use Resource for singleton StreamingMap — no ForEach search needed.
+	// The resource holds a pointer; mutate States in place to avoid the
+	// per-tick map allocation the previous implementation paid.
+	sMap := sys.streamingMapRes.Get()
+	if sMap == nil {
 		return
 	}
-	sMap := *sMapPtr
 
-	newStates := make(map[components.NodeID]components.NodeState)
-	newStates[anchorNode] = components.NodeStateActive
+	clear(sMap.States)
+	sMap.States[anchorNode] = components.NodeStateActive
 
 	if nodeDef, ok := sMap.Nodes[anchorNode]; ok {
 		for _, adj := range nodeDef.Connections {
-			newStates[adj] = components.NodeStateLoaded
+			sMap.States[adj] = components.NodeStateLoaded
 		}
 	}
-
-	// Update the StreamingMap resource
-	sys.streamingMapRes.Add(&components.StreamingMap{
-		Nodes:  sMap.Nodes,
-		States: newStates,
-	})
+	newStates := sMap.States
 
 	// Collect LOD changes for node entities — can't modify archetypes during iteration
 	type lodChange struct {

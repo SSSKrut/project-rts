@@ -3,6 +3,7 @@ package systems
 import (
 	"time"
 
+	rl "github.com/gen2brain/raylib-go/raylib"
 	"github.com/mlange-42/ark/ecs"
 	"rts-go/components"
 	"rts-go/core"
@@ -18,22 +19,24 @@ type LODSystem struct {
 	lodActiveMap    *ecs.Map[components.LODActive]
 	lodRelevantMap  *ecs.Map[components.LODRelevant]
 	lodDormantMap   *ecs.Map[components.LODDormant]
-	posMap          *ecs.Map[components.Position3D]
+	posMap          *ecs.Map[components.WorldPos]
 	alwaysActiveMap *ecs.Map[components.AlwaysActive]
 
 	// Pre-built Filters for queries
-	anchorFilter *ecs.Filter2[components.LODAnchor, components.Position3D]
-	posFilter    *ecs.Filter1[components.Position3D]
+	anchorFilter *ecs.Filter2[components.LODAnchor, components.WorldPos]
+	posFilter    *ecs.Filter1[components.WorldPos]
 }
 
 func (system *LODSystem) InitUI(w *ecs.World) {
 	system.lodActiveMap = ecs.NewMap[components.LODActive](w)
 	system.lodRelevantMap = ecs.NewMap[components.LODRelevant](w)
 	system.lodDormantMap = ecs.NewMap[components.LODDormant](w)
-	system.posMap = ecs.NewMap[components.Position3D](w)
+	system.posMap = ecs.NewMap[components.WorldPos](w)
 	system.alwaysActiveMap = ecs.NewMap[components.AlwaysActive](w)
-	system.anchorFilter = ecs.NewFilter2[components.LODAnchor, components.Position3D](w)
-	system.posFilter = ecs.NewFilter1[components.Position3D](w)
+	system.anchorFilter = ecs.NewFilter2[components.LODAnchor, components.WorldPos](w)
+	// Exclude TerrainChunk: their LOD is owned by TerrainStreamingSystem (M1.x).
+	system.posFilter = ecs.NewFilter1[components.WorldPos](w).
+		Without(ecs.C[components.TerrainChunk]())
 }
 
 func (LODSystem) Name() string { return "lod" }
@@ -48,9 +51,9 @@ func (LODSystem) LODPolicy() core.LODPolicy {
 
 func (system LODSystem) Update(ctx core.UpdateContext) {
 	var (
-		anchorID ecs.Entity
-		anchor   components.Position3D
-		found    bool
+		anchorID  ecs.Entity
+		anchorPos components.WorldPos
+		found     bool
 	)
 
 	// Find the LOD anchor using stored filter
@@ -58,7 +61,7 @@ func (system LODSystem) Update(ctx core.UpdateContext) {
 	for q.Next() {
 		if !found {
 			_, pos := q.Get()
-			anchor = *pos
+			anchorPos = *pos
 			anchorID = q.Entity()
 			found = true
 		}
@@ -92,7 +95,7 @@ func (system LODSystem) Update(ctx core.UpdateContext) {
 	}
 	var changes []lodChange
 
-	// Iterate all entities with Position (skip anchor)
+	// Iterate all entities with WorldPos (skip anchor and terrain chunks via filter)
 	q2 := system.posFilter.Query()
 	for q2.Next() {
 		id := q2.Entity()
@@ -109,11 +112,7 @@ func (system LODSystem) Update(ctx core.UpdateContext) {
 		}
 
 		pos := q2.Get()
-
-		dx := pos.X - anchor.X
-		dy := pos.Y - anchor.Y
-		dz := pos.Z - anchor.Z
-		dist2 := dx*dx + dy*dy + dz*dz
+		dist2 := components.DistanceSquared(*pos, anchorPos)
 
 		// Determine current LOD tier from marker components
 		var currentTier core.LODTier
@@ -184,15 +183,15 @@ func (system LODSystem) Update(ctx core.UpdateContext) {
 // MovementSystem updates positions based on velocity.
 type MovementSystem struct {
 	// Pre-built Filters per LOD tier
-	activeFilter   *ecs.Filter3[components.Position3D, components.Velocity3D, components.LODActive]
-	relevantFilter *ecs.Filter3[components.Position3D, components.Velocity3D, components.LODRelevant]
-	dormantFilter  *ecs.Filter3[components.Position3D, components.Velocity3D, components.LODDormant]
+	activeFilter   *ecs.Filter3[components.WorldPos, components.Velocity3D, components.LODActive]
+	relevantFilter *ecs.Filter3[components.WorldPos, components.Velocity3D, components.LODRelevant]
+	dormantFilter  *ecs.Filter3[components.WorldPos, components.Velocity3D, components.LODDormant]
 }
 
 func (system *MovementSystem) InitUI(w *ecs.World) {
-	system.activeFilter = ecs.NewFilter3[components.Position3D, components.Velocity3D, components.LODActive](w)
-	system.relevantFilter = ecs.NewFilter3[components.Position3D, components.Velocity3D, components.LODRelevant](w)
-	system.dormantFilter = ecs.NewFilter3[components.Position3D, components.Velocity3D, components.LODDormant](w)
+	system.activeFilter = ecs.NewFilter3[components.WorldPos, components.Velocity3D, components.LODActive](w)
+	system.relevantFilter = ecs.NewFilter3[components.WorldPos, components.Velocity3D, components.LODRelevant](w)
+	system.dormantFilter = ecs.NewFilter3[components.WorldPos, components.Velocity3D, components.LODDormant](w)
 }
 
 func (MovementSystem) Name() string { return "movement" }
@@ -207,50 +206,25 @@ func (MovementSystem) LODPolicy() core.LODPolicy {
 
 func (system MovementSystem) Update(ctx core.UpdateContext) {
 	dt := float32(ctx.Delta.Seconds())
-	bounds := float32(30.0)
 
 	switch ctx.Tier {
 	case core.LODTierActive:
 		q := system.activeFilter.Query()
 		for q.Next() {
 			pos, vel, _ := q.Get()
-			pos.X += vel.X * dt
-			pos.Y += vel.Y * dt
-			pos.Z += vel.Z * dt
-			wrapBounds(pos, bounds)
+			*pos = pos.Add(rl.Vector3{X: vel.X * dt, Y: vel.Y * dt, Z: vel.Z * dt})
 		}
 	case core.LODTierRelevant:
 		q := system.relevantFilter.Query()
 		for q.Next() {
 			pos, vel, _ := q.Get()
-			pos.X += vel.X * dt
-			pos.Y += vel.Y * dt
-			pos.Z += vel.Z * dt
-			wrapBounds(pos, bounds)
+			*pos = pos.Add(rl.Vector3{X: vel.X * dt, Y: vel.Y * dt, Z: vel.Z * dt})
 		}
 	case core.LODTierDormant:
 		q := system.dormantFilter.Query()
 		for q.Next() {
 			pos, vel, _ := q.Get()
-			pos.X += vel.X * dt
-			pos.Y += vel.Y * dt
-			pos.Z += vel.Z * dt
-			wrapBounds(pos, bounds)
+			*pos = pos.Add(rl.Vector3{X: vel.X * dt, Y: vel.Y * dt, Z: vel.Z * dt})
 		}
-	}
-}
-
-func wrapBounds(pos *components.Position3D, bounds float32) {
-	if pos.X < -bounds {
-		pos.X = bounds
-	}
-	if pos.X > bounds {
-		pos.X = -bounds
-	}
-	if pos.Z < -bounds {
-		pos.Z = bounds
-	}
-	if pos.Z > bounds {
-		pos.Z = -bounds
 	}
 }

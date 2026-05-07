@@ -2,7 +2,6 @@ package systems
 
 import (
 	"math"
-	"time"
 
 	"rts-go/components"
 	"rts-go/core"
@@ -13,13 +12,13 @@ import (
 
 // OrbitSystem updates camera position from OrbitController using input.
 type OrbitSystem struct {
-	filter *ecs.Filter2[components.OrbitController, components.Position3D]
-	posMap *ecs.Map[components.Position3D] // for target lookup
+	filter *ecs.Filter2[components.OrbitController, components.WorldPos]
+	posMap *ecs.Map[components.WorldPos] // for target lookup
 }
 
 func (sys *OrbitSystem) InitUI(w *ecs.World) {
-	sys.filter = ecs.NewFilter2[components.OrbitController, components.Position3D](w)
-	sys.posMap = ecs.NewMap[components.Position3D](w)
+	sys.filter = ecs.NewFilter2[components.OrbitController, components.WorldPos](w)
+	sys.posMap = ecs.NewMap[components.WorldPos](w)
 }
 
 func (OrbitSystem) Name() string { return "orbit" }
@@ -44,12 +43,14 @@ func (sys OrbitSystem) Update(ctx core.UpdateContext) {
 	for q.Next() {
 		orbit, pos := q.Get()
 
-		// Read target position
-		var target components.Position3D
+		// Read target world position
+		var target components.WorldPos
+		var hasTarget bool
 		if orbit.Target != nilEnt {
 			tptr := sys.posMap.Get(orbit.Target)
 			if tptr != nil {
 				target = *tptr
+				hasTarget = true
 			}
 		}
 
@@ -77,22 +78,23 @@ func (sys OrbitSystem) Update(ctx core.UpdateContext) {
 			orbit.Radius = orbit.MaxRadius
 		}
 
-		// Spherical -> Cartesian
+		// Spherical -> Cartesian world-space offset from target
 		cp := float32(math.Cos(float64(orbit.Pitch)))
 		sp := float32(math.Sin(float64(orbit.Pitch)))
 		sy := float32(math.Sin(float64(orbit.Yaw)))
 		cy := float32(math.Cos(float64(orbit.Yaw)))
 
-		x := cp * sy
-		y := sp
-		z := cp * cy
+		offset := rl.Vector3{
+			X: orbit.Radius * cp * sy,
+			Y: orbit.Radius * sp,
+			Z: orbit.Radius * cp * cy,
+		}
 
-		// Update camera position relative to target
-		pos.X = target.X + orbit.Radius*x
-		pos.Y = target.Y + orbit.Radius*y
-		pos.Z = target.Z + orbit.Radius*z
-
-		// (Smoothing could be applied here in future)
-		_ = time.Now() // placeholder to avoid unused import if smoothing later
+		// Camera position = target + offset (in WorldPos space, normalising chunk crossings).
+		if hasTarget {
+			*pos = target.Add(offset)
+		} else {
+			*pos = (components.WorldPos{}).Add(offset)
+		}
 	}
 }
