@@ -34,10 +34,19 @@ type ChunkMesh struct {
 	Uploaded bool
 }
 
-// HeightmapDirty marks a chunk whose heights need to be (re)generated.
-// TerrainGenSystem clears it after writing Heights.
+// HeightmapDirty marks a chunk whose heights need to be filled. Set only at
+// chunk creation by TerrainStreamingSystem. Cleared by TerrainLoadSystem
+// (after a successful disk read) or TerrainGenSystem (after procgen). Not
+// used to signal in-place edits — those go through MeshDirty + Modified.
 type HeightmapDirty struct{}
 
 // MeshDirty marks a chunk whose GPU mesh needs to be (re)built from its
 // Heightmap. TerrainMeshSystem clears it after upload.
 type MeshDirty struct{}
+
+// Modified marks a chunk whose Heightmap differs from the pure procgen
+// output — set by Stamp (and by TerrainLoadSystem when a chunk is read back
+// from disk, since by definition it diverged at some point). On eviction
+// and at shutdown, only chunks with Modified are written to disk; pristine
+// chunks stay procedural with zero disk footprint (P5/P11).
+type Modified struct{}

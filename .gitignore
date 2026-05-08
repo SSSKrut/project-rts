@@ -31,3 +31,6 @@ go.work.sum
 # .idea/
 .vscode/
 .claude/
+
+# Persisted world data (chunk deltas)
+/save/

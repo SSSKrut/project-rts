@@ -1,6 +1,7 @@
 package main
 
 import (
+	"math"
 	"time"
 
 	rl "github.com/gen2brain/raylib-go/raylib"
@@ -13,8 +14,8 @@ import (
 )
 
 const (
-	screenWidth  int32 = 800
-	screenHeight int32 = 450
+	screenWidth  int32 = 800 * 2
+	screenHeight int32 = 450 * 2
 )
 
 func main() {
@@ -54,20 +55,30 @@ func main() {
 	terrainIndex := systems.NewTerrainChunkIndex()
 	ecs.AddResource(app.World, &terrainIndex)
 
+	// Flush any in-memory chunk modifications to disk on a clean shutdown.
+	// Defers run LIFO, and this one is set up before rl.CloseWindow /
+	// rl.CloseAudioDevice, so it executes first — while app.World is still
+	// alive (P6).
+	defer systems.FlushModifiedChunks(app.World, systems.SaveDir)
+
 	// Create systems and initialize their Filters/Maps. Registration order
 	// (set below) matters for the per-tick pipeline:
 	//   1. terrain_streaming  — spawn/evict chunk entities, mark Heightmap/MeshDirty
-	//   2. terrain_gen        — fill heights for HeightmapDirty chunks
-	//   3. terrain_mesh       — build & upload GPU mesh for MeshDirty chunks
-	//   4. ground_stick       — clamp anchor Y to surface (uses GroundHeight)
-	//   5. lod                — units-only LOD (excludes TerrainChunk via filter)
-	//   6. movement           — pos += vel*dt
-	//   7. spatial_audio
-	//   8. streaming          — graph-based streaming (smart-spaces; not terrain)
-	//   9. orbit              — camera input -> spherical->cartesian
-	//  10. camera             — sync ECS camera to systems.CurrentCamera + OriginChunk
+	//   2. terrain_load       — fill HeightmapDirty chunks from disk if a save exists
+	//   3. terrain_gen        — fill remaining HeightmapDirty chunks via procgen
+	//   4. terrain_mesh       — build & upload GPU mesh for MeshDirty chunks
+	//   5. ground_stick       — clamp anchor Y to surface (uses GroundHeight)
+	//   6. lod                — units-only LOD (excludes TerrainChunk via filter)
+	//   7. movement           — pos += vel*dt
+	//   8. spatial_audio
+	//   9. streaming          — graph-based streaming (smart-spaces; not terrain)
+	//  10. orbit              — camera input -> spherical->cartesian
+	//  11. camera             — sync ECS camera to systems.CurrentCamera + OriginChunk
 	terrainStreamingSys := &systems.TerrainStreamingSystem{}
 	terrainStreamingSys.InitUI(app.World)
+
+	terrainLoadSys := &systems.TerrainLoadSystem{}
+	terrainLoadSys.InitUI(app.World)
 
 	terrainGenSys := &systems.TerrainGenSystem{}
 	terrainGenSys.InitUI(app.World)
@@ -103,7 +114,12 @@ func main() {
 	cameraSys := &systems.CameraSystem{}
 	cameraSys.InitUI(app.World)
 
+	// Stamper: service object for terrain edits. Pre-built handles, called
+	// from the input layer below (debug crater key today; ballistics later).
+	stamper := systems.NewStamper(app.World)
+
 	app.AddSystem(terrainStreamingSys)
+	app.AddSystem(terrainLoadSys)
 	app.AddSystem(terrainGenSys)
 	app.AddSystem(terrainMeshSys)
 	app.AddSystem(groundStickSys)
@@ -141,7 +157,7 @@ func main() {
 	// it on the first tick from spherical coords. Initial value just keeps the
 	// invariant valid before that tick.
 	posMap.Add(camEnt, &components.WorldPos{Local: rl.Vector3{X: 0, Y: 15.0, Z: 20.0}})
-	camCompMap.Add(camEnt, &components.Camera{Fovy: 45.0, Perspective: true})
+	camCompMap.Add(camEnt, &components.Camera{Fovy: 75.0, Perspective: true})
 	orbitMap.Add(camEnt, &components.OrbitController{
 		Target:           anchor,
 		Yaw:              0,
@@ -193,25 +209,50 @@ func main() {
 	for !rl.WindowShouldClose() {
 		dt := time.Duration(float64(rl.GetFrameTime()) * float64(time.Second))
 
-		// Update anchor position (WASD). Y is overwritten by GroundStickSystem
-		// inside Tick — we only set X/Z here.
+		// Update anchor position (WASD), driven by the orbit camera's yaw so
+		// W is always "into the screen" and D is "to the right" no matter
+		// how the camera is rotated. Forward (camera → anchor in XZ) is
+		// (-sin yaw, 0, -cos yaw) given OrbitSystem's spherical→cartesian
+		// formula; Right = Forward × Up = (cos yaw, 0, -sin yaw).
+		// Y is overwritten by GroundStickSystem inside Tick, so we only set
+		// X/Z here. Diagonal input is normalised so W+D isn't faster than W.
 		anchorPos := posMap.Get(anchor)
-		moveSpeed := float32(10.0) * float32(dt.Seconds())
-		var move rl.Vector3
-		if rl.IsKeyDown(rl.KeyD) {
-			move.X += moveSpeed
-		}
-		if rl.IsKeyDown(rl.KeyA) {
-			move.X -= moveSpeed
-		}
+		const anchorSpeed float32 = 10.0
+		orbit := orbitMap.Get(camEnt)
+		sy := float32(math.Sin(float64(orbit.Yaw)))
+		cy := float32(math.Cos(float64(orbit.Yaw)))
+		var inFwd, inRight float32
 		if rl.IsKeyDown(rl.KeyW) {
-			move.Z -= moveSpeed
+			inFwd += 1
 		}
 		if rl.IsKeyDown(rl.KeyS) {
-			move.Z += moveSpeed
+			inFwd -= 1
 		}
-		if move.X != 0 || move.Z != 0 {
+		if rl.IsKeyDown(rl.KeyD) {
+			inRight += 1
+		}
+		if rl.IsKeyDown(rl.KeyA) {
+			inRight -= 1
+		}
+		if inFwd != 0 || inRight != 0 {
+			if mag := float32(math.Sqrt(float64(inFwd*inFwd + inRight*inRight))); mag > 1 {
+				inFwd /= mag
+				inRight /= mag
+			}
+			step := anchorSpeed * float32(dt.Seconds())
+			move := rl.Vector3{
+				X: step * (inFwd*(-sy) + inRight*cy),
+				Z: step * (inFwd*(-cy) + inRight*(-sy)),
+			}
 			*anchorPos = anchorPos.Add(move)
+		}
+
+		// Debug: drop a crater at the anchor on X. 4 m radius, 2 m deep —
+		// large enough to see at distance, small enough to fit cleanly inside
+		// one chunk most of the time (and to verify cross-chunk seams when it
+		// straddles a boundary).
+		if rl.IsKeyPressed(rl.KeyX) {
+			stamper.StampHeightmap(*anchorPos, systems.Crater(2.0, 4.0), 4.0)
 		}
 
 		app.Tick(dt)
@@ -253,8 +294,7 @@ func main() {
 			rl.DrawMesh(mesh.Mesh, terrainMaterial, xform)
 		}
 
-		rl.DrawCube(anchorRender, 1, 1, 1, rl.Blue)
-
+		rl.DrawCircle3D(anchorRender, 1, rl.Vector3{X: 1, Y: 0, Z: 0}, 90, rl.Blue)
 		// Render Active unit entities (red). Cubes do NOT ground-stick in
 		// Phase 1 — they will appear floating or buried; that's expected.
 		q := activeRenderFilter.Query()
@@ -281,7 +321,8 @@ func main() {
 
 		rl.DrawText("RTS/FPS 3D ECS Prototype", 10, 10, 20, rl.Black)
 		rl.DrawText("WASD to move Anchor (Blue); right-drag to orbit; wheel to zoom", 10, 30, 20, rl.DarkGray)
-		rl.DrawText("Red = Active LOD, Green = Relevant LOD (Hidden = Dormant)", 10, 50, 20, rl.DarkGray)
+		rl.DrawText("X to drop a crater at the anchor", 10, 50, 20, rl.DarkGray)
+		rl.DrawText("Red = Active LOD, Green = Relevant LOD (Hidden = Dormant)", 10, 70, 20, rl.DarkGray)
 
 		rl.EndDrawing()
 	}

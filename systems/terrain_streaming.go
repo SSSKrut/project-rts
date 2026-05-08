@@ -1,6 +1,7 @@
 package systems
 
 import (
+	"fmt"
 	"time"
 
 	rl "github.com/gen2brain/raylib-go/raylib"
@@ -55,6 +56,8 @@ type TerrainStreamingSystem struct {
 	chunkMeshMap   *ecs.Map[components.ChunkMesh]
 	lodActiveMap   *ecs.Map[components.LODActive]
 	lodRelevantMap *ecs.Map[components.LODRelevant]
+	heightmapMap   *ecs.Map[components.Heightmap]
+	modifiedMap    *ecs.Map[components.Modified]
 }
 
 func (sys *TerrainStreamingSystem) InitUI(w *ecs.World) {
@@ -69,6 +72,8 @@ func (sys *TerrainStreamingSystem) InitUI(w *ecs.World) {
 	sys.chunkMeshMap = ecs.NewMap[components.ChunkMesh](w)
 	sys.lodActiveMap = ecs.NewMap[components.LODActive](w)
 	sys.lodRelevantMap = ecs.NewMap[components.LODRelevant](w)
+	sys.heightmapMap = ecs.NewMap[components.Heightmap](w)
+	sys.modifiedMap = ecs.NewMap[components.Modified](w)
 }
 
 func (TerrainStreamingSystem) Name() string { return "terrain_streaming" }
@@ -246,7 +251,19 @@ func (sys TerrainStreamingSystem) Update(ctx core.UpdateContext) {
 	// entity, otherwise the VAO/VBO is leaked. We use rl.UnloadMesh (not
 	// UnloadModel) so the Go-allocated mesh pointers don't get C.free'd —
 	// see the comment on components.ChunkMesh.
+	//
+	// Persistence: chunks marked Modified get their heights flushed to disk
+	// just before destruction (P6). Pristine chunks skip the write entirely.
+	// Errors are logged, not fatal — a missed flush degrades to "this edit
+	// was lost" rather than crashing the streaming loop.
 	for _, ev := range evictions {
+		if sys.modifiedMap.Has(ev.id) {
+			if hm := sys.heightmapMap.Get(ev.id); hm != nil {
+				if err := WriteChunk(SaveDir, ev.cc, &hm.Heights); err != nil {
+					fmt.Printf("terrain_streaming: WriteChunk %v: %v\n", ev.cc, err)
+				}
+			}
+		}
 		if mesh := sys.chunkMeshMap.Get(ev.id); mesh != nil && mesh.Uploaded {
 			rl.UnloadMesh(&mesh.Mesh)
 		}
