@@ -8,11 +8,10 @@ import (
 	"rts-go/core"
 )
 
-// StreamingSystem updates the state of nodes based on the player's current node.
+// StreamingSystem updates node states based on the player's current node.
 type StreamingSystem struct {
-	// Pre-built Filters and Maps
-	// The anchor filter requests WorldPos (canonical position type) even though
-	// this system doesn't read position fields — it reaches the anchor via NodeEntity.
+	// anchor filter requests WorldPos (canonical position type) even though
+	// we don't read fields — we reach the anchor via NodeEntity.
 	anchorNodeFilter   *ecs.Filter3[components.LODAnchor, components.NodeEntity, components.WorldPos]
 	streamingMapRes    ecs.Resource[components.StreamingMap]
 	nodeEntityFilter   *ecs.Filter2[components.NodeEntity, components.LODActive]
@@ -63,9 +62,8 @@ func (sys StreamingSystem) Update(ctx core.UpdateContext) {
 		return
 	}
 
-	// Use Resource for singleton StreamingMap — no ForEach search needed.
-	// The resource holds a pointer; mutate States in place to avoid the
-	// per-tick map allocation the previous implementation paid.
+	// Mutate States in place to avoid the per-tick map allocation the previous
+	// implementation paid.
 	sMap := sys.streamingMapRes.Get()
 	if sMap == nil {
 		return
@@ -81,7 +79,6 @@ func (sys StreamingSystem) Update(ctx core.UpdateContext) {
 	}
 	newStates := sMap.States
 
-	// Collect LOD changes for node entities — can't modify archetypes during iteration
 	type lodChange struct {
 		id     ecs.Entity
 		remove core.LODTier
@@ -89,7 +86,6 @@ func (sys StreamingSystem) Update(ctx core.UpdateContext) {
 	}
 	var changes []lodChange
 
-	// Iterate Active node entities
 	qActive := sys.nodeEntityFilter.Query()
 	for qActive.Next() {
 		nodeEnt, _ := qActive.Get()
@@ -99,7 +95,6 @@ func (sys StreamingSystem) Update(ctx core.UpdateContext) {
 		}
 	}
 
-	// Iterate Relevant node entities
 	qRelevant := sys.nodeRelevantFilter.Query()
 	for qRelevant.Next() {
 		nodeEnt, _ := qRelevant.Get()
@@ -109,7 +104,6 @@ func (sys StreamingSystem) Update(ctx core.UpdateContext) {
 		}
 	}
 
-	// Iterate Dormant node entities
 	qDormant := sys.nodeDormantFilter.Query()
 	for qDormant.Next() {
 		nodeEnt, _ := qDormant.Get()
@@ -119,7 +113,6 @@ func (sys StreamingSystem) Update(ctx core.UpdateContext) {
 		}
 	}
 
-	// Apply LOD changes outside iteration
 	for _, ch := range changes {
 		switch ch.remove {
 		case core.LODTierActive:

@@ -9,15 +9,13 @@ import (
 	"rts-go/core"
 )
 
-// TerrainLoadSystem fills the Heightmap of any chunk marked HeightmapDirty
-// from disk if a saved blob exists. Runs BEFORE TerrainGenSystem in the
-// pipeline so loaded chunks override procgen — the load system clears
-// HeightmapDirty on hits, leaving only pristine chunks for the gen pass to
-// pick up (P7).
+// TerrainLoadSystem fills HeightmapDirty chunks from disk if a saved blob
+// exists. Runs BEFORE TerrainGenSystem so loaded chunks override procgen —
+// the load system clears HeightmapDirty on hits, leaving only pristine chunks
+// for the gen pass.
 //
-// Misses (no file) are left alone: HeightmapDirty stays set, gen handles
-// them next. Read errors (corrupt file, version mismatch) are logged and
-// treated as misses, again falling back to procgen — never panic.
+// Misses leave HeightmapDirty set so gen handles them. Read errors (corrupt,
+// version mismatch) are logged and treated as misses — never panic.
 type TerrainLoadSystem struct {
 	dirtyFilter    *ecs.Filter2[components.ChunkCoord, components.HeightmapDirty]
 	heightmapMap   *ecs.Map[components.Heightmap]
@@ -47,8 +45,6 @@ func (sys TerrainLoadSystem) Update(ctx core.UpdateContext) {
 		return
 	}
 
-	// Buffer reads until after the iterator closes — same deferred
-	// archetype-mutation pattern used elsewhere in terrain code.
 	type loaded struct {
 		id      ecs.Entity
 		heights [components.ChunkResolution * components.ChunkResolution]float32

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"math"
 	"time"
 
@@ -43,37 +44,39 @@ func main() {
 	audioManager.RegisterWave("engine", wave)
 	defer audioManager.Unload()
 
-	// Camera will be provided by ECS camera system; systems.CurrentCamera is used for rendering.
-
 	app := core.NewApp()
 
-	// Initialize singleton resources BEFORE any system InitUI runs — systems
-	// grab a Resource[T] handle in InitUI and panic if the resource hasn't
-	// been registered yet.
+	// Singleton resources MUST be registered before any system InitUI runs —
+	// systems grab a Resource[T] handle there and panic if missing.
 	streamingMap := components.NewStreamingMap()
 	ecs.AddResource(app.World, &streamingMap)
 	terrainIndex := systems.NewTerrainChunkIndex()
 	ecs.AddResource(app.World, &terrainIndex)
+	propRegistry := systems.NewPropTypeRegistry()
+	ecs.AddResource(app.World, propRegistry)
+	propIndex := systems.NewPropChunkIndex()
+	ecs.AddResource(app.World, &propIndex)
+	rivers := components.Rivers{Polylines: makeStartingRivers()}
+	ecs.AddResource(app.World, &rivers)
 
-	// Flush any in-memory chunk modifications to disk on a clean shutdown.
-	// Defers run LIFO, and this one is set up before rl.CloseWindow /
-	// rl.CloseAudioDevice, so it executes first — while app.World is still
-	// alive (P6).
+	// Defers run LIFO; this fires before window/audio teardown — while
+	// app.World is still alive — flushing any in-memory chunk modifications.
 	defer systems.FlushModifiedChunks(app.World, systems.SaveDir)
 
-	// Create systems and initialize their Filters/Maps. Registration order
-	// (set below) matters for the per-tick pipeline:
-	//   1. terrain_streaming  — spawn/evict chunk entities, mark Heightmap/MeshDirty
-	//   2. terrain_load       — fill HeightmapDirty chunks from disk if a save exists
-	//   3. terrain_gen        — fill remaining HeightmapDirty chunks via procgen
-	//   4. terrain_mesh       — build & upload GPU mesh for MeshDirty chunks
-	//   5. ground_stick       — clamp anchor Y to surface (uses GroundHeight)
-	//   6. lod                — units-only LOD (excludes TerrainChunk via filter)
-	//   7. movement           — pos += vel*dt
-	//   8. spatial_audio
-	//   9. streaming          — graph-based streaming (smart-spaces; not terrain)
-	//  10. orbit              — camera input -> spherical->cartesian
-	//  11. camera             — sync ECS camera to systems.CurrentCamera + OriginChunk
+	// Pipeline order matters:
+	//   1. terrain_streaming  — spawn/evict chunk entities
+	//   2. terrain_load       — fill HeightmapDirty from disk if a save exists
+	//   3. terrain_gen        — fill remaining HeightmapDirty via procgen
+	//   4. river              — cut + water-props (after gen, before mesh & props)
+	//   5. prop_spawn         — vegetation/rocks
+	//   6. terrain_mesh       — build & upload GPU mesh
+	//   7. ground_stick       — clamp anchor Y to surface
+	//   8. lod                — units-only LOD
+	//   9. movement
+	//  10. spatial_audio
+	//  11. streaming          — node graph (smart-spaces; not terrain)
+	//  12. orbit              — camera input
+	//  13. camera             — sync ECS camera to systems.CurrentCamera
 	terrainStreamingSys := &systems.TerrainStreamingSystem{}
 	terrainStreamingSys.InitUI(app.World)
 
@@ -83,6 +86,12 @@ func main() {
 	terrainGenSys := &systems.TerrainGenSystem{}
 	terrainGenSys.InitUI(app.World)
 
+	riverSys := &systems.RiverSystem{}
+	riverSys.InitUI(app.World)
+
+	propSpawnSys := &systems.PropSpawnSystem{}
+	propSpawnSys.InitUI(app.World)
+
 	terrainMeshSys := &systems.TerrainMeshSystem{}
 	terrainMeshSys.InitUI(app.World)
 
@@ -90,8 +99,8 @@ func main() {
 	groundStickSys.InitUI(app.World)
 
 	lodSys := &systems.LODSystem{
-		ActiveRadius:   30,
-		RelevantRadius: 60,
+		ActiveRadius:   60,
+		RelevantRadius: 120,
 		Hysteresis:     2,
 	}
 	lodSys.InitUI(app.World)
@@ -114,13 +123,13 @@ func main() {
 	cameraSys := &systems.CameraSystem{}
 	cameraSys.InitUI(app.World)
 
-	// Stamper: service object for terrain edits. Pre-built handles, called
-	// from the input layer below (debug crater key today; ballistics later).
 	stamper := systems.NewStamper(app.World)
 
 	app.AddSystem(terrainStreamingSys)
 	app.AddSystem(terrainLoadSys)
 	app.AddSystem(terrainGenSys)
+	app.AddSystem(riverSys)
+	app.AddSystem(propSpawnSys)
 	app.AddSystem(terrainMeshSys)
 	app.AddSystem(groundStickSys)
 	app.AddSystem(lodSys)
@@ -130,7 +139,6 @@ func main() {
 	app.AddSystem(orbitSys)
 	app.AddSystem(cameraSys)
 
-	// Maps for entity creation
 	posMap := ecs.NewMap[components.WorldPos](app.World)
 	velMap := ecs.NewMap[components.Velocity3D](app.World)
 	lodActiveMap := ecs.NewMap[components.LODActive](app.World)
@@ -138,24 +146,20 @@ func main() {
 	lodAnchorMap := ecs.NewMap[components.LODAnchor](app.World)
 	alwaysActiveMap := ecs.NewMap[components.AlwaysActive](app.World)
 
-	// Create anchor entity at world origin (chunk 0,0; local 0,0,0).
-	// GroundStickSystem clamps Local.Y to GroundHeight + AnchorEyeHeight on
-	// every tick.
+	// Anchor at world origin. GroundStickSystem clamps Local.Y on every tick.
 	anchor := app.World.NewEntity()
 	posMap.Add(anchor, &components.WorldPos{})
 	lodActiveMap.Add(anchor, &components.LODActive{})
 	lodAnchorMap.Add(anchor, &components.LODAnchor{})
 	alwaysActiveMap.Add(anchor, &components.AlwaysActive{})
 
-	// Create camera entity that orbits the anchor
 	camCompMap := ecs.NewMap[components.Camera](app.World)
 	orbitMap := ecs.NewMap[components.OrbitController](app.World)
 	activeCamMap := ecs.NewMap[components.ActiveCamera](app.World)
 
 	camEnt := app.World.NewEntity()
-	// Camera world position: same chunk as anchor; OrbitSystem will overwrite
-	// it on the first tick from spherical coords. Initial value just keeps the
-	// invariant valid before that tick.
+	// Camera world position: same chunk as anchor. OrbitSystem overwrites it
+	// from spherical coords on the first tick.
 	posMap.Add(camEnt, &components.WorldPos{Local: rl.Vector3{X: 0, Y: 15.0, Z: 20.0}})
 	camCompMap.Add(camEnt, &components.Camera{Fovy: 75.0, Perspective: true})
 	orbitMap.Add(camEnt, &components.OrbitController{
@@ -167,14 +171,35 @@ func main() {
 		MaxRadius:        100.0,
 		SensitivityYaw:   0.01,
 		SensitivityPitch: 0.01,
-		SensitivityZoom:  1.0,
+		SensitivityZoom:  4.0,
 		Smooth:           0,
 	})
 	activeCamMap.Add(camEnt, &components.ActiveCamera{})
 
-	// Create mobile entities at Relevant LOD. Build their WorldPos by
-	// translating from origin so that any negative offsets fold into the
-	// neighbouring chunk (preserves the Local.X/Local.Z ∈ [0, ChunkSize) invariant).
+	// Manual test bridge across the first river polyline. Registered in
+	// propIndex so it inherits the host chunk's lifecycle: when the chunk
+	// evicts the bridge despawns with the rest of the chunk's props and will
+	// NOT come back when you walk back — bridges are not procedurally
+	// re-derivable from the rivers data. Phase 4 will tie bridges to the road
+	// graph (which is persistent).
+	propMap := ecs.NewMap[components.Prop](app.World)
+	const bridgeWX, bridgeWZ float32 = -5, 5
+	bridgeWP := components.WorldPos{}.Add(rl.Vector3{X: bridgeWX, Z: bridgeWZ})
+	bridgeWP.Local.Y = systems.GroundHeight(bridgeWX, bridgeWZ)
+	bridgeEnt := app.World.NewEntity()
+	posMap.Add(bridgeEnt, &bridgeWP)
+	// Yaw = π/4 puts the cube's long axis perpendicular to the first river's
+	// NW→SE flow at this segment. Adjust if the polyline changes.
+	propMap.Add(bridgeEnt, &components.Prop{
+		Type:  components.PropBridge,
+		Yaw:   float32(math.Pi / 4),
+		Scale: 1.0,
+	})
+	lodRelevantMap.Add(bridgeEnt, &components.LODRelevant{})
+	propIndex.Loaded[bridgeWP.Chunk] = append(propIndex.Loaded[bridgeWP.Chunk], bridgeEnt)
+
+	// Mobile entities at Relevant LOD. WorldPos via Add from origin so any
+	// negative offsets fold into the neighbouring chunk.
 	for i := 0; i < 300; i++ {
 		entity := app.World.NewEntity()
 		lodRelevantMap.Add(entity, &components.LODRelevant{})
@@ -191,33 +216,36 @@ func main() {
 		})
 	}
 
-	// Pre-built Filters for rendering. Unit cubes exclude terrain chunks
-	// (those are rendered through dedicated chunk filters below).
+	// Render filters. Unit cubes exclude terrain chunks (rendered via dedicated
+	// chunk filters) and props (rendered via propFilter).
 	activeRenderFilter := ecs.NewFilter2[components.WorldPos, components.LODActive](app.World).
-		Without(ecs.C[components.TerrainChunk]())
+		Without(ecs.C[components.TerrainChunk](), ecs.C[components.Prop]())
 	relevantRenderFilter := ecs.NewFilter2[components.WorldPos, components.LODRelevant](app.World).
-		Without(ecs.C[components.TerrainChunk]())
+		Without(ecs.C[components.TerrainChunk](), ecs.C[components.Prop]())
 	chunkActiveFilter := ecs.NewFilter3[components.WorldPos, components.ChunkMesh, components.LODActive](app.World)
 	chunkRelevantFilter := ecs.NewFilter3[components.WorldPos, components.ChunkMesh, components.LODRelevant](app.World)
+	// Single naive iteration over all props regardless of LOD tier (in
+	// practice every prop is LODRelevant). Move to instanced rendering when
+	// 5k+ props in frustum cause spikes.
+	propFilter := ecs.NewFilter2[components.WorldPos, components.Prop](app.World)
 
-	// Default material shared by every chunk DrawMesh call. Loaded once after
-	// the GL context exists. Per-vertex colour on each mesh provides the
-	// LOD-tier debug shading.
+	// Default material shared by every chunk DrawMesh. Loaded once after the
+	// GL context exists; per-vertex colour does the LOD-tier debug shading.
 	terrainMaterial := rl.LoadMaterialDefault()
 	defer rl.UnloadMaterial(terrainMaterial)
 
 	for !rl.WindowShouldClose() {
 		dt := time.Duration(float64(rl.GetFrameTime()) * float64(time.Second))
 
-		// Update anchor position (WASD), driven by the orbit camera's yaw so
-		// W is always "into the screen" and D is "to the right" no matter
-		// how the camera is rotated. Forward (camera → anchor in XZ) is
-		// (-sin yaw, 0, -cos yaw) given OrbitSystem's spherical→cartesian
-		// formula; Right = Forward × Up = (cos yaw, 0, -sin yaw).
-		// Y is overwritten by GroundStickSystem inside Tick, so we only set
-		// X/Z here. Diagonal input is normalised so W+D isn't faster than W.
+		// Anchor movement (WASD), driven by orbit yaw so W is always "into
+		// the screen" no matter how the camera is rotated. Forward (camera →
+		// anchor in XZ) is (-sin yaw, 0, -cos yaw); Right = Forward × Up =
+		// (cos yaw, 0, -sin yaw). Y is overwritten by GroundStickSystem.
 		anchorPos := posMap.Get(anchor)
-		const anchorSpeed float32 = 10.0
+		anchorSpeed := float32(20.0)
+		if rl.IsKeyDown(rl.KeyLeftShift) || rl.IsKeyDown(rl.KeyRightShift) {
+			anchorSpeed *= 4.0
+		}
 		orbit := orbitMap.Get(camEnt)
 		sy := float32(math.Sin(float64(orbit.Yaw)))
 		cy := float32(math.Cos(float64(orbit.Yaw)))
@@ -247,19 +275,14 @@ func main() {
 			*anchorPos = anchorPos.Add(move)
 		}
 
-		// Debug: drop a crater at the anchor on X. 4 m radius, 2 m deep —
-		// large enough to see at distance, small enough to fit cleanly inside
-		// one chunk most of the time (and to verify cross-chunk seams when it
-		// straddles a boundary).
 		if rl.IsKeyPressed(rl.KeyX) {
 			stamper.StampHeightmap(*anchorPos, systems.Crater(2.0, 4.0), 4.0)
 		}
 
 		app.Tick(dt)
 
-		// Re-fetch anchor pointer in case archetype mutations during Tick
-		// invalidated the previous one (defensive — current systems don't
-		// touch the anchor's archetype).
+		// Re-fetch in case archetype mutations during Tick invalidated the
+		// previous pointer (defensive).
 		anchorPos = posMap.Get(anchor)
 		anchorRender := anchorPos.ToRenderSpace(systems.CurrentOriginChunk)
 
@@ -268,11 +291,9 @@ func main() {
 
 		rl.BeginMode3D(systems.CurrentCamera)
 
-		// Terrain — Active and Relevant chunks. The chunk's WorldPos is at
-		// its (0,0,0) corner, so ToRenderSpace gives the corner position
-		// and the mesh's local vertices already span [0, ChunkSize]. We
-		// translate via a per-draw matrix and call DrawMesh (NOT DrawModel
-		// — see comment on components.ChunkMesh).
+		// Terrain. The chunk's WorldPos is at its (0,0,0) corner; the mesh's
+		// local vertices already span [0, ChunkSize]. Per-draw matrix +
+		// DrawMesh (NOT DrawModel — see ChunkMesh comment).
 		qcA := chunkActiveFilter.Query()
 		for qcA.Next() {
 			pos, mesh, _ := qcA.Get()
@@ -295,12 +316,12 @@ func main() {
 		}
 
 		rl.DrawCircle3D(anchorRender, 1, rl.Vector3{X: 1, Y: 0, Z: 0}, 90, rl.Blue)
-		// Render Active unit entities (red). Cubes do NOT ground-stick in
-		// Phase 1 — they will appear floating or buried; that's expected.
+		// Active unit entities (red). Cubes do NOT ground-stick — they will
+		// appear floating or buried; expected for now.
 		q := activeRenderFilter.Query()
 		for q.Next() {
 			pos, _ := q.Get()
-			if q.Entity() == anchor {
+			if q.Entity() == anchor || q.Entity() == camEnt {
 				continue
 			}
 			renderPos := pos.ToRenderSpace(systems.CurrentOriginChunk)
@@ -308,7 +329,7 @@ func main() {
 			rl.DrawCubeWires(renderPos, 0.5, 0.5, 0.5, rl.Maroon)
 		}
 
-		// Render Relevant unit entities (green)
+		// Relevant unit entities (green).
 		q2 := relevantRenderFilter.Query()
 		for q2.Next() {
 			pos, _ := q2.Get()
@@ -317,13 +338,130 @@ func main() {
 			rl.DrawCubeWires(renderPos, 0.5, 0.5, 0.5, rl.Maroon)
 		}
 
+		// Props. Bridge tally is computed live (rather than as a static
+		// count) so it actually drops to zero when the host chunk evicts —
+		// visual proof for "bridges follow chunk lifecycle".
+		propLive := 0
+		bridgeLive := 0
+		qp := propFilter.Query()
+		for qp.Next() {
+			pos, prop := qp.Get()
+			renderPos := pos.ToRenderSpace(systems.CurrentOriginChunk)
+			drawProp(propRegistry.Metas[prop.Type], renderPos, prop.Yaw, prop.Scale)
+			propLive++
+			if prop.Type == components.PropBridge {
+				bridgeLive++
+			}
+		}
+
 		rl.EndMode3D()
 
 		rl.DrawText("RTS/FPS 3D ECS Prototype", 10, 10, 20, rl.Black)
-		rl.DrawText("WASD to move Anchor (Blue); right-drag to orbit; wheel to zoom", 10, 30, 20, rl.DarkGray)
+		rl.DrawText("WASD to move Anchor (Blue); Shift to sprint; right-drag to orbit; wheel to zoom", 10, 30, 20, rl.DarkGray)
 		rl.DrawText("X to drop a crater at the anchor", 10, 50, 20, rl.DarkGray)
 		rl.DrawText("Red = Active LOD, Green = Relevant LOD (Hidden = Dormant)", 10, 70, 20, rl.DarkGray)
+		hud := fmt.Sprintf("Props live: %d  |  Rivers: %d  |  Bridges: %d",
+			propLive, len(rivers.Polylines), bridgeLive)
+		rl.DrawText(hud, 10, 90, 20, rl.DarkGray)
 
 		rl.EndDrawing()
+	}
+}
+
+// drawProp renders one placeholder prop primitive. Yaw radians around +Y;
+// scale uniform. Position is the prop's *foot* (ground contact), so primitives
+// lift themselves to sit on top.
+func drawProp(meta components.PropMeta, pos rl.Vector3, yaw, scale float32) {
+	switch meta.Primitive {
+	case components.PrimitiveCube:
+		sx := meta.Size.X * scale
+		sy := meta.Size.Y * scale
+		sz := meta.Size.Z * scale
+		if yaw != 0 {
+			rl.PushMatrix()
+			rl.Translatef(pos.X, pos.Y+sy*0.5, pos.Z)
+			rl.Rotatef(yaw*(180.0/math.Pi), 0, 1, 0)
+			rl.DrawCubeV(rl.Vector3{}, rl.Vector3{X: sx, Y: sy, Z: sz}, meta.Color)
+			rl.PopMatrix()
+		} else {
+			c := rl.Vector3{X: pos.X, Y: pos.Y + sy*0.5, Z: pos.Z}
+			rl.DrawCubeV(c, rl.Vector3{X: sx, Y: sy, Z: sz}, meta.Color)
+		}
+
+	case components.PrimitiveSphere:
+		r := meta.Size.X * scale
+		c := rl.Vector3{X: pos.X, Y: pos.Y + r*0.5, Z: pos.Z}
+		rl.DrawSphere(c, r, meta.Color)
+
+	case components.PrimitiveCylinder:
+		r := meta.Size.X * scale
+		h := meta.Size.Y * scale
+		bottom := pos
+		top := rl.Vector3{X: pos.X, Y: pos.Y + h, Z: pos.Z}
+		rl.DrawCylinderEx(bottom, top, r, r, 8, meta.Color)
+
+	case components.PrimitiveCone:
+		r := meta.Size.X * scale
+		h := meta.Size.Y * scale
+		bottom := pos
+		top := rl.Vector3{X: pos.X, Y: pos.Y + h, Z: pos.Z}
+		rl.DrawCylinderEx(bottom, top, r, 0, 8, meta.Color)
+
+	case components.PrimitivePlane:
+		size := rl.Vector2{X: meta.Size.X * scale, Y: meta.Size.Z * scale}
+		if yaw != 0 {
+			rl.PushMatrix()
+			rl.Translatef(pos.X, pos.Y, pos.Z)
+			rl.Rotatef(yaw*(180.0/math.Pi), 0, 1, 0)
+			rl.DrawPlane(rl.Vector3{}, size, meta.Color)
+			rl.PopMatrix()
+		} else {
+			rl.DrawPlane(pos, size, meta.Color)
+		}
+
+	case components.PrimitiveTree:
+		// Trunk + canopy composite. 6-sided is enough at silhouette resolution.
+		trunkR := meta.Size.X * scale
+		trunkH := meta.Size.Y * scale
+		canopyR := meta.Size.Z * scale
+		canopyH := trunkH * 1.5
+		trunkBase := pos
+		trunkTop := rl.Vector3{X: pos.X, Y: pos.Y + trunkH, Z: pos.Z}
+		canopyTip := rl.Vector3{X: pos.X, Y: pos.Y + trunkH + canopyH, Z: pos.Z}
+		rl.DrawCylinderEx(trunkBase, trunkTop, trunkR, trunkR, 6, meta.TrunkColor)
+		rl.DrawCylinderEx(trunkTop, canopyTip, canopyR, 0, 6, meta.Color)
+	}
+}
+
+// makeStartingRivers returns the hand-authored river polylines. World-unit
+// coords. Two rivers cross the spawn area so the player sees water + cut +
+// water-prop visuals without wandering far.
+func makeStartingRivers() []components.RiverPolyline {
+	wp := func(wx, wz float32) components.WorldPos {
+		return components.WorldPos{}.Add(rl.Vector3{X: wx, Y: 0, Z: wz})
+	}
+	return []components.RiverPolyline{
+		// Diagonal river NW → SE through chunk (0,0).
+		{
+			Points: []components.WorldPos{
+				wp(-100, -80),
+				wp(-30, -20),
+				wp(20, 30),
+				wp(80, 90),
+				wp(160, 150),
+			},
+			Width: 5.0,
+			Depth: 1.5,
+		},
+		// Smaller stream branching westward.
+		{
+			Points: []components.WorldPos{
+				wp(-90, 40),
+				wp(-30, 20),
+				wp(20, 30),
+			},
+			Width: 3.5,
+			Depth: 1.0,
+		},
 	}
 }

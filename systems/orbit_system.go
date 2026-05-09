@@ -10,10 +10,10 @@ import (
 	"github.com/mlange-42/ark/ecs"
 )
 
-// OrbitSystem updates camera position from OrbitController using input.
+// OrbitSystem updates camera position from OrbitController + mouse input.
 type OrbitSystem struct {
 	filter *ecs.Filter2[components.OrbitController, components.WorldPos]
-	posMap *ecs.Map[components.WorldPos] // for target lookup
+	posMap *ecs.Map[components.WorldPos]
 }
 
 func (sys *OrbitSystem) InitUI(w *ecs.World) {
@@ -28,12 +28,10 @@ func (OrbitSystem) LODPolicy() core.LODPolicy {
 }
 
 func (sys OrbitSystem) Update(ctx core.UpdateContext) {
-	// Only run in active tier
 	if ctx.Tier != core.LODTierActive {
 		return
 	}
 
-	// Input
 	mouseDelta := rl.GetMouseDelta()
 	wheel := rl.GetMouseWheelMove()
 	rightDown := rl.IsMouseButtonDown(rl.MouseButtonRight)
@@ -43,7 +41,6 @@ func (sys OrbitSystem) Update(ctx core.UpdateContext) {
 	for q.Next() {
 		orbit, pos := q.Get()
 
-		// Read target world position
 		var target components.WorldPos
 		var hasTarget bool
 		if orbit.Target != nilEnt {
@@ -54,17 +51,14 @@ func (sys OrbitSystem) Update(ctx core.UpdateContext) {
 			}
 		}
 
-		// Apply input
 		if rightDown {
 			orbit.Yaw -= mouseDelta.X * orbit.SensitivityYaw
 			orbit.Pitch += mouseDelta.Y * orbit.SensitivityPitch
 		}
-		// Zoom
 		if wheel != 0 {
 			orbit.Radius -= wheel * orbit.SensitivityZoom
 		}
 
-		// Clamp
 		if orbit.Pitch > math.Pi/2-0.01 {
 			orbit.Pitch = math.Pi/2 - 0.01
 		}
@@ -78,7 +72,7 @@ func (sys OrbitSystem) Update(ctx core.UpdateContext) {
 			orbit.Radius = orbit.MaxRadius
 		}
 
-		// Spherical -> Cartesian world-space offset from target
+		// Spherical → cartesian world-space offset from target.
 		cp := float32(math.Cos(float64(orbit.Pitch)))
 		sp := float32(math.Sin(float64(orbit.Pitch)))
 		sy := float32(math.Sin(float64(orbit.Yaw)))
@@ -90,7 +84,6 @@ func (sys OrbitSystem) Update(ctx core.UpdateContext) {
 			Z: orbit.Radius * cp * cy,
 		}
 
-		// Camera position = target + offset (in WorldPos space, normalising chunk crossings).
 		if hasTarget {
 			*pos = target.Add(offset)
 		} else {

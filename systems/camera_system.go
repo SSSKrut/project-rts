@@ -8,17 +8,16 @@ import (
 	"github.com/mlange-42/ark/ecs"
 )
 
-// CurrentCamera is the rl.Camera3D that the renderer should use. CameraSystem
-// updates this each frame based on ECS Camera/Transform state.
+// CurrentCamera is the rl.Camera3D the renderer uses; updated each frame by
+// CameraSystem from ECS state.
 var CurrentCamera rl.Camera3D
 
-// CurrentOriginChunk is the chunk that the render space is anchored to this
-// frame. Every drawn entity's WorldPos must be projected through
-// WorldPos.ToRenderSpace(CurrentOriginChunk) before being passed to raylib.
-// Updated together with CurrentCamera by CameraSystem.
+// CurrentOriginChunk anchors the render space this frame. Every drawn entity
+// must project its WorldPos via ToRenderSpace(CurrentOriginChunk) so float32
+// precision stays bounded near the camera no matter how far the anchor has
+// travelled.
 var CurrentOriginChunk components.ChunkCoord
 
-// CameraSystem synchronizes ECS camera components to a raylib Camera3D.
 type CameraSystem struct {
 	camFilter *ecs.Filter2[components.Camera, components.WorldPos]
 	activeMap *ecs.Map[components.ActiveCamera]
@@ -40,14 +39,12 @@ func (CameraSystem) LODPolicy() core.LODPolicy {
 }
 
 func (sys CameraSystem) Update(ctx core.UpdateContext) {
-	// Find active camera (prefer entity with ActiveCamera marker)
 	q := sys.camFilter.Query()
 	var found bool
 	for q.Next() {
 		cam, camPos := q.Get()
 		id := q.Entity()
 		if sys.activeMap.Has(id) || !found {
-			// Determine target: if entity also has an OrbitController, use its target pos.
 			var targetPos components.WorldPos
 			if orb := sys.orbitMap.Get(id); orb != nil {
 				tptr := sys.posMap.Get(orb.Target)
@@ -56,9 +53,8 @@ func (sys CameraSystem) Update(ctx core.UpdateContext) {
 				}
 			}
 
-			// Render origin = camera's chunk. The camera itself sits at
-			// camPos.Local in render space; the target is projected relative
-			// to that origin.
+			// Render origin = camera's chunk; camera sits at camPos.Local in
+			// render space, target is projected relative to that origin.
 			CurrentOriginChunk = camPos.Chunk
 			CurrentCamera = rl.Camera3D{
 				Position:   camPos.Local,
@@ -68,9 +64,7 @@ func (sys CameraSystem) Update(ctx core.UpdateContext) {
 				Projection: rl.CameraPerspective,
 			}
 			found = true
-			// prefer the first ActiveCamera found; if multiple, first wins
 			if sys.activeMap.Has(id) {
-				// Close query before breaking to release world lock
 				q.Close()
 				break
 			}

@@ -2,51 +2,41 @@ package components
 
 import rl "github.com/gen2brain/raylib-go/raylib"
 
-// Heightmap is a fixed-size grid of per-vertex heights for one chunk.
+// Heightmap is row-major along +Z: Heights[j*ChunkResolution + i] is column i,
+// row j. Vertex world position (assuming step = ChunkSize/(ChunkResolution-1)
+// = 1 m) is (chunk.X*ChunkSize + i, height, chunk.Z*ChunkSize + j).
 //
-// Layout: row-major with rows along the +Z axis. Index (i, j) — where i is the
-// X column and j is the Z row — lives at Heights[j*ChunkResolution + i]. The
-// world-space coordinate of that vertex (assuming step = ChunkSize / (ChunkResolution-1) = 1 m)
-// is (chunk.X*ChunkSize + i, height, chunk.Z*ChunkSize + j).
-//
-// The fixed-size array makes Heightmap a plain value type (~17 KB at 65×65),
-// which lets Ark pack it directly into the chunk archetype with no extra
-// indirection. Switching to a slice would force a heap allocation per chunk.
+// Fixed-size array keeps Heightmap a plain ~17 KB value type so Ark packs it
+// into the chunk archetype with no extra indirection.
 type Heightmap struct {
 	Heights [ChunkResolution * ChunkResolution]float32
 }
 
 // ChunkMesh holds the GPU-uploaded mesh for one terrain chunk.
 //
-// We deliberately store rl.Mesh (not rl.Model) here: raylib-go's UnloadModel
-// unconditionally calls C.free on the mesh-data pointers, which is undefined
-// behaviour when those pointers were Go-allocated (as ours are, via
-// rl.UploadMesh). raylib-go's UnloadMesh, by contrast, tracks
-// Go-managed VAO IDs and skips the free for those — that's what we use on
-// teardown. Rendering goes through rl.DrawMesh + a shared material set up in
-// main.go.
+// We deliberately store rl.Mesh (not rl.Model): raylib-go's UnloadModel calls
+// C.free on mesh-data pointers — undefined behaviour for our Go-allocated
+// buffers (we upload via rl.UploadMesh). UnloadMesh tracks Go-managed VAO IDs
+// and skips the free; that's what teardown uses. Rendering goes through
+// rl.DrawMesh + a shared material set up in main.go.
 //
-// Uploaded distinguishes "we own a live mesh that needs UnloadMesh" from
-// "this slot has never been filled" — important for the lifecycle on tier
-// transitions and chunk eviction.
+// Uploaded distinguishes "we own a live mesh that needs UnloadMesh" from "this
+// slot has never been filled" — important on tier transitions and eviction.
 type ChunkMesh struct {
 	Mesh     rl.Mesh
 	Uploaded bool
 }
 
-// HeightmapDirty marks a chunk whose heights need to be filled. Set only at
-// chunk creation by TerrainStreamingSystem. Cleared by TerrainLoadSystem
-// (after a successful disk read) or TerrainGenSystem (after procgen). Not
-// used to signal in-place edits — those go through MeshDirty + Modified.
+// HeightmapDirty: heights need initial fill. Set only at chunk creation;
+// cleared by terrain_load (disk hit) or terrain_gen (procgen). Not used for
+// in-place edits.
 type HeightmapDirty struct{}
 
-// MeshDirty marks a chunk whose GPU mesh needs to be (re)built from its
-// Heightmap. TerrainMeshSystem clears it after upload.
+// MeshDirty: GPU mesh needs (re)build from Heightmap. Cleared after upload.
 type MeshDirty struct{}
 
-// Modified marks a chunk whose Heightmap differs from the pure procgen
-// output — set by Stamp (and by TerrainLoadSystem when a chunk is read back
-// from disk, since by definition it diverged at some point). On eviction
-// and at shutdown, only chunks with Modified are written to disk; pristine
-// chunks stay procedural with zero disk footprint (P5/P11).
+// Modified: heights diverge from pure procgen output. Set by Stamp and by
+// terrain_load (a chunk loaded from disk diverged at some point). On eviction
+// and shutdown, only Modified chunks are persisted; pristine chunks have zero
+// disk footprint.
 type Modified struct{}

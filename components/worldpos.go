@@ -6,30 +6,27 @@ import (
 	rl "github.com/gen2brain/raylib-go/raylib"
 )
 
-// ChunkSize is the side length of a terrain chunk in world units (meters).
 const ChunkSize float32 = 64.0
 
 // ChunkResolution is the per-side vertex count of a chunk heightmap
-// (= ChunkSize quads + 1 shared edge vertex with the neighbour).
+// (ChunkSize quads + 1 shared edge vertex with the neighbour).
 const ChunkResolution int = 65
 
-// ChunkCoord identifies a chunk on the X/Z plane. Y is not chunked —
-// the world has a single vertical column per (X,Z).
+// ChunkCoord identifies a chunk on X/Z. Y is not chunked.
 type ChunkCoord struct {
 	X, Z int32
 }
 
-// WorldPos is the canonical position type. Local.X and Local.Z must lie
-// in [0, ChunkSize); a value outside that range is a bug — every operation
-// that can break the invariant is responsible for renormalising. Local.Y
-// is unbounded height.
+// WorldPos is the canonical position type. Invariant: Local.X and Local.Z
+// must lie in [0, ChunkSize); Local.Y is unbounded height. Every operation
+// that can break the invariant is responsible for renormalising.
 type WorldPos struct {
 	Chunk ChunkCoord
 	Local rl.Vector3
 }
 
 // Add translates p by world-space vector v and renormalises chunk crossings
-// on X/Z. Y is left untouched (height is not chunked).
+// on X/Z. Y is left untouched.
 func (p WorldPos) Add(v rl.Vector3) WorldPos {
 	p.Local.X += v.X
 	p.Local.Y += v.Y
@@ -59,22 +56,19 @@ func (p WorldPos) ToRenderSpace(origin ChunkCoord) rl.Vector3 {
 	}
 }
 
-// DistanceSquared returns the squared world-space distance between a and b.
 func DistanceSquared(a, b WorldPos) float32 {
 	d := a.Sub(b)
 	return d.X*d.X + d.Y*d.Y + d.Z*d.Z
 }
 
-// Distance returns the world-space distance between a and b.
 func Distance(a, b WorldPos) float32 {
 	return float32(math.Sqrt(float64(DistanceSquared(a, b))))
 }
 
-// Normalize re-establishes the Local.X/Local.Z ∈ [0, ChunkSize) invariant
-// by folding overflow into Chunk. Safe to call on already-normal positions.
+// Normalize re-establishes the Local.X/Z ∈ [0, ChunkSize) invariant. Floor-
+// division so negative locals push the chunk in the right direction
+// (Local.X = -1, ChunkSize = 64 → chunk -1, Local.X = 63).
 func Normalize(p WorldPos) WorldPos {
-	// floor-division so negative locals push the chunk in the right direction
-	// (e.g. Local.X = -1 with ChunkSize = 64 → chunk -1, Local.X = 63).
 	if p.Local.X < 0 || p.Local.X >= ChunkSize {
 		shift := int32(math.Floor(float64(p.Local.X / ChunkSize)))
 		p.Chunk.X += shift

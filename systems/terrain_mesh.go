@@ -10,38 +10,35 @@ import (
 	"rts-go/core"
 )
 
-// skirtColor is the flat tint used for chunk skirts (the perimeter strips
-// dropped below the surface to hide LOD seams). A muted earth tone so the
-// underground geometry doesn't compete visually with the surface relief.
+// skirtColor is the muted earth tone used for chunk skirts (perimeter strips
+// dropped below the surface to hide LOD seams).
 var skirtColor = [4]uint8{55, 45, 35, 255}
 
-// skirtDrop is how far below a border vertex the skirt vertex is placed.
-// 2 m is enough to hide the height-mismatch seam between Active and Relevant
-// chunks (which use different vertex resolutions and therefore interpolate
-// the surface differently along their shared edge).
+// skirtDrop hides the height-mismatch seam between Active and Relevant chunks
+// (different vertex resolutions interpolate the surface differently along
+// their shared edge).
 const skirtDrop float32 = 2.0
 
-// reliefStops are the height/colour control points used by reliefColor below.
-// Heights are tuned for terrainAmplitude = 8 (so vertex Y typically falls in
-// roughly ±8 m); adjust together if amplitude changes meaningfully. Order
-// must be ascending in H.
+// reliefStops are the height/colour control points used by reliefColor.
+// Heights tuned for terrainAmplitude = 8 (vertex Y typically ±8 m); adjust
+// together if amplitude changes meaningfully. Order ascending in H.
 var reliefStops = [...]struct {
 	H       float32
 	R, G, B float32
 }{
-	{-8, 55, 80, 50},     // wet lowland / shadowed dip
-	{-3, 90, 130, 70},    // dark grass
-	{0, 125, 165, 90},    // grass
-	{3, 160, 160, 100},   // dry grass / tan
-	{6, 165, 140, 105},   // earth
-	{9, 185, 175, 165},   // exposed rock
-	{14, 220, 215, 205},  // peak / snow-ish
+	{-8, 55, 80, 50},    // wet lowland
+	{-3, 90, 130, 70},   // dark grass
+	{0, 125, 165, 90},   // grass
+	{3, 160, 160, 100},  // dry grass / tan
+	{6, 165, 140, 105},  // earth
+	{9, 185, 175, 165},  // exposed rock
+	{14, 220, 215, 205}, // peak
 }
 
-// reliefColor maps a vertex (height y, normal-Y component ny) to an RGB tint.
-// Linearly blended between reliefStops by height; multiplied by a slope-based
-// shade (steep faces darken) so the form reads on flat-shaded geometry,
-// without depending on a runtime light/shader. ny is clamped to [0, 1].
+// reliefColor maps (height, normal-Y) to RGB. Linear blend between reliefStops
+// by height; multiplied by a slope-based shade (steep faces darken) so the
+// form reads on flat-shaded geometry without a runtime light. ny clamped to
+// [0, 1].
 func reliefColor(y, ny float32) (uint8, uint8, uint8) {
 	var rr, gg, bb float32
 	switch {
@@ -68,18 +65,16 @@ func reliefColor(y, ny float32) (uint8, uint8, uint8) {
 	} else if ny > 1 {
 		ny = 1
 	}
-	// Slope shade: 0.45 darkest (vertical wall) → 1.0 brightest (flat).
+	// 0.45 darkest (vertical wall) → 1.0 brightest (flat).
 	shade := 0.45 + 0.55*ny
 	return uint8(rr * shade), uint8(gg * shade), uint8(bb * shade)
 }
 
-// TerrainMeshSystem rebuilds the GPU mesh for any chunk marked MeshDirty.
-// Two passes: Active (full 65×65) and Relevant (decimated 33×33). Each pass
-// uses a separate filter so we hit a single archetype at a time.
-//
-// LOD-tier transitions hit this system because TerrainStreamingSystem stamps
-// MeshDirty on every transition. On rebuild, the existing rl.Model is
-// unloaded BEFORE the new one is assigned to keep GPU memory in step.
+// TerrainMeshSystem rebuilds GPU mesh for any chunk marked MeshDirty. Two
+// passes: Active (full 65×65) and Relevant (decimated 33×33). LOD-tier
+// transitions hit this because TerrainStreamingSystem stamps MeshDirty on
+// every transition. On rebuild, the existing mesh is unloaded BEFORE the new
+// one is assigned.
 type TerrainMeshSystem struct {
 	activeFilter   *ecs.Filter3[components.Heightmap, components.MeshDirty, components.LODActive]
 	relevantFilter *ecs.Filter3[components.Heightmap, components.MeshDirty, components.LODRelevant]
@@ -104,14 +99,13 @@ func (TerrainMeshSystem) LODPolicy() core.LODPolicy {
 	}
 }
 
-// builtMesh carries the upload-ready data for one chunk plus its destination
-// entity. We can't UploadMesh / LoadModelFromMesh inside an active query
-// (that touches archetypes via chunkMeshMap), so we collect first and apply
-// after the iteration closes — same deferred-mutation pattern as elsewhere.
+// builtMesh carries upload-ready data plus its destination entity. We can't
+// UploadMesh inside an active query (chunkMeshMap touches archetypes), so
+// collect first and apply after the iteration closes.
 type builtMesh struct {
 	id ecs.Entity
-	// Held heap-allocated and pinned by raylib's UploadMesh so the GPU upload
-	// can read them; we also need the slices to stay alive across the call.
+	// Held heap-allocated; raylib's UploadMesh reads them and the slices must
+	// stay alive across the call.
 	verts   []float32
 	norms   []float32
 	colors  []uint8
@@ -126,7 +120,6 @@ func (sys TerrainMeshSystem) Update(ctx core.UpdateContext) {
 
 	var built []builtMesh
 
-	// Pass 1: Active — full 65×65 resolution.
 	{
 		q := sys.activeFilter.Query()
 		for q.Next() {
@@ -137,21 +130,18 @@ func (sys TerrainMeshSystem) Update(ctx core.UpdateContext) {
 		}
 	}
 
-	// Pass 2: Relevant — every-other-vertex decimation. Sampling stride 2,
-	// so the resolution drops to (65+1)/2 = 33.
+	// Relevant: every-other-vertex decimation. (65+1)/2 = 33.
 	{
 		q := sys.relevantFilter.Query()
 		for q.Next() {
 			hm, _, _ := q.Get()
-			res := (components.ChunkResolution + 1) / 2 // 33 when ChunkRes = 65
+			res := (components.ChunkResolution + 1) / 2
 			b := buildDecimatedMesh(hm.Heights, components.ChunkResolution, res)
 			b.id = q.Entity()
 			built = append(built, b)
 		}
 	}
 
-	// Apply: upload + assign + clear MeshDirty. Old model (if any) unloaded
-	// before the new one is wired in.
 	for i := range built {
 		b := &built[i]
 		mesh := rl.Mesh{
@@ -174,8 +164,8 @@ func (sys TerrainMeshSystem) Update(ctx core.UpdateContext) {
 
 		if existing := sys.chunkMeshMap.Get(b.id); existing != nil {
 			if existing.Uploaded {
-				// rl.UnloadMesh has a goManagedMeshIDs guard; rl.UnloadModel
-				// would not, and would C.free our Go-allocated pointers.
+				// UnloadMesh has a goManagedMeshIDs guard; UnloadModel would
+				// not, and would C.free our Go-allocated pointers.
 				rl.UnloadMesh(&existing.Mesh)
 			}
 			existing.Mesh = mesh
@@ -188,11 +178,10 @@ func (sys TerrainMeshSystem) Update(ctx core.UpdateContext) {
 	}
 }
 
-// buildChunkMesh builds a flat-grid mesh at full source resolution. heights
-// is a (srcRes × srcRes) row-major grid (row-major along Z), spaced step =
-// ChunkSize/(srcRes-1) metres apart. The resulting mesh uses vertex local
-// space [0, ChunkSize] on X/Z so the chunk entity's WorldPos translates the
-// whole thing into world space at draw time.
+// buildChunkMesh: full source resolution. heights is row-major (along Z),
+// step = ChunkSize/(srcRes-1) m. Vertex local space is [0, ChunkSize] on X/Z
+// so the chunk entity's WorldPos translates the whole thing into world space
+// at draw time.
 func buildChunkMesh(heights [components.ChunkResolution * components.ChunkResolution]float32, srcRes int) builtMesh {
 	heightAt := func(i, j int) float32 {
 		return heights[j*srcRes+i]
@@ -201,10 +190,9 @@ func buildChunkMesh(heights [components.ChunkResolution * components.ChunkResolu
 }
 
 // buildDecimatedMesh samples every (srcRes-1)/(dstRes-1) source vertex along
-// each axis. Critically, the *border* vertices are sampled exactly — index 0
-// hits source 0, index dstRes-1 hits source srcRes-1 — so the edge geometry
-// joins cleanly to a neighbour at the same tier. (Across-tier seams are
-// hidden by the skirts.)
+// each axis. Border vertices are sampled exactly — index 0 hits source 0,
+// index dstRes-1 hits source srcRes-1 — so edge geometry joins cleanly to a
+// neighbour at the same tier. Across-tier seams are hidden by skirts.
 func buildDecimatedMesh(heights [components.ChunkResolution * components.ChunkResolution]float32, srcRes, dstRes int) builtMesh {
 	srcStep := (srcRes - 1) / (dstRes - 1)
 	heightAt := func(i, j int) float32 {
@@ -217,18 +205,15 @@ func buildDecimatedMesh(heights [components.ChunkResolution * components.ChunkRe
 
 // assembleGrid is the shared mesh builder.
 //
-//   - heightAt(i, j) returns the world-Y at logical column i, row j.
-//   - srcRes is the source heightmap side (used to compute world-space step
-//     for finite-difference normals via neighbour heights even at chunk edges).
-//   - dstRes is the side count of the mesh being assembled (== srcRes for
-//     Active, half-ish for Relevant).
+//   - heightAt(i, j) returns world-Y at logical column i, row j.
+//   - srcRes is the source heightmap side (used for finite-difference normals
+//     via true world-spacing even at chunk edges).
+//   - dstRes is the side count of the mesh being assembled.
 //
-// Top vertices are coloured by reliefColor(height, normal-Y) so the form
-// reads at distance without a runtime light. Skirts are added at the end:
-// 4 perimeter strips dropped skirtDrop metres below their corresponding top
-// vertices, hiding seams from any side angle.
+// Top vertices coloured by reliefColor(height, normal-Y). Skirts: 4 perimeter
+// strips dropped skirtDrop metres below their top vertices, hiding seams.
 func assembleGrid(heightAt func(i, j int) float32, srcRes, dstRes int) builtMesh {
-	step := components.ChunkSize / float32(dstRes-1) // world-space spacing along surface
+	step := components.ChunkSize / float32(dstRes-1)
 	srcStep := components.ChunkSize / float32(srcRes-1)
 
 	topVertCount := dstRes * dstRes
@@ -245,17 +230,16 @@ func assembleGrid(heightAt func(i, j int) float32, srcRes, dstRes int) builtMesh
 	colors := make([]uint8, 0, totalVerts*4)
 	indices := make([]uint16, 0, totalTris*3)
 
-	// 1. Top surface vertices (row-major: row j along Z).
+	// Top surface vertices (row-major: row j along Z).
 	for j := 0; j < dstRes; j++ {
 		z := float32(j) * step
 		for i := 0; i < dstRes; i++ {
 			x := float32(i) * step
 			y := heightAt(i, j)
 
-			// Normal via central differences on local heights. We use srcStep
-			// (the *true* world-space spacing of the underlying samples) so
-			// the slope estimate doesn't get distorted by decimation. Edge
-			// vertices fall back to one-sided differences.
+			// Central differences with srcStep (true world-space spacing of
+			// underlying samples) so the slope estimate isn't distorted by
+			// decimation. Edge vertices fall back to one-sided differences.
 			var hl, hr, hd, hu float32
 			if i > 0 {
 				hl = heightAt(i-1, j)
@@ -277,9 +261,8 @@ func assembleGrid(heightAt func(i, j int) float32, srcRes, dstRes int) builtMesh
 			} else {
 				hu = y
 			}
-			// Tangents: dx along +X = (2*srcStep, hr-hl, 0); dz along +Z =
-			// (0, hu-hd, 2*srcStep). Normal is dz × dx (so it points +Y on
-			// flat ground).
+			// dx along +X = (2*srcStep, hr-hl, 0); dz along +Z =
+			// (0, hu-hd, 2*srcStep). Normal = dz × dx (points +Y on flat).
 			nx := -(hr - hl) * (2 * srcStep)
 			ny := (2 * srcStep) * (2 * srcStep)
 			nz := -(hu - hd) * (2 * srcStep)
@@ -295,8 +278,7 @@ func assembleGrid(heightAt func(i, j int) float32, srcRes, dstRes int) builtMesh
 		}
 	}
 
-	// 2. Top surface indices. Counter-clockwise winding when viewed from +Y
-	// (above), so faces look up.
+	// Top surface indices. CCW winding when viewed from +Y, so faces look up.
 	idx := func(i, j int) uint16 {
 		return uint16(j*dstRes + i)
 	}
@@ -306,22 +288,18 @@ func assembleGrid(heightAt func(i, j int) float32, srcRes, dstRes int) builtMesh
 			b := idx(i+1, j)
 			c := idx(i, j+1)
 			d := idx(i+1, j+1)
-			// Two triangles per quad: (a, c, b) and (b, c, d).
 			indices = append(indices, a, c, b, b, c, d)
 		}
 	}
 
-	// 3. Skirts. For each of the 4 borders, emit dstRes "lower" vertices
-	// directly under the top border vertex (Y - skirtDrop), then stitch
-	// quads between top and lower vertices.
-	//
-	// We walk the border in *strip order* so consecutive lower verts share
-	// an edge with consecutive top verts, making indexing trivial.
+	// Skirts. For each of 4 borders, emit dstRes "lower" vertices directly
+	// under the top border vertex (Y - skirtDrop), then stitch quads between
+	// top and lower verts. Walk in *strip order* so consecutive lower verts
+	// share an edge with consecutive top verts, making indexing trivial.
 	skirtBase := uint16(topVertCount)
 
 	addSkirt := func(borderIdx func(t int) uint16, normal [3]float32) {
 		startLower := uint16(len(verts) / 3)
-		// Emit the lower-row vertices.
 		for t := 0; t < dstRes; t++ {
 			topI := borderIdx(t)
 			tx := verts[topI*3]
@@ -331,12 +309,12 @@ func assembleGrid(heightAt func(i, j int) float32, srcRes, dstRes int) builtMesh
 			norms = append(norms, normal[0], normal[1], normal[2])
 			colors = append(colors, skirtColor[0], skirtColor[1], skirtColor[2], skirtColor[3])
 		}
-		// Stitch quads. Winding chosen so the visible face points outward
-		// (matches the supplied normal). For each segment t -> t+1:
+		// Winding chosen so the visible face points outward. For each segment
+		// t -> t+1:
 		//   top[t] - top[t+1]
 		//      |       |
 		//   low[t] - low[t+1]
-		// outward-facing tris: (top[t], low[t], top[t+1]) and (top[t+1], low[t], low[t+1]).
+		// outward tris: (top[t], low[t], top[t+1]) and (top[t+1], low[t], low[t+1]).
 		for t := 0; t < dstRes-1; t++ {
 			tA := borderIdx(t)
 			tB := borderIdx(t + 1)
@@ -347,18 +325,10 @@ func assembleGrid(heightAt func(i, j int) float32, srcRes, dstRes int) builtMesh
 		_ = skirtBase
 	}
 
-	// Border walks. Pick t-direction such that the outward face triangulation
-	// above results in correctly oriented (outward) normals. For each border,
-	// "outward" is the negative or positive X/Z direction.
-
-	// -Z border (j = 0): walk t along +X. Outward normal = (0, 0, -1).
-	//   Triangulation (tA, lA, tB) above winds CCW when viewed from -Z, good.
+	// Border walks. Pick t-direction so triangulation produces outward normals.
 	addSkirt(func(t int) uint16 { return idx(t, 0) }, [3]float32{0, 0, -1})
-	// +X border (i = dstRes-1): walk t along +Z. Outward = (+1, 0, 0).
 	addSkirt(func(t int) uint16 { return idx(dstRes-1, t) }, [3]float32{1, 0, 0})
-	// +Z border (j = dstRes-1): walk t along -X. Outward = (0, 0, +1).
 	addSkirt(func(t int) uint16 { return idx(dstRes-1-t, dstRes-1) }, [3]float32{0, 0, 1})
-	// -X border (i = 0): walk t along -Z. Outward = (-1, 0, 0).
 	addSkirt(func(t int) uint16 { return idx(0, dstRes-1-t) }, [3]float32{-1, 0, 0})
 
 	return builtMesh{

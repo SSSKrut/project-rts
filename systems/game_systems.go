@@ -15,14 +15,12 @@ type LODSystem struct {
 	RelevantRadius float32
 	Hysteresis     float32
 
-	// Pre-built Maps for component manipulation
 	lodActiveMap    *ecs.Map[components.LODActive]
 	lodRelevantMap  *ecs.Map[components.LODRelevant]
 	lodDormantMap   *ecs.Map[components.LODDormant]
 	posMap          *ecs.Map[components.WorldPos]
 	alwaysActiveMap *ecs.Map[components.AlwaysActive]
 
-	// Pre-built Filters for queries
 	anchorFilter *ecs.Filter2[components.LODAnchor, components.WorldPos]
 	posFilter    *ecs.Filter1[components.WorldPos]
 }
@@ -34,9 +32,10 @@ func (system *LODSystem) InitUI(w *ecs.World) {
 	system.posMap = ecs.NewMap[components.WorldPos](w)
 	system.alwaysActiveMap = ecs.NewMap[components.AlwaysActive](w)
 	system.anchorFilter = ecs.NewFilter2[components.LODAnchor, components.WorldPos](w)
-	// Exclude TerrainChunk: their LOD is owned by TerrainStreamingSystem (M1.x).
+	// TerrainChunk: LOD owned by TerrainStreamingSystem.
+	// Prop: pinned to Relevant by PropSpawnSystem; lifecycle owned by host chunk.
 	system.posFilter = ecs.NewFilter1[components.WorldPos](w).
-		Without(ecs.C[components.TerrainChunk]())
+		Without(ecs.C[components.TerrainChunk](), ecs.C[components.Prop]())
 }
 
 func (LODSystem) Name() string { return "lod" }
@@ -56,7 +55,6 @@ func (system LODSystem) Update(ctx core.UpdateContext) {
 		found     bool
 	)
 
-	// Find the LOD anchor using stored filter
 	q := system.anchorFilter.Query()
 	for q.Next() {
 		if !found {
@@ -87,7 +85,7 @@ func (system LODSystem) Update(ctx core.UpdateContext) {
 	relevantIn2 := relevantIn * relevantIn
 	relevantOut2 := relevantOut * relevantOut
 
-	// Collect entities that need LOD changes — can't modify archetypes during iteration
+	// Buffer changes — Ark forbids archetype mutation during iteration.
 	type lodChange struct {
 		id     ecs.Entity
 		remove core.LODTier
@@ -95,7 +93,6 @@ func (system LODSystem) Update(ctx core.UpdateContext) {
 	}
 	var changes []lodChange
 
-	// Iterate all entities with WorldPos (skip anchor and terrain chunks via filter)
 	q2 := system.posFilter.Query()
 	for q2.Next() {
 		id := q2.Entity()
@@ -103,7 +100,6 @@ func (system LODSystem) Update(ctx core.UpdateContext) {
 			continue
 		}
 
-		// Check for AlwaysActive — force Active
 		if system.alwaysActiveMap.Has(id) {
 			if !system.lodActiveMap.Has(id) {
 				changes = append(changes, lodChange{id, -1, core.LODTierActive})
@@ -114,7 +110,6 @@ func (system LODSystem) Update(ctx core.UpdateContext) {
 		pos := q2.Get()
 		dist2 := components.DistanceSquared(*pos, anchorPos)
 
-		// Determine current LOD tier from marker components
 		var currentTier core.LODTier
 		if system.lodActiveMap.Has(id) {
 			currentTier = core.LODTierActive
@@ -123,7 +118,6 @@ func (system LODSystem) Update(ctx core.UpdateContext) {
 		} else if system.lodDormantMap.Has(id) {
 			currentTier = core.LODTierDormant
 		} else {
-			// Entity has no LOD marker — assign based on distance
 			if dist2 <= activeOut2 {
 				currentTier = core.LODTierActive
 			} else if dist2 <= relevantOut2 {
@@ -135,7 +129,6 @@ func (system LODSystem) Update(ctx core.UpdateContext) {
 			continue
 		}
 
-		// Compute next LOD tier with hysteresis
 		nextTier := currentTier
 		switch currentTier {
 		case core.LODTierActive:
@@ -159,7 +152,6 @@ func (system LODSystem) Update(ctx core.UpdateContext) {
 		}
 	}
 
-	// Apply LOD changes — archetype modifications must happen outside iteration
 	for _, ch := range changes {
 		switch ch.remove {
 		case core.LODTierActive:
@@ -182,7 +174,6 @@ func (system LODSystem) Update(ctx core.UpdateContext) {
 
 // MovementSystem updates positions based on velocity.
 type MovementSystem struct {
-	// Pre-built Filters per LOD tier
 	activeFilter   *ecs.Filter3[components.WorldPos, components.Velocity3D, components.LODActive]
 	relevantFilter *ecs.Filter3[components.WorldPos, components.Velocity3D, components.LODRelevant]
 	dormantFilter  *ecs.Filter3[components.WorldPos, components.Velocity3D, components.LODDormant]

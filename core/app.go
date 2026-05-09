@@ -6,7 +6,7 @@ import (
 	"github.com/mlange-42/ark/ecs"
 )
 
-// LODTier defines update frequency buckets — for scheduling only, NOT stored in components.
+// LODTier — scheduling bucket only, NOT stored in components.
 type LODTier int
 
 const (
@@ -17,7 +17,6 @@ const (
 
 const LODDisabled time.Duration = -1
 
-// LODPolicy defines how often a system runs per LOD bucket.
 type LODPolicy struct {
 	ActiveEvery   time.Duration
 	RelevantEvery time.Duration

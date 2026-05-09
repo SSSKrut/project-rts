@@ -7,19 +7,16 @@ import (
 	"rts-go/core"
 )
 
-// AnchorEyeHeight is the offset above the terrain surface that the anchor
-// (and any future ground-stuck pawn) sits at. Roughly average human eye
-// level — also keeps the camera target a touch above the ground.
+// AnchorEyeHeight: offset above the terrain surface for the anchor and any
+// future ground-stuck pawn. Roughly average human eye level.
 const AnchorEyeHeight float32 = 1.5
 
-// GroundStickSystem clamps the anchor's WorldPos.Local.Y to the terrain
-// surface every tick. It uses the same GroundHeight() function as procgen,
-// so the anchor sits exactly on the meshed surface, never below or above
-// (Р9).
+// GroundStickSystem clamps the anchor's Local.Y to the terrain surface every
+// tick using the same GroundHeight() the procgen does, so the anchor sits
+// exactly on the meshed surface.
 //
-// In Phase 1 we ground-stick only the LODAnchor. A general GroundStick
-// marker arrives in a later phase when units need it; widening the filter
-// at that point is a one-line change.
+// Filter is currently LODAnchor-only; widening to a generic GroundStick marker
+// is a one-line change once units need it.
 type GroundStickSystem struct {
 	anchorFilter *ecs.Filter2[components.LODAnchor, components.WorldPos]
 }

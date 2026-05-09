@@ -11,7 +11,6 @@ import (
 	"rts-go/core"
 )
 
-// AudioVoice tracks a hardware playback channel for a specific sound.
 type AudioVoice struct {
 	HardwareSound rl.Sound
 	Owner         ecs.Entity // 0 if free
@@ -19,14 +18,13 @@ type AudioVoice struct {
 	Vol           float32
 }
 
-// AudioManager pre-allocates raylib Sound objects to allow independent
-// volume and panning for multiple instances of the same loaded Wave.
+// AudioManager pre-allocates raylib Sound objects to allow independent volume
+// and panning for multiple instances of the same loaded Wave.
 type AudioManager struct {
 	MaxVoicesPerSound int
 	voices            map[string][]AudioVoice
 }
 
-// NewAudioManager initializes the audio manager with a global voice limit per sound.
 func NewAudioManager(maxVoices int) *AudioManager {
 	return &AudioManager{
 		MaxVoicesPerSound: maxVoices,
@@ -34,7 +32,7 @@ func NewAudioManager(maxVoices int) *AudioManager {
 	}
 }
 
-// RegisterWave converts a single memory wave into N independent hardware sounds.
+// RegisterWave converts one in-memory wave into N independent hardware sounds.
 func (am *AudioManager) RegisterWave(id string, wave rl.Wave) {
 	pool := make([]AudioVoice, am.MaxVoicesPerSound)
 	for i := 0; i < am.MaxVoicesPerSound; i++ {
@@ -44,7 +42,6 @@ func (am *AudioManager) RegisterWave(id string, wave rl.Wave) {
 	am.voices[id] = pool
 }
 
-// Unload releases all hardware audio resources.
 func (am *AudioManager) Unload() {
 	for _, pool := range am.voices {
 		for i := range pool {
@@ -53,12 +50,12 @@ func (am *AudioManager) Unload() {
 	}
 }
 
-// SpatialAudioSystem limits playing sounds per spatial chunk and maps them to hardware voices.
+// SpatialAudioSystem limits playing sounds per spatial chunk and maps them to
+// hardware voices.
 type SpatialAudioSystem struct {
 	Manager     *AudioManager
 	MaxPerChunk int
 
-	// Pre-built Filters and Maps
 	anchorFilter *ecs.Filter2[components.LODAnchor, components.WorldPos]
 	activeFilter *ecs.Filter3[components.WorldPos, components.AudioSource, components.LODActive]
 	anchorMap    *ecs.Map[components.LODAnchor]
@@ -74,17 +71,16 @@ func (SpatialAudioSystem) Name() string { return "spatial_audio" }
 
 func (SpatialAudioSystem) LODPolicy() core.LODPolicy {
 	return core.LODPolicy{
-		ActiveEvery:   0, // Smooth panning/volume changes in near-field
+		ActiveEvery:   0, // smooth panning/volume in near-field
 		RelevantEvery: core.LODDisabled,
 		DormantEvery:  core.LODDisabled,
 	}
 }
 
-// audioCandidate groups entity info for spatial filtering
 type audioCandidate struct {
 	id     ecs.Entity
 	pos    components.WorldPos
-	delta  rl.Vector3 // world-space vector from anchor to source
+	delta  rl.Vector3 // anchor → source
 	dist   float32
 	source components.AudioSource
 }
@@ -107,8 +103,7 @@ func (sys SpatialAudioSystem) Update(ctx core.UpdateContext) {
 		return
 	}
 
-	// 1. Collect all playing audio candidates grouped by SoundID and Chunk(X,Z).
-	// One bucket per chunk — keeps voice-limit grain coupled to the world grid.
+	// One bucket per chunk — voice-limit grain coupled to the world grid.
 	chunks := make(map[[2]int32]map[string][]audioCandidate)
 
 	q2 := sys.activeFilter.Query()
@@ -139,7 +134,6 @@ func (sys SpatialAudioSystem) Update(ctx core.UpdateContext) {
 		})
 	}
 
-	// 2. Select permitted candidates (Enforce Per-Chunk Limit)
 	var allowed []audioCandidate
 	for _, soundMap := range chunks {
 		for _, candidates := range soundMap {
@@ -156,7 +150,6 @@ func (sys SpatialAudioSystem) Update(ctx core.UpdateContext) {
 		}
 	}
 
-	// 3. Allocate hardware voices globally by distance
 	sort.Slice(allowed, func(i, j int) bool {
 		return allowed[i].dist < allowed[j].dist
 	})
@@ -176,7 +169,6 @@ func (sys SpatialAudioSystem) Update(ctx core.UpdateContext) {
 		}
 	}
 
-	// 4. Update the actual Hardware Voices
 	for soundID, pool := range sys.Manager.voices {
 		for i := range pool {
 			voice := &pool[i]

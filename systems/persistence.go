@@ -12,25 +12,24 @@ import (
 	"rts-go/components"
 )
 
-// SaveDir is the on-disk root for the (currently single) world. Subpath
-// {x}_{z}.bin under chunks/ holds the per-chunk binary blobs (P2). When we
+// SaveDir holds per-chunk binary blobs under chunks/{x}_{z}.bin. When we
 // migrate to region-files, only WriteChunk/ReadChunk change — callers keep
-// using the same API (P1).
+// the same API.
 const SaveDir = "./save/world-default"
 
-// Binary format v1 (P3).
+// Binary format v1:
 //
-//   offset  size   field
-//        0     4   magic "RTSC"
-//        4     2   version uint16 LE  (currently 1)
-//        6     2   flags   uint16 LE  (reserved, 0 in v1)
-//        8     4   ChunkCoord.X int32 LE
-//       12     4   ChunkCoord.Z int32 LE
-//       16 16900   heights — ChunkResolution^2 × float32 LE, row-major by +Z
+//	offset  size   field
+//	     0     4   magic "RTSC"
+//	     4     2   version uint16 LE  (currently 1)
+//	     6     2   flags   uint16 LE  (reserved, 0)
+//	     8     4   ChunkCoord.X int32 LE
+//	    12     4   ChunkCoord.Z int32 LE
+//	    16 16900   heights — ChunkResolution^2 × float32 LE, row-major by +Z
 //
-// Total = 16 916 bytes at ChunkResolution = 65. Bumping the format bumps
-// the version: ReadChunk treats a version mismatch as "not loadable", and
-// callers fall back to procgen rather than crashing.
+// Total = 16 916 bytes at ChunkResolution = 65. Bumping the format bumps the
+// version: ReadChunk treats version mismatch as "not loadable" and callers
+// fall back to procgen rather than crashing.
 const (
 	persistMagic       = "RTSC"
 	persistVersion     = uint16(1)
@@ -40,18 +39,13 @@ const (
 	persistFileSize    = persistHeaderSize + persistHeightBytes
 )
 
-// chunkFilePath builds the canonical path for a chunk's blob. Negative chunk
-// coords get a leading minus from %d, which is fine on every filesystem we
-// care about.
 func chunkFilePath(saveDir string, cc components.ChunkCoord) string {
 	return filepath.Join(saveDir, "chunks", fmt.Sprintf("%d_%d.bin", cc.X, cc.Z))
 }
 
-// WriteChunk serializes heights to disk under saveDir using the v1 format.
-// Atomic via tmp + rename (P4); no fsync — eviction-time durability is not
-// worth the syscall cost.
-//
-// heights is taken by pointer to avoid copying ~17 KB on every call.
+// WriteChunk serializes heights to disk atomically (tmp + rename). No fsync —
+// eviction-time durability isn't worth the syscall cost. heights is taken by
+// pointer to avoid copying ~17 KB on every call.
 func WriteChunk(saveDir string, cc components.ChunkCoord, heights *[persistHeightCount]float32) error {
 	dir := filepath.Join(saveDir, "chunks")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -82,14 +76,11 @@ func WriteChunk(saveDir string, cc components.ChunkCoord, heights *[persistHeigh
 	return nil
 }
 
-// ReadChunk loads heights from saveDir into *out.
+// ReadChunk loads heights into *out.
 //
-//   - file missing  → (false, nil); not an error, just pristine.
+//   - file missing  → (false, nil); pristine, not an error.
 //   - corrupt/version → (false, err); caller logs and falls back to procgen.
 //   - success       → (true, nil).
-//
-// The chunk coordinate stored in the file is sanity-checked against cc;
-// mismatch is treated as corruption.
 func ReadChunk(saveDir string, cc components.ChunkCoord, out *[persistHeightCount]float32) (bool, error) {
 	path := chunkFilePath(saveDir, cc)
 	buf, err := os.ReadFile(path)
@@ -121,9 +112,9 @@ func ReadChunk(saveDir string, cc components.ChunkCoord, out *[persistHeightCoun
 	return true, nil
 }
 
-// FlushModifiedChunks writes every live chunk that carries Heightmap +
-// Modified out to saveDir. Called from main on shutdown so changes that
-// haven't been evicted yet still survive a restart (P6).
+// FlushModifiedChunks writes every live Heightmap+Modified chunk to saveDir.
+// Called on clean shutdown so changes that haven't been evicted yet still
+// survive a restart.
 func FlushModifiedChunks(w *ecs.World, saveDir string) {
 	filter := ecs.NewFilter3[components.ChunkCoord, components.Heightmap, components.Modified](w)
 	q := filter.Query()

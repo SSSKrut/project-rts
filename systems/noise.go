@@ -5,28 +5,23 @@ import (
 	"math/rand"
 )
 
-// Terrain noise — single source of truth for ground height.
-//
-// We sample a deterministic 2D Perlin/fBm field in *world* coordinates, so
-// neighbouring chunks line up by construction (Р5/Р9). Both terrain procgen
-// and the ground-stick controller call GroundHeight with the same world (X,Z),
-// guaranteeing the anchor sits exactly on the surface and chunk seams are
-// continuous to the last vertex.
+// Terrain noise — single source of truth for ground height. Sampled in *world*
+// coordinates so neighbouring chunks line up by construction. Both procgen
+// and the ground-stick controller call GroundHeight, guaranteeing the anchor
+// sits exactly on the surface and chunk seams stay continuous.
 
-// terrainSeed is "COLD WAR!" packed into bytes — arbitrary but stable.
-const terrainSeed int64 = 0x434F4C4457415221
+const terrainSeed int64 = 0x434F4C4457415221 // "COLD WAR!"
 
-// fBm parameters (Р5).
 const (
-	noiseScale       = 1.0 / 96.0 // base frequency: ~96 m wavelength
+	noiseScale       = 1.0 / 96.0 // ~96 m wavelength
 	fbmOctaves       = 4
 	fbmLacunarity    = 2.0
 	fbmPersistence   = 0.5
-	terrainAmplitude = 8.0 // peak-to-trough envelope, in metres
+	terrainAmplitude = 8.0 // peak-to-trough envelope, metres
 )
 
-// permTable is a 256-entry permutation, doubled to 512 to avoid wrap-around
-// indexing in the gradient lookup. Built once from terrainSeed at init.
+// permTable: 256-entry permutation doubled to 512 to avoid wrap-around in the
+// gradient lookup. Built once from terrainSeed at init.
 var permTable [512]int
 
 func init() {
@@ -35,7 +30,6 @@ func init() {
 	for i := 0; i < 256; i++ {
 		p[i] = i
 	}
-	// Fisher-Yates shuffle, deterministic from the seeded RNG.
 	for i := 255; i > 0; i-- {
 		j := r.Intn(i + 1)
 		p[i], p[j] = p[j], p[i]
@@ -50,14 +44,13 @@ func fade(t float64) float64 {
 	return t * t * t * (t*(t*6-15) + 10)
 }
 
-// lerp is a plain linear interpolation.
 func lerp(a, b, t float64) float64 {
 	return a + t*(b-a)
 }
 
 // grad2 picks one of 8 unit-ish gradients on the XY plane based on the low
-// bits of hash and returns its dot product with (x, y). Standard Perlin trick:
-// avoiding a real lookup table by encoding directions in switch arms.
+// bits of hash and returns its dot with (x, y). Standard Perlin trick:
+// directions encoded in switch arms, no real lookup table.
 func grad2(hash int, x, y float64) float64 {
 	switch hash & 7 {
 	case 0:
@@ -79,8 +72,7 @@ func grad2(hash int, x, y float64) float64 {
 	}
 }
 
-// perlin2 evaluates classic 2D Perlin noise at (x, y). Output is roughly
-// in [-1, 1] (a touch outside, like all Perlin variants).
+// perlin2 evaluates classic 2D Perlin noise at (x, y). Output ~[-1, 1].
 func perlin2(x, y float64) float64 {
 	xi := int(math.Floor(x)) & 255
 	yi := int(math.Floor(y)) & 255
@@ -100,9 +92,8 @@ func perlin2(x, y float64) float64 {
 	return lerp(x1, x2, v)
 }
 
-// fbm2 sums fbmOctaves octaves of perlin2, doubling frequency and halving
-// amplitude per octave (lacunarity / persistence). Result is normalised to
-// roughly [-1, 1] by dividing by the cumulative amplitude.
+// fbm2 sums fbmOctaves octaves, doubling frequency / halving amplitude per
+// octave. Result normalised to ~[-1, 1] by dividing by cumulative amplitude.
 func fbm2(x, y float64) float64 {
 	var sum, amp, totalAmp float64
 	freq := 1.0
@@ -119,9 +110,8 @@ func fbm2(x, y float64) float64 {
 	return sum / totalAmp
 }
 
-// GroundHeight returns the terrain height (Y, in metres) at the given world
-// (X, Z) in metres. Single source of truth for both procgen and ground-stick
-// — see Р9 in PHASE-0-1.md.
+// GroundHeight returns the terrain height (Y, metres) at world (X, Z).
+// Single source of truth for procgen and ground-stick.
 func GroundHeight(worldX, worldZ float32) float32 {
 	h := fbm2(float64(worldX)*noiseScale, float64(worldZ)*noiseScale)
 	return float32(h * terrainAmplitude)

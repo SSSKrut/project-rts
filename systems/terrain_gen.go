@@ -8,13 +8,12 @@ import (
 )
 
 // TerrainGenSystem fills the Heightmap of every chunk marked HeightmapDirty
-// by sampling GroundHeight at each vertex's world (X, Z). It does not touch
-// LOD markers or the GPU — that's downstream (Р8).
+// by sampling GroundHeight at each vertex's world (X, Z). Doesn't touch LOD
+// markers or the GPU.
 //
-// Runs every tick (ActiveEvery: 0): we want freshly-spawned chunks to have
-// heights ready for the mesh system on the same frame. With ChunkResolution
-// = 65 that's 4225 noise evals per chunk; 25 chunks at world startup is
-// ~100k evals — acceptable for a one-time spike on world load (MVP).
+// Runs every tick: freshly-spawned chunks must have heights ready for the
+// mesh system on the same frame. ~4225 noise evals per chunk; world startup
+// at 25 chunks ~= 100k evals — acceptable one-time spike.
 type TerrainGenSystem struct {
 	dirtyFilter    *ecs.Filter2[components.ChunkCoord, components.HeightmapDirty]
 	heightmapMap   *ecs.Map[components.Heightmap]
@@ -42,12 +41,8 @@ func (sys TerrainGenSystem) Update(ctx core.UpdateContext) {
 		return
 	}
 
-	// Step is 1 m at the current settings (64 m / 64 quads). Compute it from
-	// the constants so the math stays correct if ChunkResolution changes.
 	step := components.ChunkSize / float32(components.ChunkResolution-1)
 
-	// Generated heights buffered until after the query closes — we add the
-	// Heightmap component (archetype mutation) once the iterator is done.
 	type genResult struct {
 		id      ecs.Entity
 		heights [components.ChunkResolution * components.ChunkResolution]float32
@@ -72,7 +67,6 @@ func (sys TerrainGenSystem) Update(ctx core.UpdateContext) {
 		results = append(results, genResult{id, hm})
 	}
 
-	// Apply results: write heights, clear HeightmapDirty.
 	for _, r := range results {
 		if existing := sys.heightmapMap.Get(r.id); existing != nil {
 			existing.Heights = r.heights
