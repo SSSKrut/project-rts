@@ -58,6 +58,17 @@ func main() {
 	ecs.AddResource(app.World, &propIndex)
 	rivers := components.Rivers{Polylines: makeStartingRivers()}
 	ecs.AddResource(app.World, &rivers)
+	roadGraph := makeStartingRoadGraph()
+	systems.PreprocessRoadGraph(&roadGraph, &rivers)
+	ecs.AddResource(app.World, &roadGraph)
+	bridgeEdges := 0
+	for _, e := range roadGraph.Edges {
+		if e.Kind == components.RoadBridge {
+			bridgeEdges++
+		}
+	}
+	fmt.Printf("road graph: nodes=%d edges=%d bridges=%d\n",
+		len(roadGraph.Nodes), len(roadGraph.Edges), bridgeEdges)
 
 	// Defers run LIFO; this fires before window/audio teardown — while
 	// app.World is still alive — flushing any in-memory chunk modifications.
@@ -68,15 +79,16 @@ func main() {
 	//   2. terrain_load       — fill HeightmapDirty from disk if a save exists
 	//   3. terrain_gen        — fill remaining HeightmapDirty via procgen
 	//   4. river              — cut + water-props (after gen, before mesh & props)
-	//   5. prop_spawn         — vegetation/rocks
-	//   6. terrain_mesh       — build & upload GPU mesh
-	//   7. ground_stick       — clamp anchor Y to surface
-	//   8. lod                — units-only LOD
-	//   9. movement
-	//  10. spatial_audio
-	//  11. streaming          — node graph (smart-spaces; not terrain)
-	//  12. orbit              — camera input
-	//  13. camera             — sync ECS camera to systems.CurrentCamera
+	//   5. road               — flatten + road/bridge/junction props
+	//   6. prop_spawn         — vegetation/rocks (sees road clearance)
+	//   7. terrain_mesh       — build & upload GPU mesh
+	//   8. ground_stick       — clamp anchor Y to surface
+	//   9. lod                — units-only LOD
+	//  10. movement
+	//  11. spatial_audio
+	//  12. streaming          — node graph (smart-spaces; not terrain)
+	//  13. orbit              — camera input
+	//  14. camera             — sync ECS camera to systems.CurrentCamera
 	terrainStreamingSys := &systems.TerrainStreamingSystem{}
 	terrainStreamingSys.InitUI(app.World)
 
@@ -88,6 +100,9 @@ func main() {
 
 	riverSys := &systems.RiverSystem{}
 	riverSys.InitUI(app.World)
+
+	roadSys := &systems.RoadSystem{}
+	roadSys.InitUI(app.World)
 
 	propSpawnSys := &systems.PropSpawnSystem{}
 	propSpawnSys.InitUI(app.World)
@@ -129,6 +144,7 @@ func main() {
 	app.AddSystem(terrainLoadSys)
 	app.AddSystem(terrainGenSys)
 	app.AddSystem(riverSys)
+	app.AddSystem(roadSys)
 	app.AddSystem(propSpawnSys)
 	app.AddSystem(terrainMeshSys)
 	app.AddSystem(groundStickSys)
@@ -175,28 +191,6 @@ func main() {
 		Smooth:           0,
 	})
 	activeCamMap.Add(camEnt, &components.ActiveCamera{})
-
-	// Manual test bridge across the first river polyline. Registered in
-	// propIndex so it inherits the host chunk's lifecycle: when the chunk
-	// evicts the bridge despawns with the rest of the chunk's props and will
-	// NOT come back when you walk back — bridges are not procedurally
-	// re-derivable from the rivers data. Phase 4 will tie bridges to the road
-	// graph (which is persistent).
-	propMap := ecs.NewMap[components.Prop](app.World)
-	const bridgeWX, bridgeWZ float32 = -5, 5
-	bridgeWP := components.WorldPos{}.Add(rl.Vector3{X: bridgeWX, Z: bridgeWZ})
-	bridgeWP.Local.Y = systems.GroundHeight(bridgeWX, bridgeWZ)
-	bridgeEnt := app.World.NewEntity()
-	posMap.Add(bridgeEnt, &bridgeWP)
-	// Yaw = π/4 puts the cube's long axis perpendicular to the first river's
-	// NW→SE flow at this segment. Adjust if the polyline changes.
-	propMap.Add(bridgeEnt, &components.Prop{
-		Type:  components.PropBridge,
-		Yaw:   float32(math.Pi / 4),
-		Scale: 1.0,
-	})
-	lodRelevantMap.Add(bridgeEnt, &components.LODRelevant{})
-	propIndex.Loaded[bridgeWP.Chunk] = append(propIndex.Loaded[bridgeWP.Chunk], bridgeEnt)
 
 	// Mobile entities at Relevant LOD. WorldPos via Add from origin so any
 	// negative offsets fold into the neighbouring chunk.
@@ -354,17 +348,62 @@ func main() {
 			}
 		}
 
+		// Road-graph debug overlay. Hold G to draw the whole graph (lines +
+		// node markers) on top of the scene — useful for sanity-checking
+		// preprocessing and bridge detection without walking to every chunk.
+		if rl.IsKeyDown(rl.KeyG) {
+			drawRoadGraphDebug(&roadGraph)
+		}
+
 		rl.EndMode3D()
 
 		rl.DrawText("RTS/FPS 3D ECS Prototype", 10, 10, 20, rl.Black)
 		rl.DrawText("WASD to move Anchor (Blue); Shift to sprint; right-drag to orbit; wheel to zoom", 10, 30, 20, rl.DarkGray)
-		rl.DrawText("X to drop a crater at the anchor", 10, 50, 20, rl.DarkGray)
+		rl.DrawText("X = crater at anchor; G (hold) = road graph overlay", 10, 50, 20, rl.DarkGray)
 		rl.DrawText("Red = Active LOD, Green = Relevant LOD (Hidden = Dormant)", 10, 70, 20, rl.DarkGray)
-		hud := fmt.Sprintf("Props live: %d  |  Rivers: %d  |  Bridges: %d",
+		hud := fmt.Sprintf("Props live: %d  |  Rivers: %d  |  Bridges live: %d",
 			propLive, len(rivers.Polylines), bridgeLive)
 		rl.DrawText(hud, 10, 90, 20, rl.DarkGray)
+		hud2 := fmt.Sprintf("Roads: nodes=%d edges=%d bridge-edges=%d",
+			len(roadGraph.Nodes), len(roadGraph.Edges), bridgeEdges)
+		rl.DrawText(hud2, 10, 110, 20, rl.DarkGray)
 
 		rl.EndDrawing()
+	}
+}
+
+// drawRoadGraphDebug overlays the road graph in 3D — one coloured line per
+// edge, plus a small marker cube at each node. Colour by RoadKind: white
+// Highway, blue Local, brown DirtTrack, yellow Bridge.
+func drawRoadGraphDebug(g *components.RoadGraph) {
+	for i := range g.Edges {
+		e := &g.Edges[i]
+		from := g.Nodes[e.From].Pos
+		to := g.Nodes[e.To].Pos
+		fr := from.ToRenderSpace(systems.CurrentOriginChunk)
+		tr := to.ToRenderSpace(systems.CurrentOriginChunk)
+		// Lift slightly so the line isn't buried in the road surface.
+		fr.Y += 0.5
+		tr.Y += 0.5
+		var col rl.Color
+		switch e.Kind {
+		case components.RoadHighway:
+			col = rl.White
+		case components.RoadLocal:
+			col = rl.Blue
+		case components.RoadDirtTrack:
+			col = rl.Brown
+		case components.RoadBridge:
+			col = rl.Yellow
+		default:
+			col = rl.Magenta
+		}
+		rl.DrawLine3D(fr, tr, col)
+	}
+	for i := range g.Nodes {
+		p := g.Nodes[i].Pos.ToRenderSpace(systems.CurrentOriginChunk)
+		p.Y += 0.5
+		rl.DrawCube(p, 0.6, 0.6, 0.6, rl.Black)
 	}
 }
 
@@ -430,6 +469,30 @@ func drawProp(meta components.PropMeta, pos rl.Vector3, yaw, scale float32) {
 		canopyTip := rl.Vector3{X: pos.X, Y: pos.Y + trunkH + canopyH, Z: pos.Z}
 		rl.DrawCylinderEx(trunkBase, trunkTop, trunkR, trunkR, 6, meta.TrunkColor)
 		rl.DrawCylinderEx(trunkTop, canopyTip, canopyR, 0, 6, meta.Color)
+	}
+}
+
+// makeStartingRoadGraph builds the Phase-4 test graph: a four-node chain
+// (n0 → n1 → n2 → n3) where n1→n2 is intentionally aimed across the first
+// river so the preprocessor can split it and tag the middle sub-edge
+// RoadBridge. n0→n1 is highway, n2→n3 is dirt track — visual proof that
+// kinds survive preprocessing.
+func makeStartingRoadGraph() components.RoadGraph {
+	wp := func(wx, wz float32) components.WorldPos {
+		return components.WorldPos{}.Add(rl.Vector3{X: wx, Y: 0, Z: wz})
+	}
+	return components.RoadGraph{
+		Nodes: []components.RoadNode{
+			{Pos: wp(0, -50)},  // n0 — start, south of river 1
+			{Pos: wp(15, -15)}, // n1 — south bank
+			{Pos: wp(15, 50)},  // n2 — north bank (n1→n2 crosses river 1)
+			{Pos: wp(-50, 80)}, // n3 — far NW
+		},
+		Edges: []components.RoadEdge{
+			{From: 0, To: 1, Kind: components.RoadHighway, Width: 4.0},
+			{From: 1, To: 2, Kind: components.RoadHighway, Width: 4.0},
+			{From: 2, To: 3, Kind: components.RoadDirtTrack, Width: 2.5},
+		},
 	}
 }
 

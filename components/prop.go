@@ -12,6 +12,10 @@ const (
 	PropRock
 	PropWater
 	PropBridge
+	PropRoadHighway
+	PropRoadLocal
+	PropRoadDirt
+	PropJunction
 	PropTypeMax
 )
 

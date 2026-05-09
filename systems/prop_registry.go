@@ -88,17 +88,52 @@ func NewPropTypeRegistry() *components.PropTypeRegistry {
 		BlocksMove: true,
 	}
 
-	// Bridge — wooden cube spanning the river. Traversable overrides the
-	// underlying water's BlocksMove for nav purposes.
+	// Bridge — wooden plank spanning the river. Length matches the road spawn
+	// step (4 m); width matches highway. Traversable overrides the underlying
+	// water's BlocksMove for nav purposes.
 	r.Metas[components.PropBridge] = components.PropMeta{
 		Primitive:   components.PrimitiveCube,
-		Size:        rl.Vector3{X: 8.0, Y: 0.8, Z: 4.0},
+		Size:        rl.Vector3{X: 4.0, Y: 0.4, Z: 4.0},
 		Color:       rl.Color{R: 110, G: 80, B: 50, A: 255},
 		Cover:       0.2,
 		HP:          1500,
-		BBoxRadius:  4.5,
+		BBoxRadius:  3.0,
 		BlocksLOS:   false,
 		BlocksMove:  false,
+		Traversable: true,
+	}
+
+	// Road surface placeholders. Plane primitive: Size.X = full road width
+	// (perpendicular to travel), Size.Z = step length along travel. Yaw is
+	// applied per-spawn so the plane rotates into segment direction.
+	r.Metas[components.PropRoadHighway] = components.PropMeta{
+		Primitive:   components.PrimitivePlane,
+		Size:        rl.Vector3{X: 4.0, Z: 4.0},
+		Color:       rl.Color{R: 50, G: 50, B: 55, A: 255},
+		BBoxRadius:  2.0,
+		Traversable: true,
+	}
+	r.Metas[components.PropRoadLocal] = components.PropMeta{
+		Primitive:   components.PrimitivePlane,
+		Size:        rl.Vector3{X: 3.0, Z: 4.0},
+		Color:       rl.Color{R: 110, G: 110, B: 115, A: 255},
+		BBoxRadius:  1.5,
+		Traversable: true,
+	}
+	r.Metas[components.PropRoadDirt] = components.PropMeta{
+		Primitive:   components.PrimitivePlane,
+		Size:        rl.Vector3{X: 2.5, Z: 4.0},
+		Color:       rl.Color{R: 130, G: 95, B: 60, A: 255},
+		BBoxRadius:  1.25,
+		Traversable: true,
+	}
+	// Junction — square plate sized per-spawn via uniform Scale (= 1.5 ×
+	// max-incident-edge-width). Single shared meta keeps the registry small.
+	r.Metas[components.PropJunction] = components.PropMeta{
+		Primitive:   components.PrimitivePlane,
+		Size:        rl.Vector3{X: 1.0, Z: 1.0},
+		Color:       rl.Color{R: 60, G: 60, B: 65, A: 255},
+		BBoxRadius:  0.7,
 		Traversable: true,
 	}
 

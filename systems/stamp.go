@@ -210,3 +210,80 @@ func (s *Stamper) RiverCut(cc components.ChunkCoord, polyline []components.World
 		// Rivers resource on respawn.
 	}
 }
+
+// RoadFlatten blends the chunk's heightmap toward a linear road profile
+// between two world-space endpoints over a strip of the given width. Profile
+// at distance d from the centre line is a cosine ramp from full replacement
+// (d = 0) to no change (d ≥ width/2):
+//
+//	w(d) = 0.5 * (1 + cos(pi * d / (width/2)))
+//	h    = lerp(h, target, w)
+//
+// where target is interpolated linearly between fromY and toY along the road.
+//
+// Unlike RiverCut (additive), this is a *blend toward target* — flattens a
+// strip of land to road height, fading back to the surrounding terrain at the
+// strip edges. Per-chunk; the caller (RoadSystem) decides which chunks an edge
+// touches. Modified is NOT set, by the same rule as river cuts.
+func (s *Stamper) RoadFlatten(cc components.ChunkCoord,
+	fromWX, fromWZ, fromY, toWX, toWZ, toY, width float32) {
+	if width <= 0 {
+		return
+	}
+	idx := s.indexRes.Get()
+	if idx == nil {
+		return
+	}
+	ent, ok := idx.Loaded[cc]
+	if !ok {
+		return
+	}
+	hm := s.heightmapMap.Get(ent)
+	if hm == nil {
+		return
+	}
+
+	dx := toWX - fromWX
+	dz := toWZ - fromWZ
+	lenSq := dx*dx + dz*dz
+	if lenSq <= 0 {
+		return
+	}
+
+	step := components.ChunkSize / float32(components.ChunkResolution-1)
+	baseX := float32(cc.X) * components.ChunkSize
+	baseZ := float32(cc.Z) * components.ChunkSize
+	halfW := width * 0.5
+	invHalfW := 1.0 / halfW
+
+	touched := false
+	for j := 0; j < components.ChunkResolution; j++ {
+		wz := baseZ + float32(j)*step
+		row := j * components.ChunkResolution
+		for i := 0; i < components.ChunkResolution; i++ {
+			wx := baseX + float32(i)*step
+			t := ((wx-fromWX)*dx + (wz-fromWZ)*dz) / lenSq
+			if t < 0 {
+				t = 0
+			} else if t > 1 {
+				t = 1
+			}
+			cx := fromWX + t*dx
+			cz := fromWZ + t*dz
+			ddx := wx - cx
+			ddz := wz - cz
+			d := float32(math.Sqrt(float64(ddx*ddx + ddz*ddz)))
+			if d >= halfW {
+				continue
+			}
+			targetY := fromY + t*(toY-fromY)
+			w := 0.5 * (1 + float32(math.Cos(math.Pi*float64(d*invHalfW))))
+			hm.Heights[row+i] = hm.Heights[row+i]*(1-w) + targetY*w
+			touched = true
+		}
+	}
+
+	if touched && !s.meshDirtyMap.Has(ent) {
+		s.meshDirtyMap.Add(ent, &components.MeshDirty{})
+	}
+}

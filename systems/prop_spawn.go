@@ -42,6 +42,10 @@ const (
 // so a tree spawned in the riverbed would stand on a plinth above the water.
 const minPropRiverDistance float32 = 3.0
 
+// roadClearanceMargin is added to (edge.Width / 2) for the road-vs-prop
+// rejection — a 1 m buffer between the road shoulder and the closest tree.
+const roadClearanceMargin float32 = 1.0
+
 // Salts for hashFloat — distinct values keep parallel rolls de-correlated
 // (otherwise rollTree and rollBush in the same cell would always be equal,
 // visibly striping the world).
@@ -68,6 +72,7 @@ type PropSpawnSystem struct {
 	lodRelevantMap *ecs.Map[components.LODRelevant]
 	propIndexRes   ecs.Resource[PropChunkIndex]
 	riversRes      ecs.Resource[components.Rivers]
+	roadGraphRes   ecs.Resource[components.RoadGraph]
 }
 
 func (sys *PropSpawnSystem) InitUI(w *ecs.World) {
@@ -78,6 +83,7 @@ func (sys *PropSpawnSystem) InitUI(w *ecs.World) {
 	sys.lodRelevantMap = ecs.NewMap[components.LODRelevant](w)
 	sys.propIndexRes = ecs.NewResource[PropChunkIndex](w)
 	sys.riversRes = ecs.NewResource[components.Rivers](w)
+	sys.roadGraphRes = ecs.NewResource[components.RoadGraph](w)
 }
 
 func (PropSpawnSystem) Name() string { return "prop_spawn" }
@@ -110,6 +116,7 @@ func (sys PropSpawnSystem) Update(ctx core.UpdateContext) {
 	if rivers != nil {
 		riverPolylines = rivers.Polylines
 	}
+	graph := sys.roadGraphRes.Get()
 
 	var pending []pendingProp
 	var clearedChunks []ecs.Entity
@@ -142,6 +149,9 @@ func (sys PropSpawnSystem) Update(ctx core.UpdateContext) {
 
 				if len(riverPolylines) > 0 &&
 					nearestRiverDistance(wx, wz, riverPolylines) < minPropRiverDistance {
+					continue
+				}
+				if graph != nil && tooCloseToRoad(graph, wx, wz) {
 					continue
 				}
 
@@ -201,6 +211,23 @@ func (sys PropSpawnSystem) Update(ctx core.UpdateContext) {
 	for _, e := range clearedChunks {
 		sys.propsDirtyMap.Remove(e)
 	}
+}
+
+// tooCloseToRoad rejects candidate (wx, wz) if any edge's centre line passes
+// within (Width/2 + margin) of it. O(edges) per candidate; fine at hand-
+// authored graph sizes — switch to a chunk-bucketed spatial index when the
+// graph grows past a few thousand edges.
+func tooCloseToRoad(g *components.RoadGraph, wx, wz float32) bool {
+	for i := range g.Edges {
+		e := &g.Edges[i]
+		ax, az := worldXZ(g.Nodes[e.From].Pos)
+		bx, bz := worldXZ(g.Nodes[e.To].Pos)
+		threshold := e.Width*0.5 + roadClearanceMargin
+		if pointToSegment2D(wx, wz, ax, az, bx, bz) < threshold {
+			return true
+		}
+	}
+	return false
 }
 
 // pickTreeType: deterministic Oak/Pine/Birch choice for a chunk-cell. Hash is
