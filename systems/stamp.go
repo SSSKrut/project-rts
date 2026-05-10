@@ -136,15 +136,24 @@ func (s *Stamper) StampHeightmap(center components.WorldPos, kernel HeightKernel
 	}
 }
 
-// RiverCut applies a cosine half-falloff cut to a single chunk's heightmap
-// along a polyline. Same kernel profile as Crater but with a *line* centre:
-// at each vertex, distance to the polyline drives a cosine ramp from -depth
-// at the line to 0 at width.
-//
-// Per-chunk (RiverSystem decides which chunks). Crucially does NOT stamp
-// Modified — river cuts are procedural, derivable from the rivers resource
-// on respawn, so they have zero disk footprint.
+// RiverCut applies a cosine half-falloff cut along a polyline. Wrapper over
+// cutAlongPolyline; semantically a "river bed", but the kernel is identical to
+// the Trench cut. Does NOT set Modified — derivable on respawn.
 func (s *Stamper) RiverCut(cc components.ChunkCoord, polyline []components.WorldPos, width, depth float32) {
+	s.cutAlongPolyline(cc, polyline, width, depth)
+}
+
+// Trench cuts a defensive earthwork along a polyline. Same kernel as RiverCut
+// but kept separate at the API surface so callers (river vs. earthwork) read
+// distinct intent. Does NOT set Modified.
+func (s *Stamper) Trench(cc components.ChunkCoord, polyline []components.WorldPos, width, depth float32) {
+	s.cutAlongPolyline(cc, polyline, width, depth)
+}
+
+// cutAlongPolyline is the shared cosine-falloff polyline-cut kernel:
+// for each chunk vertex, distance d to the nearest segment of polyline drives
+// a cosine ramp from -depth at the line centre to 0 at width.
+func (s *Stamper) cutAlongPolyline(cc components.ChunkCoord, polyline []components.WorldPos, width, depth float32) {
 	if width <= 0 || len(polyline) < 2 {
 		return
 	}
@@ -202,12 +211,64 @@ func (s *Stamper) RiverCut(cc components.ChunkCoord, polyline []components.World
 		}
 	}
 
-	if touched {
-		if !s.meshDirtyMap.Has(ent) {
-			s.meshDirtyMap.Add(ent, &components.MeshDirty{})
+	if touched && !s.meshDirtyMap.Has(ent) {
+		s.meshDirtyMap.Add(ent, &components.MeshDirty{})
+	}
+}
+
+// RectCut blends the chunk's heightmap toward a flat target plate inside an
+// AABB footprint, with a cosine-falloff skirt of falloffWidth metres outside
+// the footprint blending back to the original. Used to sink bunker pads into
+// the surface. targetY is referenceY - depth where referenceY is the procgen
+// surface at the footprint centre — gives a flat floor regardless of natural
+// slope under the building. Does NOT set Modified.
+func (s *Stamper) RectCut(cc components.ChunkCoord, footprint components.AABB2D, depth, falloffWidth float32) {
+	if falloffWidth < 0 {
+		falloffWidth = 0
+	}
+	idx := s.indexRes.Get()
+	if idx == nil {
+		return
+	}
+	ent, ok := idx.Loaded[cc]
+	if !ok {
+		return
+	}
+	hm := s.heightmapMap.Get(ent)
+	if hm == nil {
+		return
+	}
+
+	step := components.ChunkSize / float32(components.ChunkResolution-1)
+	baseX := float32(cc.X) * components.ChunkSize
+	baseZ := float32(cc.Z) * components.ChunkSize
+	referenceY := GroundHeight(footprint.CenterX(), footprint.CenterZ())
+	targetY := referenceY - depth
+
+	touched := false
+	for j := 0; j < components.ChunkResolution; j++ {
+		wz := baseZ + float32(j)*step
+		row := j * components.ChunkResolution
+		for i := 0; i < components.ChunkResolution; i++ {
+			wx := baseX + float32(i)*step
+			d := footprint.DistanceXZ(wx, wz)
+			if d == 0 {
+				hm.Heights[row+i] = targetY
+				touched = true
+				continue
+			}
+			if falloffWidth <= 0 || d >= falloffWidth {
+				continue
+			}
+			w := 0.5 * (1 + float32(math.Cos(math.Pi*float64(d/falloffWidth))))
+			cur := hm.Heights[row+i]
+			hm.Heights[row+i] = cur*(1-w) + targetY*w
+			touched = true
 		}
-		// Deliberately not setting Modified — river cuts regenerate from the
-		// Rivers resource on respawn.
+	}
+
+	if touched && !s.meshDirtyMap.Has(ent) {
+		s.meshDirtyMap.Add(ent, &components.MeshDirty{})
 	}
 }
 

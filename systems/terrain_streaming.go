@@ -44,28 +44,32 @@ func NewTerrainChunkIndex() TerrainChunkIndex {
 // HeightmapDirty / MeshDirty for downstream systems. Runs at 4 Hz; the anchor
 // can't outrun a chunk in less than that even at high speed.
 type TerrainStreamingSystem struct {
-	anchorFilter   *ecs.Filter2[components.LODAnchor, components.WorldPos]
-	chunkFilter    *ecs.Filter2[components.ChunkCoord, components.TerrainChunk]
-	indexRes       ecs.Resource[TerrainChunkIndex]
-	propIndexRes   ecs.Resource[PropChunkIndex]
-	posMap         *ecs.Map[components.WorldPos]
-	chunkCoordMap  *ecs.Map[components.ChunkCoord]
-	chunkMarkerMap *ecs.Map[components.TerrainChunk]
-	heightDirtyMap *ecs.Map[components.HeightmapDirty]
-	meshDirtyMap   *ecs.Map[components.MeshDirty]
-	propsDirtyMap  *ecs.Map[components.PropsDirty]
-	chunkMeshMap   *ecs.Map[components.ChunkMesh]
-	lodActiveMap   *ecs.Map[components.LODActive]
-	lodRelevantMap *ecs.Map[components.LODRelevant]
-	heightmapMap   *ecs.Map[components.Heightmap]
-	modifiedMap    *ecs.Map[components.Modified]
+	anchorFilter      *ecs.Filter2[components.LODAnchor, components.WorldPos]
+	chunkFilter       *ecs.Filter2[components.ChunkCoord, components.TerrainChunk]
+	buildingFilter    *ecs.Filter2[components.Building, components.WorldPos]
+	indexRes          ecs.Resource[TerrainChunkIndex]
+	propIndexRes      ecs.Resource[PropChunkIndex]
+	buildingIndexRes  ecs.Resource[BuildingChildIndex]
+	posMap            *ecs.Map[components.WorldPos]
+	chunkCoordMap     *ecs.Map[components.ChunkCoord]
+	chunkMarkerMap    *ecs.Map[components.TerrainChunk]
+	heightDirtyMap    *ecs.Map[components.HeightmapDirty]
+	meshDirtyMap      *ecs.Map[components.MeshDirty]
+	propsDirtyMap     *ecs.Map[components.PropsDirty]
+	chunkMeshMap      *ecs.Map[components.ChunkMesh]
+	lodActiveMap      *ecs.Map[components.LODActive]
+	lodRelevantMap    *ecs.Map[components.LODRelevant]
+	heightmapMap      *ecs.Map[components.Heightmap]
+	modifiedMap       *ecs.Map[components.Modified]
 }
 
 func (sys *TerrainStreamingSystem) InitUI(w *ecs.World) {
 	sys.anchorFilter = ecs.NewFilter2[components.LODAnchor, components.WorldPos](w)
 	sys.chunkFilter = ecs.NewFilter2[components.ChunkCoord, components.TerrainChunk](w)
+	sys.buildingFilter = ecs.NewFilter2[components.Building, components.WorldPos](w)
 	sys.indexRes = ecs.NewResource[TerrainChunkIndex](w)
 	sys.propIndexRes = ecs.NewResource[PropChunkIndex](w)
+	sys.buildingIndexRes = ecs.NewResource[BuildingChildIndex](w)
 	sys.posMap = ecs.NewMap[components.WorldPos](w)
 	sys.chunkCoordMap = ecs.NewMap[components.ChunkCoord](w)
 	sys.chunkMarkerMap = ecs.NewMap[components.TerrainChunk](w)
@@ -250,6 +254,22 @@ func (sys TerrainStreamingSystem) Update(ctx core.UpdateContext) {
 	// logged, not fatal — a missed flush degrades to "this edit was lost"
 	// rather than crashing the streaming loop.
 	propIdx := sys.propIndexRes.Get()
+	bIdx := sys.buildingIndexRes.Get()
+
+	// Build a chunk → buildings-rooted-here map only if any buildings exist
+	// and we're actually evicting something — keeps the common path cheap.
+	var buildingsByChunk map[components.ChunkCoord][]ecs.Entity
+	if bIdx != nil && len(evictions) > 0 {
+		qb := sys.buildingFilter.Query()
+		for qb.Next() {
+			_, pos := qb.Get()
+			if buildingsByChunk == nil {
+				buildingsByChunk = make(map[components.ChunkCoord][]ecs.Entity)
+			}
+			buildingsByChunk[pos.Chunk] = append(buildingsByChunk[pos.Chunk], qb.Entity())
+		}
+	}
+
 	for _, ev := range evictions {
 		if sys.modifiedMap.Has(ev.id) {
 			if hm := sys.heightmapMap.Get(ev.id); hm != nil {
@@ -258,16 +278,28 @@ func (sys TerrainStreamingSystem) Update(ctx core.UpdateContext) {
 				}
 			}
 		}
-		// Tear down every prop / water-prop / bridge entity that lived in
-		// this chunk before the chunk itself goes away. The chunk owns the
-		// prop lifecycle — props will respawn deterministically next time
-		// the chunk is streamed in.
+		// Tear down every prop / water-prop / bridge / road-surface entity
+		// that lived in this chunk. Chunk owns the prop lifecycle; props
+		// respawn deterministically on chunk return.
 		if propIdx != nil {
 			if props, ok := propIdx.Loaded[ev.cc]; ok {
 				for _, p := range props {
 					ctx.World.RemoveEntity(p)
 				}
 				delete(propIdx.Loaded, ev.cc)
+			}
+		}
+		// Tear down every building child (walls / floors / etc.) for any
+		// Building rooted in this chunk. The Building root is AlwaysActive
+		// and survives — children respawn on chunk return.
+		if bIdx != nil {
+			for _, root := range buildingsByChunk[ev.cc] {
+				if children, ok := bIdx.Loaded[root]; ok {
+					for _, c := range children {
+						ctx.World.RemoveEntity(c)
+					}
+					delete(bIdx.Loaded, root)
+				}
 			}
 		}
 		if mesh := sys.chunkMeshMap.Get(ev.id); mesh != nil && mesh.Uploaded {

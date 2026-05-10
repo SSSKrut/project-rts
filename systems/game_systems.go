@@ -32,10 +32,16 @@ func (system *LODSystem) InitUI(w *ecs.World) {
 	system.posMap = ecs.NewMap[components.WorldPos](w)
 	system.alwaysActiveMap = ecs.NewMap[components.AlwaysActive](w)
 	system.anchorFilter = ecs.NewFilter2[components.LODAnchor, components.WorldPos](w)
-	// TerrainChunk: LOD owned by TerrainStreamingSystem.
-	// Prop: pinned to Relevant by PropSpawnSystem; lifecycle owned by host chunk.
+	// TerrainChunk:     LOD owned by TerrainStreamingSystem.
+	// Prop:             pinned to Relevant by PropSpawnSystem.
+	// BuildingMember:   pinned to Relevant by BuildingSystem; chunk owns the
+	//                   lifecycle, so generic LOD is moot.
 	system.posFilter = ecs.NewFilter1[components.WorldPos](w).
-		Without(ecs.C[components.TerrainChunk](), ecs.C[components.Prop]())
+		Without(
+			ecs.C[components.TerrainChunk](),
+			ecs.C[components.Prop](),
+			ecs.C[components.BuildingMember](),
+		)
 }
 
 func (LODSystem) Name() string { return "lod" }

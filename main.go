@@ -70,6 +70,13 @@ func main() {
 	fmt.Printf("road graph: nodes=%d edges=%d bridges=%d\n",
 		len(roadGraph.Nodes), len(roadGraph.Edges), bridgeEdges)
 
+	buildingPlans := components.BuildingPlanList{Plans: makeStartingBuildings()}
+	ecs.AddResource(app.World, &buildingPlans)
+	buildingIndex := systems.NewBuildingChildIndex()
+	ecs.AddResource(app.World, &buildingIndex)
+	trenches := components.TrenchNetwork{Lines: makeStartingTrenches()}
+	ecs.AddResource(app.World, &trenches)
+
 	// Defers run LIFO; this fires before window/audio teardown — while
 	// app.World is still alive — flushing any in-memory chunk modifications.
 	defer systems.FlushModifiedChunks(app.World, systems.SaveDir)
@@ -80,15 +87,17 @@ func main() {
 	//   3. terrain_gen        — fill remaining HeightmapDirty via procgen
 	//   4. river              — cut + water-props (after gen, before mesh & props)
 	//   5. road               — flatten + road/bridge/junction props
-	//   6. prop_spawn         — vegetation/rocks (sees road clearance)
-	//   7. terrain_mesh       — build & upload GPU mesh
-	//   8. ground_stick       — clamp anchor Y to surface
-	//   9. lod                — units-only LOD
-	//  10. movement
-	//  11. spatial_audio
-	//  12. streaming          — node graph (smart-spaces; not terrain)
-	//  13. orbit              — camera input
-	//  14. camera             — sync ECS camera to systems.CurrentCamera
+	//   6. building           — bunker RectCut + walls/floors/stairs spawn
+	//   7. trench             — earthworks polyline cut
+	//   8. prop_spawn         — vegetation/rocks (sees all clearance)
+	//   9. terrain_mesh       — build & upload GPU mesh
+	//  10. ground_stick       — clamp anchor Y to surface
+	//  11. lod                — units-only LOD
+	//  12. movement
+	//  13. spatial_audio
+	//  14. streaming          — node graph (smart-spaces; not terrain)
+	//  15. orbit              — camera input
+	//  16. camera             — sync ECS camera to systems.CurrentCamera
 	terrainStreamingSys := &systems.TerrainStreamingSystem{}
 	terrainStreamingSys.InitUI(app.World)
 
@@ -103,6 +112,12 @@ func main() {
 
 	roadSys := &systems.RoadSystem{}
 	roadSys.InitUI(app.World)
+
+	buildingSys := &systems.BuildingSystem{}
+	buildingSys.InitUI(app.World)
+
+	trenchSys := &systems.TrenchSystem{}
+	trenchSys.InitUI(app.World)
 
 	propSpawnSys := &systems.PropSpawnSystem{}
 	propSpawnSys.InitUI(app.World)
@@ -145,6 +160,8 @@ func main() {
 	app.AddSystem(terrainGenSys)
 	app.AddSystem(riverSys)
 	app.AddSystem(roadSys)
+	app.AddSystem(buildingSys)
+	app.AddSystem(trenchSys)
 	app.AddSystem(propSpawnSys)
 	app.AddSystem(terrainMeshSys)
 	app.AddSystem(groundStickSys)
@@ -192,6 +209,33 @@ func main() {
 	})
 	activeCamMap.Add(camEnt, &components.ActiveCamera{})
 
+	// Building roots — one entity per BuildingPlan. Root carries Building +
+	// WorldPos + AlwaysActive so it survives chunk eviction; child entities
+	// (walls/floors/...) are spawned by BuildingSystem on chunk presence and
+	// torn down on eviction via BuildingChildIndex.
+	buildingMap := ecs.NewMap[components.Building](app.World)
+	for i := range buildingPlans.Plans {
+		p := &buildingPlans.Plans[i]
+		root := app.World.NewEntity()
+		fp := components.AABB2D{
+			MinX: p.Pos.Local.X + float32(p.Pos.Chunk.X)*components.ChunkSize - p.Size.X*0.5,
+			MinZ: p.Pos.Local.Z + float32(p.Pos.Chunk.Z)*components.ChunkSize - p.Size.Y*0.5,
+			MaxX: p.Pos.Local.X + float32(p.Pos.Chunk.X)*components.ChunkSize + p.Size.X*0.5,
+			MaxZ: p.Pos.Local.Z + float32(p.Pos.Chunk.Z)*components.ChunkSize + p.Size.Y*0.5,
+		}
+		bpos := p.Pos
+		bpos.Local.Y = systems.GroundHeight(fp.CenterX(), fp.CenterZ())
+		posMap.Add(root, &bpos)
+		buildingMap.Add(root, &components.Building{
+			Kind:      p.Kind,
+			Stories:   p.Stories,
+			Yaw:       p.Yaw,
+			Footprint: fp,
+			Seed:      p.Seed,
+		})
+		alwaysActiveMap.Add(root, &components.AlwaysActive{})
+	}
+
 	// Mobile entities at Relevant LOD. WorldPos via Add from origin so any
 	// negative offsets fold into the neighbouring chunk.
 	for i := 0; i < 300; i++ {
@@ -210,18 +254,31 @@ func main() {
 		})
 	}
 
-	// Render filters. Unit cubes exclude terrain chunks (rendered via dedicated
-	// chunk filters) and props (rendered via propFilter).
+	// Render filters. Unit cubes exclude terrain chunks, props, and building
+	// children (each has its own renderer).
 	activeRenderFilter := ecs.NewFilter2[components.WorldPos, components.LODActive](app.World).
-		Without(ecs.C[components.TerrainChunk](), ecs.C[components.Prop]())
+		Without(
+			ecs.C[components.TerrainChunk](),
+			ecs.C[components.Prop](),
+			ecs.C[components.BuildingMember](),
+			ecs.C[components.Building](),
+		)
 	relevantRenderFilter := ecs.NewFilter2[components.WorldPos, components.LODRelevant](app.World).
-		Without(ecs.C[components.TerrainChunk](), ecs.C[components.Prop]())
+		Without(
+			ecs.C[components.TerrainChunk](),
+			ecs.C[components.Prop](),
+			ecs.C[components.BuildingMember](),
+			ecs.C[components.Building](),
+		)
 	chunkActiveFilter := ecs.NewFilter3[components.WorldPos, components.ChunkMesh, components.LODActive](app.World)
 	chunkRelevantFilter := ecs.NewFilter3[components.WorldPos, components.ChunkMesh, components.LODRelevant](app.World)
 	// Single naive iteration over all props regardless of LOD tier (in
 	// practice every prop is LODRelevant). Move to instanced rendering when
 	// 5k+ props in frustum cause spikes.
 	propFilter := ecs.NewFilter2[components.WorldPos, components.Prop](app.World)
+	wallRenderFilter := ecs.NewFilter2[components.WorldPos, components.WallSegment](app.World)
+	floorRenderFilter := ecs.NewFilter2[components.WorldPos, components.Floor](app.World)
+	stairsRenderFilter := ecs.NewFilter2[components.WorldPos, components.Stairs](app.World)
 
 	// Default material shared by every chunk DrawMesh. Loaded once after the
 	// GL context exists; per-vertex colour does the LOD-tier debug shading.
@@ -348,6 +405,30 @@ func main() {
 			}
 		}
 
+		// Floors first so walls / stairs draw above without z-fighting.
+		floorLive := 0
+		qf := floorRenderFilter.Query()
+		for qf.Next() {
+			pos, fl := qf.Get()
+			renderPos := pos.ToRenderSpace(systems.CurrentOriginChunk)
+			drawBuildingFloor(renderPos, *fl)
+			floorLive++
+		}
+		wallLive := 0
+		qw := wallRenderFilter.Query()
+		for qw.Next() {
+			pos, ws := qw.Get()
+			renderPos := pos.ToRenderSpace(systems.CurrentOriginChunk)
+			drawBuildingWall(renderPos, *ws)
+			wallLive++
+		}
+		qst := stairsRenderFilter.Query()
+		for qst.Next() {
+			pos, st := qst.Get()
+			renderPos := pos.ToRenderSpace(systems.CurrentOriginChunk)
+			drawBuildingStairs(renderPos, *st)
+		}
+
 		// Road-graph debug overlay. Hold G to draw the whole graph (lines +
 		// node markers) on top of the scene — useful for sanity-checking
 		// preprocessing and bridge detection without walking to every chunk.
@@ -364,8 +445,9 @@ func main() {
 		hud := fmt.Sprintf("Props live: %d  |  Rivers: %d  |  Bridges live: %d",
 			propLive, len(rivers.Polylines), bridgeLive)
 		rl.DrawText(hud, 10, 90, 20, rl.DarkGray)
-		hud2 := fmt.Sprintf("Roads: nodes=%d edges=%d bridge-edges=%d",
-			len(roadGraph.Nodes), len(roadGraph.Edges), bridgeEdges)
+		hud2 := fmt.Sprintf("Roads: nodes=%d edges=%d bridge-edges=%d  |  Buildings: plans=%d walls=%d floors=%d  |  Trenches: %d",
+			len(roadGraph.Nodes), len(roadGraph.Edges), bridgeEdges,
+			len(buildingPlans.Plans), wallLive, floorLive, len(trenches.Lines))
 		rl.DrawText(hud2, 10, 110, 20, rl.DarkGray)
 
 		rl.EndDrawing()
@@ -494,6 +576,157 @@ func makeStartingRoadGraph() components.RoadGraph {
 			{From: 2, To: 3, Kind: components.RoadDirtTrack, Width: 2.5},
 		},
 	}
+}
+
+// makeStartingBuildings — Phase 5 hardcoded test scene: a single-storey house,
+// a two-storey house (verifies stairs), and a sunken bunker (verifies
+// RectCut). Footprints are sized to fit cleanly inside their host chunks (P5).
+func makeStartingBuildings() []components.BuildingPlan {
+	wp := func(wx, wz float32) components.WorldPos {
+		return components.WorldPos{}.Add(rl.Vector3{X: wx, Y: 0, Z: wz})
+	}
+	return []components.BuildingPlan{
+		{
+			Pos:     wp(-25, -40),
+			Kind:    components.BuildingHouse,
+			Stories: 1,
+			Size:    rl.Vector2{X: 8, Y: 8},
+			Yaw:     0,
+			Seed:    0xA1,
+		},
+		{
+			Pos:     wp(40, 30),
+			Kind:    components.BuildingHouse,
+			Stories: 2,
+			Size:    rl.Vector2{X: 12, Y: 10},
+			Yaw:     0,
+			Seed:    0xB2,
+		},
+		{
+			Pos:     wp(-30, 55),
+			Kind:    components.BuildingBunker,
+			Stories: 1,
+			Size:    rl.Vector2{X: 10, Y: 10},
+			Yaw:     0,
+			Seed:    0xC3,
+		},
+	}
+}
+
+// makeStartingTrenches — one ~30 m defensive earthwork running between the
+// bunker and the road, so persistence + clearance are exercised in one place.
+func makeStartingTrenches() []components.Trench {
+	wp := func(wx, wz float32) components.WorldPos {
+		return components.WorldPos{}.Add(rl.Vector3{X: wx, Y: 0, Z: wz})
+	}
+	return []components.Trench{
+		{
+			Points: []components.WorldPos{
+				wp(-50, 40),
+				wp(-35, 50),
+				wp(-15, 55),
+			},
+			Width: 1.5,
+			Depth: 1.5,
+		},
+	}
+}
+
+// drawBuildingFloor draws a horizontal grey plate at the floor's WorldPos.
+// Floor.Y is the slab top — drop a thin slab below it.
+func drawBuildingFloor(pos rl.Vector3, f components.Floor) {
+	const slabThickness float32 = 0.15
+	// Centre cube vertically below the floor surface.
+	c := rl.Vector3{X: pos.X, Y: pos.Y - slabThickness*0.5, Z: pos.Z}
+	rl.DrawCubeV(c, rl.Vector3{X: f.SizeX, Y: slabThickness, Z: f.SizeZ},
+		rl.Color{R: 110, G: 110, B: 120, A: 255})
+}
+
+// drawBuildingWall renders a wall segment with optional opening (door / window).
+// WallSegment local axes after Rotatef(Yaw): +Z = along wall, +X = thickness,
+// +Y = up. Walls without an opening are one cube; walls with one are split
+// into left + right solids, lintel above and (for windows) sill below, with
+// a coloured panel filling the opening.
+func drawBuildingWall(pos rl.Vector3, w components.WallSegment) {
+	wallCol := rl.Color{R: 175, G: 170, B: 165, A: 255}
+	doorCol := rl.Color{R: 90, G: 60, B: 35, A: 255}
+	winCol := rl.Color{R: 160, G: 200, B: 230, A: 200}
+	lintelCol := rl.Color{R: 150, G: 145, B: 140, A: 255}
+
+	rl.PushMatrix()
+	rl.Translatef(pos.X, pos.Y, pos.Z)
+	rl.Rotatef(w.Yaw*(180.0/math.Pi), 0, 1, 0)
+
+	if w.OpeningKind == components.OpeningNone || w.OpeningWidth <= 0 {
+		c := rl.Vector3{X: 0, Y: w.Height * 0.5, Z: w.Length * 0.5}
+		rl.DrawCubeV(c, rl.Vector3{X: w.Thickness, Y: w.Height, Z: w.Length}, wallCol)
+		rl.PopMatrix()
+		return
+	}
+
+	openingCenter := w.OpeningCenterT * w.Length
+	openStart := openingCenter - w.OpeningWidth*0.5
+	openEnd := openingCenter + w.OpeningWidth*0.5
+	if openStart < 0 {
+		openStart = 0
+	}
+	if openEnd > w.Length {
+		openEnd = w.Length
+	}
+
+	if openStart > 0 {
+		c := rl.Vector3{X: 0, Y: w.Height * 0.5, Z: openStart * 0.5}
+		rl.DrawCubeV(c, rl.Vector3{X: w.Thickness, Y: w.Height, Z: openStart}, wallCol)
+	}
+	if openEnd < w.Length {
+		rightLen := w.Length - openEnd
+		c := rl.Vector3{X: 0, Y: w.Height * 0.5, Z: openEnd + rightLen*0.5}
+		rl.DrawCubeV(c, rl.Vector3{X: w.Thickness, Y: w.Height, Z: rightLen}, wallCol)
+	}
+
+	// Sill (only when bottom > 0, i.e. windows).
+	if w.OpeningBottom > 0 {
+		c := rl.Vector3{X: 0, Y: w.OpeningBottom * 0.5, Z: openingCenter}
+		rl.DrawCubeV(c, rl.Vector3{X: w.Thickness, Y: w.OpeningBottom, Z: openEnd - openStart}, lintelCol)
+	}
+	// Lintel above opening.
+	lintelBottom := w.OpeningBottom + w.OpeningHeight
+	if lintelBottom < w.Height {
+		lintelH := w.Height - lintelBottom
+		c := rl.Vector3{X: 0, Y: lintelBottom + lintelH*0.5, Z: openingCenter}
+		rl.DrawCubeV(c, rl.Vector3{X: w.Thickness, Y: lintelH, Z: openEnd - openStart}, lintelCol)
+	}
+
+	// Panel inside the opening.
+	panelY := w.OpeningBottom + w.OpeningHeight*0.5
+	switch w.OpeningKind {
+	case components.OpeningDoor:
+		c := rl.Vector3{X: 0, Y: panelY, Z: openingCenter}
+		rl.DrawCubeV(c, rl.Vector3{X: w.Thickness * 0.6, Y: w.OpeningHeight, Z: openEnd - openStart}, doorCol)
+	case components.OpeningWindow:
+		c := rl.Vector3{X: 0, Y: panelY, Z: openingCenter}
+		rl.DrawCubeV(c, rl.Vector3{X: w.Thickness * 0.3, Y: w.OpeningHeight, Z: openEnd - openStart}, winCol)
+	}
+
+	rl.PopMatrix()
+}
+
+// drawBuildingStairs draws a tilted slab approximating a stairwell. WorldPos
+// is the bottom-of-stairs anchor; slab tilts up along Yaw (+Z by default).
+func drawBuildingStairs(pos rl.Vector3, s components.Stairs) {
+	col := rl.Color{R: 130, G: 110, B: 95, A: 255}
+	rl.PushMatrix()
+	rl.Translatef(pos.X, pos.Y, pos.Z)
+	rl.Rotatef(s.Yaw*(180.0/math.Pi), 0, 1, 0)
+	// Pitch by angle = atan(Rise/Length) around local X axis. raylib's Rotatef
+	// expects degrees; do everything in degrees from here.
+	pitchDeg := float32(math.Atan2(float64(s.Rise), float64(s.Length))) * 180.0 / math.Pi
+	rl.Rotatef(-pitchDeg, 1, 0, 0)
+	// Slab centred along forward (Z) so its midpoint lies above the diagonal.
+	hyp := float32(math.Sqrt(float64(s.Length*s.Length + s.Rise*s.Rise)))
+	c := rl.Vector3{X: 0, Y: 0.1, Z: hyp * 0.5}
+	rl.DrawCubeV(c, rl.Vector3{X: s.Width, Y: 0.2, Z: hyp}, col)
+	rl.PopMatrix()
 }
 
 // makeStartingRivers returns the hand-authored river polylines. World-unit

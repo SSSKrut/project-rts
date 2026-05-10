@@ -46,6 +46,15 @@ const minPropRiverDistance float32 = 3.0
 // rejection — a 1 m buffer between the road shoulder and the closest tree.
 const roadClearanceMargin float32 = 1.0
 
+// minPropBuildingClearance keeps trees / rocks / bushes off building
+// footprints (and well away from walls).
+const minPropBuildingClearance float32 = 1.5
+
+// minPropTrenchClearance — same idea as river/road clearance but for
+// earthworks. Trees standing on the lip of a trench look broken; a small
+// buffer keeps the silhouette readable.
+const minPropTrenchClearance float32 = 1.0
+
 // Salts for hashFloat — distinct values keep parallel rolls de-correlated
 // (otherwise rollTree and rollBush in the same cell would always be equal,
 // visibly striping the world).
@@ -73,6 +82,8 @@ type PropSpawnSystem struct {
 	propIndexRes   ecs.Resource[PropChunkIndex]
 	riversRes      ecs.Resource[components.Rivers]
 	roadGraphRes   ecs.Resource[components.RoadGraph]
+	trenchRes      ecs.Resource[components.TrenchNetwork]
+	buildingFilter *ecs.Filter2[components.Building, components.WorldPos]
 }
 
 func (sys *PropSpawnSystem) InitUI(w *ecs.World) {
@@ -84,6 +95,8 @@ func (sys *PropSpawnSystem) InitUI(w *ecs.World) {
 	sys.propIndexRes = ecs.NewResource[PropChunkIndex](w)
 	sys.riversRes = ecs.NewResource[components.Rivers](w)
 	sys.roadGraphRes = ecs.NewResource[components.RoadGraph](w)
+	sys.trenchRes = ecs.NewResource[components.TrenchNetwork](w)
+	sys.buildingFilter = ecs.NewFilter2[components.Building, components.WorldPos](w)
 }
 
 func (PropSpawnSystem) Name() string { return "prop_spawn" }
@@ -117,6 +130,16 @@ func (sys PropSpawnSystem) Update(ctx core.UpdateContext) {
 		riverPolylines = rivers.Polylines
 	}
 	graph := sys.roadGraphRes.Get()
+	trenches := sys.trenchRes.Get()
+
+	// Snapshot building footprints for clearance — usually a handful, fits
+	// happily in a small slice.
+	var buildings []components.AABB2D
+	qb := sys.buildingFilter.Query()
+	for qb.Next() {
+		b, _ := qb.Get()
+		buildings = append(buildings, b.Footprint)
+	}
 
 	var pending []pendingProp
 	var clearedChunks []ecs.Entity
@@ -152,6 +175,12 @@ func (sys PropSpawnSystem) Update(ctx core.UpdateContext) {
 					continue
 				}
 				if graph != nil && tooCloseToRoad(graph, wx, wz) {
+					continue
+				}
+				if len(buildings) > 0 && tooCloseToBuilding(buildings, wx, wz) {
+					continue
+				}
+				if trenches != nil && tooCloseToTrench(trenches.Lines, wx, wz) {
 					continue
 				}
 
@@ -211,6 +240,34 @@ func (sys PropSpawnSystem) Update(ctx core.UpdateContext) {
 	for _, e := range clearedChunks {
 		sys.propsDirtyMap.Remove(e)
 	}
+}
+
+// tooCloseToBuilding rejects candidates inside a building footprint or within
+// minPropBuildingClearance metres of its perimeter.
+func tooCloseToBuilding(footprints []components.AABB2D, wx, wz float32) bool {
+	for i := range footprints {
+		if footprints[i].DistanceXZ(wx, wz) < minPropBuildingClearance {
+			return true
+		}
+	}
+	return false
+}
+
+// tooCloseToTrench rejects candidates within (Width/2 + margin) of any trench
+// polyline segment.
+func tooCloseToTrench(lines []components.Trench, wx, wz float32) bool {
+	for i := range lines {
+		t := &lines[i]
+		threshold := t.Width*0.5 + minPropTrenchClearance
+		for j := 0; j+1 < len(t.Points); j++ {
+			ax, az := worldXZ(t.Points[j])
+			bx, bz := worldXZ(t.Points[j+1])
+			if pointToSegment2D(wx, wz, ax, az, bx, bz) < threshold {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // tooCloseToRoad rejects candidate (wx, wz) if any edge's centre line passes
