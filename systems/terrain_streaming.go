@@ -50,6 +50,7 @@ type TerrainStreamingSystem struct {
 	indexRes          ecs.Resource[TerrainChunkIndex]
 	propIndexRes      ecs.Resource[PropChunkIndex]
 	buildingIndexRes  ecs.Resource[BuildingChildIndex]
+	coverSlotIndexRes ecs.Resource[CoverSlotIndex]
 	posMap            *ecs.Map[components.WorldPos]
 	chunkCoordMap     *ecs.Map[components.ChunkCoord]
 	chunkMarkerMap    *ecs.Map[components.TerrainChunk]
@@ -70,6 +71,7 @@ func (sys *TerrainStreamingSystem) InitUI(w *ecs.World) {
 	sys.indexRes = ecs.NewResource[TerrainChunkIndex](w)
 	sys.propIndexRes = ecs.NewResource[PropChunkIndex](w)
 	sys.buildingIndexRes = ecs.NewResource[BuildingChildIndex](w)
+	sys.coverSlotIndexRes = ecs.NewResource[CoverSlotIndex](w)
 	sys.posMap = ecs.NewMap[components.WorldPos](w)
 	sys.chunkCoordMap = ecs.NewMap[components.ChunkCoord](w)
 	sys.chunkMarkerMap = ecs.NewMap[components.TerrainChunk](w)
@@ -255,6 +257,7 @@ func (sys TerrainStreamingSystem) Update(ctx core.UpdateContext) {
 	// rather than crashing the streaming loop.
 	propIdx := sys.propIndexRes.Get()
 	bIdx := sys.buildingIndexRes.Get()
+	coverIdx := sys.coverSlotIndexRes.Get()
 
 	// Build a chunk → buildings-rooted-here map only if any buildings exist
 	// and we're actually evicting something — keeps the common path cheap.
@@ -284,6 +287,9 @@ func (sys TerrainStreamingSystem) Update(ctx core.UpdateContext) {
 		if propIdx != nil {
 			if props, ok := propIdx.Loaded[ev.cc]; ok {
 				for _, p := range props {
+					if coverIdx != nil {
+						delete(coverIdx.ByHost, p)
+					}
 					ctx.World.RemoveEntity(p)
 				}
 				delete(propIdx.Loaded, ev.cc)
@@ -296,6 +302,9 @@ func (sys TerrainStreamingSystem) Update(ctx core.UpdateContext) {
 			for _, root := range buildingsByChunk[ev.cc] {
 				if children, ok := bIdx.Loaded[root]; ok {
 					for _, c := range children {
+						if coverIdx != nil {
+							delete(coverIdx.ByHost, c)
+						}
 						ctx.World.RemoveEntity(c)
 					}
 					delete(bIdx.Loaded, root)

@@ -41,6 +41,10 @@ func (system *LODSystem) InitUI(w *ecs.World) {
 			ecs.C[components.TerrainChunk](),
 			ecs.C[components.Prop](),
 			ecs.C[components.BuildingMember](),
+			// Cover-slots are pinned to Relevant by SpatialBakeSystem and the
+			// chunk owns their lifecycle; generic distance-based LOD would
+			// thrash markers on thousands of slot entities for no win.
+			ecs.C[components.CoverSlot](),
 		)
 }
 

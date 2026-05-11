@@ -76,6 +76,8 @@ func main() {
 	ecs.AddResource(app.World, &buildingIndex)
 	trenches := components.TrenchNetwork{Lines: makeStartingTrenches()}
 	ecs.AddResource(app.World, &trenches)
+	coverSlotIndex := systems.NewCoverSlotIndex()
+	ecs.AddResource(app.World, &coverSlotIndex)
 
 	// Defers run LIFO; this fires before window/audio teardown — while
 	// app.World is still alive — flushing any in-memory chunk modifications.
@@ -90,14 +92,15 @@ func main() {
 	//   6. building           — bunker RectCut + walls/floors/stairs spawn
 	//   7. trench             — earthworks polyline cut
 	//   8. prop_spawn         — vegetation/rocks (sees all clearance)
-	//   9. terrain_mesh       — build & upload GPU mesh
-	//  10. ground_stick       — clamp anchor Y to surface
-	//  11. lod                — units-only LOD
-	//  12. movement
-	//  13. spatial_audio
-	//  14. streaming          — node graph (smart-spaces; not terrain)
-	//  15. orbit              — camera input
-	//  16. camera             — sync ECS camera to systems.CurrentCamera
+	//   9. spatial_bake       — NavGrid / CoverMap / cover slots
+	//  10. terrain_mesh       — build & upload GPU mesh
+	//  11. ground_stick       — clamp anchor Y to surface
+	//  12. lod                — units-only LOD
+	//  13. movement
+	//  14. spatial_audio
+	//  15. streaming          — node graph (smart-spaces; not terrain)
+	//  16. orbit              — camera input
+	//  17. camera             — sync ECS camera to systems.CurrentCamera
 	terrainStreamingSys := &systems.TerrainStreamingSystem{}
 	terrainStreamingSys.InitUI(app.World)
 
@@ -121,6 +124,9 @@ func main() {
 
 	propSpawnSys := &systems.PropSpawnSystem{}
 	propSpawnSys.InitUI(app.World)
+
+	spatialBakeSys := &systems.SpatialBakeSystem{}
+	spatialBakeSys.InitUI(app.World)
 
 	terrainMeshSys := &systems.TerrainMeshSystem{}
 	terrainMeshSys.InitUI(app.World)
@@ -154,6 +160,7 @@ func main() {
 	cameraSys.InitUI(app.World)
 
 	stamper := systems.NewStamper(app.World)
+	navService := systems.NewNavService(app.World)
 
 	app.AddSystem(terrainStreamingSys)
 	app.AddSystem(terrainLoadSys)
@@ -163,6 +170,7 @@ func main() {
 	app.AddSystem(buildingSys)
 	app.AddSystem(trenchSys)
 	app.AddSystem(propSpawnSys)
+	app.AddSystem(spatialBakeSys)
 	app.AddSystem(terrainMeshSys)
 	app.AddSystem(groundStickSys)
 	app.AddSystem(lodSys)
@@ -262,6 +270,7 @@ func main() {
 			ecs.C[components.Prop](),
 			ecs.C[components.BuildingMember](),
 			ecs.C[components.Building](),
+			ecs.C[components.CoverSlot](),
 		)
 	relevantRenderFilter := ecs.NewFilter2[components.WorldPos, components.LODRelevant](app.World).
 		Without(
@@ -269,6 +278,7 @@ func main() {
 			ecs.C[components.Prop](),
 			ecs.C[components.BuildingMember](),
 			ecs.C[components.Building](),
+			ecs.C[components.CoverSlot](),
 		)
 	chunkActiveFilter := ecs.NewFilter3[components.WorldPos, components.ChunkMesh, components.LODActive](app.World)
 	chunkRelevantFilter := ecs.NewFilter3[components.WorldPos, components.ChunkMesh, components.LODRelevant](app.World)
@@ -279,11 +289,25 @@ func main() {
 	wallRenderFilter := ecs.NewFilter2[components.WorldPos, components.WallSegment](app.World)
 	floorRenderFilter := ecs.NewFilter2[components.WorldPos, components.Floor](app.World)
 	stairsRenderFilter := ecs.NewFilter2[components.WorldPos, components.Stairs](app.World)
+	// NavGrid debug overlay (key N). Restricted to active-tier chunks via the
+	// LODActive marker — drawing 4096 cells × 50 chunks every frame is too
+	// many DrawCubeV calls; the active ring (~49 chunks) is already heavy and
+	// is what the player can usefully inspect.
+	navOverlayFilter := ecs.NewFilter4[components.WorldPos, components.ChunkCoord, components.NavGrid, components.Heightmap](app.World).
+		With(ecs.C[components.LODActive]())
+	coverOverlayFilter := ecs.NewFilter4[components.WorldPos, components.ChunkCoord, components.CoverMap, components.Heightmap](app.World).
+		With(ecs.C[components.LODActive]())
+	coverSlotFilter := ecs.NewFilter2[components.WorldPos, components.CoverSlot](app.World)
+	navGridChunkFilter := ecs.NewFilter1[components.NavGrid](app.World)
 
 	// Default material shared by every chunk DrawMesh. Loaded once after the
 	// GL context exists; per-vertex colour does the LOD-tier debug shading.
 	terrainMaterial := rl.LoadMaterialDefault()
 	defer rl.UnloadMaterial(terrainMaterial)
+
+	// Active path for the right-click navigation. Replaced on each click;
+	// drained as the anchor walks. WASD movement clears it (= player override).
+	var navPath []components.WorldPos
 
 	for !rl.WindowShouldClose() {
 		dt := time.Duration(float64(rl.GetFrameTime()) * float64(time.Second))
@@ -313,7 +337,8 @@ func main() {
 		if rl.IsKeyDown(rl.KeyA) {
 			inRight -= 1
 		}
-		if inFwd != 0 || inRight != 0 {
+		wasdActive := inFwd != 0 || inRight != 0
+		if wasdActive {
 			if mag := float32(math.Sqrt(float64(inFwd*inFwd + inRight*inRight))); mag > 1 {
 				inFwd /= mag
 				inRight /= mag
@@ -324,6 +349,29 @@ func main() {
 				Z: step * (inFwd*(-cy) + inRight*(-sy)),
 			}
 			*anchorPos = anchorPos.Add(move)
+			// WASD overrides any in-flight nav. The previous click is lost on
+			// purpose — direct control is the player's veto.
+			navPath = nil
+		}
+
+		// Right-click: pick a target on the surface plane and re-plan. Mouse
+		// ray works in the previous frame's render space (CurrentCamera +
+		// CurrentOriginChunk are updated by CameraSystem at the *end* of each
+		// tick), which is fine — both the camera and anchor have moved at
+		// most one frame's worth.
+		if rl.IsMouseButtonPressed(rl.MouseButtonLeft) {
+			if target, ok := mouseTargetWorldPos(systems.CurrentCamera,
+				anchorPos.ToRenderSpace(systems.CurrentOriginChunk)); ok {
+				navPath = navService.FindPath(*anchorPos, target, systems.NavOpts{
+					Locomotion: components.LocomotionFoot,
+				})
+			}
+		}
+
+		// Path follow. WASD wins per-tick — only walk when the player isn't
+		// holding direction keys.
+		if !wasdActive && len(navPath) > 0 {
+			navPath = stepAlongPath(anchorPos, navPath, anchorSpeed*float32(dt.Seconds()))
 		}
 
 		if rl.IsKeyPressed(rl.KeyX) {
@@ -436,11 +484,63 @@ func main() {
 			drawRoadGraphDebug(&roadGraph)
 		}
 
+		// NavGrid debug overlay. Hold N — for every active-tier chunk, draw
+		// each cell as a flat coloured plate at surfaceY+0.05. Heavy (~50
+		// chunks × 4096 cells), so only on demand.
+		if rl.IsKeyDown(rl.KeyN) {
+			qNav := navOverlayFilter.Query()
+			for qNav.Next() {
+				pos, cc, grid, hm := qNav.Get()
+				drawNavGridOverlay(*pos, *cc, grid, hm)
+			}
+		}
+
+		// CoverMap debug overlay. Hold C — translucent blue plate per cell,
+		// alpha proportional to BaseCover (popcount(DirMask) × 32).
+		if rl.IsKeyDown(rl.KeyC) {
+			qCov := coverOverlayFilter.Query()
+			for qCov.Next() {
+				pos, cc, cov, hm := qCov.Get()
+				drawCoverMapOverlay(*pos, *cc, cov, hm)
+			}
+		}
+
+		// Cover-slot debug overlay. Hold V — small yellow cube at every slot
+		// position with a short magenta arrow along OriginDir.
+		coverSlotLive := 0
+		if rl.IsKeyDown(rl.KeyV) {
+			qSlot := coverSlotFilter.Query()
+			for qSlot.Next() {
+				pos, slot := qSlot.Get()
+				render := pos.ToRenderSpace(systems.CurrentOriginChunk)
+				rl.DrawCubeV(render, rl.Vector3{X: 0.25, Y: 0.25, Z: 0.25}, rl.Yellow)
+				tip := rl.Vector3{
+					X: render.X + slot.OriginDir.X*1.0,
+					Y: render.Y,
+					Z: render.Z + slot.OriginDir.Z*1.0,
+				}
+				rl.DrawLine3D(render, tip, rl.Magenta)
+				coverSlotLive++
+			}
+		} else {
+			// Cheap census even when overlay is off — used in HUD.
+			qSlot := coverSlotFilter.Query()
+			for qSlot.Next() {
+				qSlot.Get()
+				coverSlotLive++
+			}
+		}
+
+		// Active nav path: magenta line through every remaining waypoint, plus
+		// a marker at the next target.
+		drawNavPath(navPath, *anchorPos)
+
 		rl.EndMode3D()
 
 		rl.DrawText("RTS/FPS 3D ECS Prototype", 10, 10, 20, rl.Black)
 		rl.DrawText("WASD to move Anchor (Blue); Shift to sprint; right-drag to orbit; wheel to zoom", 10, 30, 20, rl.DarkGray)
-		rl.DrawText("X = crater at anchor; G (hold) = road graph overlay", 10, 50, 20, rl.DarkGray)
+		rl.DrawText("X = crater; G/N/C/V (hold) = road / nav / cover / cover-slot overlays", 10, 50, 20, rl.DarkGray)
+		rl.DrawText("Right-click on terrain = walk anchor along A* path; WASD interrupts", 10, 130, 20, rl.DarkGray)
 		rl.DrawText("Red = Active LOD, Green = Relevant LOD (Hidden = Dormant)", 10, 70, 20, rl.DarkGray)
 		hud := fmt.Sprintf("Props live: %d  |  Rivers: %d  |  Bridges live: %d",
 			propLive, len(rivers.Polylines), bridgeLive)
@@ -449,8 +549,184 @@ func main() {
 			len(roadGraph.Nodes), len(roadGraph.Edges), bridgeEdges,
 			len(buildingPlans.Plans), wallLive, floorLive, len(trenches.Lines))
 		rl.DrawText(hud2, 10, 110, 20, rl.DarkGray)
+		navChunks := 0
+		qng := navGridChunkFilter.Query()
+		for qng.Next() {
+			qng.Get()
+			navChunks++
+		}
+		hud3 := fmt.Sprintf("Nav: chunks=%d  |  Cover slots: live=%d  |  Path: waypoints=%d",
+			navChunks, coverSlotLive, len(navPath))
+		rl.DrawText(hud3, 10, 150, 20, rl.DarkGray)
 
 		rl.EndDrawing()
+	}
+}
+
+// mouseTargetWorldPos converts the current cursor position into a WorldPos by
+// raycasting against a horizontal plane at the anchor's surface height. Returns
+// (_, false) if the ray is parallel to the plane or points away from it
+// (mouse hovering above the horizon, etc.) — the caller should leave navPath
+// untouched in that case.
+func mouseTargetWorldPos(cam rl.Camera3D, anchorRender rl.Vector3) (components.WorldPos, bool) {
+	ray := rl.GetMouseRay(rl.GetMousePosition(), cam)
+	planeY := anchorRender.Y - systems.AnchorEyeHeight
+	if math.Abs(float64(ray.Direction.Y)) < 1e-4 {
+		return components.WorldPos{}, false
+	}
+	t := (planeY - ray.Position.Y) / ray.Direction.Y
+	if t < 0 {
+		return components.WorldPos{}, false
+	}
+	hit := rl.Vector3{
+		X: ray.Position.X + t*ray.Direction.X,
+		Y: planeY,
+		Z: ray.Position.Z + t*ray.Direction.Z,
+	}
+	return (components.WorldPos{Chunk: systems.CurrentOriginChunk}).Add(hit), true
+}
+
+// stepAlongPath moves the anchor toward path[0] by up to step metres, popping
+// the waypoint when the agent enters its arrival radius. Y is left to
+// GroundStickSystem. Returns the (possibly trimmed) path slice.
+func stepAlongPath(anchorPos *components.WorldPos, path []components.WorldPos, step float32) []components.WorldPos {
+	for len(path) > 0 && step > 0 {
+		target := path[0]
+		diff := target.Sub(*anchorPos)
+		dist := float32(math.Sqrt(float64(diff.X*diff.X + diff.Z*diff.Z)))
+		if dist <= 0.5 {
+			path = path[1:]
+			continue
+		}
+		// Take min(step, distToWaypoint) along the XZ direction.
+		take := step
+		if take > dist {
+			take = dist
+		}
+		*anchorPos = anchorPos.Add(rl.Vector3{
+			X: diff.X / dist * take,
+			Z: diff.Z / dist * take,
+		})
+		step -= take
+		if take >= dist {
+			path = path[1:]
+		} else {
+			break
+		}
+	}
+	return path
+}
+
+// drawNavPath renders the path from the anchor through every remaining
+// waypoint. Empty/nil paths render nothing. Lifted slightly so the line is
+// visible against the terrain.
+func drawNavPath(path []components.WorldPos, anchorPos components.WorldPos) {
+	if len(path) == 0 {
+		return
+	}
+	prev := anchorPos.ToRenderSpace(systems.CurrentOriginChunk)
+	prev.Y += 0.4
+	for i := range path {
+		p := path[i].ToRenderSpace(systems.CurrentOriginChunk)
+		p.Y += 0.4
+		rl.DrawLine3D(prev, p, rl.Magenta)
+		prev = p
+	}
+	target := path[0].ToRenderSpace(systems.CurrentOriginChunk)
+	target.Y += 0.4
+	rl.DrawCircle3D(target, 0.6, rl.Vector3{X: 1, Y: 0, Z: 0}, 90, rl.Magenta)
+}
+
+// drawNavGridOverlay draws a flat coloured plate per NavCell at the cell's
+// terrain height + 5 cm. Cell size is 1 m; plates are sized to 0.9 m so
+// neighbouring cells visibly separate. Colour LUT:
+//
+//	Cost = 0           → black (impassable)
+//	Cost = navCostRoad → light blue (OnRoad — M6.4)
+//	Cost = navCostOpen → green (open field)
+//	Cost = navCostRough → yellow-orange (rough)
+//	Cost = navCostTrench → orange (trench — M6.4)
+//	other              → magenta (unknown)
+func drawNavGridOverlay(chunkPos components.WorldPos, cc components.ChunkCoord,
+	grid *components.NavGrid, hm *components.Heightmap) {
+	chunkRender := chunkPos.ToRenderSpace(systems.CurrentOriginChunk)
+	const plate float32 = 0.9
+	const lift float32 = 0.05
+	for cj := 0; cj < components.NavGridSide; cj++ {
+		row0 := cj * components.ChunkResolution
+		row1 := row0 + components.ChunkResolution
+		for ci := 0; ci < components.NavGridSide; ci++ {
+			cell := grid.Cells[cj*components.NavGridSide+ci]
+			h00 := hm.Heights[row0+ci]
+			h10 := hm.Heights[row0+ci+1]
+			h01 := hm.Heights[row1+ci]
+			h11 := hm.Heights[row1+ci+1]
+			centerY := (h00 + h10 + h01 + h11) * 0.25
+
+			col := navCellColor(cell)
+			c := rl.Vector3{
+				X: chunkRender.X + float32(ci) + 0.5,
+				Y: centerY + lift,
+				Z: chunkRender.Z + float32(cj) + 0.5,
+			}
+			rl.DrawCubeV(c, rl.Vector3{X: plate, Y: 0.02, Z: plate}, col)
+		}
+	}
+	_ = cc
+}
+
+// drawCoverMapOverlay — same shape as drawNavGridOverlay but with a single
+// translucent blue plate per cell whose alpha tracks BaseCover. 0 cover ⇒
+// fully transparent (cell skipped); 8 covered directions ⇒ 90% blue.
+func drawCoverMapOverlay(chunkPos components.WorldPos, cc components.ChunkCoord,
+	cov *components.CoverMap, hm *components.Heightmap) {
+	chunkRender := chunkPos.ToRenderSpace(systems.CurrentOriginChunk)
+	const plate float32 = 0.9
+	const lift float32 = 0.06
+	for cj := 0; cj < components.NavGridSide; cj++ {
+		row0 := cj * components.ChunkResolution
+		row1 := row0 + components.ChunkResolution
+		for ci := 0; ci < components.NavGridSide; ci++ {
+			cell := cov.Cells[cj*components.NavGridSide+ci]
+			if cell.BaseCover == 0 {
+				continue
+			}
+			h00 := hm.Heights[row0+ci]
+			h10 := hm.Heights[row0+ci+1]
+			h01 := hm.Heights[row1+ci]
+			h11 := hm.Heights[row1+ci+1]
+			centerY := (h00 + h10 + h01 + h11) * 0.25
+
+			alpha := uint8(int(cell.BaseCover))
+			c := rl.Vector3{
+				X: chunkRender.X + float32(ci) + 0.5,
+				Y: centerY + lift,
+				Z: chunkRender.Z + float32(cj) + 0.5,
+			}
+			rl.DrawCubeV(c, rl.Vector3{X: plate, Y: 0.02, Z: plate},
+				rl.Color{R: 60, G: 110, B: 230, A: alpha})
+		}
+	}
+	_ = cc
+}
+
+func navCellColor(cell components.NavCell) rl.Color {
+	if cell.Cost == 0 {
+		return rl.Color{R: 0, G: 0, B: 0, A: 200}
+	}
+	if cell.Flags&components.NavInTrench != 0 {
+		return rl.Color{R: 230, G: 130, B: 30, A: 170}
+	}
+	if cell.Flags&components.NavOnRoad != 0 {
+		return rl.Color{R: 120, G: 180, B: 230, A: 170}
+	}
+	switch cell.Cost {
+	case 4:
+		return rl.Color{R: 80, G: 200, B: 80, A: 150}
+	case 8:
+		return rl.Color{R: 230, G: 200, B: 60, A: 170}
+	default:
+		return rl.Color{R: 220, G: 60, B: 220, A: 200}
 	}
 }
 
