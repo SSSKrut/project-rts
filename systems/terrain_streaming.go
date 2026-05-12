@@ -51,6 +51,7 @@ type TerrainStreamingSystem struct {
 	propIndexRes      ecs.Resource[PropChunkIndex]
 	buildingIndexRes  ecs.Resource[BuildingChildIndex]
 	coverSlotIndexRes ecs.Resource[CoverSlotIndex]
+	transitionRes     ecs.Resource[components.TransitionRegistry]
 	posMap            *ecs.Map[components.WorldPos]
 	chunkCoordMap     *ecs.Map[components.ChunkCoord]
 	chunkMarkerMap    *ecs.Map[components.TerrainChunk]
@@ -72,6 +73,7 @@ func (sys *TerrainStreamingSystem) InitUI(w *ecs.World) {
 	sys.propIndexRes = ecs.NewResource[PropChunkIndex](w)
 	sys.buildingIndexRes = ecs.NewResource[BuildingChildIndex](w)
 	sys.coverSlotIndexRes = ecs.NewResource[CoverSlotIndex](w)
+	sys.transitionRes = ecs.NewResource[components.TransitionRegistry](w)
 	sys.posMap = ecs.NewMap[components.WorldPos](w)
 	sys.chunkCoordMap = ecs.NewMap[components.ChunkCoord](w)
 	sys.chunkMarkerMap = ecs.NewMap[components.TerrainChunk](w)
@@ -258,6 +260,7 @@ func (sys TerrainStreamingSystem) Update(ctx core.UpdateContext) {
 	propIdx := sys.propIndexRes.Get()
 	bIdx := sys.buildingIndexRes.Get()
 	coverIdx := sys.coverSlotIndexRes.Get()
+	transitionReg := sys.transitionRes.Get()
 
 	// Build a chunk → buildings-rooted-here map only if any buildings exist
 	// and we're actually evicting something — keeps the common path cheap.
@@ -301,11 +304,31 @@ func (sys TerrainStreamingSystem) Update(ctx core.UpdateContext) {
 		if bIdx != nil {
 			for _, root := range buildingsByChunk[ev.cc] {
 				if children, ok := bIdx.Loaded[root]; ok {
+					evictedChildren := make(map[ecs.Entity]bool, len(children))
 					for _, c := range children {
 						if coverIdx != nil {
 							delete(coverIdx.ByHost, c)
 						}
+						evictedChildren[c] = true
 						ctx.World.RemoveEntity(c)
+					}
+					// Drop every TransitionEdge whose owner just despawned —
+					// otherwise A* could route through a stale doorway / stair
+					// edge. Per Phase 7 P3 (transition cleanup on eviction).
+					if transitionReg != nil {
+						for k, edges := range transitionReg.Out {
+							kept := edges[:0]
+							for _, e := range edges {
+								if !evictedChildren[e.Owner] && !evictedChildren[e.From.Floor] && !evictedChildren[e.To.Floor] {
+									kept = append(kept, e)
+								}
+							}
+							if len(kept) == 0 {
+								delete(transitionReg.Out, k)
+							} else {
+								transitionReg.Out[k] = kept
+							}
+						}
 					}
 					delete(bIdx.Loaded, root)
 				}

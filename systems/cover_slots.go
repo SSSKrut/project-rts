@@ -41,7 +41,7 @@ func propCoverSlots(host ecs.Entity, propLocal rl.Vector3, meta components.PropM
 	if q > 255 {
 		q = 255
 	}
-	stance := components.StanceCrouch | components.StanceStand
+	stance := components.StanceMaskCrouch | components.StanceMaskStand
 
 	// Effective height heuristic — sphere primitives use 2*X (radius); the
 	// rest use Size.Y; trees count their trunk only (canopy doesn't shield).
@@ -50,7 +50,7 @@ func propCoverSlots(host ecs.Entity, propLocal rl.Vector3, meta components.PropM
 		height = meta.Size.X * 2
 	}
 	if height*scale < 1.5 {
-		stance = components.StanceCrouch
+		stance = components.StanceMaskCrouch
 	}
 
 	r := meta.BBoxRadius * scale
@@ -96,7 +96,7 @@ func windowCoverSlots(host ecs.Entity, wallLocal rl.Vector3, w components.WallSe
 		HostKind:  components.CoverHostWindow,
 		OriginDir: outward,
 		Quality:   200,
-		Stance:    components.StanceCrouch | components.StanceStand,
+		Stance:    components.StanceMaskCrouch | components.StanceMaskStand,
 	}}
 }
 
@@ -179,7 +179,7 @@ func wallCornerCoverSlots(walls []wallCornerSrc) []coverSlotSpec {
 					HostKind:  components.CoverHostWallCorner,
 					OriginDir: rl.Vector3{X: nx, Y: 0, Z: nz},
 					Quality:   180,
-					Stance:    components.StanceProne | components.StanceCrouch | components.StanceStand,
+					Stance:    components.StanceMaskProne | components.StanceMaskCrouch | components.StanceMaskStand,
 				})
 			}
 		}

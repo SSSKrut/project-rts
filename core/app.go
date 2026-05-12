@@ -57,6 +57,14 @@ type App struct {
 	World   *ecs.World
 	systems []systemEntry
 	elapsed time.Duration
+
+	// Prof collects per-tick timings (M7.5.1). Lives on App so tests / tools
+	// can read it without globals; main.go owns the HUD presentation.
+	Prof Profiler
+
+	// Trace is a build-tag-gated per-frame JSONL writer. On a normal build
+	// Tracer's methods compile to no-ops (see core/trace_off.go).
+	Trace Tracer
 }
 
 func NewApp() *App {
@@ -66,14 +74,22 @@ func NewApp() *App {
 }
 
 func (app *App) AddSystem(sys System) {
+	app.Prof.RegisterSystem(sys.Name())
 	app.systems = append(app.systems, systemEntry{
 		sys:     sys,
 		lastRun: make(map[LODTier]time.Duration),
 	})
 }
 
+// Elapsed exposes the total simulation time since NewApp. Used by main.go to
+// throttle expensive sampling (ReadMemStats, World.Stats).
+func (app *App) Elapsed() time.Duration { return app.elapsed }
+
 func (app *App) Tick(delta time.Duration) {
 	app.elapsed += delta
+
+	tickStart := time.Now()
+	app.Prof.BeginTick()
 
 	for i := range app.systems {
 		entry := &app.systems[i]
@@ -87,13 +103,17 @@ func (app *App) Tick(delta time.Duration) {
 
 			last := entry.lastRun[tier]
 			if interval == 0 || app.elapsed-last >= interval {
+				sysStart := time.Now()
 				entry.sys.Update(UpdateContext{
 					World: app.World,
 					Delta: app.elapsed - last,
 					Tier:  tier,
 				})
+				app.Prof.RecordSystem(i, time.Since(sysStart))
 				entry.lastRun[tier] = app.elapsed
 			}
 		}
 	}
+
+	app.Prof.EndTick(time.Since(tickStart))
 }

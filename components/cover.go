@@ -21,9 +21,9 @@ const (
 type StanceMask uint8
 
 const (
-	StanceProne StanceMask = 1 << iota
-	StanceCrouch
-	StanceStand
+	StanceMaskProne StanceMask = 1 << iota
+	StanceMaskCrouch
+	StanceMaskStand
 )
 
 // CoverSlot is the per-slot data on its own entity. WorldPos lives separately

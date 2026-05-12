@@ -48,9 +48,12 @@ type SpatialBakeSystem struct {
 	navFilter         *ecs.Filter3[components.ChunkCoord, components.Heightmap, components.WorldPos]
 	coverFilter       *ecs.Filter3[components.ChunkCoord, components.Heightmap, components.WorldPos]
 	wallFilter        *ecs.Filter2[components.WorldPos, components.WallSegment]
+	floorFilter       *ecs.Filter2[components.WorldPos, components.Floor]
 	heightmapMap      *ecs.Map[components.Heightmap]
 	navGridMap        *ecs.Map[components.NavGrid]
 	coverMapMap       *ecs.Map[components.CoverMap]
+	floorNavMap       *ecs.Map[components.FloorNavGrid]
+	floorNavBakedMap  *ecs.Map[components.FloorNavBaked]
 	navBakedMap       *ecs.Map[components.NavBaked]
 	coverBakedMap     *ecs.Map[components.CoverBaked]
 	doorMap           *ecs.Map[components.Door]
@@ -68,6 +71,9 @@ type SpatialBakeSystem struct {
 	chunkIndexRes     ecs.Resource[TerrainChunkIndex]
 	coverSlotIndexRes ecs.Resource[CoverSlotIndex]
 	buildingIndexRes  ecs.Resource[BuildingChildIndex]
+	transitionRes     ecs.Resource[components.TransitionRegistry]
+	stairsFilter      *ecs.Filter2[components.WorldPos, components.Stairs]
+	floorComponentMap *ecs.Map[components.Floor]
 }
 
 func (sys *SpatialBakeSystem) InitUI(w *ecs.World) {
@@ -76,9 +82,13 @@ func (sys *SpatialBakeSystem) InitUI(w *ecs.World) {
 	sys.coverFilter = ecs.NewFilter3[components.ChunkCoord, components.Heightmap, components.WorldPos](w).
 		Without(ecs.C[components.CoverBaked]())
 	sys.wallFilter = ecs.NewFilter2[components.WorldPos, components.WallSegment](w)
+	sys.floorFilter = ecs.NewFilter2[components.WorldPos, components.Floor](w).
+		Without(ecs.C[components.FloorNavBaked]())
 	sys.heightmapMap = ecs.NewMap[components.Heightmap](w)
 	sys.navGridMap = ecs.NewMap[components.NavGrid](w)
 	sys.coverMapMap = ecs.NewMap[components.CoverMap](w)
+	sys.floorNavMap = ecs.NewMap[components.FloorNavGrid](w)
+	sys.floorNavBakedMap = ecs.NewMap[components.FloorNavBaked](w)
 	sys.navBakedMap = ecs.NewMap[components.NavBaked](w)
 	sys.coverBakedMap = ecs.NewMap[components.CoverBaked](w)
 	sys.doorMap = ecs.NewMap[components.Door](w)
@@ -92,6 +102,9 @@ func (sys *SpatialBakeSystem) InitUI(w *ecs.World) {
 	sys.chunkIndexRes = ecs.NewResource[TerrainChunkIndex](w)
 	sys.coverSlotIndexRes = ecs.NewResource[CoverSlotIndex](w)
 	sys.buildingIndexRes = ecs.NewResource[BuildingChildIndex](w)
+	sys.transitionRes = ecs.NewResource[components.TransitionRegistry](w)
+	sys.stairsFilter = ecs.NewFilter2[components.WorldPos, components.Stairs](w)
+	sys.floorComponentMap = ecs.NewMap[components.Floor](w)
 	sys.memberMap = ecs.NewMap[components.BuildingMember](w)
 	sys.coverDirMap = ecs.NewMap[components.CoverDirection](w)
 	sys.coverSlotMap = ecs.NewMap[components.CoverSlot](w)
@@ -297,6 +310,334 @@ func (sys SpatialBakeSystem) Update(ctx core.UpdateContext) {
 			sys.spawnCoverSlots(ctx.World, rec.cc, propIdx, registry, coverIdx, buildingIdx)
 		}
 	}
+
+	// ── Pass 3: FloorNavGrid bake ──
+	//
+	// Per Phase 7 P2: one grid per Floor entity. Walls of the same storey
+	// (matched by WorldPos.Y ≈ floor.Y) become Cost=0; open-door openings are
+	// punched through; windows and closed doors stay blocked. Floor footprint
+	// must fit MaxFloorSide (≤32 m); Phase 5's placeholder buildings all do.
+	type floorRec struct {
+		ent     ecs.Entity
+		pos     components.WorldPos
+		f       components.Floor
+	}
+	var floorTodo []floorRec
+	qF := sys.floorFilter.Query()
+	for qF.Next() {
+		pos, f := qF.Get()
+		floorTodo = append(floorTodo, floorRec{ent: qF.Entity(), pos: *pos, f: *f})
+	}
+	if len(floorTodo) == 0 {
+		return
+	}
+
+	// Snapshot every wall once — Phase 7 has at most a few buildings loaded;
+	// the per-floor filter is cheap.
+	type wallSnap struct {
+		pos             components.WorldPos
+		w               components.WallSegment
+		openingPassable bool
+	}
+	var wallSnaps []wallSnap
+	qW := sys.wallFilter.Query()
+	for qW.Next() {
+		pos, w := qW.Get()
+		passable := false
+		if w.OpeningKind == components.OpeningDoor {
+			if d := sys.doorMap.Get(qW.Entity()); d != nil && d.State == components.DoorOpen {
+				passable = true
+			}
+		}
+		wallSnaps = append(wallSnaps, wallSnap{pos: *pos, w: *w, openingPassable: passable})
+	}
+
+	for _, fr := range floorTodo {
+		// Footprint centre in chunk-local space → corners.
+		sx := fr.f.SizeX
+		sz := fr.f.SizeZ
+		if sx <= 0 || sz <= 0 {
+			continue
+		}
+		szi := uint8(math.Ceil(float64(sx)))
+		szj := uint8(math.Ceil(float64(sz)))
+		if szi > components.MaxFloorSide {
+			szi = components.MaxFloorSide
+		}
+		if szj > components.MaxFloorSide {
+			szj = components.MaxFloorSide
+		}
+
+		originX := fr.pos.Local.X - sx*0.5
+		originZ := fr.pos.Local.Z - sz*0.5
+		var grid components.FloorNavGrid
+		grid.SizeX = szi
+		grid.SizeZ = szj
+		grid.Origin = components.Vec3{X: originX, Y: fr.pos.Local.Y, Z: originZ}
+
+		// Seed all valid cells as open (Cost=4 — same as NavCostOpen for
+		// chunk-NavGrid; A* uses the same scale).
+		for cj := uint8(0); cj < szj; cj++ {
+			for ci := uint8(0); ci < szi; ci++ {
+				grid.Cells[int(cj)*components.MaxFloorSide+int(ci)] = components.NavCell{
+					Cost:  navCostOpen,
+					Flags: components.NavInBuilding,
+				}
+			}
+		}
+
+		// Rasterise walls that belong to this storey. "Same storey" =
+		// |wall.Y - floor.Y| < floorHeight/2 AND same host chunk.
+		for _, ws := range wallSnaps {
+			if ws.pos.Chunk != fr.pos.Chunk {
+				continue
+			}
+			if absDelta(ws.pos.Local.Y, fr.pos.Local.Y) > floorHeight*0.5 {
+				continue
+			}
+			rasterizeFloorWall(&grid, ws.pos.Local, ws.w, ws.openingPassable, originX, originZ)
+		}
+
+		if existing := sys.floorNavMap.Get(fr.ent); existing != nil {
+			*existing = grid
+		} else {
+			sys.floorNavMap.Add(fr.ent, &grid)
+		}
+		if !sys.floorNavBakedMap.Has(fr.ent) {
+			sys.floorNavBakedMap.Add(fr.ent, &components.FloorNavBaked{})
+		}
+	}
+
+	// ── Pass 4: TransitionRegistry edges ──
+	//
+	// Doors / Stairs / bunker entrances connect surface↔floor and floor↔floor
+	// NavNodes. We rebuild every floor's outgoing edges whenever a Floor is
+	// (re-)baked above; existing edges for the same owner are replaced. Phase 7
+	// scope: every Floor in the world is touched whenever ANY chunk bakes,
+	// which is fine on the placeholder scene; Phase 8+ may want per-owner
+	// invalidation if rebuild cost becomes visible.
+	registry := sys.transitionRes.Get()
+	if registry == nil {
+		return
+	}
+
+	// Drop every edge owned by an entity in the current floorTodo set so the
+	// re-bake doesn't duplicate. (Phase 7 keeps the floor-owner association
+	// loose: every transition is owned by either a Door/Stairs entity or by
+	// the Floor itself; the latter happens for "implicit" edges that don't
+	// have a dedicated source.) Simpler approach: wipe the entire registry
+	// since the test scene has at most ~20 edges.
+	for k := range registry.Out {
+		delete(registry.Out, k)
+	}
+
+	// Snapshot every Floor entity we can address: walk every building's
+	// child entities, filter by "has Floor component", and require a baked
+	// FloorNavGrid so we know origin/size are valid.
+	var floors []floorSnapshot
+	bIdx := sys.buildingIndexRes.Get()
+	if bIdx != nil {
+		for _, children := range bIdx.Loaded {
+			for _, c := range children {
+				fComp := sys.floorComponentMap.Get(c)
+				if fComp == nil {
+					continue
+				}
+				if sys.floorNavMap.Get(c) == nil {
+					continue
+				}
+				pos := sys.posMap.Get(c)
+				if pos == nil {
+					continue
+				}
+				floors = append(floors, floorSnapshot{ent: c, pos: *pos, f: *fComp})
+			}
+		}
+	}
+	if len(floors) == 0 {
+		return
+	}
+
+	// Snapshot door walls (open doors only — closed = blocked, no edge).
+	type doorSnap struct {
+		ent     ecs.Entity
+		pos     components.WorldPos
+		w       components.WallSegment
+		outward rl.Vector3
+	}
+	var doors []doorSnap
+	qDW := sys.wallFilter.Query()
+	for qDW.Next() {
+		pos, w := qDW.Get()
+		if w.OpeningKind != components.OpeningDoor {
+			continue
+		}
+		// Phase 7: include all doors regardless of state (closed = Cost=0
+		// edge, kept for forward-compat with Phase 12 open/close logic).
+		_ = sys.doorMap.Get(qDW.Entity())
+		var outward rl.Vector3
+		if cd := sys.coverDirMap.Get(qDW.Entity()); cd != nil {
+			outward = cd.Dir
+		}
+		doors = append(doors, doorSnap{ent: qDW.Entity(), pos: *pos, w: *w, outward: outward})
+	}
+
+	// Snapshot stairs.
+	type stairsSnap struct {
+		ent ecs.Entity
+		pos components.WorldPos
+		s   components.Stairs
+	}
+	var stairs []stairsSnap
+	qS := sys.stairsFilter.Query()
+	for qS.Next() {
+		pos, s := qS.Get()
+		stairs = append(stairs, stairsSnap{ent: qS.Entity(), pos: *pos, s: *s})
+	}
+
+	addEdge := func(from, to components.NavNode, cost uint8, owner ecs.Entity) {
+		registry.Out[from] = append(registry.Out[from], components.TransitionEdge{
+			From: from, To: to, Cost: cost, Owner: owner,
+		})
+	}
+
+	// Doors → 1 bidirectional edge between surface cell outside and floor
+	// cell inside. Outside = surface cell at door centre + outward * 0.7 m.
+	// Inside = floor cell at door centre - outward * 0.7 m.
+	for _, d := range doors {
+		// Door centre in world XZ.
+		sa := float32(math.Sin(float64(d.w.Yaw)))
+		ca := float32(math.Cos(float64(d.w.Yaw)))
+		centreT := d.w.OpeningCenterT * d.w.Length
+		baseX := float32(d.pos.Chunk.X) * components.ChunkSize
+		baseZ := float32(d.pos.Chunk.Z) * components.ChunkSize
+		cx := baseX + d.pos.Local.X + sa*centreT
+		cz := baseZ + d.pos.Local.Z + ca*centreT
+		// Find the floor entity hosting this door (same chunk, |Y - door.Y|
+		// minimal). Doors live at storey-0 in Phase 5 placeholder buildings.
+		fr := findFloorAt(floors, d.pos.Chunk, d.pos.Local.Y)
+		if fr == nil {
+			continue
+		}
+		// Floor-side cell.
+		floorOriginX := float32(fr.pos.Chunk.X)*components.ChunkSize + fr.pos.Local.X - fr.f.SizeX*0.5
+		floorOriginZ := float32(fr.pos.Chunk.Z)*components.ChunkSize + fr.pos.Local.Z - fr.f.SizeZ*0.5
+		insideX := cx - d.outward.X*0.7
+		insideZ := cz - d.outward.Z*0.7
+		fi := int16(math.Floor(float64(insideX - floorOriginX)))
+		fj := int16(math.Floor(float64(insideZ - floorOriginZ)))
+		if fi < 0 || fi >= int16(fr.f.SizeX) || fj < 0 || fj >= int16(fr.f.SizeZ) {
+			continue
+		}
+		floorNode := components.NavNode{Kind: components.NodeFloor, Floor: fr.ent, I: fi, J: fj}
+
+		// Surface side. Convert outside world XZ to global (gi, gj).
+		outsideX := cx + d.outward.X*0.7
+		outsideZ := cz + d.outward.Z*0.7
+		sgi := int32(math.Floor(float64(outsideX)))
+		sgj := int32(math.Floor(float64(outsideZ)))
+		surfChunk := components.ChunkCoord{X: sgi >> 6, Z: sgj >> 6}
+		surfI := int16(sgi & 63)
+		surfJ := int16(sgj & 63)
+		surfNode := components.NavNode{Kind: components.NodeSurface, Chunk: surfChunk, I: surfI, J: surfJ}
+
+		var cost uint8 = 3
+		if dc := sys.doorMap.Get(d.ent); dc != nil && dc.State == components.DoorClosed {
+			cost = 0 // closed door blocks
+		}
+		addEdge(surfNode, floorNode, cost, d.ent)
+		addEdge(floorNode, surfNode, cost, d.ent)
+	}
+
+	// Stairs → 1 bidirectional edge between two floor cells (or surface↔floor
+	// for bunker entrance). FromFloor==0, ToFloor==1 with rise == bunkerDepth
+	// is the bunker case — top "floor" doesn't exist as an entity, so we
+	// emit a surface edge.
+	for _, s := range stairs {
+		// Bottom (FromFloor) is the floor whose Y matches stairs.Y in the same
+		// chunk.
+		fromFloor := findFloorAt(floors, s.pos.Chunk, s.pos.Local.Y)
+		if fromFloor == nil {
+			continue
+		}
+		// Top — Y at fromFloor.Y + rise.
+		topY := s.pos.Local.Y + s.s.Rise
+		// Stairs centre (XZ).
+		sa := float32(math.Sin(float64(s.s.Yaw)))
+		ca := float32(math.Cos(float64(s.s.Yaw)))
+		bottomX := s.pos.Local.X
+		bottomZ := s.pos.Local.Z
+		topX := bottomX + sa*s.s.Length
+		topZ := bottomZ + ca*s.s.Length
+
+		// Floor cell on the bottom (centre near the foot of the stairs).
+		fromOriginX := fromFloor.pos.Local.X - fromFloor.f.SizeX*0.5
+		fromOriginZ := fromFloor.pos.Local.Z - fromFloor.f.SizeZ*0.5
+		fI := int16(math.Floor(float64(bottomX - fromOriginX)))
+		fJ := int16(math.Floor(float64(bottomZ - fromOriginZ)))
+		if fI < 0 || fI >= int16(fromFloor.f.SizeX) || fJ < 0 || fJ >= int16(fromFloor.f.SizeZ) {
+			continue
+		}
+		fromNode := components.NavNode{Kind: components.NodeFloor, Floor: fromFloor.ent, I: fI, J: fJ}
+
+		// Find top end — a floor at topY, or surface (bunker entrance).
+		toFloor := findFloorAt(floors, s.pos.Chunk, topY)
+		if toFloor != nil {
+			toOriginX := toFloor.pos.Local.X - toFloor.f.SizeX*0.5
+			toOriginZ := toFloor.pos.Local.Z - toFloor.f.SizeZ*0.5
+			tI := int16(math.Floor(float64(topX - toOriginX)))
+			tJ := int16(math.Floor(float64(topZ - toOriginZ)))
+			if tI < 0 || tI >= int16(toFloor.f.SizeX) || tJ < 0 || tJ >= int16(toFloor.f.SizeZ) {
+				continue
+			}
+			toNode := components.NavNode{Kind: components.NodeFloor, Floor: toFloor.ent, I: tI, J: tJ}
+			addEdge(fromNode, toNode, 4, s.ent)
+			addEdge(toNode, fromNode, 4, s.ent)
+		} else {
+			// Bunker entrance: top is the surface cell above the stairs head.
+			baseX := float32(s.pos.Chunk.X) * components.ChunkSize
+			baseZ := float32(s.pos.Chunk.Z) * components.ChunkSize
+			tx := baseX + topX
+			tz := baseZ + topZ
+			tgi := int32(math.Floor(float64(tx)))
+			tgj := int32(math.Floor(float64(tz)))
+			surfChunk := components.ChunkCoord{X: tgi >> 6, Z: tgj >> 6}
+			toNode := components.NavNode{
+				Kind:  components.NodeSurface,
+				Chunk: surfChunk,
+				I:     int16(tgi & 63),
+				J:     int16(tgj & 63),
+			}
+			addEdge(fromNode, toNode, 4, s.ent)
+			addEdge(toNode, fromNode, 4, s.ent)
+		}
+	}
+}
+
+// floorSnapshot — per-floor record used by the TransitionRegistry pass.
+type floorSnapshot struct {
+	ent ecs.Entity
+	pos components.WorldPos
+	f   components.Floor
+}
+
+// findFloorAt returns the floor whose pos.Chunk matches `chunk` and whose Y
+// is closest to `y` within 0.5 m. Returns nil if no floor qualifies.
+func findFloorAt(floors []floorSnapshot, chunk components.ChunkCoord, y float32) *floorSnapshot {
+	var best *floorSnapshot
+	bestD := float32(0.5)
+	for i := range floors {
+		fl := &floors[i]
+		if fl.pos.Chunk != chunk {
+			continue
+		}
+		d := absDelta(fl.pos.Local.Y, y)
+		if d <= bestD {
+			bestD = d
+			best = fl
+		}
+	}
+	return best
 }
 
 // bakeNavSlope writes per-cell Cost from the heightmap. Each cell maps 1:1 to
@@ -438,6 +779,98 @@ func rasterizeWall(grid *components.NavGrid, e wallEntry) {
 				}
 			}
 			grid.Cells[cj*components.NavGridSide+ci].Cost = 0
+		}
+	}
+}
+
+// rasterizeFloorWall marks cells of a FloorNavGrid as Cost=0 inside the wall's
+// oriented rectangle, mirroring rasterizeWall for chunk-NavGrids but with a
+// (sizeX, sizeZ, origin) sub-block instead of a full 64×64 grid. Passable
+// opening (open door) carves a gap along the wall axis. Windows and closed
+// doors leave Cost=0 over the opening.
+func rasterizeFloorWall(grid *components.FloorNavGrid, wallLocal rl.Vector3,
+	w components.WallSegment, openingPassable bool,
+	originX, originZ float32) {
+	yaw := w.Yaw
+	length := w.Length
+	halfT := w.Thickness * 0.5
+	if length <= 0 || halfT <= 0 {
+		return
+	}
+
+	sa := float32(math.Sin(float64(yaw)))
+	ca := float32(math.Cos(float64(yaw)))
+
+	fromX := wallLocal.X - originX
+	fromZ := wallLocal.Z - originZ
+
+	ex := length * sa
+	ez := length * ca
+	px := halfT * ca
+	pz := halfT * (-sa)
+	corners := [4][2]float32{
+		{fromX - px, fromZ - pz},
+		{fromX + px, fromZ + pz},
+		{fromX + ex - px, fromZ + ez - pz},
+		{fromX + ex + px, fromZ + ez + pz},
+	}
+	minX, maxX := corners[0][0], corners[0][0]
+	minZ, maxZ := corners[0][1], corners[0][1]
+	for i := 1; i < 4; i++ {
+		if corners[i][0] < minX {
+			minX = corners[i][0]
+		}
+		if corners[i][0] > maxX {
+			maxX = corners[i][0]
+		}
+		if corners[i][1] < minZ {
+			minZ = corners[i][1]
+		}
+		if corners[i][1] > maxZ {
+			maxZ = corners[i][1]
+		}
+	}
+	iMin := int(math.Floor(float64(minX)))
+	iMax := int(math.Ceil(float64(maxX)))
+	jMin := int(math.Floor(float64(minZ)))
+	jMax := int(math.Ceil(float64(maxZ)))
+	if iMin < 0 {
+		iMin = 0
+	}
+	if jMin < 0 {
+		jMin = 0
+	}
+	if iMax > int(grid.SizeX) {
+		iMax = int(grid.SizeX)
+	}
+	if jMax > int(grid.SizeZ) {
+		jMax = int(grid.SizeZ)
+	}
+	if iMin >= iMax || jMin >= jMax {
+		return
+	}
+
+	openCenter := w.OpeningCenterT * length
+	openStart := openCenter - w.OpeningWidth*0.5
+	openEnd := openCenter + w.OpeningWidth*0.5
+
+	for cj := jMin; cj < jMax; cj++ {
+		for ci := iMin; ci < iMax; ci++ {
+			cx := float32(ci) + 0.5
+			cz := float32(cj) + 0.5
+			dx := cx - fromX
+			dz := cz - fromZ
+			t := dx*sa + dz*ca
+			n := dx*ca - dz*sa
+			if t < 0 || t > length || n < -halfT || n > halfT {
+				continue
+			}
+			if openingPassable && w.OpeningWidth > 0 {
+				if t >= openStart && t <= openEnd {
+					continue
+				}
+			}
+			grid.Cells[cj*components.MaxFloorSide+ci].Cost = 0
 		}
 	}
 }

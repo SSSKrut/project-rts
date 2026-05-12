@@ -9,45 +9,55 @@ import (
 	"rts-go/components"
 )
 
-// NavService is the multi-chunk A* pathfinder. Service object (not a System);
+// NavService is the multi-graph A* pathfinder. Service object (not a System);
 // pre-built handles via NewNavService and reused across calls.
 //
-// Phase 6 ships one locomotion class (foot); per-class cost variants land in
-// Phase 8. The API is forward-compatible: callers pass NavOpts.Locomotion and
-// get the foot path until the planner learns about wheels and tracks.
+// Phase 7 widens the planner past per-chunk surface NavGrids: each Floor
+// entity also carries a FloorNavGrid, and surface↔floor / floor↔floor
+// transitions live in a TransitionRegistry resource. WorldPos→NavNode
+// resolution checks floor footprint membership first; in-grid neighbours +
+// registry edges are unified in one A* expansion.
 type NavService struct {
-	indexRes   ecs.Resource[TerrainChunkIndex]
-	navGridMap *ecs.Map[components.NavGrid]
+	indexRes      ecs.Resource[TerrainChunkIndex]
+	transitionRes ecs.Resource[components.TransitionRegistry]
+	buildingIndex ecs.Resource[BuildingChildIndex]
+	navGridMap    *ecs.Map[components.NavGrid]
+	floorNavMap   *ecs.Map[components.FloorNavGrid]
+	floorMap      *ecs.Map[components.Floor]
+	posMap        *ecs.Map[components.WorldPos]
 }
 
 func NewNavService(w *ecs.World) *NavService {
 	return &NavService{
-		indexRes:   ecs.NewResource[TerrainChunkIndex](w),
-		navGridMap: ecs.NewMap[components.NavGrid](w),
+		indexRes:      ecs.NewResource[TerrainChunkIndex](w),
+		transitionRes: ecs.NewResource[components.TransitionRegistry](w),
+		buildingIndex: ecs.NewResource[BuildingChildIndex](w),
+		navGridMap:    ecs.NewMap[components.NavGrid](w),
+		floorNavMap:   ecs.NewMap[components.FloorNavGrid](w),
+		floorMap:      ecs.NewMap[components.Floor](w),
+		posMap:        ecs.NewMap[components.WorldPos](w),
 	}
 }
 
-// NavOpts is the per-call planner config. Keep small; pre-Phase-6 state
-// is intentional — Phase 8 will widen it without breaking the call site.
+// NavOpts is the per-call planner config.
 type NavOpts struct {
 	Locomotion components.Locomotion
+	// AvoidOpenedDoors — Phase 12 stealth stub; ignored in Phase 7.
+	AvoidOpenedDoors bool
 }
 
-// navMaxIter caps the number of cells A* will expand per call. A worst-case
-// search across a fully loaded ring (11×11 chunks × 4096 = ~500K cells) is way
-// over this; the cap is a safety net against pathological loops, not a tuning
-// knob.
+// navMaxIter caps the number of cells A* will expand per call.
 const navMaxIter = 50000
 
 // navArrivalRadius — when walking the path returned by FindPath, the agent
-// can pop a waypoint whenever it gets within this many metres of it. Used by
-// the main loop's anchor walker; not consulted by the planner itself.
+// can pop a waypoint whenever it gets within this many metres of it.
 const navArrivalRadius float32 = 0.5
 
 // FindPath returns waypoints (cell centres) along a least-cost path from
-// `from` to `to`. Empty result = no path or target outside the loaded ring;
-// nil = both endpoints fall in the same cell. No smoothing — that's the
-// steering layer's job (Phase 7).
+// `from` to `to`. Empty result = no path; nil = both endpoints fall in the
+// same cell. The multi-graph A* expansion picks up surface↔floor transitions
+// from the TransitionRegistry resource so a path through a doorway or up a
+// staircase just works.
 func (s *NavService) FindPath(from, to components.WorldPos, opts NavOpts) []components.WorldPos {
 	_ = opts
 
@@ -55,83 +65,99 @@ func (s *NavService) FindPath(from, to components.WorldPos, opts NavOpts) []comp
 	if idx == nil {
 		return []components.WorldPos{}
 	}
+	registry := s.transitionRes.Get()
 
-	fromGI, fromGJ := worldPosToCell(from)
-	toGI, toGJ := worldPosToCell(to)
-	if fromGI == toGI && fromGJ == toGJ {
+	floors := s.snapshotFloors()
+
+	fromNode, fromOK := s.resolveNode(from, idx, floors)
+	toNode, toOK := s.resolveNode(to, idx, floors)
+	if !fromOK || !toOK {
+		return []components.WorldPos{}
+	}
+	if fromNode == toNode {
 		return nil
 	}
 
-	// Reject impossible queries up front: target chunk must be loaded *and*
-	// the target cell itself must be passable, otherwise A* would burn its
-	// entire iteration budget exploring fluently around a sealed goal.
-	cache := navGridCache{}
-	if c, ok := cache.cellAt(idx, s.navGridMap, toGI, toGJ); !ok || c.Cost == 0 {
+	if c, ok := s.cellAt(fromNode, idx, floors); !ok || c.Cost == 0 {
 		return []components.WorldPos{}
 	}
-	if c, ok := cache.cellAt(idx, s.navGridMap, fromGI, fromGJ); !ok || c.Cost == 0 {
+	if c, ok := s.cellAt(toNode, idx, floors); !ok || c.Cost == 0 {
 		return []components.WorldPos{}
 	}
 
-	type state struct {
-		g                float32
-		parentI, parentJ int32
-		hasParent        bool
+	type stateRec struct {
+		g         float32
+		parent    components.NavNode
+		hasParent bool
 	}
-	states := map[navGlobalCell]state{}
-	closed := map[navGlobalCell]bool{}
+	states := map[components.NavNode]stateRec{}
+	closed := map[components.NavNode]bool{}
+	states[fromNode] = stateRec{g: 0}
 
-	startCell := navGlobalCell{fromGI, fromGJ}
-	states[startCell] = state{g: 0}
+	toWP := s.nodeWorldPos(toNode, floors)
 
-	open := navHeap{}
-	open.push(navHeapEntry{f: navHeuristic(fromGI, fromGJ, toGI, toGJ), gi: fromGI, gj: fromGJ})
+	open := nodeHeap{}
+	open.push(nodeHeapEntry{f: nodeHeuristic(s.nodeWorldPos(fromNode, floors), toWP), node: fromNode})
 
 	const sqrt2 float32 = 1.41421356
-
-	type neighbourOffset struct {
-		di, dj int32
-		step   float32
-	}
-	neighbours := [8]neighbourOffset{
-		{1, 0, 1}, {-1, 0, 1}, {0, 1, 1}, {0, -1, 1},
-		{1, 1, sqrt2}, {1, -1, sqrt2}, {-1, 1, sqrt2}, {-1, -1, sqrt2},
-	}
 
 	found := false
 	for iter := 0; iter < navMaxIter && open.len() > 0; iter++ {
 		cur := open.pop()
-		gi, gj := cur.gi, cur.gj
-		if gi == toGI && gj == toGJ {
+		if cur.node == toNode {
 			found = true
 			break
 		}
-		gc := navGlobalCell{gi, gj}
-		if closed[gc] {
+		if closed[cur.node] {
 			continue
 		}
-		closed[gc] = true
-		curG := states[gc].g
+		closed[cur.node] = true
+		curG := states[cur.node].g
 
-		for _, off := range neighbours {
-			ni, nj := gi+off.di, gj+off.dj
-			ngc := navGlobalCell{ni, nj}
-			if closed[ngc] {
+		// In-grid 8 neighbours.
+		neighbours := s.gridNeighbours(cur.node)
+		for _, n := range neighbours {
+			if closed[n.node] {
 				continue
 			}
-			cell, ok := cache.cellAt(idx, s.navGridMap, ni, nj)
+			cell, ok := s.cellAt(n.node, idx, floors)
 			if !ok || cell.Cost == 0 {
 				continue
 			}
-			tentativeG := curG + float32(cell.Cost)*off.step
-			if existing, has := states[ngc]; has && tentativeG >= existing.g {
+			step := float32(1)
+			if n.diag {
+				step = sqrt2
+			}
+			tentativeG := curG + float32(cell.Cost)*step
+			if existing, has := states[n.node]; has && tentativeG >= existing.g {
 				continue
 			}
-			states[ngc] = state{g: tentativeG, parentI: gi, parentJ: gj, hasParent: true}
-			open.push(navHeapEntry{
-				f:  tentativeG + navHeuristic(ni, nj, toGI, toGJ),
-				gi: ni, gj: nj,
+			states[n.node] = stateRec{g: tentativeG, parent: cur.node, hasParent: true}
+			open.push(nodeHeapEntry{
+				f:    tentativeG + nodeHeuristic(s.nodeWorldPos(n.node, floors), toWP),
+				node: n.node,
 			})
+		}
+
+		// Cross-graph transitions.
+		if registry != nil {
+			for _, edge := range registry.Out[cur.node] {
+				if edge.Cost == 0 {
+					continue
+				}
+				if closed[edge.To] {
+					continue
+				}
+				tentativeG := curG + float32(edge.Cost)
+				if existing, has := states[edge.To]; has && tentativeG >= existing.g {
+					continue
+				}
+				states[edge.To] = stateRec{g: tentativeG, parent: cur.node, hasParent: true}
+				open.push(nodeHeapEntry{
+					f:    tentativeG + nodeHeuristic(s.nodeWorldPos(edge.To, floors), toWP),
+					node: edge.To,
+				})
+			}
 		}
 	}
 
@@ -139,163 +165,265 @@ func (s *NavService) FindPath(from, to components.WorldPos, opts NavOpts) []comp
 		return []components.WorldPos{}
 	}
 
-	// Reconstruct from goal to start, then reverse.
-	var cells []navGlobalCell
-	ci, cj := toGI, toGJ
+	// Reconstruct goal→start, then reverse into start→goal.
+	var nodes []components.NavNode
+	cur := toNode
 	for {
-		cells = append(cells, navGlobalCell{ci, cj})
-		st := states[navGlobalCell{ci, cj}]
+		nodes = append(nodes, cur)
+		st := states[cur]
 		if !st.hasParent {
 			break
 		}
-		ci, cj = st.parentI, st.parentJ
+		cur = st.parent
 	}
-	waypoints := make([]components.WorldPos, len(cells))
-	for i, gc := range cells {
-		waypoints[len(cells)-1-i] = cellToWorldPos(gc.gi, gc.gj)
+	waypoints := make([]components.WorldPos, 0, len(nodes))
+	for i := len(nodes) - 1; i >= 0; i-- {
+		waypoints = append(waypoints, s.nodeWorldPos(nodes[i], floors))
 	}
-
-	// Post-A* string-pulling: drop every waypoint that the agent can reach
-	// directly from its predecessor with a clear, equally-cheap line. Restores
-	// natural diagonal motion through open ground while still respecting the
-	// cost contour A* picked (a trench-avoiding detour stays detoured).
-	return s.smoothPath(waypoints)
+	// Drop the leading waypoint (start cell centre) — the caller's agent is
+	// already there; the walker would otherwise spend its first metres
+	// lateral-correcting onto the cell centre.
+	if len(waypoints) > 1 {
+		waypoints = waypoints[1:]
+	}
+	return waypoints
 }
 
-// smoothPath collapses a cell-by-cell A* result into corner-only waypoints by
-// LOS-rasterising the line between candidates and dropping intermediates whose
-// removal doesn't cut through impassable terrain or *more expensive* cells
-// than the original sub-path crossed.
-//
-// The cost-aware rule is what distinguishes this from a generic string-pulling
-// pass: a path that A* routed around a trench (Cost=16, navCostTrench) won't
-// be re-routed through the trench just because LOS happens to be clear — we
-// require lineMax ≤ runMax over the bypassed sub-path. Without that, the
-// smoother would undo A*'s cost-preference work in M6.4.
-//
-// The leading waypoint (start cell centre) is intentionally dropped: the
-// caller's anchor is already approximately there, and the path-walker would
-// otherwise spend its first metres lateral-correcting onto the cell centre.
-func (s *NavService) smoothPath(path []components.WorldPos) []components.WorldPos {
-	if len(path) <= 1 {
-		return path
-	}
-	idx := s.indexRes.Get()
-	if idx == nil {
-		return path
-	}
+// floorRec — lightweight per-floor record used during a single FindPath call.
+type floorRec struct {
+	ent           ecs.Entity
+	chunk         components.ChunkCoord
+	originX       float32
+	originZ       float32
+	y             float32
+	sizeX, sizeZ  uint8
+	grid          *components.FloorNavGrid
+}
 
-	cache := navGridCache{}
-	costs := make([]uint8, len(path))
-	for i, wp := range path {
-		gi, gj := worldPosToCell(wp)
-		if c, ok := cache.cellAt(idx, s.navGridMap, gi, gj); ok {
-			costs[i] = c.Cost
-		}
+// snapshotFloors walks every loaded building child via BuildingChildIndex and
+// keeps any entity that carries both Floor + FloorNavGrid. The set is small
+// (≤ ~6 floors on the placeholder scene), so a linear scan during resolve and
+// neighbour expansion is fine.
+func (s *NavService) snapshotFloors() []floorRec {
+	bIdx := s.buildingIndex.Get()
+	if bIdx == nil {
+		return nil
 	}
-
-	out := make([]components.WorldPos, 0, len(path))
-	anchor := 0
-	for anchor < len(path)-1 {
-		next := anchor + 1
-		runMax := costs[next]
-		for j := anchor + 2; j < len(path); j++ {
-			if costs[j] > runMax {
-				runMax = costs[j]
+	var out []floorRec
+	for _, children := range bIdx.Loaded {
+		for _, c := range children {
+			fComp := s.floorMap.Get(c)
+			if fComp == nil {
+				continue
 			}
-			lineMax, ok := s.lineMaxCost(path[anchor], path[j], idx, &cache)
-			if !ok || lineMax > runMax {
-				break
+			grid := s.floorNavMap.Get(c)
+			if grid == nil {
+				continue
 			}
-			next = j
+			pos := s.posMap.Get(c)
+			if pos == nil {
+				continue
+			}
+			out = append(out, floorRec{
+				ent:     c,
+				chunk:   pos.Chunk,
+				originX: pos.Local.X - fComp.SizeX*0.5,
+				originZ: pos.Local.Z - fComp.SizeZ*0.5,
+				y:       pos.Local.Y,
+				sizeX:   grid.SizeX,
+				sizeZ:   grid.SizeZ,
+				grid:    grid,
+			})
 		}
-		out = append(out, path[next])
-		anchor = next
 	}
 	return out
 }
 
-// lineMaxCost rasterises the world-XZ line a→b at fixed step and returns the
-// maximum NavCell.Cost touched along the way, with `ok=false` on any
-// impassable (Cost=0) or unloaded-chunk sample. Step is sub-cell (0.25 m =
-// 4× per cell) so a line tangent to a wall corner still catches the wall.
-func (s *NavService) lineMaxCost(a, b components.WorldPos, idx *TerrainChunkIndex, cache *navGridCache) (uint8, bool) {
-	aWX, aWZ := worldXZ(a)
-	bWX, bWZ := worldXZ(b)
-	dx := bWX - aWX
-	dz := bWZ - aWZ
-	dist := float32(math.Sqrt(float64(dx*dx + dz*dz)))
-	if dist <= 0 {
-		return 0, true
-	}
-	const sampleStep float32 = 0.25
-	samples := int(math.Ceil(float64(dist / sampleStep)))
-	if samples < 1 {
-		samples = 1
-	}
-	var maxCost uint8 = 0
-	for k := 0; k <= samples; k++ {
-		t := float32(k) / float32(samples)
-		sx := aWX + t*dx
-		sz := aWZ + t*dz
-		gi := int32(math.Floor(float64(sx)))
-		gj := int32(math.Floor(float64(sz)))
-		cell, ok := cache.cellAt(idx, s.navGridMap, gi, gj)
-		if !ok || cell.Cost == 0 {
-			return 0, false
+// resolveNode maps a WorldPos to a NavNode. Floor footprint check is first —
+// if the WorldPos.Y is close to a covering floor's Y (within floorHeight/2),
+// the NavNode is NodeFloor. Otherwise NodeSurface, using the standard global
+// cell math.
+func (s *NavService) resolveNode(wp components.WorldPos, idx *TerrainChunkIndex, floors []floorRec) (components.NavNode, bool) {
+	for i := range floors {
+		fr := &floors[i]
+		if fr.chunk != wp.Chunk {
+			continue
 		}
-		if cell.Cost > maxCost {
-			maxCost = cell.Cost
+		if absDelta(wp.Local.Y, fr.y) > floorHeight*0.5 {
+			continue
+		}
+		lx := wp.Local.X - fr.originX
+		lz := wp.Local.Z - fr.originZ
+		if lx < 0 || lz < 0 {
+			continue
+		}
+		ci := int16(math.Floor(float64(lx)))
+		cj := int16(math.Floor(float64(lz)))
+		if ci < 0 || ci >= int16(fr.sizeX) || cj < 0 || cj >= int16(fr.sizeZ) {
+			continue
+		}
+		return components.NavNode{Kind: components.NodeFloor, Floor: fr.ent, I: ci, J: cj}, true
+	}
+	gi, gj := worldPosToCell(wp)
+	cc := components.ChunkCoord{X: gi >> navGridShift, Z: gj >> navGridShift}
+	if _, ok := idx.Loaded[cc]; !ok {
+		return components.NavNode{}, false
+	}
+	return components.NavNode{
+		Kind:  components.NodeSurface,
+		Chunk: cc,
+		I:     int16(gi & navGridMask),
+		J:     int16(gj & navGridMask),
+	}, true
+}
+
+// cellAt returns the NavCell for a NavNode. (false) if the host grid is not
+// loaded.
+func (s *NavService) cellAt(n components.NavNode, idx *TerrainChunkIndex, floors []floorRec) (components.NavCell, bool) {
+	switch n.Kind {
+	case components.NodeSurface:
+		ent, ok := idx.Loaded[n.Chunk]
+		if !ok {
+			return components.NavCell{}, false
+		}
+		grid := s.navGridMap.Get(ent)
+		if grid == nil {
+			return components.NavCell{}, false
+		}
+		if n.I < 0 || n.I >= components.NavGridSide || n.J < 0 || n.J >= components.NavGridSide {
+			return components.NavCell{}, false
+		}
+		return grid.Cells[int(n.J)*components.NavGridSide+int(n.I)], true
+	case components.NodeFloor:
+		for i := range floors {
+			if floors[i].ent != n.Floor {
+				continue
+			}
+			fr := &floors[i]
+			if n.I < 0 || n.I >= int16(fr.sizeX) || n.J < 0 || n.J >= int16(fr.sizeZ) {
+				return components.NavCell{}, false
+			}
+			return fr.grid.Cells[int(n.J)*components.MaxFloorSide+int(n.I)], true
 		}
 	}
-	return maxCost, true
+	return components.NavCell{}, false
 }
 
-// navHeuristic — Chebyshev distance × min cell cost, in the same units the
-// gScore uses. Admissible: actual cost = Σ cellCost × step ≥ minCost × cells.
-// minCost in Phase 6 is navCostRoad (2).
-func navHeuristic(fromI, fromJ, toI, toJ int32) float32 {
-	di := fromI - toI
-	if di < 0 {
-		di = -di
+// nodeWorldPos returns the centre-of-cell WorldPos for a NavNode. Used by the
+// heuristic, path reconstruction, and the walker.
+func (s *NavService) nodeWorldPos(n components.NavNode, floors []floorRec) components.WorldPos {
+	switch n.Kind {
+	case components.NodeSurface:
+		gi := int32(n.Chunk.X)<<navGridShift + int32(n.I)
+		gj := int32(n.Chunk.Z)<<navGridShift + int32(n.J)
+		return cellToWorldPos(gi, gj)
+	case components.NodeFloor:
+		for i := range floors {
+			if floors[i].ent != n.Floor {
+				continue
+			}
+			fr := &floors[i]
+			lx := fr.originX + float32(n.I) + 0.5
+			lz := fr.originZ + float32(n.J) + 0.5
+			return components.WorldPos{
+				Chunk: fr.chunk,
+				Local: rl.Vector3{X: lx, Y: fr.y, Z: lz},
+			}
+		}
 	}
-	dj := fromJ - toJ
-	if dj < 0 {
-		dj = -dj
+	return components.WorldPos{}
+}
+
+// gridNeighbour — output of gridNeighbours, packs target NavNode + a flag
+// telling A* whether the move is diagonal (√2 step) or cardinal (1 m).
+type gridNeighbour struct {
+	node components.NavNode
+	diag bool
+}
+
+// gridNeighbours enumerates the 8 cells around a node *inside the same grid*.
+// Surface nodes overflow into neighbouring chunks via the global-cell math;
+// floor nodes are clamped to the grid's SizeX × SizeZ block.
+func (s *NavService) gridNeighbours(n components.NavNode) []gridNeighbour {
+	var out [8]gridNeighbour
+	offsets := [8][3]int{
+		{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0},
+		{1, 1, 1}, {1, -1, 1}, {-1, 1, 1}, {-1, -1, 1},
 	}
-	cheb := di
-	if dj > cheb {
-		cheb = dj
+	count := 0
+	switch n.Kind {
+	case components.NodeSurface:
+		gi := int32(n.Chunk.X)<<navGridShift + int32(n.I)
+		gj := int32(n.Chunk.Z)<<navGridShift + int32(n.J)
+		for _, off := range offsets {
+			ni := gi + int32(off[0])
+			nj := gj + int32(off[1])
+			nc := components.ChunkCoord{X: ni >> navGridShift, Z: nj >> navGridShift}
+			out[count] = gridNeighbour{
+				node: components.NavNode{
+					Kind:  components.NodeSurface,
+					Chunk: nc,
+					I:     int16(ni & navGridMask),
+					J:     int16(nj & navGridMask),
+				},
+				diag: off[2] == 1,
+			}
+			count++
+		}
+	case components.NodeFloor:
+		for _, off := range offsets {
+			ni := int16(int(n.I) + off[0])
+			nj := int16(int(n.J) + off[1])
+			out[count] = gridNeighbour{
+				node: components.NavNode{
+					Kind: components.NodeFloor, Floor: n.Floor, I: ni, J: nj,
+				},
+				diag: off[2] == 1,
+			}
+			count++
+		}
 	}
-	return float32(cheb) * float32(navCostRoad)
+	return out[:count]
 }
 
-// navGlobalCell is a (chunk-aware) cell coordinate covering the entire world.
-// gi = chunk.X*NavGridSide + i; gj = chunk.Z*NavGridSide + j.
-type navGlobalCell struct {
-	gi, gj int32
+// nodeHeuristic — Chebyshev distance in WorldPos space, scaled by min cell
+// cost (navCostRoad = 2). Admissible regardless of whether the two nodes
+// live on the same grid.
+func nodeHeuristic(a, b components.WorldPos) float32 {
+	d := a.Sub(b)
+	dx := d.X
+	if dx < 0 {
+		dx = -dx
+	}
+	dz := d.Z
+	if dz < 0 {
+		dz = -dz
+	}
+	cheb := dx
+	if dz > cheb {
+		cheb = dz
+	}
+	return cheb * float32(navCostRoad)
 }
 
-// navHeapEntry is one slot in the open set, keyed by f-score.
-type navHeapEntry struct {
-	f      float32
-	gi, gj int32
+// nodeHeap — min-heap on f-score, keyed on NavNode payload.
+type nodeHeapEntry struct {
+	f    float32
+	node components.NavNode
 }
 
-// navHeap is a min-heap on f. Stay-local rather than container/heap to avoid
-// the interface boxing — A* hits this in the inner loop.
-type navHeap struct {
-	entries []navHeapEntry
+type nodeHeap struct {
+	entries []nodeHeapEntry
 }
 
-func (h *navHeap) len() int { return len(h.entries) }
+func (h *nodeHeap) len() int { return len(h.entries) }
 
-func (h *navHeap) push(e navHeapEntry) {
+func (h *nodeHeap) push(e nodeHeapEntry) {
 	h.entries = append(h.entries, e)
 	h.siftUp(len(h.entries) - 1)
 }
 
-func (h *navHeap) pop() navHeapEntry {
+func (h *nodeHeap) pop() nodeHeapEntry {
 	top := h.entries[0]
 	last := len(h.entries) - 1
 	h.entries[0] = h.entries[last]
@@ -306,7 +434,7 @@ func (h *navHeap) pop() navHeapEntry {
 	return top
 }
 
-func (h *navHeap) siftUp(i int) {
+func (h *nodeHeap) siftUp(i int) {
 	for i > 0 {
 		p := (i - 1) / 2
 		if h.entries[p].f <= h.entries[i].f {
@@ -317,7 +445,7 @@ func (h *navHeap) siftUp(i int) {
 	}
 }
 
-func (h *navHeap) siftDown(i int) {
+func (h *nodeHeap) siftDown(i int) {
 	n := len(h.entries)
 	for {
 		l := 2*i + 1
@@ -337,81 +465,22 @@ func (h *navHeap) siftDown(i int) {
 	}
 }
 
-// navGridCache is a tiny per-call lookup cache: A* reads the same chunk's grid
-// for many consecutive cells, so caching the most recent few avoids a hashmap
-// hit every step. Capacity 4 covers all four chunks meeting at a corner.
-type navGridCache struct {
-	entries [4]struct {
-		cc    components.ChunkCoord
-		grid  *components.NavGrid
-		valid bool
-	}
-}
-
-func (c *navGridCache) cellAt(idx *TerrainChunkIndex, gridMap *ecs.Map[components.NavGrid],
-	gi, gj int32) (components.NavCell, bool) {
-	// NavGridSide == 64 == 2^navGridShift; arithmetic right shift gives the
-	// correct floor-division for negative gi/gj as well (Go's >> on signed
-	// ints sign-extends).
-	cc := components.ChunkCoord{X: gi >> navGridShift, Z: gj >> navGridShift}
-	var grid *components.NavGrid
-	for k := range c.entries {
-		if c.entries[k].valid && c.entries[k].cc == cc {
-			grid = c.entries[k].grid
-			break
-		}
-	}
-	if grid == nil {
-		ent, ok := idx.Loaded[cc]
-		if !ok {
-			return components.NavCell{}, false
-		}
-		grid = gridMap.Get(ent)
-		if grid == nil {
-			return components.NavCell{}, false
-		}
-		// Evict oldest slot (round-robin via the first invalid; if all valid,
-		// reuse slot 0 — cache locality matters far more than perfect LRU at
-		// this size).
-		slot := -1
-		for k := range c.entries {
-			if !c.entries[k].valid {
-				slot = k
-				break
-			}
-		}
-		if slot < 0 {
-			slot = 0
-		}
-		c.entries[slot].cc = cc
-		c.entries[slot].grid = grid
-		c.entries[slot].valid = true
-	}
-	li := int(gi & navGridMask)
-	lj := int(gj & navGridMask)
-	return grid.Cells[lj*components.NavGridSide+li], true
-}
-
 // navGridShift / navGridMask — NavGridSide is fixed at 64 (1 m cells, 64 m
-// chunk). Compile-time bit ops decode (gi, gj) into (chunk, local) without
-// signed-mod surprises near negative coordinates.
+// chunk). Compile-time bit ops decode (gi, gj) into (chunk, local).
 const (
 	navGridShift = 6
 	navGridMask  = components.NavGridSide - 1
 )
 
-// worldPosToCell — global (gi, gj) cell index of a WorldPos. NavGrid step is
-// 1 m and ChunkSize is 64 m, so the cell index of the chunk's (Local.X = 0)
-// edge is exactly chunk.X << navGridShift.
+// worldPosToCell — global (gi, gj) surface-cell index of a WorldPos.
 func worldPosToCell(p components.WorldPos) (int32, int32) {
 	gi := p.Chunk.X<<navGridShift + int32(math.Floor(float64(p.Local.X)))
 	gj := p.Chunk.Z<<navGridShift + int32(math.Floor(float64(p.Local.Z)))
 	return gi, gj
 }
 
-// cellToWorldPos — centre-of-cell WorldPos. Y is the procgen surface so the
-// waypoint marker hovers visibly above the ground; the anchor walker overwrites
-// Y via GroundStickSystem each tick anyway.
+// cellToWorldPos — centre-of-cell WorldPos for a surface cell. Y is the
+// procgen surface; GroundStickSystem clamps later.
 func cellToWorldPos(gi, gj int32) components.WorldPos {
 	cc := components.ChunkCoord{X: gi >> navGridShift, Z: gj >> navGridShift}
 	li := float32(gi&navGridMask) + 0.5
