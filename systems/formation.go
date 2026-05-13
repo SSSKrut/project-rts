@@ -27,12 +27,35 @@ type FormationSystem struct {
 	actionQueueMap *ecs.Map[components.ActionQueue]
 	pool           *core.WorkerPool
 	squadService   *SquadService
+
+	// Phase 11.6 M11.6.2: reusable snapshot buffer.
+	workBuf []formationWork
+
+	// Phase 11.6 M11.6.4: per-worker buffers for stragglers. Length == pool
+	// workers (or 1 for serial). Reused across ticks; reset to len=0 inside
+	// Update.
+	workerLeaveBufs [][]ecs.Entity
 }
 
 // NewFormationSystem wires the system with a worker pool. nil pool falls back
 // to serial execution.
 func NewFormationSystem(squadService *SquadService, pool *core.WorkerPool) *FormationSystem {
-	return &FormationSystem{squadService: squadService, pool: pool}
+	workers := 1
+	if pool != nil {
+		if w := pool.Workers(); w > 0 {
+			workers = w
+		}
+	}
+	bufs := make([][]ecs.Entity, workers)
+	for i := range bufs {
+		bufs[i] = make([]ecs.Entity, 0, 4)
+	}
+	return &FormationSystem{
+		squadService:    squadService,
+		pool:            pool,
+		workBuf:         make([]formationWork, 0, 16),
+		workerLeaveBufs: bufs,
+	}
 }
 
 func (sys *FormationSystem) InitUI(w *ecs.World) {
@@ -97,29 +120,41 @@ func (sys *FormationSystem) Update(ctx core.UpdateContext) {
 	// Snapshot squads. Workers write per-squad → per-member ActionQueue (each
 	// member belongs to exactly one squad, so the write set is disjoint
 	// across workers — no shared writes).
-	work := make([]formationWork, 0, 16)
+	sys.workBuf = sys.workBuf[:0]
 	q := sys.filter.Query()
 	for q.Next() {
 		_, roster, mp, fd := q.Get()
-		work = append(work, formationWork{roster: roster, mp: mp, fd: fd})
+		sys.workBuf = append(sys.workBuf, formationWork{roster: roster, mp: mp, fd: fd})
+	}
+	work := sys.workBuf
+
+	// Reset per-worker straggler buffers. Phase 11.6 M11.6.4: each worker
+	// gets its own buffer, then we drain all of them serially after the
+	// parallel pass. With cohesionEjectionEnabled = false the buffers stay
+	// empty, but the pattern is in place for when Phase 15's doctrine layer
+	// flips the flag.
+	for i := range sys.workerLeaveBufs {
+		sys.workerLeaveBufs[i] = sys.workerLeaveBufs[i][:0]
 	}
 
-	// Stragglers are collected and applied after the parallel pass closes —
-	// SquadService.Leave mutates archetypes and CommandRosters, neither safe
-	// inside a parallel-for write. Phase 11.5: with cohesionEjectionEnabled
-	// = false the buffer is always empty, but the slot stays so the pattern
-	// is in place for Phase 15.
-	leaveBuffer := make([]ecs.Entity, 0)
-
 	world := ctx.World
-	sys.pool.ParallelFor(len(work), func(start, end int) {
+	sys.pool.ParallelForIndexed(len(work), func(chunkIdx, start, end int) {
+		// Bound the index — defensive in case ParallelForIndexed ever splits
+		// into more chunks than the buffer slice (shouldn't happen with our
+		// constructor, but cheap to be safe).
+		if chunkIdx >= len(sys.workerLeaveBufs) {
+			chunkIdx = len(sys.workerLeaveBufs) - 1
+		}
+		buf := &sys.workerLeaveBufs[chunkIdx]
 		for i := start; i < end; i++ {
-			sys.processSquad(world, work[i], &leaveBuffer)
+			sys.processSquad(world, work[i], buf)
 		}
 	})
 
-	for _, e := range leaveBuffer {
-		sys.squadService.Leave(e)
+	for i := range sys.workerLeaveBufs {
+		for _, e := range sys.workerLeaveBufs[i] {
+			sys.squadService.Leave(e)
+		}
 	}
 }
 

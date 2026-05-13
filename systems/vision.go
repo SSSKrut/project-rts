@@ -31,13 +31,26 @@ type VisionSystem struct {
 	wallFilter *ecs.Filter2[components.WorldPos, components.WallSegment]
 	doorMap    *ecs.Map[components.Door]
 	pool       *core.WorkerPool
-	elapsed    float32
+
+	// Phase 11.6 M11.6.2: reusable snapshot buffers + wall map. unitsBuf and
+	// seersBuf are reset to len=0 each Update; wallsByChunk is reused via
+	// clear() so capacity persists.
+	unitsBuf     []visionUnit
+	seersBuf     []seerWork
+	wallsByChunk map[components.ChunkCoord][]losWall
+
+	elapsed float32
 }
 
 // NewVisionSystem wires the system with a worker pool. nil pool falls back to
 // serial execution.
 func NewVisionSystem(pool *core.WorkerPool) *VisionSystem {
-	return &VisionSystem{pool: pool}
+	return &VisionSystem{
+		pool:         pool,
+		unitsBuf:     make([]visionUnit, 0, 64),
+		seersBuf:     make([]seerWork, 0, 64),
+		wallsByChunk: make(map[components.ChunkCoord][]losWall, 32),
+	}
 }
 
 func (sys *VisionSystem) InitUI(w *ecs.World) {
@@ -80,21 +93,25 @@ func (sys *VisionSystem) Update(ctx core.UpdateContext) {
 	// Snapshot every unit as both a candidate target and a seer. We need two
 	// shapes because candidates are positional only (small struct, copied)
 	// whereas seers carry pointers to Awareness for the write.
-	var units []visionUnit
-	var seers []seerWork
+	sys.unitsBuf = sys.unitsBuf[:0]
+	sys.seersBuf = sys.seersBuf[:0]
 	q := sys.unitFilter.Query()
 	for q.Next() {
 		_, pos, mot, vision, aware := q.Get()
-		units = append(units, visionUnit{ent: q.Entity(), pos: *pos, chunk: pos.Chunk})
-		seers = append(seers, seerWork{
+		sys.unitsBuf = append(sys.unitsBuf, visionUnit{ent: q.Entity(), pos: *pos, chunk: pos.Chunk})
+		sys.seersBuf = append(sys.seersBuf, seerWork{
 			ent: q.Entity(), pos: *pos, yaw: mot.Yaw,
 			vision: vision, aware: aware,
 		})
 	}
+	units := sys.unitsBuf
+	seers := sys.seersBuf
 
 	// Snapshot LOS walls by chunk so the raycast pass can pull the 9 chunks
-	// around any seer in O(1).
-	wallsByChunk := map[components.ChunkCoord][]losWall{}
+	// around any seer in O(1). clear() empties the map but keeps the
+	// underlying buckets, so we skip the per-tick map allocation that the
+	// pre-11.6 build paid.
+	clear(sys.wallsByChunk)
 	qW := sys.wallFilter.Query()
 	for qW.Next() {
 		pos, w := qW.Get()
@@ -102,10 +119,11 @@ func (sys *VisionSystem) Update(ctx core.UpdateContext) {
 		if d := sys.doorMap.Get(qW.Entity()); d != nil {
 			doorState = d.State
 		}
-		wallsByChunk[pos.Chunk] = append(wallsByChunk[pos.Chunk], makeLosWall(*pos, *w, doorState))
+		sys.wallsByChunk[pos.Chunk] = append(sys.wallsByChunk[pos.Chunk], makeLosWall(*pos, *w, doorState))
 	}
 
 	elapsed := sys.elapsed
+	wallsByChunk := sys.wallsByChunk
 	sys.pool.ParallelFor(len(seers), func(start, end int) {
 		for i := start; i < end; i++ {
 			s := seers[i]

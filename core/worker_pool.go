@@ -9,12 +9,16 @@ import (
 // data-parallel hot loops (Phase 11.5 M11.5.1). Lifecycle is owned by main:
 // NewWorkerPool spins workers; Stop joins them on shutdown.
 //
-// ParallelFor is the only entry point. It splits [0, total) into roughly even
-// ranges (one per worker), dispatches each range as a job, and blocks until
-// all jobs complete. The caller's fn must be race-safe over its own range —
-// writing to shared maps / resources is forbidden. raylib calls are also
-// forbidden inside fn (raylib-go isn't thread-safe; all draw / upload
+// ParallelFor is the primary entry point. It splits [0, total) into roughly
+// even ranges (one per worker), dispatches each range as a job, and blocks
+// until all jobs complete. The caller's fn must be race-safe over its own
+// range — writing to shared maps / resources is forbidden. raylib calls are
+// also forbidden inside fn (raylib-go isn't thread-safe; all draw / upload
 // happens on the main goroutine).
+//
+// ParallelForIndexed is the variant that also passes a chunk index so
+// callers can keep per-worker scratch buffers (used by FormationSystem in
+// Phase 11.6 M11.6.4 for race-safe straggler collection).
 type WorkerPool struct {
 	workers int
 	jobs    chan workerJob
@@ -23,11 +27,24 @@ type WorkerPool struct {
 }
 
 type workerJob struct {
-	fn    func(start, end int)
-	start int
-	end   int
-	done  *sync.WaitGroup
+	fn       func(start, end int)
+	fnIndex  func(chunkIdx, start, end int)
+	chunkIdx int
+	start    int
+	end      int
+	done     *sync.WaitGroup
 }
+
+// SerialThresholdHint — when total <= this value, ParallelFor / ParallelForIndexed
+// skip the worker dispatch and run the whole range in the caller goroutine.
+// Below this, the ParallelFor synchronisation overhead (channel send + wait
+// group + scheduler hops, ~5–10 μs on 8 workers) outweighs the parallel gain.
+//
+// Phase 11.6 M11.6.3: chosen empirically against the current 12-unit test
+// scene where step cost is ~1 μs/unit. Phase 14 may revisit per-system if
+// some systems grow heavier than others, but for now one global default
+// keeps the API single-line simple.
+const SerialThresholdHint = 64
 
 // NewWorkerPool spawns n workers. n must be >= 1; values <= 0 are clamped to
 // 1 to keep ParallelFor functional (otherwise there'd be no goroutine to
@@ -58,7 +75,11 @@ func (p *WorkerPool) workerLoop() {
 			if !ok {
 				return
 			}
-			j.fn(j.start, j.end)
+			if j.fnIndex != nil {
+				j.fnIndex(j.chunkIdx, j.start, j.end)
+			} else if j.fn != nil {
+				j.fn(j.start, j.end)
+			}
 			j.done.Done()
 		}
 	}
@@ -76,13 +97,15 @@ func (p *WorkerPool) Workers() int {
 // once per range, in parallel. Blocks until every range completes. fn must
 // be race-safe over its [start, end) slice — no shared writes, no raylib.
 //
-// When p is nil OR total == 0 the call is a no-op, letting systems fall back
-// to a simple serial loop for unit tests where the pool isn't wired.
+// Falls back to a serial inline call when:
+//   - p is nil or has at most 1 worker (test / stripped builds);
+//   - total <= SerialThresholdHint (Phase 11.6 M11.6.3: small workloads where
+//     the dispatch overhead would dominate).
 func (p *WorkerPool) ParallelFor(total int, fn func(start, end int)) {
 	if total <= 0 || fn == nil {
 		return
 	}
-	if p == nil || p.workers <= 1 || total == 1 {
+	if p == nil || p.workers <= 1 || total <= SerialThresholdHint {
 		fn(0, total)
 		return
 	}
@@ -102,6 +125,41 @@ func (p *WorkerPool) ParallelFor(total int, fn func(start, end int)) {
 		}
 		end := start + size
 		p.jobs <- workerJob{fn: fn, start: start, end: end, done: &done}
+		start = end
+	}
+	done.Wait()
+}
+
+// ParallelForIndexed is ParallelFor that also hands `fn` the chunk index
+// (0..workers-1). Useful for per-worker scratch buffers — see
+// FormationSystem.workerLeaveBufs.
+//
+// Same fallback rules as ParallelFor. In the serial-fallback case chunkIdx
+// is always 0; callers should size their per-worker buffers to at least 1.
+func (p *WorkerPool) ParallelForIndexed(total int, fn func(chunkIdx, start, end int)) {
+	if total <= 0 || fn == nil {
+		return
+	}
+	if p == nil || p.workers <= 1 || total <= SerialThresholdHint {
+		fn(0, 0, total)
+		return
+	}
+	workers := p.workers
+	if workers > total {
+		workers = total
+	}
+	chunk := total / workers
+	rem := total % workers
+	var done sync.WaitGroup
+	done.Add(workers)
+	start := 0
+	for i := 0; i < workers; i++ {
+		size := chunk
+		if i < rem {
+			size++
+		}
+		end := start + size
+		p.jobs <- workerJob{fnIndex: fn, chunkIdx: i, start: start, end: end, done: &done}
 		start = end
 	}
 	done.Wait()

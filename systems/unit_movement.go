@@ -38,20 +38,34 @@ const stopDuration float32 = 0.1
 // Phase 11.5 M11.5.3 / M11.5.5: tier-gating removed and the per-unit step
 // is dispatched through WorkerPool.ParallelFor. snapshot → parallel step →
 // no post-pass (each worker writes only to its own unit's component pointers,
-// no shared map mutation, no archetype changes). On a 12-unit scene the
-// ParallelFor overhead is ~50 μs of net loss; the chassis pays off at 1000+
-// units.
+// no shared map mutation, no archetype changes).
+//
+// Phase 11.6 M11.6.2: snapshot buffers live on the struct and are reset to
+// len=0 each Update instead of allocated fresh. After the first Update the
+// underlying capacity is stable, so steady-state runs no longer hit the
+// allocator on this hot path.
 type UnitMovementSystem struct {
 	unitFilter      *ecs.Filter5[components.Unit, components.WorldPos, components.Motion, components.ActionQueue, components.Stance]
 	neighbourFilter *ecs.Filter2[components.Unit, components.WorldPos]
 	pool            *core.WorkerPool
-	elapsed         float32
+
+	// Reusable snapshot buffers. Filled in the serial pre-pass, read-only by
+	// workers during ParallelFor — safe because writes are indexed and never
+	// concurrent.
+	workBuf      []unitWork
+	neighbourBuf []unitNeighbour
+
+	elapsed float32
 }
 
 // NewUnitMovementSystem wires the system with a worker pool. nil pool falls
 // back to serial execution (useful for unit tests).
 func NewUnitMovementSystem(pool *core.WorkerPool) *UnitMovementSystem {
-	return &UnitMovementSystem{pool: pool}
+	return &UnitMovementSystem{
+		pool:         pool,
+		workBuf:      make([]unitWork, 0, 64),
+		neighbourBuf: make([]unitNeighbour, 0, 64),
+	}
 }
 
 func (sys *UnitMovementSystem) InitUI(w *ecs.World) {
@@ -97,25 +111,27 @@ func (sys *UnitMovementSystem) Update(ctx core.UpdateContext) {
 
 	// Snapshot neighbours (XZ-only) for the separation pass. Phase 14 will
 	// swap this O(N²) scan for a spatial hash.
-	neighbours := make([]unitNeighbour, 0, 64)
+	sys.neighbourBuf = sys.neighbourBuf[:0]
 	qN := sys.neighbourFilter.Query()
 	for qN.Next() {
 		_, pos := qN.Get()
-		neighbours = append(neighbours, unitNeighbour{
+		sys.neighbourBuf = append(sys.neighbourBuf, unitNeighbour{
 			ent: qN.Entity(),
 			wx:  float32(pos.Chunk.X)*components.ChunkSize + pos.Local.X,
 			wz:  float32(pos.Chunk.Z)*components.ChunkSize + pos.Local.Z,
 		})
 	}
+	neighbours := sys.neighbourBuf
 
 	// Snapshot units (component pointers) so the parallel pass can index into
 	// a slice without holding the live ECS query.
-	work := make([]unitWork, 0, 64)
+	sys.workBuf = sys.workBuf[:0]
 	q := sys.unitFilter.Query()
 	for q.Next() {
 		_, pos, mot, queue, stance := q.Get()
-		work = append(work, unitWork{ent: q.Entity(), pos: pos, mot: mot, queue: queue, stance: stance})
+		sys.workBuf = append(sys.workBuf, unitWork{ent: q.Entity(), pos: pos, mot: mot, queue: queue, stance: stance})
 	}
+	work := sys.workBuf
 
 	sys.pool.ParallelFor(len(work), func(start, end int) {
 		for i := start; i < end; i++ {

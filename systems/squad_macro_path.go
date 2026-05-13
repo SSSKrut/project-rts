@@ -35,13 +35,21 @@ type SquadMacroPathSystem struct {
 	orderStateMap  *ecs.Map[components.OrderState]
 	nav            *NavService
 	pool           *core.WorkerPool
-	elapsed        float32
+
+	// Phase 11.6 M11.6.2: reusable snapshot buffer.
+	workBuf []macroPathWork
+
+	elapsed float32
 }
 
 // NewSquadMacroPathSystem wires the system with NavService and worker pool.
 // nil pool falls back to serial execution.
 func NewSquadMacroPathSystem(nav *NavService, pool *core.WorkerPool) *SquadMacroPathSystem {
-	return &SquadMacroPathSystem{nav: nav, pool: pool}
+	return &SquadMacroPathSystem{
+		nav:     nav,
+		pool:    pool,
+		workBuf: make([]macroPathWork, 0, 16),
+	}
 }
 
 func (sys *SquadMacroPathSystem) InitUI(w *ecs.World) {
@@ -91,12 +99,13 @@ type macroPathWork struct {
 func (sys *SquadMacroPathSystem) Update(ctx core.UpdateContext) {
 	sys.elapsed += float32(ctx.Delta.Seconds())
 
-	work := make([]macroPathWork, 0, 16)
+	sys.workBuf = sys.workBuf[:0]
 	q := sys.filter.Query()
 	for q.Next() {
 		_, roster, mp, fd, head := q.Get()
-		work = append(work, macroPathWork{roster: roster, mp: mp, fd: fd, head: head})
+		sys.workBuf = append(sys.workBuf, macroPathWork{roster: roster, mp: mp, fd: fd, head: head})
 	}
+	work := sys.workBuf
 
 	world := ctx.World
 	elapsed := sys.elapsed
