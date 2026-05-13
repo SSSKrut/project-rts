@@ -25,20 +25,57 @@ type SquadService struct {
 	radioMap        *ecs.Map[components.RadioNetwork]
 	memberMap       *ecs.Map[components.SquadMember]
 	alwaysActiveMap *ecs.Map[components.AlwaysActive]
+	// Phase 11 order maps. SquadService is the only path that issues / cancels
+	// orders, mirroring the "service owns its archetype" pattern from Phase 9.
+	orderQueueMap    *ecs.Map[components.OrderQueueHead]
+	orderMap         *ecs.Map[components.Order]
+	orderKindMap     *ecs.Map[components.OrderKind]
+	orderStateMap    *ecs.Map[components.OrderState]
+	orderOwnerMap    *ecs.Map[components.OrderOwner]
+	orderTargetMap   *ecs.Map[components.OrderTarget]
+	orderIssuedAtMap *ecs.Map[components.OrderIssuedAt]
+	orderProgressMap *ecs.Map[components.OrderProgress]
+	orderChainMap    *ecs.Map[components.OrderChain]
+	orderFacingMap   *ecs.Map[components.OrderParamFacing]
+	orderPatrolMap   *ecs.Map[components.OrderParamPatrol]
+	// Session-time clock for OrderIssuedAt. Advanced by SetClock (called
+	// from main.go each frame before input handlers run).
+	clock float32
 }
 
 func NewSquadService(w *ecs.World) *SquadService {
 	return &SquadService{
-		world:           w,
-		squadMap:        ecs.NewMap[components.Squad](w),
-		rosterMap:       ecs.NewMap[components.CommandRoster](w),
-		formationMap:    ecs.NewMap[components.FormationData](w),
-		macroPathMap:    ecs.NewMap[components.MacroPath](w),
-		radioMap:        ecs.NewMap[components.RadioNetwork](w),
-		memberMap:       ecs.NewMap[components.SquadMember](w),
-		alwaysActiveMap: ecs.NewMap[components.AlwaysActive](w),
+		world:            w,
+		squadMap:         ecs.NewMap[components.Squad](w),
+		rosterMap:        ecs.NewMap[components.CommandRoster](w),
+		formationMap:     ecs.NewMap[components.FormationData](w),
+		macroPathMap:     ecs.NewMap[components.MacroPath](w),
+		radioMap:         ecs.NewMap[components.RadioNetwork](w),
+		memberMap:        ecs.NewMap[components.SquadMember](w),
+		alwaysActiveMap:  ecs.NewMap[components.AlwaysActive](w),
+		orderQueueMap:    ecs.NewMap[components.OrderQueueHead](w),
+		orderMap:         ecs.NewMap[components.Order](w),
+		orderKindMap:     ecs.NewMap[components.OrderKind](w),
+		orderStateMap:    ecs.NewMap[components.OrderState](w),
+		orderOwnerMap:    ecs.NewMap[components.OrderOwner](w),
+		orderTargetMap:   ecs.NewMap[components.OrderTarget](w),
+		orderIssuedAtMap: ecs.NewMap[components.OrderIssuedAt](w),
+		orderProgressMap: ecs.NewMap[components.OrderProgress](w),
+		orderChainMap:    ecs.NewMap[components.OrderChain](w),
+		orderFacingMap:   ecs.NewMap[components.OrderParamFacing](w),
+		orderPatrolMap:   ecs.NewMap[components.OrderParamPatrol](w),
 	}
 }
+
+// SetClock updates the session-time used for OrderIssuedAt. main.go calls
+// this once per frame before issuing any orders. Separate from app.elapsed
+// because SquadService doesn't import core.
+func (s *SquadService) SetClock(t float32) { s.clock = t }
+
+// Clock returns the current session clock used for order timestamps. Used by
+// OrderResolverSystem to compute progress / timeouts without re-importing
+// elapsed.
+func (s *SquadService) Clock() float32 { return s.clock }
 
 // FormationSpacing returns the default spacing (metres) for each formation
 // kind. F1-F4 hotkeys use this table; Phase 14 may swap it for a slider.
@@ -128,6 +165,7 @@ func (s *SquadService) CreateFromUnits(units []ecs.Entity, kind components.Forma
 		HasRadioman: hasRadiomanInRoster(s.world, prepared),
 		HQReachable: false,
 	})
+	s.orderQueueMap.Add(squad, &components.OrderQueueHead{})
 	s.alwaysActiveMap.Add(squad, &components.AlwaysActive{})
 
 	// Stage 4 — attach SquadMember on every member. Each Add mutates the
@@ -277,37 +315,134 @@ func (s *SquadService) Despawn(squad ecs.Entity) {
 	}
 }
 
-// OrderMoveTo sets the squad's macro goal and forces SquadMacroPathSystem to
-// replan on its next pass (ReplanAt = 0 clears any throttle gating).
-func (s *SquadService) OrderMoveTo(squad ecs.Entity, goal components.WorldPos) {
-	if squad == (ecs.Entity{}) || !s.world.Alive(squad) {
-		return
-	}
-	mp := s.macroPathMap.Get(squad)
-	if mp == nil {
-		return
-	}
-	mp.Goal = goal
-	mp.HasGoal = true
-	mp.ReplanAt = 0
-	mp.Head = 0
-	mp.Count = 0
+// OrderParams bundles the optional per-kind fields IssueOrder accepts. Zero
+// values are fine for kinds that don't read them.
+type OrderParams struct {
+	FacingYawRad float32
+	HasFacing    bool
+	PatrolLoop   bool
 }
 
-// Stop drops the squad's goal so FormationSystem stops driving the roster.
-// Members keep whatever ActionQueue entries they already have; the last
-// formation-offset MoveTo brings each one to rest at its current slot.
-func (s *SquadService) Stop(squad ecs.Entity) {
+// IssueOrder spawns a new Order entity owned by `squad`. If append=false the
+// existing chain (head + tails) is cancelled first; if append=true the new
+// order is appended at the tail (Shift+RMB semantics, PHASE-11.md P9).
+//
+// kind / target / entityTarget describe what the order *means*; per-kind
+// completion lives in OrderResolverSystem. Returns the new Order entity, or
+// zero on a no-op (dead squad / missing OrderQueueHead).
+func (s *SquadService) IssueOrder(
+	squad ecs.Entity,
+	kind components.OrderKindCode,
+	target components.WorldPos,
+	entityTarget ecs.Entity,
+	appendToQueue bool,
+	params OrderParams,
+) ecs.Entity {
+	if squad == (ecs.Entity{}) || !s.world.Alive(squad) {
+		return ecs.Entity{}
+	}
+	head := s.orderQueueMap.Get(squad)
+	if head == nil {
+		return ecs.Entity{}
+	}
+
+	// Cancel mode — wipe the current chain so the new order is the sole head.
+	// The wipe deletes order entities and walks the chain via OrderChain.Next.
+	if !appendToQueue {
+		s.cancelChain(head.First)
+		head.First = ecs.Entity{}
+	}
+
+	// Spawn the new order entity.
+	ord := s.world.NewEntity()
+	s.orderMap.Add(ord, &components.Order{})
+	s.orderKindMap.Add(ord, &components.OrderKind{Code: kind})
+	s.orderStateMap.Add(ord, &components.OrderState{Code: components.OrderStateIssued})
+	s.orderOwnerMap.Add(ord, &components.OrderOwner{Squad: squad})
+	s.orderTargetMap.Add(ord, &components.OrderTarget{Pos: target, Entity: entityTarget})
+	s.orderIssuedAtMap.Add(ord, &components.OrderIssuedAt{Time: s.clock})
+	s.orderProgressMap.Add(ord, &components.OrderProgress{})
+	s.orderChainMap.Add(ord, &components.OrderChain{})
+	if params.HasFacing {
+		s.orderFacingMap.Add(ord, &components.OrderParamFacing{YawRad: params.FacingYawRad})
+	}
+	if kind == components.OrderKindPatrol {
+		s.orderPatrolMap.Add(ord, &components.OrderParamPatrol{Loop: params.PatrolLoop})
+	}
+
+	// Wire into the chain. The squad's MacroPath also gets ReplanAt=0 so
+	// SquadMacroPathSystem replans immediately rather than waiting for the
+	// 1 s throttle — this is the "fresh order → don't dawdle" guarantee from
+	// PHASE-11.md notes.
+	if head.First == (ecs.Entity{}) {
+		head.First = ord
+		if mp := s.macroPathMap.Get(squad); mp != nil {
+			mp.ReplanAt = 0
+		}
+	} else {
+		// Append at tail.
+		tail := head.First
+		for {
+			ch := s.orderChainMap.Get(tail)
+			if ch == nil || ch.Next == (ecs.Entity{}) {
+				break
+			}
+			tail = ch.Next
+		}
+		if ch := s.orderChainMap.Get(tail); ch != nil {
+			ch.Next = ord
+		}
+	}
+	return ord
+}
+
+// CancelAllOrders aborts the squad's full chain (head + every Next). Used by
+// H (Stop) hotkey and by the Phase 11 non-append RMB path.
+func (s *SquadService) CancelAllOrders(squad ecs.Entity) {
 	if squad == (ecs.Entity{}) || !s.world.Alive(squad) {
 		return
 	}
-	mp := s.macroPathMap.Get(squad)
-	if mp == nil {
+	head := s.orderQueueMap.Get(squad)
+	if head == nil {
 		return
 	}
-	mp.HasGoal = false
-	mp.Head = 0
-	mp.Count = 0
+	s.cancelChain(head.First)
+	head.First = ecs.Entity{}
+	if mp := s.macroPathMap.Get(squad); mp != nil {
+		mp.HasGoal = false
+		mp.Head = 0
+		mp.Count = 0
+	}
+}
+
+// cancelChain walks Next pointers starting at `start`, marks each order
+// Cancelled, and removes the entity. OrderResolverSystem would catch
+// Cancelled and remove anyway, but doing it here keeps a clear "no dangling
+// orders after CancelAllOrders" invariant.
+func (s *SquadService) cancelChain(start ecs.Entity) {
+	cur := start
+	for cur != (ecs.Entity{}) {
+		if !s.world.Alive(cur) {
+			break
+		}
+		next := ecs.Entity{}
+		if ch := s.orderChainMap.Get(cur); ch != nil {
+			next = ch.Next
+		}
+		s.world.RemoveEntity(cur)
+		cur = next
+	}
+}
+
+// OrderMoveTo is the Phase 9-compat wrapper. New callers should use
+// IssueOrder; this stays so existing test code / hotkeys keep working.
+func (s *SquadService) OrderMoveTo(squad ecs.Entity, goal components.WorldPos) {
+	s.IssueOrder(squad, components.OrderKindMoveTo, goal, ecs.Entity{}, false, OrderParams{})
+}
+
+// Stop is the Phase 9-compat wrapper. Cancels the full chain.
+func (s *SquadService) Stop(squad ecs.Entity) {
+	s.CancelAllOrders(squad)
 }
 
 // hasRadiomanInRoster — Phase 12 scaffold (PHASE-9.md M9.6). In Phase 9 no

@@ -29,6 +29,15 @@ type InspectorCtx struct {
 	FormationDataMap *ecs.Map[components.FormationData]
 	MacroPathMap     *ecs.Map[components.MacroPath]
 	SquadFilter      *ecs.Filter2[components.Squad, components.CommandRoster]
+	// Phase 11 order maps. Inspector reads to render the current Order row.
+	OrderQueueMap    *ecs.Map[components.OrderQueueHead]
+	OrderKindMap     *ecs.Map[components.OrderKind]
+	OrderStateMap    *ecs.Map[components.OrderState]
+	OrderTargetMap   *ecs.Map[components.OrderTarget]
+	OrderProgressMap *ecs.Map[components.OrderProgress]
+	OrderChainMap    *ecs.Map[components.OrderChain]
+	BuildingMap      *ecs.Map[components.Building]
+	TrenchRootMap    *ecs.Map[components.TrenchRoot]
 	// SquadColor picks a stable palette colour from a squad entity ID so the
 	// inspector and the map render use the same shade. Injected as a func to
 	// avoid a UI → render-package cycle.
@@ -249,6 +258,11 @@ func drawInspectorSquad(ctx InspectorCtx, squad ecs.Entity, x, y, width int32) {
 		y += inspectorRowH
 	}
 	y += inspectorRowH / 2
+
+	// Phase 11: Order section. Head + up to 2 queued.
+	y = drawInspectorOrderSection(ctx, squad, x, y, width)
+	y += inspectorRowH / 2
+
 	drawText(ctx.Font, "Roster:", x, y, inspectorFontSize, inspectorTextDim)
 	y += inspectorRowH
 
@@ -360,3 +374,131 @@ func drawText(font rl.Font, s string, x, y, size int32, c rl.Color) {
 		rl.Vector2{X: float32(x), Y: float32(y)},
 		float32(size), 1.0, c)
 }
+
+// drawInspectorOrderSection renders the squad's current Order + up to 2
+// queued orders. Returns the y-coord after the section so callers can chain
+// the next subsection vertically. PHASE-11.md P8.
+func drawInspectorOrderSection(ctx InspectorCtx, squad ecs.Entity, x, y, width int32) int32 {
+	drawText(ctx.Font, "Order:", x, y, inspectorFontSize, inspectorTextDim)
+	y += inspectorRowH
+
+	if ctx.OrderQueueMap == nil {
+		drawText(ctx.Font, "  (orders unavailable)",
+			x, y, inspectorFontSize, inspectorTextDim)
+		return y + inspectorRowH
+	}
+	head := ctx.OrderQueueMap.Get(squad)
+	if head == nil || head.First == (ecs.Entity{}) {
+		drawText(ctx.Font, "  No order", x, y, inspectorFontSize, inspectorTextDim)
+		return y + inspectorRowH
+	}
+
+	// Head order row.
+	cur := head.First
+	y = drawOrderRow(ctx, cur, "> ", x, y, width)
+	// Walk chain, render up to 2 more queued (PHASE-11.md P8).
+	const maxQueued = 2
+	queued := 0
+	for queued < maxQueued {
+		ch := ctx.OrderChainMap.Get(cur)
+		if ch == nil || ch.Next == (ecs.Entity{}) || !ctx.World.Alive(ch.Next) {
+			break
+		}
+		cur = ch.Next
+		queued++
+		y = drawOrderRow(ctx, cur, "  ", x, y, width)
+	}
+	return y
+}
+
+// drawOrderRow draws one line: "PREFIX OrderKindName state-bar target".
+// Returns the new y. Used for both the head and queued orders.
+func drawOrderRow(ctx InspectorCtx, ord ecs.Entity, prefix string, x, y, width int32) int32 {
+	kind := ctx.OrderKindMap.Get(ord)
+	target := ctx.OrderTargetMap.Get(ord)
+	state := ctx.OrderStateMap.Get(ord)
+	if kind == nil || target == nil || state == nil {
+		drawText(ctx.Font, prefix+"(?)", x, y, inspectorFontSize, inspectorTextDim)
+		return y + inspectorRowH
+	}
+	label := orderKindLabel(kind.Code)
+	stateLbl := orderStateLabel(state.Code)
+	targetLbl := orderTargetLabel(ctx, kind.Code, target)
+	progressTxt := ""
+	if pr := ctx.OrderProgressMap.Get(ord); pr != nil && pr.Value > 0 {
+		progressTxt = fmt.Sprintf(" %d%%", int(pr.Value*100))
+	}
+	color := inspectorText
+	if state.Code == components.OrderStateBlocked || state.Code == components.OrderStateFailed {
+		color = rl.Color{R: 230, G: 110, B: 80, A: 255}
+	}
+	drawText(ctx.Font, fmt.Sprintf("%s%-12s %-10s%s %s",
+		prefix, label, stateLbl, progressTxt, targetLbl),
+		x, y, inspectorFontSize, color)
+	_ = width
+	return y + inspectorRowH
+}
+
+func orderKindLabel(k components.OrderKindCode) string {
+	switch k {
+	case components.OrderKindMoveTo:
+		return "MoveTo"
+	case components.OrderKindGarrison:
+		return "Garrison"
+	case components.OrderKindOccupyTrench:
+		return "OccupyTr."
+	case components.OrderKindDefendPosition:
+		return "Defend"
+	case components.OrderKindPatrol:
+		return "Patrol"
+	}
+	return "?"
+}
+
+func orderStateLabel(s components.OrderStateCode) string {
+	switch s {
+	case components.OrderStateIssued:
+		return "issued"
+	case components.OrderStateInProgress:
+		return "in prog"
+	case components.OrderStateBlocked:
+		return "blocked"
+	case components.OrderStateCompleted:
+		return "done"
+	case components.OrderStateCancelled:
+		return "cancel"
+	case components.OrderStateFailed:
+		return "failed"
+	}
+	return "?"
+}
+
+// orderTargetLabel produces a short string identifying the order's target —
+// "@ (x, z)" for Pos targets, "@ Building #X" / "@ Trench #N" for entity
+// targets. Avoids floats with sub-metre noise.
+func orderTargetLabel(ctx InspectorCtx, kind components.OrderKindCode, t *components.OrderTarget) string {
+	if t.Entity != (ecs.Entity{}) {
+		switch kind {
+		case components.OrderKindGarrison:
+			return fmt.Sprintf("@ Building #%X", t.Entity.ID()&0xFFF)
+		case components.OrderKindOccupyTrench:
+			idx := -1
+			if ctx.TrenchRootMap != nil {
+				if r := ctx.TrenchRootMap.Get(t.Entity); r != nil {
+					idx = r.Index
+				}
+			}
+			if idx >= 0 {
+				return fmt.Sprintf("@ Trench %d", idx)
+			}
+			return fmt.Sprintf("@ Trench #%X", t.Entity.ID()&0xFFF)
+		}
+	}
+	wx := float32(t.Pos.Chunk.X)*components.ChunkSize + t.Pos.Local.X
+	wz := float32(t.Pos.Chunk.Z)*components.ChunkSize + t.Pos.Local.Z
+	return fmt.Sprintf("@ (%.0f, %.0f)", wx, wz)
+}
+
+// suppress the unused-math warning if math is no longer referenced after
+// edits. Currently used in drawInspectorUnit for yaw → degrees.
+var _ = math.Pi

@@ -14,52 +14,61 @@ import (
 // FormationSystem drives every rostered unit to its formation offset around
 // the squad center (PHASE-9.md P3). The contract with Phase 7
 // UnitMovementSystem stays the same: we keep writing the unit's ActionQueue,
-// the low-level controller hasn't been told squads exist. That means Phase 10
-// tactical AI can later preempt FormationSystem by also writing to the queue
-// at higher priority — no architectural change.
+// the low-level controller hasn't been told squads exist.
 //
-// Cohesion (P6) is integrated here, not a separate system: we already walk
-// every member to compute the offset, so the "is this member too far from
-// center?" test is one extra subtract. Stragglers go through SquadService.Leave
-// after the filter loop closes.
-//
-// Tier routing — same as SquadMacroPathSystem: the squad inherits the
-// commander's LOD tier; the system itself runs Update for both tiers but
-// only processes squads whose commander has the matching LOD marker.
+// Phase 11.5 M11.5.3 / M11.5.5: tier-gating dropped; per-squad processing is
+// dispatched through WorkerPool.ParallelFor. Each worker writes only to
+// members of its own squad — disjoint sets across workers, so no shared
+// writes. Stragglers (when ejection is enabled) drop into leaveBuffer for a
+// serial post-pass. M11.5.6 / P8: leash 4 → 8 and auto-ejection gated off.
 type FormationSystem struct {
 	filter         *ecs.Filter4[components.Squad, components.CommandRoster, components.MacroPath, components.FormationData]
 	posMap         *ecs.Map[components.WorldPos]
 	actionQueueMap *ecs.Map[components.ActionQueue]
-	lodActiveMap   *ecs.Map[components.LODActive]
-	lodRelevantMap *ecs.Map[components.LODRelevant]
+	pool           *core.WorkerPool
 	squadService   *SquadService
 }
 
-func NewFormationSystem(squadService *SquadService) *FormationSystem {
-	return &FormationSystem{squadService: squadService}
+// NewFormationSystem wires the system with a worker pool. nil pool falls back
+// to serial execution.
+func NewFormationSystem(squadService *SquadService, pool *core.WorkerPool) *FormationSystem {
+	return &FormationSystem{squadService: squadService, pool: pool}
 }
 
 func (sys *FormationSystem) InitUI(w *ecs.World) {
 	sys.filter = ecs.NewFilter4[components.Squad, components.CommandRoster, components.MacroPath, components.FormationData](w)
 	sys.posMap = ecs.NewMap[components.WorldPos](w)
 	sys.actionQueueMap = ecs.NewMap[components.ActionQueue](w)
-	sys.lodActiveMap = ecs.NewMap[components.LODActive](w)
-	sys.lodRelevantMap = ecs.NewMap[components.LODRelevant](w)
 }
 
 func (FormationSystem) Name() string { return "formation" }
 
 func (FormationSystem) LODPolicy() core.LODPolicy {
+	// Phase 11.5 P1: universal sim — single 100 ms interval. The old
+	// Relevant/Dormant fallbacks are gone since members no longer carry LOD
+	// markers; FormationSystem touches every alive squad each cycle.
 	return core.LODPolicy{
 		ActiveEvery:   100 * time.Millisecond,
-		RelevantEvery: 500 * time.Millisecond,
+		RelevantEvery: core.LODDisabled,
 		DormantEvery:  core.LODDisabled,
 	}
 }
 
 // CohesionLeashCoeff × Spacing = max distance member-to-center before the
-// member falls out of the roster (PHASE-9.md P6 "эластичный поводок").
-const CohesionLeashCoeff float32 = 4.0
+// member would fall out of the roster.
+//
+// Phase 11.5 P8: bumped 4 → 8. For Line Spacing=2 m this widens the leash
+// from 8 m to 16 m so a member that briefly snags on a tree / chunk seam
+// doesn't get ejected by the next FormationSystem tick. The auto-ejection
+// branch is also gated off (see cohesionEjectionEnabled) — stragglers are
+// only flagged for future Tactical AI.
+const CohesionLeashCoeff float32 = 8.0
+
+// cohesionEjectionEnabled toggles whether stragglers are removed from the
+// squad. Phase 11.5 keeps the detection code but turns the action off
+// (squadService.Leave is the destructive call). Phase 15 (Tactical AI) will
+// turn it back on per-doctrine (Patrol = strict, Assault = loose).
+const cohesionEjectionEnabled = false
 
 // formationPushTolerance — minimum target shift that re-pushes the unit's
 // MoveTo. Below this, the unit keeps its existing queue. Without the gate the
@@ -75,131 +84,146 @@ const formationPushTolerance float32 = 0.7
 // offsets into circular motion in the original Phase 9 build.
 const formationForwardLockDist float32 = 5.0
 
-func (sys *FormationSystem) Update(ctx core.UpdateContext) {
-	// Stragglers are collected and applied after the filter loop closes —
-	// SquadService.Leave mutates the archetype of the member unit and the
-	// CommandRoster of the squad, both of which would break a live query.
-	var leaveBuffer []ecs.Entity
+// formationWork — snapshot row for the parallel per-squad pass. Pointers are
+// stable between snapshot and ParallelFor since neither branch changes
+// archetype for snapshotted entities.
+type formationWork struct {
+	roster *components.CommandRoster
+	mp     *components.MacroPath
+	fd     *components.FormationData
+}
 
+func (sys *FormationSystem) Update(ctx core.UpdateContext) {
+	// Snapshot squads. Workers write per-squad → per-member ActionQueue (each
+	// member belongs to exactly one squad, so the write set is disjoint
+	// across workers — no shared writes).
+	work := make([]formationWork, 0, 16)
 	q := sys.filter.Query()
 	for q.Next() {
 		_, roster, mp, fd := q.Get()
-		if roster.Count == 0 {
-			continue
-		}
-		commander := roster.Members[0]
-		switch ctx.Tier {
-		case core.LODTierActive:
-			if !sys.lodActiveMap.Has(commander) {
-				continue
-			}
-		case core.LODTierRelevant:
-			if !sys.lodRelevantMap.Has(commander) {
-				continue
-			}
-		default:
-			continue
-		}
-
-		center, ok := SquadCenter(ctx.World, roster, sys.posMap)
-		if !ok {
-			continue
-		}
-
-		// Pop reached waypoints — SquadMacroPathSystem runs only every 1 s,
-		// FormationSystem at 100 ms is the responsive pace for head advance.
-		for mp.Head < mp.Count {
-			d := center.Sub(mp.Waypoints[mp.Head])
-			if d.X*d.X+d.Z*d.Z < SquadWaypointReached*SquadWaypointReached {
-				mp.Head++
-			} else {
-				break
-			}
-		}
-
-		// Resolve the center's current macro target.
-		var centerTarget components.WorldPos
-		haveTarget := false
-		if mp.HasGoal {
-			if mp.Head < mp.Count {
-				centerTarget = mp.Waypoints[mp.Head]
-			} else {
-				centerTarget = mp.Goal
-			}
-			haveTarget = true
-		}
-
-		// Update Forward toward the macro target — but only while the squad
-		// is still far enough out that the unit vector (target - center) /
-		// mag is geometrically stable. Once we're inside formationForwardLockDist
-		// (or Forward was never set), the existing Forward stays.
-		forwardZero := fd.Forward.X == 0 && fd.Forward.Z == 0
-		if haveTarget {
-			diff := centerTarget.Sub(center)
-			mag := float32(math.Sqrt(float64(diff.X*diff.X + diff.Z*diff.Z)))
-			if mag > 0.05 && (forwardZero || mag > formationForwardLockDist) {
-				fd.Forward = rl.Vector3{X: diff.X / mag, Y: 0, Z: diff.Z / mag}
-			}
-		}
-
-		// Cohesion is only enforced while the squad has an active order
-		// (PHASE-9.md P6 wording — "эластичный поводок" — describes movement,
-		// not a no-op idle state). The previous behaviour ejected naturally-
-		// spread members the moment a fresh squad was formed with `T`, even
-		// before the player issued any order.
-		leash := CohesionLeashCoeff * fd.Spacing
-		leashSq := leash * leash
-
-		for i := uint8(0); i < roster.Count; i++ {
-			mem := roster.Members[i]
-			if mem == (ecs.Entity{}) || !ctx.World.Alive(mem) {
-				continue
-			}
-			mPos := sys.posMap.Get(mem)
-			if mPos == nil {
-				continue
-			}
-
-			if haveTarget {
-				d := mPos.Sub(center)
-				distSq := d.X*d.X + d.Z*d.Z
-				if distSq > leashSq {
-					leaveBuffer = append(leaveBuffer, mem)
-					continue
-				}
-			}
-
-			if !haveTarget {
-				continue
-			}
-			aq := sys.actionQueueMap.Get(mem)
-			if aq == nil {
-				continue
-			}
-			offX, offZ := formationOffset(fd.Type, i, fd.Spacing, fd.Forward)
-			target := centerTarget.Add(rl.Vector3{X: offX, Y: 0, Z: offZ})
-
-			// Re-push only if the new target meaningfully differs from the
-			// last queued MoveTo. Cuts the per-tick pop-push cycle at the
-			// destination and stops the rotating-offset chase that some
-			// formations could fall into.
-			if aq.Count > 0 {
-				lastIdx := (int(aq.Tail) + components.ActionQueueSize - 1) % components.ActionQueueSize
-				last := aq.Actions[lastIdx]
-				if last.Kind == components.ActionMoveTo {
-					d := last.Target.Sub(target)
-					if d.X*d.X+d.Z*d.Z < formationPushTolerance*formationPushTolerance {
-						continue
-					}
-				}
-			}
-			ClearActions(aq)
-			PushAction(aq, components.Action{Kind: components.ActionMoveTo, Target: target})
-		}
+		work = append(work, formationWork{roster: roster, mp: mp, fd: fd})
 	}
+
+	// Stragglers are collected and applied after the parallel pass closes —
+	// SquadService.Leave mutates archetypes and CommandRosters, neither safe
+	// inside a parallel-for write. Phase 11.5: with cohesionEjectionEnabled
+	// = false the buffer is always empty, but the slot stays so the pattern
+	// is in place for Phase 15.
+	leaveBuffer := make([]ecs.Entity, 0)
+
+	world := ctx.World
+	sys.pool.ParallelFor(len(work), func(start, end int) {
+		for i := start; i < end; i++ {
+			sys.processSquad(world, work[i], &leaveBuffer)
+		}
+	})
 
 	for _, e := range leaveBuffer {
 		sys.squadService.Leave(e)
+	}
+}
+
+// processSquad handles one squad's formation pass. Note: leaveBuffer writes
+// are a no-op while cohesionEjectionEnabled = false, so the parallel pass
+// has no contention on it; if Phase 15 turns ejection back on we'll need a
+// per-worker buffer and a serial merge.
+func (sys *FormationSystem) processSquad(world *ecs.World, w formationWork, leaveBuffer *[]ecs.Entity) {
+	roster := w.roster
+	mp := w.mp
+	fd := w.fd
+	if roster.Count == 0 {
+		return
+	}
+
+	center, ok := SquadCenter(world, roster, sys.posMap)
+	if !ok {
+		return
+	}
+
+	// Pop reached waypoints — SquadMacroPathSystem runs only every 1 s,
+	// FormationSystem at 100 ms is the responsive pace for head advance.
+	for mp.Head < mp.Count {
+		d := center.Sub(mp.Waypoints[mp.Head])
+		if d.X*d.X+d.Z*d.Z < SquadWaypointReached*SquadWaypointReached {
+			mp.Head++
+		} else {
+			break
+		}
+	}
+
+	// Resolve the center's current macro target.
+	var centerTarget components.WorldPos
+	haveTarget := false
+	if mp.HasGoal {
+		if mp.Head < mp.Count {
+			centerTarget = mp.Waypoints[mp.Head]
+		} else {
+			centerTarget = mp.Goal
+		}
+		haveTarget = true
+	}
+
+	// Update Forward toward the macro target — but only while the squad
+	// is still far enough out that the unit vector (target - center) /
+	// mag is geometrically stable. Once we're inside formationForwardLockDist
+	// (or Forward was never set), the existing Forward stays.
+	forwardZero := fd.Forward.X == 0 && fd.Forward.Z == 0
+	if haveTarget {
+		diff := centerTarget.Sub(center)
+		mag := float32(math.Sqrt(float64(diff.X*diff.X + diff.Z*diff.Z)))
+		if mag > 0.05 && (forwardZero || mag > formationForwardLockDist) {
+			fd.Forward = rl.Vector3{X: diff.X / mag, Y: 0, Z: diff.Z / mag}
+		}
+	}
+
+	leash := CohesionLeashCoeff * fd.Spacing
+	leashSq := leash * leash
+
+	for i := uint8(0); i < roster.Count; i++ {
+		mem := roster.Members[i]
+		if mem == (ecs.Entity{}) || !world.Alive(mem) {
+			continue
+		}
+		mPos := sys.posMap.Get(mem)
+		if mPos == nil {
+			continue
+		}
+
+		if haveTarget {
+			d := mPos.Sub(center)
+			distSq := d.X*d.X + d.Z*d.Z
+			if distSq > leashSq && cohesionEjectionEnabled {
+				*leaveBuffer = append(*leaveBuffer, mem)
+				continue
+			}
+		}
+
+		if !haveTarget {
+			continue
+		}
+		aq := sys.actionQueueMap.Get(mem)
+		if aq == nil {
+			continue
+		}
+		offX, offZ := formationOffset(fd.Type, i, fd.Spacing, fd.Forward)
+		target := centerTarget.Add(rl.Vector3{X: offX, Y: 0, Z: offZ})
+
+		// Re-push only if the new target meaningfully differs from the
+		// last queued MoveTo. Cuts the per-tick pop-push cycle at the
+		// destination and stops the rotating-offset chase that some
+		// formations could fall into.
+		if aq.Count > 0 {
+			lastIdx := (int(aq.Tail) + components.ActionQueueSize - 1) % components.ActionQueueSize
+			last := aq.Actions[lastIdx]
+			if last.Kind == components.ActionMoveTo {
+				d := last.Target.Sub(target)
+				if d.X*d.X+d.Z*d.Z < formationPushTolerance*formationPushTolerance {
+					continue
+				}
+			}
+		}
+		ClearActions(aq)
+		PushAction(aq, components.Action{Kind: components.ActionMoveTo, Target: target})
 	}
 }
 

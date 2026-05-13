@@ -36,11 +36,16 @@ func (system *LODSystem) InitUI(w *ecs.World) {
 	// Prop:             pinned to Relevant by PropSpawnSystem.
 	// BuildingMember:   pinned to Relevant by BuildingSystem; chunk owns the
 	//                   lifecycle, so generic LOD is moot.
+	// Unit (Phase 11.5): units no longer carry LOD markers; simulation systems
+	//                    run universally over every unit. Excluding the
+	//                    archetype here keeps LODSystem from thrashing markers
+	//                    on entities that have no readers.
 	system.posFilter = ecs.NewFilter1[components.WorldPos](w).
 		Without(
 			ecs.C[components.TerrainChunk](),
 			ecs.C[components.Prop](),
 			ecs.C[components.BuildingMember](),
+			ecs.C[components.Unit](),
 			// Cover-slots are pinned to Relevant by SpatialBakeSystem and the
 			// chunk owns their lifecycle; generic distance-based LOD would
 			// thrash markers on thousands of slot entities for no win.

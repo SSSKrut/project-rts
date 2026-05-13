@@ -40,6 +40,11 @@ type UpdateContext struct {
 	World *ecs.World
 	Delta time.Duration
 	Tier  LODTier
+	// FrameIndex is the App-level tick counter (Phase 11.5 P10). Used by
+	// systems that hash entities into per-frame buckets via ShouldProcessBucket
+	// for time-sliced workloads (vision/AI in later phases). Always grows;
+	// paused ticks still increment so render-time animations stay live.
+	FrameIndex uint32
 }
 
 type System interface {
@@ -54,9 +59,10 @@ type systemEntry struct {
 }
 
 type App struct {
-	World   *ecs.World
-	systems []systemEntry
-	elapsed time.Duration
+	World      *ecs.World
+	systems    []systemEntry
+	elapsed    time.Duration
+	frameIndex uint32
 
 	// Prof collects per-tick timings (M7.5.1). Lives on App so tests / tools
 	// can read it without globals; main.go owns the HUD presentation.
@@ -99,10 +105,15 @@ func (app *App) AddSystem(sys System) {
 // throttle expensive sampling (ReadMemStats, World.Stats).
 func (app *App) Elapsed() time.Duration { return app.elapsed }
 
+// FrameIndex exposes the rolling tick counter (Phase 11.5 P10). Time-sliced
+// systems hash entity IDs against this to pick "their" frame.
+func (app *App) FrameIndex() uint32 { return app.frameIndex }
+
 func (app *App) Tick(delta time.Duration) {
 	scaled := time.Duration(float64(delta) * float64(app.TimeScale))
 	delta = scaled
 	app.elapsed += delta
+	app.frameIndex++
 
 	tickStart := time.Now()
 	app.Prof.BeginTick()
@@ -121,9 +132,10 @@ func (app *App) Tick(delta time.Duration) {
 			if interval == 0 || app.elapsed-last >= interval {
 				sysStart := time.Now()
 				entry.sys.Update(UpdateContext{
-					World: app.World,
-					Delta: app.elapsed - last,
-					Tier:  tier,
+					World:      app.World,
+					Delta:      app.elapsed - last,
+					Tier:       tier,
+					FrameIndex: app.frameIndex,
 				})
 				app.Prof.RecordSystem(i, time.Since(sysStart))
 				entry.lastRun[tier] = app.elapsed

@@ -104,6 +104,38 @@ type bindEntry struct {
 	Units []ecs.Entity
 }
 
+// SelectionGroups splits a mixed selection into the unique squads to issue
+// orders against and the soloists (units with no SquadMember). PHASE-11.md P9
+// — replaces the homogeneous-squad-only routing from Phase 9 / 10 and
+// prevents the Leave() chain that dissolved multi-squad selections (ISSUES #3).
+type SelectionGroups struct {
+	SquadsToOrder []ecs.Entity
+	Soloists      []ecs.Entity
+}
+
+// groupSelectionByOwner walks `selected`, collects the distinct squads any
+// member belongs to, and aggregates the rest as soloists. Allocation: O(N)
+// for the temporary set; Phase 11 selections fit in a handful of entities,
+// so the cost is negligible.
+func groupSelectionByOwner(selected []ecs.Entity,
+	squadMemberMap *ecs.Map[components.SquadMember]) SelectionGroups {
+	var groups SelectionGroups
+	seen := make(map[ecs.Entity]struct{}, len(selected))
+	for _, e := range selected {
+		sm := squadMemberMap.Get(e)
+		if sm == nil || sm.Squad == (ecs.Entity{}) {
+			groups.Soloists = append(groups.Soloists, e)
+			continue
+		}
+		if _, dup := seen[sm.Squad]; dup {
+			continue
+		}
+		seen[sm.Squad] = struct{}{}
+		groups.SquadsToOrder = append(groups.SquadsToOrder, sm.Squad)
+	}
+	return groups
+}
+
 // groupSelected inspects the SquadMember of every entity in `selected` and
 // returns (commonSquad, true) when every selected unit belongs to the *same*
 // squad. The common Squad entity is zero when every selected unit is a

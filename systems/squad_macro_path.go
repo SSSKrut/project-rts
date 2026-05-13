@@ -20,36 +20,47 @@ import (
 //  3. Center drifted further than SquadReplanCenterDrift from the next
 //     waypoint — bunch reorganised around an obstacle, replan to the goal.
 //
-// Tier routing (P7): squad inherits the LOD tier of its commander (slot 0).
-// The system itself runs Update for both Active (1 s) and Relevant (3 s)
-// tiers but only processes squads whose commander carries the matching LOD
-// marker.
+// Phase 11.5 M11.5.3 / M11.5.5: tier-gating dropped, per-squad pass runs
+// through WorkerPool.ParallelFor. Each squad's A* call is independent —
+// NavService.FindPath builds local A* state per call (states / closed / open
+// maps are stack-local), and the read-only resources it queries
+// (TerrainChunkIndex, TransitionRegistry, etc.) are immutable across the
+// tick. The per-squad MacroPath write touches only that squad's component
+// (disjoint across workers).
 type SquadMacroPathSystem struct {
-	filter         *ecs.Filter4[components.Squad, components.CommandRoster, components.MacroPath, components.FormationData]
+	filter         *ecs.Filter5[components.Squad, components.CommandRoster, components.MacroPath, components.FormationData, components.OrderQueueHead]
 	posMap         *ecs.Map[components.WorldPos]
-	lodActiveMap   *ecs.Map[components.LODActive]
-	lodRelevantMap *ecs.Map[components.LODRelevant]
+	orderKindMap   *ecs.Map[components.OrderKind]
+	orderTargetMap *ecs.Map[components.OrderTarget]
+	orderStateMap  *ecs.Map[components.OrderState]
 	nav            *NavService
+	pool           *core.WorkerPool
 	elapsed        float32
 }
 
-func NewSquadMacroPathSystem(nav *NavService) *SquadMacroPathSystem {
-	return &SquadMacroPathSystem{nav: nav}
+// NewSquadMacroPathSystem wires the system with NavService and worker pool.
+// nil pool falls back to serial execution.
+func NewSquadMacroPathSystem(nav *NavService, pool *core.WorkerPool) *SquadMacroPathSystem {
+	return &SquadMacroPathSystem{nav: nav, pool: pool}
 }
 
 func (sys *SquadMacroPathSystem) InitUI(w *ecs.World) {
-	sys.filter = ecs.NewFilter4[components.Squad, components.CommandRoster, components.MacroPath, components.FormationData](w)
+	sys.filter = ecs.NewFilter5[components.Squad, components.CommandRoster, components.MacroPath, components.FormationData, components.OrderQueueHead](w)
 	sys.posMap = ecs.NewMap[components.WorldPos](w)
-	sys.lodActiveMap = ecs.NewMap[components.LODActive](w)
-	sys.lodRelevantMap = ecs.NewMap[components.LODRelevant](w)
+	sys.orderKindMap = ecs.NewMap[components.OrderKind](w)
+	sys.orderTargetMap = ecs.NewMap[components.OrderTarget](w)
+	sys.orderStateMap = ecs.NewMap[components.OrderState](w)
 }
 
 func (SquadMacroPathSystem) Name() string { return "squad_macro_path" }
 
 func (SquadMacroPathSystem) LODPolicy() core.LODPolicy {
+	// Phase 11.5 P1: universal sim — single 1 s replan interval for every
+	// active squad. The old Relevant (3 s) / Dormant (5 s) fallbacks are gone
+	// since LOD markers no longer apply to units / commanders.
 	return core.LODPolicy{
 		ActiveEvery:   1 * time.Second,
-		RelevantEvery: 3 * time.Second,
+		RelevantEvery: core.LODDisabled,
 		DormantEvery:  core.LODDisabled,
 	}
 }
@@ -69,122 +80,160 @@ const (
 	SquadWaypointReached float32 = 2.0
 )
 
+// macroPathWork — snapshot row for the parallel per-squad pass.
+type macroPathWork struct {
+	roster *components.CommandRoster
+	mp     *components.MacroPath
+	fd     *components.FormationData
+	head   *components.OrderQueueHead
+}
+
 func (sys *SquadMacroPathSystem) Update(ctx core.UpdateContext) {
 	sys.elapsed += float32(ctx.Delta.Seconds())
 
+	work := make([]macroPathWork, 0, 16)
 	q := sys.filter.Query()
 	for q.Next() {
-		_, roster, mp, fd := q.Get()
-		if roster.Count == 0 {
-			continue
-		}
-		commander := roster.Members[0]
-		// Squad inherits the commander's LOD tier — see P7.
-		switch ctx.Tier {
-		case core.LODTierActive:
-			if !sys.lodActiveMap.Has(commander) {
-				continue
-			}
-		case core.LODTierRelevant:
-			if !sys.lodRelevantMap.Has(commander) {
-				continue
-			}
-		default:
-			continue
-		}
+		_, roster, mp, fd, head := q.Get()
+		work = append(work, macroPathWork{roster: roster, mp: mp, fd: fd, head: head})
+	}
 
-		center, ok := SquadCenter(ctx.World, roster, sys.posMap)
-		if !ok {
-			continue
+	world := ctx.World
+	elapsed := sys.elapsed
+	sys.pool.ParallelFor(len(work), func(start, end int) {
+		for i := start; i < end; i++ {
+			sys.processSquad(world, work[i], elapsed)
 		}
+	})
+}
 
-		if !mp.HasGoal {
-			continue
-		}
+func (sys *SquadMacroPathSystem) processSquad(world *ecs.World, w macroPathWork, elapsed float32) {
+	roster := w.roster
+	mp := w.mp
+	fd := w.fd
+	head := w.head
+	if roster.Count == 0 {
+		return
+	}
 
-		// Pop head waypoints already crossed by the center. Also covers the
-		// case where FormationSystem hasn't advanced Head yet (e.g. during the
-		// first tick after a replan).
-		for mp.Head < mp.Count {
-			d := center.Sub(mp.Waypoints[mp.Head])
-			if d.X*d.X+d.Z*d.Z < SquadWaypointReached*SquadWaypointReached {
-				mp.Head++
-			} else {
-				break
-			}
-		}
+	center, ok := SquadCenter(world, roster, sys.posMap)
+	if !ok {
+		return
+	}
 
-		arrival := SquadArrivalCoeff * fd.Spacing
-		if dSq := centerXZDistSq(center, mp.Goal); dSq < arrival*arrival {
-			mp.HasGoal = false
-			mp.Head = 0
-			mp.Count = 0
-			continue
-		}
-
-		needReplan := false
-		switch {
-		case mp.ReplanAt == 0:
-			needReplan = true
-		case sys.elapsed >= mp.ReplanAt:
-			needReplan = true
-		case mp.Count > 0 && mp.Head < mp.Count:
-			d := center.Sub(mp.Waypoints[mp.Head])
-			if d.X*d.X+d.Z*d.Z > SquadReplanCenterDrift*SquadReplanCenterDrift {
-				needReplan = true
+	// Phase 11: MacroPath is derived from the current Order. Read kind +
+	// target Pos from head; only "moving" kinds (MoveTo / Garrison /
+	// OccupyTrench / DefendPosition / Patrol — all current kinds) feed a
+	// macro path. Idle squad → mp.HasGoal stays false; FormationSystem
+	// sits this one out.
+	var orderKind components.OrderKindCode
+	var orderTargetPos components.WorldPos
+	hasOrder := false
+	if head.First != (ecs.Entity{}) && world.Alive(head.First) {
+		if k := sys.orderKindMap.Get(head.First); k != nil {
+			if t := sys.orderTargetMap.Get(head.First); t != nil {
+				orderKind = k.Code
+				orderTargetPos = t.Pos
+				hasOrder = true
 			}
 		}
-		if !needReplan {
-			continue
-		}
-
-		path := sys.nav.FindPath(center, mp.Goal, NavOpts{Locomotion: components.LocomotionFoot})
-
+	}
+	if !hasOrder {
+		// Order finished or queue empty — make sure derived state matches.
+		mp.HasGoal = false
 		mp.Head = 0
 		mp.Count = 0
-		if len(path) == 0 {
-			// No path — push the raw goal as a single fallback waypoint so
-			// FormationSystem still drags the squad in the right direction.
-			mp.Waypoints[0] = mp.Goal
-			mp.Count = 1
-		} else {
-			step := decimationStep(fd.Spacing)
-			for i := step - 1; i < len(path); i += step {
-				if int(mp.Count) >= components.SquadMacroPathSize {
-					break
-				}
-				mp.Waypoints[mp.Count] = path[i]
-				mp.Count++
-			}
-			// Always end on Goal — otherwise the squad parks at the last
-			// decimated waypoint instead of pulling up at the target.
-			if mp.Count == 0 || centerXZDistSq(mp.Waypoints[mp.Count-1], mp.Goal) > 1 {
-				if int(mp.Count) < components.SquadMacroPathSize {
-					mp.Waypoints[mp.Count] = mp.Goal
-					mp.Count++
-				} else {
-					mp.Waypoints[components.SquadMacroPathSize-1] = mp.Goal
-				}
-			}
-		}
-
-		// Forward = unit XZ-vector from center toward the next waypoint. Falls
-		// back to existing Forward when the squad is on top of the waypoint.
-		var target components.WorldPos
-		if mp.Count > 0 {
-			target = mp.Waypoints[0]
-		} else {
-			target = mp.Goal
-		}
-		diff := target.Sub(center)
-		mag := float32(math.Sqrt(float64(diff.X*diff.X + diff.Z*diff.Z)))
-		if mag > 0.01 {
-			fd.Forward = rl.Vector3{X: diff.X / mag, Y: 0, Z: diff.Z / mag}
-		}
-
-		mp.LastPlanned = sys.elapsed
-		mp.ReplanAt = sys.elapsed + SquadReplanInterval
+		return
 	}
+	// Pull the order target into MacroPath.Goal so FormationSystem (which
+	// still reads Goal as a fallback) and the rest of the legacy code
+	// stay correct.
+	mp.Goal = orderTargetPos
+	mp.HasGoal = true
+	_ = orderKind // Phase 13 will branch per-kind for Pace overrides.
+
+	// Pop head waypoints already crossed by the center. Also covers the
+	// case where FormationSystem hasn't advanced Head yet (e.g. during the
+	// first tick after a replan).
+	for mp.Head < mp.Count {
+		d := center.Sub(mp.Waypoints[mp.Head])
+		if d.X*d.X+d.Z*d.Z < SquadWaypointReached*SquadWaypointReached {
+			mp.Head++
+		} else {
+			break
+		}
+	}
+
+	arrival := SquadArrivalCoeff * fd.Spacing
+	if dSq := centerXZDistSq(center, mp.Goal); dSq < arrival*arrival {
+		mp.HasGoal = false
+		mp.Head = 0
+		mp.Count = 0
+		return
+	}
+
+	needReplan := false
+	switch {
+	case mp.ReplanAt == 0:
+		needReplan = true
+	case elapsed >= mp.ReplanAt:
+		needReplan = true
+	case mp.Count > 0 && mp.Head < mp.Count:
+		d := center.Sub(mp.Waypoints[mp.Head])
+		if d.X*d.X+d.Z*d.Z > SquadReplanCenterDrift*SquadReplanCenterDrift {
+			needReplan = true
+		}
+	}
+	if !needReplan {
+		return
+	}
+
+	path := sys.nav.FindPath(center, mp.Goal, NavOpts{Locomotion: components.LocomotionFoot})
+
+	mp.Head = 0
+	mp.Count = 0
+	if len(path) == 0 {
+		// No path — push the raw goal as a single fallback waypoint so
+		// FormationSystem still drags the squad in the right direction.
+		mp.Waypoints[0] = mp.Goal
+		mp.Count = 1
+	} else {
+		step := decimationStep(fd.Spacing)
+		for i := step - 1; i < len(path); i += step {
+			if int(mp.Count) >= components.SquadMacroPathSize {
+				break
+			}
+			mp.Waypoints[mp.Count] = path[i]
+			mp.Count++
+		}
+		// Always end on Goal — otherwise the squad parks at the last
+		// decimated waypoint instead of pulling up at the target.
+		if mp.Count == 0 || centerXZDistSq(mp.Waypoints[mp.Count-1], mp.Goal) > 1 {
+			if int(mp.Count) < components.SquadMacroPathSize {
+				mp.Waypoints[mp.Count] = mp.Goal
+				mp.Count++
+			} else {
+				mp.Waypoints[components.SquadMacroPathSize-1] = mp.Goal
+			}
+		}
+	}
+
+	// Forward = unit XZ-vector from center toward the next waypoint. Falls
+	// back to existing Forward when the squad is on top of the waypoint.
+	var target components.WorldPos
+	if mp.Count > 0 {
+		target = mp.Waypoints[0]
+	} else {
+		target = mp.Goal
+	}
+	diff := target.Sub(center)
+	mag := float32(math.Sqrt(float64(diff.X*diff.X + diff.Z*diff.Z)))
+	if mag > 0.01 {
+		fd.Forward = rl.Vector3{X: diff.X / mag, Y: 0, Z: diff.Z / mag}
+	}
+
+	mp.LastPlanned = elapsed
+	mp.ReplanAt = elapsed + SquadReplanInterval
 }
 
 // SquadCenter returns the XZ-averaged WorldPos of every live member in the

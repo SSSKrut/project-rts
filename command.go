@@ -7,22 +7,163 @@ import (
 	"github.com/mlange-42/ark/ecs"
 )
 
-// resolveRMBOrder is the shared MoveTo entry point used by both the 3D-panel
-// RMB handler and the map-panel RMB handler (Phase 10 P10). It routes the
-// order through SquadService when every selected unit belongs to one squad,
-// and otherwise falls back to per-unit pathed MoveTo (Phase 7 behaviour).
+// HitTestKind tags what kind of world entity the cursor's WorldPos landed on.
+// PHASE-11.md P6: resolver maps cursor-hit → OrderKindCode.
+type HitTestKind uint8
+
+const (
+	HitTerrain HitTestKind = iota
+	HitBuilding
+	HitTrench
+)
+
+// HitTestResult is the answer to "what's under this target Pos?". For
+// terrain hits Entity is zero. For Building / Trench hits Entity is the
+// matching entity.
+type HitTestResult struct {
+	Kind   HitTestKind
+	Entity ecs.Entity
+}
+
+// HitTester bundles the per-frame handles needed to resolve a cursor target.
+// Built once in main.go and reused. Building hit-test iterates a Filter1 of
+// Building components; Trench hit-test reads the TrenchNetwork resource and
+// the TrenchRoot map to attribute the hit to a specific TrenchRoot entity.
+type HitTester struct {
+	BuildingFilter *ecs.Filter1[components.Building]
+	BuildingMap    *ecs.Map[components.Building]
+	TrenchRootMap  *ecs.Map[components.TrenchRoot]
+	TrenchRoots    *ecs.Filter1[components.TrenchRoot]
+	Trenches       *components.TrenchNetwork
+	// TrenchHitRadius is how close (metres) the target must be to a polyline
+	// segment to count as a trench hit. PHASE-11.md P6 suggests 2-3 m.
+	TrenchHitRadius float32
+}
+
+// HitTest classifies a WorldPos. Priority: Building (point-in-AABB) → Trench
+// (distance-to-polyline) → Terrain. Building wins over trench when an
+// authored trench accidentally clips a footprint; that's the rarer case in
+// real maps and the easier mistake to read.
+func (h *HitTester) HitTest(target components.WorldPos) HitTestResult {
+	wx := float32(target.Chunk.X)*components.ChunkSize + target.Local.X
+	wz := float32(target.Chunk.Z)*components.ChunkSize + target.Local.Z
+
+	if h.BuildingFilter != nil {
+		q := h.BuildingFilter.Query()
+		for q.Next() {
+			b := q.Get()
+			if b.Footprint.Contains(wx, wz) {
+				ent := q.Entity()
+				q.Close()
+				return HitTestResult{Kind: HitBuilding, Entity: ent}
+			}
+		}
+	}
+
+	if h.Trenches != nil && h.TrenchRoots != nil {
+		// Walk each polyline; if any segment is within radius, find the
+		// TrenchRoot pointing at this Index via TrenchRootMap iteration.
+		radius := h.TrenchHitRadius
+		if radius <= 0 {
+			radius = 2.5
+		}
+		rSq := radius * radius
+		bestIdx := -1
+		bestDSq := rSq
+		for i := range h.Trenches.Lines {
+			pts := h.Trenches.Lines[i].Points
+			for k := 1; k < len(pts); k++ {
+				ax := float32(pts[k-1].Chunk.X)*components.ChunkSize + pts[k-1].Local.X
+				az := float32(pts[k-1].Chunk.Z)*components.ChunkSize + pts[k-1].Local.Z
+				bx := float32(pts[k].Chunk.X)*components.ChunkSize + pts[k].Local.X
+				bz := float32(pts[k].Chunk.Z)*components.ChunkSize + pts[k].Local.Z
+				dx, dz := bx-ax, bz-az
+				lenSq := dx*dx + dz*dz
+				if lenSq < 1e-6 {
+					continue
+				}
+				t := ((wx-ax)*dx + (wz-az)*dz) / lenSq
+				if t < 0 {
+					t = 0
+				} else if t > 1 {
+					t = 1
+				}
+				cx := ax + dx*t
+				cz := az + dz*t
+				dSq := (wx-cx)*(wx-cx) + (wz-cz)*(wz-cz)
+				if dSq < bestDSq {
+					bestDSq = dSq
+					bestIdx = i
+				}
+			}
+		}
+		if bestIdx >= 0 {
+			// Look up the TrenchRoot entity with matching Index.
+			qr := h.TrenchRoots.Query()
+			for qr.Next() {
+				root := qr.Get()
+				if root.Index == bestIdx {
+					ent := qr.Entity()
+					qr.Close()
+					return HitTestResult{Kind: HitTrench, Entity: ent}
+				}
+			}
+		}
+	}
+
+	return HitTestResult{Kind: HitTerrain}
+}
+
+// resolveTargetIntoOrder converts a HitTestResult to an OrderKindCode + entity
+// target. PHASE-11.md P6 mapping. `kindOverride != nil` (from pie menu) wins
+// over hit-test.
+func resolveTargetIntoOrder(hit HitTestResult, kindOverride *components.OrderKindCode) (components.OrderKindCode, ecs.Entity) {
+	if kindOverride != nil {
+		// Pie menu override: keep the entity from hit-test if the kind matches
+		// the natural mapping; otherwise drop entity (terrain Pos suffices).
+		switch *kindOverride {
+		case components.OrderKindGarrison:
+			if hit.Kind == HitBuilding {
+				return components.OrderKindGarrison, hit.Entity
+			}
+			return components.OrderKindGarrison, ecs.Entity{}
+		case components.OrderKindOccupyTrench:
+			if hit.Kind == HitTrench {
+				return components.OrderKindOccupyTrench, hit.Entity
+			}
+			return components.OrderKindOccupyTrench, ecs.Entity{}
+		default:
+			return *kindOverride, ecs.Entity{}
+		}
+	}
+	switch hit.Kind {
+	case HitBuilding:
+		return components.OrderKindGarrison, hit.Entity
+	case HitTrench:
+		return components.OrderKindOccupyTrench, hit.Entity
+	default:
+		return components.OrderKindMoveTo, ecs.Entity{}
+	}
+}
+
+// resolveRMBOrder is the shared RMB entry point for 3D-panel and Map-panel
+// clicks. Phase 11 reshape (M11.3 + M11.5):
 //
-// `shiftHeld == false` clears the unit's queue before pushing the path so RMB
-// is the usual "go here now" verb; `shiftHeld == true` appends, matching the
-// existing chained-waypoints UX.
-//
-// Phase 11 will plug an entity-resolver in front of this (target a Building
-// → Garrison, target a Trench → Occupy, etc.); the signature is kept small so
-// that resolver can wrap it.
+//   - Hit-test classifies the target as Terrain / Building / Trench, mapping
+//     to OrderKindCode {MoveTo / Garrison / OccupyTrench}.
+//   - Multi-squad selection no longer dissolves squads (closes ISSUES #3).
+//     Each touched squad gets its own Order; soloists in the same selection
+//     still receive per-unit ActionQueue MoveTo (Phase 7 fallback).
+//   - shiftHeld switches IssueOrder to append mode (chained orders via
+//     OrderChain.Next).
+//   - `kindOverride` from a pie menu commit forces the kind regardless of
+//     hit-test.
 func resolveRMBOrder(
 	selected []ecs.Entity,
 	target components.WorldPos,
 	shiftHeld bool,
+	kindOverride *components.OrderKindCode,
+	hitTester *HitTester,
 	squadService *systems.SquadService,
 	navService *systems.NavService,
 	squadMemberMap *ecs.Map[components.SquadMember],
@@ -32,15 +173,26 @@ func resolveRMBOrder(
 	if len(selected) == 0 {
 		return
 	}
-	commonSquad, homogeneous := groupSelected(selected, squadMemberMap)
-	if homogeneous && commonSquad != (ecs.Entity{}) {
-		squadService.OrderMoveTo(commonSquad, target)
+
+	// Hit-test the target (terrain by default if no tester is wired up).
+	hit := HitTestResult{Kind: HitTerrain}
+	if hitTester != nil {
+		hit = hitTester.HitTest(target)
+	}
+	kind, entityTarget := resolveTargetIntoOrder(hit, kindOverride)
+
+	// PHASE-11.md P9: distribute orders by squad ownership. SquadsToOrder is
+	// the unique squads touched by the selection; Soloists are units not in
+	// any squad. Never call SquadService.Leave — that was the ISSUES #3 bug.
+	groups := groupSelectionByOwner(selected, squadMemberMap)
+	for _, s := range groups.SquadsToOrder {
+		squadService.IssueOrder(s, kind, target, entityTarget, shiftHeld, systems.OrderParams{})
+	}
+
+	if len(groups.Soloists) == 0 {
 		return
 	}
-	for _, e := range selected {
-		if squadMemberMap.Has(e) {
-			squadService.Leave(e)
-		}
+	for _, e := range groups.Soloists {
 		aq := actionQueueMap.Get(e)
 		pos := posMap.Get(e)
 		if aq == nil || pos == nil {
@@ -64,4 +216,5 @@ func resolveRMBOrder(
 			}
 		}
 	}
+
 }

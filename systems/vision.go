@@ -11,8 +11,12 @@ import (
 )
 
 // Phase 7 P9: Vision system caps trace length at one chunk (64 m) and walks
-// only the 3×3-chunk window around the seer. Active units re-evaluate every
-// 500 ms; Relevant units every 2 s; Dormant skipped.
+// only the 3×3-chunk window around the seer.
+//
+// Phase 11.5 M11.5.3 / M11.5.5: tier-gating removed and the per-seer pass is
+// dispatched through WorkerPool.ParallelFor. Each seer writes its own
+// Awareness ring; the candidate / wall snapshots are read-only across
+// workers.
 const (
 	visionMaxRange     float32 = 64.0
 	visionEyeHeight    float32 = 1.5
@@ -23,16 +27,21 @@ const (
 // unit it can see (range + cone + LOS). Phase 7 leaves the buffer as pure
 // data; consumers arrive in Phase 10 (TacticalAI) and Phase 11 (combat).
 type VisionSystem struct {
-	activeFilter   *ecs.Filter5[components.Unit, components.WorldPos, components.Motion, components.Vision, components.Awareness]
-	relevantFilter *ecs.Filter5[components.Unit, components.WorldPos, components.Motion, components.Vision, components.Awareness]
-	wallFilter     *ecs.Filter2[components.WorldPos, components.WallSegment]
-	doorMap        *ecs.Map[components.Door]
-	elapsed        float32
+	unitFilter *ecs.Filter5[components.Unit, components.WorldPos, components.Motion, components.Vision, components.Awareness]
+	wallFilter *ecs.Filter2[components.WorldPos, components.WallSegment]
+	doorMap    *ecs.Map[components.Door]
+	pool       *core.WorkerPool
+	elapsed    float32
+}
+
+// NewVisionSystem wires the system with a worker pool. nil pool falls back to
+// serial execution.
+func NewVisionSystem(pool *core.WorkerPool) *VisionSystem {
+	return &VisionSystem{pool: pool}
 }
 
 func (sys *VisionSystem) InitUI(w *ecs.World) {
-	sys.activeFilter = ecs.NewFilter5[components.Unit, components.WorldPos, components.Motion, components.Vision, components.Awareness](w)
-	sys.relevantFilter = ecs.NewFilter5[components.Unit, components.WorldPos, components.Motion, components.Vision, components.Awareness](w)
+	sys.unitFilter = ecs.NewFilter5[components.Unit, components.WorldPos, components.Motion, components.Vision, components.Awareness](w)
 	sys.wallFilter = ecs.NewFilter2[components.WorldPos, components.WallSegment](w)
 	sys.doorMap = ecs.NewMap[components.Door](w)
 }
@@ -40,9 +49,11 @@ func (sys *VisionSystem) InitUI(w *ecs.World) {
 func (VisionSystem) Name() string { return "vision" }
 
 func (VisionSystem) LODPolicy() core.LODPolicy {
+	// Phase 11.5 P1: universal sim, single interval. 500 ms matches the prior
+	// Active cadence; Relevant/Dormant tiers no longer exist for this system.
 	return core.LODPolicy{
 		ActiveEvery:   500 * time.Millisecond,
-		RelevantEvery: 2 * time.Second,
+		RelevantEvery: core.LODDisabled,
 		DormantEvery:  core.LODDisabled,
 	}
 }
@@ -54,21 +65,31 @@ type visionUnit struct {
 	chunk components.ChunkCoord
 }
 
+// seerWork — per-seer snapshot row for the parallel pass.
+type seerWork struct {
+	ent    ecs.Entity
+	pos    components.WorldPos
+	yaw    float32
+	vision *components.Vision
+	aware  *components.Awareness
+}
+
 func (sys *VisionSystem) Update(ctx core.UpdateContext) {
 	sys.elapsed += float32(ctx.Delta.Seconds())
 
-	// Snapshot every unit (both Active and Relevant) so we have a candidate
-	// pool indexable by chunk.
+	// Snapshot every unit as both a candidate target and a seer. We need two
+	// shapes because candidates are positional only (small struct, copied)
+	// whereas seers carry pointers to Awareness for the write.
 	var units []visionUnit
-	qA := sys.activeFilter.Query()
-	for qA.Next() {
-		_, pos, _, _, _ := qA.Get()
-		units = append(units, visionUnit{ent: qA.Entity(), pos: *pos, chunk: pos.Chunk})
-	}
-	qR := sys.relevantFilter.Query()
-	for qR.Next() {
-		_, pos, _, _, _ := qR.Get()
-		units = append(units, visionUnit{ent: qR.Entity(), pos: *pos, chunk: pos.Chunk})
+	var seers []seerWork
+	q := sys.unitFilter.Query()
+	for q.Next() {
+		_, pos, mot, vision, aware := q.Get()
+		units = append(units, visionUnit{ent: q.Entity(), pos: *pos, chunk: pos.Chunk})
+		seers = append(seers, seerWork{
+			ent: q.Entity(), pos: *pos, yaw: mot.Yaw,
+			vision: vision, aware: aware,
+		})
 	}
 
 	// Snapshot LOS walls by chunk so the raycast pass can pull the 9 chunks
@@ -84,76 +105,75 @@ func (sys *VisionSystem) Update(ctx core.UpdateContext) {
 		wallsByChunk[pos.Chunk] = append(wallsByChunk[pos.Chunk], makeLosWall(*pos, *w, doorState))
 	}
 
-	process := func(seer ecs.Entity, seerPos components.WorldPos, seerYaw float32, vision *components.Vision, aware *components.Awareness) {
-		// Pull 9-chunk wall window.
-		var localWalls []losWall
-		for dz := int32(-1); dz <= 1; dz++ {
-			for dx := int32(-1); dx <= 1; dx++ {
-				nb := components.ChunkCoord{X: seerPos.Chunk.X + dx, Z: seerPos.Chunk.Z + dz}
-				localWalls = append(localWalls, wallsByChunk[nb]...)
-			}
+	elapsed := sys.elapsed
+	sys.pool.ParallelFor(len(seers), func(start, end int) {
+		for i := start; i < end; i++ {
+			s := seers[i]
+			processVisionSeer(s, units, wallsByChunk, elapsed)
 		}
+	})
+}
 
-		seerX := float32(seerPos.Chunk.X)*components.ChunkSize + seerPos.Local.X
-		seerZ := float32(seerPos.Chunk.Z)*components.ChunkSize + seerPos.Local.Z
-		fwdX := float32(math.Sin(float64(seerYaw)))
-		fwdZ := float32(math.Cos(float64(seerYaw)))
-		// AngleDot = cos(half-FOV). 0 = full 180° cone; -1 = full 360°.
-
-		rng := vision.RangeM
-		if rng > visionMaxRange {
-			rng = visionMaxRange
-		}
-		rngSq := rng * rng
-
-		for _, cand := range units {
-			if cand.ent == seer {
-				continue
-			}
-			// 3×3 chunk window — anything outside is automatic miss.
-			dcx := cand.chunk.X - seerPos.Chunk.X
-			if dcx < -1 || dcx > 1 {
-				continue
-			}
-			dcz := cand.chunk.Z - seerPos.Chunk.Z
-			if dcz < -1 || dcz > 1 {
-				continue
-			}
-			candX := float32(cand.pos.Chunk.X)*components.ChunkSize + cand.pos.Local.X
-			candZ := float32(cand.pos.Chunk.Z)*components.ChunkSize + cand.pos.Local.Z
-			dx := candX - seerX
-			dz := candZ - seerZ
-			dSq := dx*dx + dz*dz
-			if dSq > rngSq || dSq < 1e-4 {
-				continue
-			}
-			// Angle gate.
-			d := float32(math.Sqrt(float64(dSq)))
-			invD := 1 / d
-			dotF := (dx*fwdX + dz*fwdZ) * invD
-			if dotF < vision.AngleDot {
-				continue
-			}
-			// Wall raycast.
-			if anyLosWallBlocks(localWalls, seerX, seerZ, candX, candZ) {
-				continue
-			}
-			recordSighting(aware, cand.ent, cand.pos, sys.elapsed)
+func processVisionSeer(
+	s seerWork,
+	units []visionUnit,
+	wallsByChunk map[components.ChunkCoord][]losWall,
+	elapsed float32,
+) {
+	// Pull 9-chunk wall window.
+	var localWalls []losWall
+	for dz := int32(-1); dz <= 1; dz++ {
+		for dx := int32(-1); dx <= 1; dx++ {
+			nb := components.ChunkCoord{X: s.pos.Chunk.X + dx, Z: s.pos.Chunk.Z + dz}
+			localWalls = append(localWalls, wallsByChunk[nb]...)
 		}
 	}
 
-	if ctx.Tier == core.LODTierActive {
-		q := sys.activeFilter.Query()
-		for q.Next() {
-			_, pos, mot, vision, aware := q.Get()
-			process(q.Entity(), *pos, mot.Yaw, vision, aware)
+	seerX := float32(s.pos.Chunk.X)*components.ChunkSize + s.pos.Local.X
+	seerZ := float32(s.pos.Chunk.Z)*components.ChunkSize + s.pos.Local.Z
+	fwdX := float32(math.Sin(float64(s.yaw)))
+	fwdZ := float32(math.Cos(float64(s.yaw)))
+	// AngleDot = cos(half-FOV). 0 = full 180° cone; -1 = full 360°.
+
+	rng := s.vision.RangeM
+	if rng > visionMaxRange {
+		rng = visionMaxRange
+	}
+	rngSq := rng * rng
+
+	for _, cand := range units {
+		if cand.ent == s.ent {
+			continue
 		}
-	} else if ctx.Tier == core.LODTierRelevant {
-		q := sys.relevantFilter.Query()
-		for q.Next() {
-			_, pos, mot, vision, aware := q.Get()
-			process(q.Entity(), *pos, mot.Yaw, vision, aware)
+		// 3×3 chunk window — anything outside is automatic miss.
+		dcx := cand.chunk.X - s.pos.Chunk.X
+		if dcx < -1 || dcx > 1 {
+			continue
 		}
+		dcz := cand.chunk.Z - s.pos.Chunk.Z
+		if dcz < -1 || dcz > 1 {
+			continue
+		}
+		candX := float32(cand.pos.Chunk.X)*components.ChunkSize + cand.pos.Local.X
+		candZ := float32(cand.pos.Chunk.Z)*components.ChunkSize + cand.pos.Local.Z
+		dx := candX - seerX
+		dz := candZ - seerZ
+		dSq := dx*dx + dz*dz
+		if dSq > rngSq || dSq < 1e-4 {
+			continue
+		}
+		// Angle gate.
+		d := float32(math.Sqrt(float64(dSq)))
+		invD := 1 / d
+		dotF := (dx*fwdX + dz*fwdZ) * invD
+		if dotF < s.vision.AngleDot {
+			continue
+		}
+		// Wall raycast.
+		if anyLosWallBlocks(localWalls, seerX, seerZ, candX, candZ) {
+			continue
+		}
+		recordSighting(s.aware, cand.ent, cand.pos, elapsed)
 	}
 }
 

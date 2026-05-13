@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"math"
 	"runtime"
@@ -21,7 +22,13 @@ const (
 	initialScreenHeight int32 = 450 * 2
 )
 
+// workersFlag picks the worker-pool size. 0 (default) → runtime.NumCPU().
+// Phase 11.5 M11.5.1; pool feeds the parallel hot-path systems below.
+var workersFlag = flag.Int("workers", 0, "worker pool size (default = NumCPU)")
+
 func main() {
+	flag.Parse()
+
 	rl.SetConfigFlags(rl.FlagWindowResizable)
 	rl.InitWindow(initialScreenWidth, initialScreenHeight, "RTS/FPS 3D ECS Prototype")
 	defer rl.CloseWindow()
@@ -57,6 +64,17 @@ func main() {
 	initTrace(app)
 	defer func() { _ = app.Trace.Close() }()
 
+	// Worker pool feeds the parallel hot-path systems (UnitMovement / Vision /
+	// Formation / SquadMacroPath). Stop on shutdown so the worker goroutines
+	// don't outlive main.
+	workerCount := *workersFlag
+	if workerCount <= 0 {
+		workerCount = runtime.NumCPU()
+	}
+	workerPool := core.NewWorkerPool(workerCount)
+	defer workerPool.Stop()
+	fmt.Printf("worker pool: %d workers\n", workerPool.Workers())
+
 	streamingMap := components.NewStreamingMap()
 	ecs.AddResource(app.World, &streamingMap)
 	terrainIndex := systems.NewTerrainChunkIndex()
@@ -89,6 +107,8 @@ func main() {
 	ecs.AddResource(app.World, &coverSlotIndex)
 	transitionRegistry := components.NewTransitionRegistry()
 	ecs.AddResource(app.World, &transitionRegistry)
+	mapMarkerCache := components.NewMapMarkerCache()
+	ecs.AddResource(app.World, &mapMarkerCache)
 
 	defer systems.FlushModifiedChunks(app.World, systems.SaveDir)
 
@@ -129,17 +149,23 @@ func main() {
 	groundStickSys := &systems.GroundStickSystem{}
 	groundStickSys.InitUI(app.World)
 
-	unitMovementSys := &systems.UnitMovementSystem{}
+	unitMovementSys := systems.NewUnitMovementSystem(workerPool)
 	unitMovementSys.InitUI(app.World)
 
-	visionSys := &systems.VisionSystem{}
+	visionSys := systems.NewVisionSystem(workerPool)
 	visionSys.InitUI(app.World)
 
-	squadMacroPathSys := systems.NewSquadMacroPathSystem(navService)
+	orderResolverSys := systems.NewOrderResolverSystem(squadService)
+	orderResolverSys.InitUI(app.World)
+
+	squadMacroPathSys := systems.NewSquadMacroPathSystem(navService, workerPool)
 	squadMacroPathSys.InitUI(app.World)
 
-	formationSys := systems.NewFormationSystem(squadService)
+	formationSys := systems.NewFormationSystem(squadService, workerPool)
 	formationSys.InitUI(app.World)
+
+	mapMarkerCacheSys := &systems.MapMarkerCacheSystem{}
+	mapMarkerCacheSys.InitUI(app.World)
 
 	lodSys := &systems.LODSystem{
 		ActiveRadius:   60,
@@ -179,8 +205,10 @@ func main() {
 	app.AddSystem(groundStickSys)
 	app.AddSystem(unitMovementSys)
 	app.AddSystem(visionSys)
+	app.AddSystem(orderResolverSys)
 	app.AddSystem(squadMacroPathSys)
 	app.AddSystem(formationSys)
+	app.AddSystem(mapMarkerCacheSys)
 	app.AddSystem(lodSys)
 	app.AddSystem(movementSys)
 	app.AddSystem(audioSys)
@@ -190,7 +218,6 @@ func main() {
 
 	posMap := ecs.NewMap[components.WorldPos](app.World)
 	lodActiveMap := ecs.NewMap[components.LODActive](app.World)
-	lodRelevantMap := ecs.NewMap[components.LODRelevant](app.World)
 	lodAnchorMap := ecs.NewMap[components.LODAnchor](app.World)
 	alwaysActiveMap := ecs.NewMap[components.AlwaysActive](app.World)
 
@@ -244,6 +271,24 @@ func main() {
 		alwaysActiveMap.Add(root, &components.AlwaysActive{})
 	}
 
+	// Phase 11: one TrenchRoot entity per polyline so the hit-test resolver
+	// can return an ecs.Entity in OrderTarget.Entity for OccupyTrench. The
+	// Trench polyline data stays in the TrenchNetwork resource — TrenchRoot
+	// is a thin reverse-index. Pos is the polyline midpoint, used for any
+	// "where is this trench" preview before order resolution.
+	trenchRootMap := ecs.NewMap[components.TrenchRoot](app.World)
+	for i := range trenches.Lines {
+		pts := trenches.Lines[i].Points
+		if len(pts) == 0 {
+			continue
+		}
+		ent := app.World.NewEntity()
+		mid := pts[len(pts)/2]
+		posMap.Add(ent, &mid)
+		trenchRootMap.Add(ent, &components.TrenchRoot{Index: i})
+		alwaysActiveMap.Add(ent, &components.AlwaysActive{})
+	}
+
 	unitPositions := []rl.Vector3{
 		{X: -22, Z: -38}, {X: -28, Z: -38}, {X: -22, Z: -42}, {X: -28, Z: -42},
 		{X: 38, Z: 28}, {X: 42, Z: 28}, {X: 38, Z: 32}, {X: 42, Z: 32},
@@ -265,6 +310,14 @@ func main() {
 	rosterMap := ecs.NewMap[components.CommandRoster](app.World)
 	formationDataMap := ecs.NewMap[components.FormationData](app.World)
 	macroPathMap := ecs.NewMap[components.MacroPath](app.World)
+	// Phase 11 order maps. main.go reads (no mutation) for UI render. All
+	// writes flow through SquadService.IssueOrder / CancelAllOrders.
+	orderQueueMap := ecs.NewMap[components.OrderQueueHead](app.World)
+	orderKindMap := ecs.NewMap[components.OrderKind](app.World)
+	orderStateMap := ecs.NewMap[components.OrderState](app.World)
+	orderTargetMap := ecs.NewMap[components.OrderTarget](app.World)
+	orderProgressMap := ecs.NewMap[components.OrderProgress](app.World)
+	orderChainMap := ecs.NewMap[components.OrderChain](app.World)
 	unitEnts := make([]ecs.Entity, 0, len(unitPositions))
 	for _, p := range unitPositions {
 		ent := app.World.NewEntity()
@@ -279,7 +332,10 @@ func main() {
 		awarenessMap.Add(ent, &components.Awareness{})
 		blackboardMap.Add(ent, &components.LocalBlackboard{})
 		actionQueueMap.Add(ent, &components.ActionQueue{})
-		lodRelevantMap.Add(ent, &components.LODRelevant{})
+		// Phase 11.5 P6: units no longer carry LOD markers. Simulation systems
+		// (UnitMovement / Vision / Formation / SquadMacroPath / OrderResolver)
+		// iterate every unit each tick; LODSystem also excludes the Unit
+		// archetype to avoid thrashing markers that nothing reads.
 
 		weapon := app.World.NewEntity()
 		weaponMap.Add(weapon, &components.Weapon{
@@ -321,6 +377,19 @@ func main() {
 	stairsCountFilter := ecs.NewFilter1[components.Stairs](app.World)
 	squadFilter := ecs.NewFilter2[components.Squad, components.CommandRoster](app.World)
 
+	// Phase 11 hit-test filters. The Building filter is the same archetype as
+	// buildingMap; the Trench-root filter walks the small startup-spawned set.
+	buildingFilter := ecs.NewFilter1[components.Building](app.World)
+	trenchRootFilter := ecs.NewFilter1[components.TrenchRoot](app.World)
+	hitTester := &HitTester{
+		BuildingFilter:  buildingFilter,
+		BuildingMap:     buildingMap,
+		TrenchRootMap:   trenchRootMap,
+		TrenchRoots:     trenchRootFilter,
+		Trenches:        &trenches,
+		TrenchHitRadius: 2.5,
+	}
+
 	terrainMaterial := rl.LoadMaterialDefault()
 	defer rl.UnloadMaterial(terrainMaterial)
 
@@ -341,6 +410,9 @@ func main() {
 	mapCam := ui.NewMapCamera()
 	var mapPanning bool
 	var mapPanCursor rl.Vector2
+	var pieMenu ui.PieMenu
+	// Inter-frame smoothing for map squad markers (ISSUES #1 polish).
+	smoothedSquadPos := make(map[ecs.Entity]components.WorldPos, 8)
 
 	// Selection / hover state. Hover refreshes each frame from cursor + focused
 	// panel; `hovered` is consumed by the inspector and the map renderer.
@@ -389,6 +461,9 @@ func main() {
 		// Real-time dt for input / camera-orbit. The simulation tick gets this
 		// scaled by app.TimeScale inside App.Tick (Phase 10 P7).
 		dtReal := time.Duration(float64(rl.GetFrameTime()) * float64(time.Second))
+		// Session clock for OrderIssuedAt / progress timing. Scaled to match
+		// simulation time so pause freezes the clock with the rest of the sim.
+		squadService.SetClock(float32(app.Elapsed().Seconds()))
 
 		cursor := rl.GetMousePosition()
 		focused := panelMgr.FocusedAt(cursor)
@@ -526,7 +601,8 @@ func main() {
 				// Click on map: pick squad marker, else clear selection.
 				mapCtx := ui.MapRenderCtx{
 					World: app.World, Cam: mapCam, SquadFilter: squadFilter,
-					SquadCenter: squadCenter,
+					SquadCenter:    squadCenter,
+					MapMarkerCache: &mapMarkerCache,
 				}
 				hit := ui.PickSquadAt(cursor, mapCtx, panelMap, 12)
 				if hit != (ecs.Entity{}) && app.World.Alive(hit) {
@@ -591,37 +667,67 @@ func main() {
 			marqueeActive = false
 		}
 
-		// ── RMB → MoveTo (3D or map, shared resolver) ──
+		// ── RMB orders (3D or map). Two paths:
+		//   • Tap: PieMenu stays inactive, hit-test resolver runs at release.
+		//   • Hold > 200 ms: PieMenu activates, sweep cursor for kind, commit
+		//     on release. Kind override overrides hit-test mapping.
+		// Note: PieMenu suppresses OrbitSystem's RMB-orbit because it captures
+		// the press inside Panel3D too — fine, the camera doesn't spin during
+		// the menu interaction. After menu release, RMB is no longer held and
+		// the orbit doesn't catch the trailing frame either.
 		if rl.IsMouseButtonPressed(rl.MouseButtonRight) {
+			var (
+				pressTarget components.WorldPos
+				targetOK    bool
+			)
 			switch focused {
 			case ui.Panel3D:
-				target, ok := mouseTargetWorldPos(systems.CurrentCamera,
+				pressTarget, targetOK = mouseTargetWorldPos(systems.CurrentCamera,
 					anchorPos.ToRenderSpace(systems.CurrentOriginChunk),
 					panel3DLocal, panel3DW, panel3DH)
-				if ok && len(selected) > 0 {
-					resolveRMBOrder(selected, target, shiftHeld, squadService, navService,
-						squadMemberMap, posMap, actionQueueMap)
-				}
 			case ui.PanelMap:
-				target := ui.MapPanelToWorld(cursor, mapCam, panelMapContent)
-				if len(selected) > 0 {
-					resolveRMBOrder(selected, target, shiftHeld, squadService, navService,
-						squadMemberMap, posMap, actionQueueMap)
-				}
+				pressTarget = ui.MapPanelToWorld(cursor, mapCam, panelMapContent)
+				targetOK = true
+			}
+			if targetOK && len(selected) > 0 && (focused == ui.Panel3D || focused == ui.PanelMap) {
+				pieMenu.Begin(cursor, pressTarget, focused)
+			}
+		}
+
+		// While RMB is held the menu may activate, get drag-cancelled, or
+		// commit on release. Tick returns one of three outcomes; only commit
+		// and tap issue orders.
+		if pieMenu.SourcePanel != ui.PanelNone {
+			rmbDown := rl.IsMouseButtonDown(rl.MouseButtonRight)
+			rmbReleased := rl.IsMouseButtonReleased(rl.MouseButtonRight)
+			res := pieMenu.Tick(cursor, rmbDown, rmbReleased)
+			switch {
+			case res.ReleasedAsCommit:
+				k := res.Kind
+				resolveRMBOrder(selected, pieMenu.Target, shiftHeld, &k, hitTester,
+					squadService, navService, squadMemberMap, posMap, actionQueueMap)
+				pieMenu.SourcePanel = ui.PanelNone
+			case res.ReleasedAsTap:
+				resolveRMBOrder(selected, pieMenu.Target, shiftHeld, nil, hitTester,
+					squadService, navService, squadMemberMap, posMap, actionQueueMap)
+				pieMenu.SourcePanel = ui.PanelNone
+			case res.Cancelled, res.ReleasedAsDrag:
+				pieMenu.SourcePanel = ui.PanelNone
 			}
 		}
 
 		// ── H → Stop order (global hotkey) ──
+		// Phase 11: iterates SquadsToOrder for distributed cancel, plus the
+		// per-unit Stop for soloists. Mirrors resolveRMBOrder's split.
 		if rl.IsKeyPressed(rl.KeyH) && len(selected) > 0 {
-			commonSquad, homogeneous := groupSelected(selected, squadMemberMap)
-			if homogeneous && commonSquad != (ecs.Entity{}) {
-				squadService.Stop(commonSquad)
-			} else {
-				for _, e := range selected {
-					if aq := actionQueueMap.Get(e); aq != nil {
-						systems.ClearActions(aq)
-						systems.PushAction(aq, components.Action{Kind: components.ActionStop})
-					}
+			groups := groupSelectionByOwner(selected, squadMemberMap)
+			for _, s := range groups.SquadsToOrder {
+				squadService.CancelAllOrders(s)
+			}
+			for _, e := range groups.Soloists {
+				if aq := actionQueueMap.Get(e); aq != nil {
+					systems.ClearActions(aq)
+					systems.PushAction(aq, components.Action{Kind: components.ActionStop})
 				}
 			}
 		}
@@ -733,15 +839,19 @@ func main() {
 		case ui.PanelMap:
 			mapCtx := ui.MapRenderCtx{
 				World: app.World, Cam: mapCam, SquadFilter: squadFilter,
-				SquadCenter: squadCenter,
+				SquadCenter:    squadCenter,
+				MapMarkerCache: &mapMarkerCache,
 			}
 			hovered = ui.PickSquadAt(cursor, mapCtx, panelMap, 12)
 		}
 
 		// Gate the 3D camera's orbit / wheel zoom by panel focus. Wheel events
 		// when the map panel is focused belong to the map's own zoom; RMB held
-		// while drawing a map marquee shouldn't spin the field camera.
-		systems.OrbitInputEnabled = focused == ui.Panel3D || focused == ui.PanelNone
+		// while drawing a map marquee shouldn't spin the field camera. Also
+		// suppress while pie menu is active so the camera doesn't drift as the
+		// player sweeps cursor to pick a segment.
+		systems.OrbitInputEnabled = (focused == ui.Panel3D || focused == ui.PanelNone) &&
+			!pieMenu.IsActive() && pieMenu.SourcePanel == ui.PanelNone
 
 		app.Tick(dtReal)
 
@@ -987,6 +1097,12 @@ func main() {
 			Rivers:          &rivers,
 			Buildings:       &buildingPlans,
 			ShowDebugLayers: showMapDebugLy,
+			OrderQueueMap:    orderQueueMap,
+			OrderKindMap:     orderKindMap,
+			OrderTargetMap:   orderTargetMap,
+			OrderChainMap:    orderChainMap,
+			SmoothedSquadPos: smoothedSquadPos,
+			MapMarkerCache:   &mapMarkerCache,
 		}
 		ui.DrawMap(panelMap, mapCtx)
 
@@ -1006,6 +1122,14 @@ func main() {
 			FormationDataMap: formationDataMap,
 			MacroPathMap:     macroPathMap,
 			SquadFilter:      squadFilter,
+			OrderQueueMap:    orderQueueMap,
+			OrderKindMap:     orderKindMap,
+			OrderStateMap:    orderStateMap,
+			OrderTargetMap:   orderTargetMap,
+			OrderProgressMap: orderProgressMap,
+			OrderChainMap:    orderChainMap,
+			BuildingMap:      buildingMap,
+			TrenchRootMap:    trenchRootMap,
 			SquadColor:       squadColor,
 		})
 
@@ -1047,6 +1171,10 @@ func main() {
 		for _, id := range []ui.PanelID{ui.Panel3D, ui.PanelMap, ui.PanelInspect, ui.PanelTime} {
 			ui.DrawChrome(panelMgr.Get(id), hudFont, 14)
 		}
+
+		// Pie menu (RMB-hold overlay, M11.6). Drawn after chrome so it sits
+		// above every panel.
+		pieMenu.Draw(hudFont, cursor)
 
 		// HUD hotkey hints moved into expanded profiler HUD (toggle with P).
 		// Phase 10: drawing them over the panel chrome on every frame conflicts

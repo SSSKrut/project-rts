@@ -23,8 +23,15 @@ type MapRenderCtx struct {
 	SquadMemberMap *ecs.Map[components.SquadMember]
 	SquadFilter    *ecs.Filter2[components.Squad, components.CommandRoster]
 	// SquadCenter resolves a roster to its centre WorldPos. Injected as func
-	// to keep the ui package free of a systems import.
+	// to keep the ui package free of a systems import. Used as the fallback
+	// when MapMarkerCache has no entry yet (e.g. fresh squad before the first
+	// MapMarkerCacheSystem tick).
 	SquadCenter func(world *ecs.World, roster *components.CommandRoster) (components.WorldPos, bool)
+	// MapMarkerCache is the per-squad position cache populated by
+	// MapMarkerCacheSystem @ 250 ms (Phase 11.5 P7). When non-nil drawSquadMarkers
+	// / drawOrderMarkers / PickSquadAt read from it; nil falls back to per-call
+	// SquadCenter.
+	MapMarkerCache *components.MapMarkerCache
 	// SquadColor mirrors InspectorCtx.SquadColor.
 	SquadColor func(id uint32) rl.Color
 	// Optional debug layers — checked by drawDebugLayers.
@@ -33,6 +40,17 @@ type MapRenderCtx struct {
 	Buildings *components.BuildingPlanList
 	// ShowDebugLayers toggles roads/rivers/buildings overlay.
 	ShowDebugLayers bool
+	// Phase 11 order overlay maps. When non-nil DrawMap renders the head
+	// order's destination icon + line for each squad.
+	OrderQueueMap  *ecs.Map[components.OrderQueueHead]
+	OrderKindMap   *ecs.Map[components.OrderKind]
+	OrderTargetMap *ecs.Map[components.OrderTarget]
+	OrderChainMap  *ecs.Map[components.OrderChain]
+	// SmoothedSquadPos is the inter-frame lerp store for squad-marker
+	// positions on the map (ISSUES #1 fix). Owned by main.go so its lifetime
+	// matches the camera; DrawMap reads + writes per frame. Nil disables
+	// smoothing — markers snap to the raw squad center.
+	SmoothedSquadPos map[ecs.Entity]components.WorldPos
 }
 
 var (
@@ -61,8 +79,107 @@ func DrawMap(panel Panel, ctx MapRenderCtx) {
 	if ctx.ShowDebugLayers {
 		drawDebugLayers(content, ctx)
 	}
+	drawOrderMarkers(content, ctx)
 	drawSquadMarkers(content, ctx)
 	drawAnchorMarker(content, ctx)
+}
+
+// drawOrderMarkers draws, for every squad with an active head order, a thin
+// line from the squad center to the order's target Pos and a small icon at
+// the target. Icon shape encodes order kind (MoveTo dot, Defend diamond,
+// Garrison square, Trench down-triangle, Patrol circle). Colour is the
+// squad's palette colour.
+func drawOrderMarkers(content rl.Rectangle, ctx MapRenderCtx) {
+	if ctx.OrderQueueMap == nil || ctx.OrderKindMap == nil || ctx.OrderTargetMap == nil {
+		return
+	}
+	q := ctx.SquadFilter.Query()
+	for q.Next() {
+		_, roster := q.Get()
+		squad := q.Entity()
+		head := ctx.OrderQueueMap.Get(squad)
+		if head == nil || head.First == (ecs.Entity{}) || !ctx.World.Alive(head.First) {
+			continue
+		}
+		kind := ctx.OrderKindMap.Get(head.First)
+		target := ctx.OrderTargetMap.Get(head.First)
+		if kind == nil || target == nil {
+			continue
+		}
+		center, ok := lookupSquadCenter(ctx, squad, roster)
+		if !ok {
+			continue
+		}
+		col := rl.Color{R: 230, G: 230, B: 230, A: 220}
+		if ctx.SquadColor != nil {
+			col = ctx.SquadColor(squad.ID())
+		}
+		from := MapWorldToPanel(center, ctx.Cam, content)
+		to := MapWorldToPanel(target.Pos, ctx.Cam, content)
+		rl.DrawLineEx(from, to, 1.5, col)
+		drawOrderIcon(to, kind.Code, col)
+
+		// Walk chain — paint queued orders' targets dimmed.
+		cur := head.First
+		dim := rl.Color{R: col.R, G: col.G, B: col.B, A: 120}
+		prev := to
+		for ctx.OrderChainMap != nil {
+			ch := ctx.OrderChainMap.Get(cur)
+			if ch == nil || ch.Next == (ecs.Entity{}) || !ctx.World.Alive(ch.Next) {
+				break
+			}
+			cur = ch.Next
+			tt := ctx.OrderTargetMap.Get(cur)
+			kk := ctx.OrderKindMap.Get(cur)
+			if tt == nil || kk == nil {
+				break
+			}
+			next := MapWorldToPanel(tt.Pos, ctx.Cam, content)
+			rl.DrawLineEx(prev, next, 1.0, dim)
+			drawOrderIcon(next, kk.Code, dim)
+			prev = next
+		}
+	}
+}
+
+// drawOrderIcon paints one per-kind glyph at `at`. Geometry kept tiny (~6 px)
+// so multiple orders don't crowd the map at default zoom.
+func drawOrderIcon(at rl.Vector2, k components.OrderKindCode, col rl.Color) {
+	const r float32 = 6
+	switch k {
+	case components.OrderKindMoveTo:
+		rl.DrawCircleV(at, 4, col)
+		rl.DrawCircleLines(int32(at.X), int32(at.Y), 4, rl.Black)
+	case components.OrderKindGarrison:
+		rl.DrawRectangle(int32(at.X-r*0.5), int32(at.Y-r*0.5), int32(r), int32(r), col)
+		rl.DrawRectangleLines(int32(at.X-r*0.5), int32(at.Y-r*0.5), int32(r), int32(r), rl.Black)
+	case components.OrderKindOccupyTrench:
+		v1 := rl.Vector2{X: at.X, Y: at.Y + r*0.7}
+		v2 := rl.Vector2{X: at.X - r*0.7, Y: at.Y - r*0.5}
+		v3 := rl.Vector2{X: at.X + r*0.7, Y: at.Y - r*0.5}
+		rl.DrawTriangle(v2, v1, v3, col)
+		rl.DrawTriangleLines(v2, v1, v3, rl.Black)
+	case components.OrderKindDefendPosition:
+		// Diamond — top / right / bottom / left.
+		v1 := rl.Vector2{X: at.X, Y: at.Y - r*0.7}
+		v2 := rl.Vector2{X: at.X + r*0.7, Y: at.Y}
+		v3 := rl.Vector2{X: at.X, Y: at.Y + r*0.7}
+		v4 := rl.Vector2{X: at.X - r*0.7, Y: at.Y}
+		rl.DrawTriangle(v1, v4, v2, col)
+		rl.DrawTriangle(v2, v4, v3, col)
+		rl.DrawLineEx(v1, v2, 1.0, rl.Black)
+		rl.DrawLineEx(v2, v3, 1.0, rl.Black)
+		rl.DrawLineEx(v3, v4, 1.0, rl.Black)
+		rl.DrawLineEx(v4, v1, 1.0, rl.Black)
+	case components.OrderKindPatrol:
+		rl.DrawCircleLines(int32(at.X), int32(at.Y), r*0.7, col)
+		rl.DrawCircleLines(int32(at.X), int32(at.Y), r*0.7+1, rl.Black)
+		// Arrow head — small triangle to the right.
+		v1 := rl.Vector2{X: at.X + r, Y: at.Y - r*0.4}
+		v2 := rl.Vector2{X: at.X + r, Y: at.Y + r*0.4}
+		v3 := rl.Vector2{X: at.X + r*1.6, Y: at.Y}
+		rl.DrawTriangle(v1, v3, v2, col)
+	}
 }
 
 func drawUnderlay(content rl.Rectangle, ctx MapRenderCtx) {
@@ -128,12 +245,27 @@ func drawSquadMarkers(content rl.Rectangle, ctx MapRenderCtx) {
 	for q.Next() {
 		_, roster := q.Get()
 		ent := q.Entity()
-		if roster.Count == 0 || ctx.SquadCenter == nil {
+		if roster.Count == 0 {
 			continue
 		}
-		center, ok := ctx.SquadCenter(ctx.World, roster)
+		center, ok := lookupSquadCenter(ctx, ent, roster)
 		if !ok {
 			continue
+		}
+		// ISSUES #1: lerp toward the latest center in world space. UnitMovement
+		// at Relevant/Dormant tier writes pos only every 250-500 ms; raw
+		// markers jitter at the framerate gap. World-space lerp keeps the
+		// marker stable under map pan / zoom.
+		if ctx.SmoothedSquadPos != nil {
+			if prev, hadPrev := ctx.SmoothedSquadPos[ent]; hadPrev {
+				const factor float32 = 0.18 // ~6-frame settle at 60 FPS
+				diff := center.Sub(prev)
+				lerped := prev.Add(rl.Vector3{
+					X: diff.X * factor, Y: diff.Y * factor, Z: diff.Z * factor,
+				})
+				center = lerped
+			}
+			ctx.SmoothedSquadPos[ent] = center
 		}
 		screen := MapWorldToPanel(center, ctx.Cam, content)
 		col := rl.Color{R: 200, G: 200, B: 200, A: 240}
@@ -180,10 +312,10 @@ func PickSquadAt(screenPos rl.Vector2, ctx MapRenderCtx, panel Panel,
 	for q.Next() {
 		_, roster := q.Get()
 		ent := q.Entity()
-		if roster.Count == 0 || ctx.SquadCenter == nil {
+		if roster.Count == 0 {
 			continue
 		}
-		center, ok := ctx.SquadCenter(ctx.World, roster)
+		center, ok := lookupSquadCenter(ctx, ent, roster)
 		if !ok {
 			continue
 		}
@@ -197,6 +329,22 @@ func PickSquadAt(screenPos rl.Vector2, ctx MapRenderCtx, panel Panel,
 		}
 	}
 	return best
+}
+
+// lookupSquadCenter returns the cached position when MapMarkerCache has an
+// entry, otherwise falls back to the live SquadCenter call (covers
+// first-tick / cache-cold cases). Keeps every map draw path consistent.
+func lookupSquadCenter(ctx MapRenderCtx, squad ecs.Entity,
+	roster *components.CommandRoster) (components.WorldPos, bool) {
+	if ctx.MapMarkerCache != nil {
+		if wp, ok := ctx.MapMarkerCache.Position[squad]; ok {
+			return wp, true
+		}
+	}
+	if ctx.SquadCenter == nil {
+		return components.WorldPos{}, false
+	}
+	return ctx.SquadCenter(ctx.World, roster)
 }
 
 func mapAnyMemberSelected(selected []ecs.Entity, roster *components.CommandRoster) bool {
