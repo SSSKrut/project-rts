@@ -348,6 +348,44 @@ func unitStanceHeight(code components.StanceCode) float32 {
 	}
 }
 
+// squadPalette is a small fixed palette of distinguishable colours. Each
+// Squad picks a slot deterministically from its entity ID, so the same squad
+// keeps the same colour across frames. Eight entries is enough until the
+// scene grows beyond ~8 squads; collisions are visually obvious in worst case
+// (Phase 14 may move to per-squad-stored colour with player override).
+var squadPalette = [...]rl.Color{
+	{R: 220, G: 80, B: 80, A: 230},
+	{R: 80, G: 200, B: 90, A: 230},
+	{R: 80, G: 130, B: 230, A: 230},
+	{R: 230, G: 190, B: 60, A: 230},
+	{R: 180, G: 100, B: 220, A: 230},
+	{R: 230, G: 130, B: 200, A: 230},
+	{R: 60, G: 200, B: 200, A: 230},
+	{R: 230, G: 150, B: 80, A: 230},
+}
+
+// squadColor maps an entity ID to a palette slot via a SplitMix-style mix.
+func squadColor(id uint32) rl.Color {
+	x := id ^ 0x9e3779b9
+	x ^= x >> 16
+	x *= 0x7feb352d
+	x ^= x >> 15
+	x *= 0x846ca68b
+	x ^= x >> 16
+	return squadPalette[int(x%uint32(len(squadPalette)))]
+}
+
+// drawSquadConnections draws a small circle at the squad center plus lines
+// from the center out to every live member. Used both by the per-selection
+// overlay (always-on when selection is one squad) and the hold-K all-squads
+// overlay.
+func drawSquadConnections(center rl.Vector3, members []rl.Vector3, col rl.Color) {
+	rl.DrawCircle3D(center, 0.6, rl.Vector3{X: 1, Y: 0, Z: 0}, 90, col)
+	for _, m := range members {
+		rl.DrawLine3D(center, m, col)
+	}
+}
+
 // drawBuildingStairs draws a tilted slab approximating a stairwell. WorldPos
 // is the bottom-of-stairs anchor; slab tilts up along Yaw (+Z by default).
 func drawBuildingStairs(pos rl.Vector3, s components.Stairs) {

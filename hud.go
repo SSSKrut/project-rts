@@ -38,6 +38,9 @@ type census struct {
 	rivers       int
 	bldgPlans    int
 	trenches     int
+	squads       int
+	squadMembers int
+	soloists     int
 }
 
 // countFilter1 walks every entity matching a single-component Filter and
@@ -184,10 +187,19 @@ func drawExpandedProfHUD(p *core.Profiler, screenW int32, cen census, font rl.Fo
 		fmt.Sprintf("  walls=%d floors=%d stairs=%d", cen.walls, cen.floors, cen.stairs),
 		fmt.Sprintf("  cover-slots=%d props=%d bridges-live=%d", cen.coverSlots, cen.props, cen.bridgesLive),
 		fmt.Sprintf("  units=%d weapons=%d selected=%d", cen.units, cen.weapons, cen.selection),
+		fmt.Sprintf("  squads=%d squad-members=%d soloists=%d", cen.squads, cen.squadMembers, cen.soloists),
 		fmt.Sprintf("  vision-pairs=%d path-wpts=%d", cen.visionPairs, cen.pathWaypts),
 		"--- world data ---",
 		fmt.Sprintf("  roads: nodes=%d edges=%d bridges=%d", cen.roadNodes, cen.roadEdges, cen.bridgeEdges),
 		fmt.Sprintf("  rivers=%d buildings=%d trenches=%d", cen.rivers, cen.bldgPlans, cen.trenches),
+		"--- hotkeys ---",
+		"  Tab swap layout  WASD move  RMB-drag orbit  wheel zoom",
+		"  LMB pick / drag-marquee  Shift+LMB toggle  RMB MoveTo",
+		"  H halt  T squad  U ungroup  F1-F4 formation",
+		"  Ctrl+1..5 bind / 1..5 recall  K (hold) all-squad overlay",
+		"  Space pause  +/- speed (1/2/4/8)  X crater (3D-focus)",
+		"  G/N/C/V/F/Y (hold) road / nav / cover / slot / floor / vision",
+		"  P toggle HUD  Ctrl+P snapshot to stdout  MMB-drag pan map",
 	)
 
 	maxW := int32(0)

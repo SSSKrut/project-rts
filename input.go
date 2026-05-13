@@ -11,14 +11,17 @@ import (
 	"github.com/mlange-42/ark/ecs"
 )
 
-// pickUnitFromMouse — single-click selection. Cast a ray through the mouse
-// pointer, intersect with the horizontal plane at the anchor's surface
-// height, then snap to the nearest unit within 1 m XZ. Returns the entity ID
-// when something is hit, or (0, false) otherwise.
+// pickUnitFromMouse — single-click selection. Cast a ray through the panel-
+// local cursor (in viewW×viewH viewport space, NOT screen space), intersect
+// with the horizontal plane at the anchor's surface height, then snap to the
+// nearest unit within 1 m XZ. Returns the entity ID when something is hit, or
+// (0, false) otherwise. Phase 10 (M10.3): callers must pass panel-local
+// cursor + the 3D panel's bounds, because raylib's GetScreenToWorldRayEx
+// derives the projection matrix from the supplied viewport size.
 func pickUnitFromMouse(filter *ecs.Filter3[components.WorldPos, components.Unit, components.Stance],
-	anchor components.WorldPos) (ecs.Entity, bool) {
+	anchor components.WorldPos, localCursor rl.Vector2, viewW, viewH int32) (ecs.Entity, bool) {
 	target, ok := mouseTargetWorldPos(systems.CurrentCamera,
-		anchor.ToRenderSpace(systems.CurrentOriginChunk))
+		anchor.ToRenderSpace(systems.CurrentOriginChunk), localCursor, viewW, viewH)
 	if !ok {
 		return ecs.Entity{}, false
 	}
@@ -39,15 +42,25 @@ func pickUnitFromMouse(filter *ecs.Filter3[components.WorldPos, components.Unit,
 	return best, hasHit
 }
 
-// collectUnitsInRect — marquee selection. For every Unit, project its
-// WorldPos into screen space and keep those whose XY lies in the rect.
+// hoverUnitFromMouse is the silent twin of pickUnitFromMouse — no click, just
+// a closest-within-1 m lookup. Used per-frame to refresh the global `hovered`
+// state so the inspector / map can highlight whoever the cursor is over.
+func hoverUnitFromMouse(filter *ecs.Filter3[components.WorldPos, components.Unit, components.Stance],
+	anchor components.WorldPos, localCursor rl.Vector2, viewW, viewH int32) (ecs.Entity, bool) {
+	return pickUnitFromMouse(filter, anchor, localCursor, viewW, viewH)
+}
+
+// collectUnitsInRect — marquee selection. Projects every Unit into the panel-
+// local viewport, keeps those whose XY lies inside the rect. minX/Y/maxX/Y
+// are in panel-local coords (cursor.x - panel.Bounds.X, etc.).
 func collectUnitsInRect(filter *ecs.Filter3[components.WorldPos, components.Unit, components.Stance],
-	minX, maxX, minY, maxY float32) []ecs.Entity {
+	minX, maxX, minY, maxY float32, viewW, viewH int32) []ecs.Entity {
 	var out []ecs.Entity
 	q := filter.Query()
 	for q.Next() {
 		pos, _, _ := q.Get()
-		screen := rl.GetWorldToScreen(pos.ToRenderSpace(systems.CurrentOriginChunk), systems.CurrentCamera)
+		screen := rl.GetWorldToScreenEx(pos.ToRenderSpace(systems.CurrentOriginChunk),
+			systems.CurrentCamera, viewW, viewH)
 		if screen.X < minX || screen.X > maxX || screen.Y < minY || screen.Y > maxY {
 			continue
 		}
@@ -56,13 +69,15 @@ func collectUnitsInRect(filter *ecs.Filter3[components.WorldPos, components.Unit
 	return out
 }
 
-// mouseTargetWorldPos converts the current cursor position into a WorldPos by
-// raycasting against a horizontal plane at the anchor's surface height. Returns
-// (_, false) if the ray is parallel to the plane or points away from it
-// (mouse hovering above the horizon, etc.) — the caller should leave navPath
-// untouched in that case.
-func mouseTargetWorldPos(cam rl.Camera3D, anchorRender rl.Vector3) (components.WorldPos, bool) {
-	ray := rl.GetMouseRay(rl.GetMousePosition(), cam)
+// mouseTargetWorldPos converts the panel-local cursor into a WorldPos by
+// raycasting against a horizontal plane at the anchor's surface height. viewW
+// / viewH are the 3D panel's dimensions — GetScreenToWorldRayEx uses them to
+// derive the projection matrix, so the ray matches what the player sees in
+// the panel even when the panel is smaller than the OS window. Returns
+// (_, false) if the ray is parallel to the plane or points away from it.
+func mouseTargetWorldPos(cam rl.Camera3D, anchorRender rl.Vector3,
+	localCursor rl.Vector2, viewW, viewH int32) (components.WorldPos, bool) {
+	ray := rl.GetScreenToWorldRayEx(localCursor, cam, viewW, viewH)
 	planeY := anchorRender.Y - systems.AnchorEyeHeight
 	if math.Abs(float64(ray.Direction.Y)) < 1e-4 {
 		return components.WorldPos{}, false
@@ -77,6 +92,45 @@ func mouseTargetWorldPos(cam rl.Camera3D, anchorRender rl.Vector3) (components.W
 		Z: ray.Position.Z + t*ray.Direction.Z,
 	}
 	return (components.WorldPos{Chunk: systems.CurrentOriginChunk}).Add(hit), true
+}
+
+// bindEntry stores one slot of the Ctrl+1..5 / 1..5 selection-recall ring.
+// If Squad is non-zero, the slot is tied to a live squad — recall expands it
+// to whoever is currently in the roster, so binding a squad and then losing
+// members still works. If Squad is zero, Units is the ad-hoc snapshot taken at
+// bind time (Phase 7-style selection memory).
+type bindEntry struct {
+	Squad ecs.Entity
+	Units []ecs.Entity
+}
+
+// groupSelected inspects the SquadMember of every entity in `selected` and
+// returns (commonSquad, true) when every selected unit belongs to the *same*
+// squad. The common Squad entity is zero when every selected unit is a
+// soloist (which still counts as homogeneous — the caller checks the zero
+// value before routing the order through SquadService).
+func groupSelected(selected []ecs.Entity,
+	squadMemberMap *ecs.Map[components.SquadMember]) (ecs.Entity, bool) {
+	if len(selected) == 0 {
+		return ecs.Entity{}, false
+	}
+	var common ecs.Entity
+	first := true
+	for _, e := range selected {
+		var s ecs.Entity
+		if m := squadMemberMap.Get(e); m != nil {
+			s = m.Squad
+		}
+		if first {
+			common = s
+			first = false
+			continue
+		}
+		if common != s {
+			return ecs.Entity{}, false
+		}
+	}
+	return common, true
 }
 
 // stepAlongPath moves the anchor toward path[0] by up to step metres, popping

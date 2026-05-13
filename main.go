@@ -11,23 +11,21 @@ import (
 	"rts-go/components"
 	"rts-go/core"
 	"rts-go/systems"
+	"rts-go/ui"
 
 	"github.com/mlange-42/ark/ecs"
 )
 
 const (
-	screenWidth  int32 = 800 * 2
-	screenHeight int32 = 450 * 2
+	initialScreenWidth  int32 = 800 * 2
+	initialScreenHeight int32 = 450 * 2
 )
 
 func main() {
-	rl.InitWindow(screenWidth, screenHeight, "RTS/FPS 3D ECS Prototype")
+	rl.SetConfigFlags(rl.FlagWindowResizable)
+	rl.InitWindow(initialScreenWidth, initialScreenHeight, "RTS/FPS 3D ECS Prototype")
 	defer rl.CloseWindow()
 
-	// HUD font (Phase 7.5). Try common monospace paths; fall back to raylib's
-	// default bitmap font if nothing loads. The atlas is generated once at
-	// hudFontAtlasSize so DrawTextEx at slightly smaller sizes (16/18) stays
-	// crisp via subpixel downscale.
 	hudFont, hudFontIsCustom := loadHUDFont()
 	if hudFontIsCustom {
 		defer rl.UnloadFont(hudFont)
@@ -56,13 +54,9 @@ func main() {
 
 	app := core.NewApp()
 
-	// Trace file (M7.5.5). No-op on normal builds; on `-tags trace` parses
-	// the -trace=path.jsonl flag and opens the JSONL writer.
 	initTrace(app)
 	defer func() { _ = app.Trace.Close() }()
 
-	// Singleton resources MUST be registered before any system InitUI runs —
-	// systems grab a Resource[T] handle there and panic if missing.
 	streamingMap := components.NewStreamingMap()
 	ecs.AddResource(app.World, &streamingMap)
 	terrainIndex := systems.NewTerrainChunkIndex()
@@ -96,28 +90,12 @@ func main() {
 	transitionRegistry := components.NewTransitionRegistry()
 	ecs.AddResource(app.World, &transitionRegistry)
 
-	// Defers run LIFO; this fires before window/audio teardown — while
-	// app.World is still alive — flushing any in-memory chunk modifications.
 	defer systems.FlushModifiedChunks(app.World, systems.SaveDir)
 
-	// Pipeline order matters:
-	//   1. terrain_streaming  — spawn/evict chunk entities
-	//   2. terrain_load       — fill HeightmapDirty from disk if a save exists
-	//   3. terrain_gen        — fill remaining HeightmapDirty via procgen
-	//   4. river              — cut + water-props (after gen, before mesh & props)
-	//   5. road               — flatten + road/bridge/junction props
-	//   6. building           — bunker RectCut + walls/floors/stairs spawn
-	//   7. trench             — earthworks polyline cut
-	//   8. prop_spawn         — vegetation/rocks (sees all clearance)
-	//   9. spatial_bake       — NavGrid / CoverMap / cover slots
-	//  10. terrain_mesh       — build & upload GPU mesh
-	//  11. ground_stick       — clamp anchor Y to surface
-	//  12. lod                — units-only LOD
-	//  13. movement
-	//  14. spatial_audio
-	//  15. streaming          — node graph (smart-spaces; not terrain)
-	//  16. orbit              — camera input
-	//  17. camera             — sync ECS camera to systems.CurrentCamera
+	stamper := systems.NewStamper(app.World)
+	navService := systems.NewNavService(app.World)
+	squadService := systems.NewSquadService(app.World)
+
 	terrainStreamingSys := &systems.TerrainStreamingSystem{}
 	terrainStreamingSys.InitUI(app.World)
 
@@ -157,6 +135,12 @@ func main() {
 	visionSys := &systems.VisionSystem{}
 	visionSys.InitUI(app.World)
 
+	squadMacroPathSys := systems.NewSquadMacroPathSystem(navService)
+	squadMacroPathSys.InitUI(app.World)
+
+	formationSys := systems.NewFormationSystem(squadService)
+	formationSys.InitUI(app.World)
+
 	lodSys := &systems.LODSystem{
 		ActiveRadius:   60,
 		RelevantRadius: 120,
@@ -182,9 +166,6 @@ func main() {
 	cameraSys := &systems.CameraSystem{}
 	cameraSys.InitUI(app.World)
 
-	stamper := systems.NewStamper(app.World)
-	navService := systems.NewNavService(app.World)
-
 	app.AddSystem(terrainStreamingSys)
 	app.AddSystem(terrainLoadSys)
 	app.AddSystem(terrainGenSys)
@@ -198,6 +179,8 @@ func main() {
 	app.AddSystem(groundStickSys)
 	app.AddSystem(unitMovementSys)
 	app.AddSystem(visionSys)
+	app.AddSystem(squadMacroPathSys)
+	app.AddSystem(formationSys)
 	app.AddSystem(lodSys)
 	app.AddSystem(movementSys)
 	app.AddSystem(audioSys)
@@ -211,7 +194,6 @@ func main() {
 	lodAnchorMap := ecs.NewMap[components.LODAnchor](app.World)
 	alwaysActiveMap := ecs.NewMap[components.AlwaysActive](app.World)
 
-	// Anchor at world origin. GroundStickSystem clamps Local.Y on every tick.
 	anchor := app.World.NewEntity()
 	posMap.Add(anchor, &components.WorldPos{})
 	lodActiveMap.Add(anchor, &components.LODActive{})
@@ -223,8 +205,6 @@ func main() {
 	activeCamMap := ecs.NewMap[components.ActiveCamera](app.World)
 
 	camEnt := app.World.NewEntity()
-	// Camera world position: same chunk as anchor. OrbitSystem overwrites it
-	// from spherical coords on the first tick.
 	posMap.Add(camEnt, &components.WorldPos{Local: rl.Vector3{X: 0, Y: 15.0, Z: 20.0}})
 	camCompMap.Add(camEnt, &components.Camera{Fovy: 75.0, Perspective: true})
 	orbitMap.Add(camEnt, &components.OrbitController{
@@ -241,10 +221,6 @@ func main() {
 	})
 	activeCamMap.Add(camEnt, &components.ActiveCamera{})
 
-	// Building roots — one entity per BuildingPlan. Root carries Building +
-	// WorldPos + AlwaysActive so it survives chunk eviction; child entities
-	// (walls/floors/...) are spawned by BuildingSystem on chunk presence and
-	// torn down on eviction via BuildingChildIndex.
 	buildingMap := ecs.NewMap[components.Building](app.World)
 	for i := range buildingPlans.Plans {
 		p := &buildingPlans.Plans[i]
@@ -268,26 +244,10 @@ func main() {
 		alwaysActiveMap.Add(root, &components.AlwaysActive{})
 	}
 
-	// Phase 7 test scene: 12 hardcoded soldiers in three clusters around the
-	// existing buildings/road/bunker. Each unit gets a Weapon entity tied via
-	// Equipment.Primary + OwnedBy. Cubes from Phase 0/1 are gone — they were
-	// placeholders for "mobile things" before GroundStick existed.
 	unitPositions := []rl.Vector3{
-		// Cluster 1 — around house 1 (-25, -40).
-		{X: -22, Z: -38},
-		{X: -28, Z: -38},
-		{X: -22, Z: -42},
-		{X: -28, Z: -42},
-		// Cluster 2 — between house 2 (40, 30) and the road.
-		{X: 38, Z: 28},
-		{X: 42, Z: 28},
-		{X: 38, Z: 32},
-		{X: 42, Z: 32},
-		// Cluster 3 — near the bunker (-30, 55).
-		{X: -28, Z: 52},
-		{X: -32, Z: 52},
-		{X: -28, Z: 58},
-		{X: -32, Z: 58},
+		{X: -22, Z: -38}, {X: -28, Z: -38}, {X: -22, Z: -42}, {X: -28, Z: -42},
+		{X: 38, Z: 28}, {X: 42, Z: 28}, {X: 38, Z: 32}, {X: 42, Z: 32},
+		{X: -28, Z: 52}, {X: -32, Z: 52}, {X: -28, Z: 58}, {X: -32, Z: 58},
 	}
 	unitMap := ecs.NewMap[components.Unit](app.World)
 	stanceMap := ecs.NewMap[components.Stance](app.World)
@@ -301,6 +261,11 @@ func main() {
 	equipmentMap := ecs.NewMap[components.Equipment](app.World)
 	weaponMap := ecs.NewMap[components.Weapon](app.World)
 	ownedByMap := ecs.NewMap[components.OwnedBy](app.World)
+	squadMemberMap := ecs.NewMap[components.SquadMember](app.World)
+	rosterMap := ecs.NewMap[components.CommandRoster](app.World)
+	formationDataMap := ecs.NewMap[components.FormationData](app.World)
+	macroPathMap := ecs.NewMap[components.MacroPath](app.World)
+	unitEnts := make([]ecs.Entity, 0, len(unitPositions))
 	for _, p := range unitPositions {
 		ent := app.World.NewEntity()
 		wp := components.WorldPos{}.Add(p)
@@ -309,7 +274,7 @@ func main() {
 		stanceMap.Add(ent, &components.Stance{Code: components.StanceStand})
 		motionMap.Add(ent, &components.Motion{})
 		colliderMap.Add(ent, &components.Collider{Radius: 0.35})
-		visionMap.Add(ent, &components.Vision{RangeM: 40, AngleDot: 0.5}) // ~120° cone
+		visionMap.Add(ent, &components.Vision{RangeM: 40, AngleDot: 0.5})
 		suppressionMap.Add(ent, &components.Suppression{})
 		awarenessMap.Add(ent, &components.Awareness{})
 		blackboardMap.Add(ent, &components.LocalBlackboard{})
@@ -324,25 +289,22 @@ func main() {
 		wpW := wp
 		posMap.Add(weapon, &wpW)
 		equipmentMap.Add(ent, &components.Equipment{Primary: weapon, Active: weapon})
+
+		unitEnts = append(unitEnts, ent)
 	}
 
-	// Render filters. Units are drawn through their own (Unit + WorldPos +
-	// Stance) filter — Weapon entities also carry WorldPos but skip
-	// the unit renderer (they're invisible placeholders in Phase 7).
+	squadService.CreateFromUnits(unitEnts[0:4], components.FormationLine)
+	squadService.CreateFromUnits(unitEnts[4:8], components.FormationWedge)
+	squadService.CreateFromUnits(unitEnts[8:12], components.FormationColumn)
+
+	// Render filters.
 	unitRenderFilter := ecs.NewFilter3[components.WorldPos, components.Unit, components.Stance](app.World)
 	chunkActiveFilter := ecs.NewFilter3[components.WorldPos, components.ChunkMesh, components.LODActive](app.World)
 	chunkRelevantFilter := ecs.NewFilter3[components.WorldPos, components.ChunkMesh, components.LODRelevant](app.World)
-	// Single naive iteration over all props regardless of LOD tier (in
-	// practice every prop is LODRelevant). Move to instanced rendering when
-	// 5k+ props in frustum cause spikes.
 	propFilter := ecs.NewFilter2[components.WorldPos, components.Prop](app.World)
 	wallRenderFilter := ecs.NewFilter2[components.WorldPos, components.WallSegment](app.World)
 	floorRenderFilter := ecs.NewFilter2[components.WorldPos, components.Floor](app.World)
 	stairsRenderFilter := ecs.NewFilter2[components.WorldPos, components.Stairs](app.World)
-	// NavGrid debug overlay (key N). Restricted to active-tier chunks via the
-	// LODActive marker — drawing 4096 cells × 50 chunks every frame is too
-	// many DrawCubeV calls; the active ring (~49 chunks) is already heavy and
-	// is what the player can usefully inspect.
 	navOverlayFilter := ecs.NewFilter4[components.WorldPos, components.ChunkCoord, components.NavGrid, components.Heightmap](app.World).
 		With(ecs.C[components.LODActive]())
 	coverOverlayFilter := ecs.NewFilter4[components.WorldPos, components.ChunkCoord, components.CoverMap, components.Heightmap](app.World).
@@ -353,37 +315,48 @@ func main() {
 	visionAwareFilter := ecs.NewFilter2[components.WorldPos, components.Awareness](app.World).
 		With(ecs.C[components.Unit]())
 
-	// Phase 7.5 HUD census filters. Cheap — these archetypes are tiny and
-	// we only iterate while hold-P expanded HUD is up. Heap / entity-count
-	// from world.Stats() are rate-limited to 1 Hz inside the main loop.
 	chunkAllFilter := ecs.NewFilter1[components.TerrainChunk](app.World)
 	weaponFilter := ecs.NewFilter1[components.Weapon](app.World)
 	unitFilter := ecs.NewFilter1[components.Unit](app.World)
 	stairsCountFilter := ecs.NewFilter1[components.Stairs](app.World)
+	squadFilter := ecs.NewFilter2[components.Squad, components.CommandRoster](app.World)
 
-	// Default material shared by every chunk DrawMesh. Loaded once after the
-	// GL context exists; per-vertex colour does the LOD-tier debug shading.
 	terrainMaterial := rl.LoadMaterialDefault()
 	defer rl.UnloadMaterial(terrainMaterial)
 
-	// Active path for the anchor's RMB navigation when nothing is selected.
-	var navPath []components.WorldPos
+	// Phase 10 UI scaffold.
+	screenW, screenH := initialScreenWidth, initialScreenHeight
+	panelMgr := ui.NewPanelManager()
+	panelMgr.Recompute(screenW, screenH)
+	scene3DRT := ui.NewScene3DRT(panelMgr.Get(ui.Panel3D))
+	defer scene3DRT.Unload()
 
-	// Selection state. `selected` is an ad-hoc group of Unit entities; it has
-	// no ECS representation and dies with the next click. Phase 9's Squad
-	// component is the persistent equivalent. The marquee is drawn in 2D after
-	// EndMode3D when `marqueeActive` is true.
-	var selected []ecs.Entity
-	var marqueeStart rl.Vector2
-	var marqueeActive bool
+	// Pre-bake the map underlay. 2 km × 2 km centred at origin, 4 m / pixel
+	// (500×500 = 250 KB upload). Blocking; runs once at startup before the
+	// main loop kicks off.
+	underlay := ui.BakeUnderlay(0, 0, 2000, 4, func(wx, wz float32) float32 {
+		return systems.GroundHeight(wx, wz)
+	})
+	defer underlay.Unload()
+	mapCam := ui.NewMapCamera()
+	var mapPanning bool
+	var mapPanCursor rl.Vector2
+
+	// Selection / hover state. Hover refreshes each frame from cursor + focused
+	// panel; `hovered` is consumed by the inspector and the map renderer.
+	var (
+		navPath        []components.WorldPos
+		selected       []ecs.Entity
+		hovered        ecs.Entity
+		marqueeStart   rl.Vector2 // screen coords
+		marqueeActive  bool
+		marqueeOrigin  ui.PanelID
+		expandedHUDOn  bool
+		showMapDebugLy bool // toggled per-frame by hold-G
+		binds          [5]bindEntry
+	)
 	const marqueeClickThreshold float32 = 5
 
-	// Profiler expanded HUD toggle (M7.5.3). Flipped on plain P press; Ctrl+P
-	// is the separate snapshot-to-stdout action.
-	var expandedHUDVisible bool
-
-	// Helpers for the selection state — keep them local to the main loop so
-	// they close over the world's filters / maps without polluting global ns.
 	isSelected := func(e ecs.Entity) int {
 		for i := range selected {
 			if selected[i] == e {
@@ -400,33 +373,85 @@ func main() {
 		}
 	}
 
-	for !rl.WindowShouldClose() {
-		dt := time.Duration(float64(rl.GetFrameTime()) * float64(time.Second))
+	squadCenter := func(world *ecs.World, roster *components.CommandRoster) (components.WorldPos, bool) {
+		return systems.SquadCenter(world, roster, posMap)
+	}
 
-		// Anchor movement (WASD), driven by orbit yaw so W is always "into
-		// the screen" no matter how the camera is rotated. Forward (camera →
-		// anchor in XZ) is (-sin yaw, 0, -cos yaw); Right = Forward × Up =
-		// (cos yaw, 0, -sin yaw). Y is overwritten by GroundStickSystem.
+	for !rl.WindowShouldClose() {
+		// Window resize → re-layout + re-alloc the 3D RT to the new bounds.
+		if rl.IsWindowResized() {
+			screenW = int32(rl.GetScreenWidth())
+			screenH = int32(rl.GetScreenHeight())
+			panelMgr.Recompute(screenW, screenH)
+			scene3DRT.EnsureSize(panelMgr.Get(ui.Panel3D))
+		}
+
+		// Real-time dt for input / camera-orbit. The simulation tick gets this
+		// scaled by app.TimeScale inside App.Tick (Phase 10 P7).
+		dtReal := time.Duration(float64(rl.GetFrameTime()) * float64(time.Second))
+
+		cursor := rl.GetMousePosition()
+		focused := panelMgr.FocusedAt(cursor)
+		shiftHeld := rl.IsKeyDown(rl.KeyLeftShift) || rl.IsKeyDown(rl.KeyRightShift)
+		ctrlHeld := rl.IsKeyDown(rl.KeyLeftControl) || rl.IsKeyDown(rl.KeyRightControl)
+
+		panel3D := panelMgr.Get(ui.Panel3D)
+		panelMap := panelMgr.Get(ui.PanelMap)
+
+		// ── Tab → toggle layout preset ──
+		if rl.IsKeyPressed(rl.KeyTab) {
+			panelMgr.TogglePreset()
+			panelMgr.Recompute(screenW, screenH)
+			scene3DRT.EnsureSize(panelMgr.Get(ui.Panel3D))
+			panel3D = panelMgr.Get(ui.Panel3D)
+			panelMap = panelMgr.Get(ui.PanelMap)
+		}
+
+		// ── Space → toggle pause; +/− → cycle speed 1→2→4→8→1 ──
+		if rl.IsKeyPressed(rl.KeySpace) {
+			if app.TimeScale > 0 {
+				app.LastNonZeroScale = app.TimeScale
+				app.TimeScale = 0
+			} else {
+				if app.LastNonZeroScale <= 0 {
+					app.LastNonZeroScale = 1
+				}
+				app.TimeScale = app.LastNonZeroScale
+			}
+		}
+		if rl.IsKeyPressed(rl.KeyEqual) || rl.IsKeyPressed(rl.KeyKpAdd) {
+			app.TimeScale = nextTimeScale(app.TimeScale, +1)
+			app.LastNonZeroScale = app.TimeScale
+		}
+		if rl.IsKeyPressed(rl.KeyMinus) || rl.IsKeyPressed(rl.KeyKpSubtract) {
+			app.TimeScale = nextTimeScale(app.TimeScale, -1)
+			app.LastNonZeroScale = app.TimeScale
+		}
+
+		// ── WASD anchor (Panel3D-or-none focus) ──
 		anchorPos := posMap.Get(anchor)
 		anchorSpeed := float32(20.0)
-		if rl.IsKeyDown(rl.KeyLeftShift) || rl.IsKeyDown(rl.KeyRightShift) {
+		if shiftHeld {
 			anchorSpeed *= 4.0
 		}
 		orbit := orbitMap.Get(camEnt)
 		sy := float32(math.Sin(float64(orbit.Yaw)))
 		cy := float32(math.Cos(float64(orbit.Yaw)))
 		var inFwd, inRight float32
-		if rl.IsKeyDown(rl.KeyW) {
-			inFwd += 1
-		}
-		if rl.IsKeyDown(rl.KeyS) {
-			inFwd -= 1
-		}
-		if rl.IsKeyDown(rl.KeyD) {
-			inRight += 1
-		}
-		if rl.IsKeyDown(rl.KeyA) {
-			inRight -= 1
+		wasdAllowed := focused == ui.Panel3D || focused == ui.PanelNone
+		if wasdAllowed {
+			if rl.IsKeyDown(rl.KeyW) {
+				inFwd += 1
+			}
+			if rl.IsKeyDown(rl.KeyS) {
+				inFwd -= 1
+			}
+			if rl.IsKeyDown(rl.KeyD) {
+				inRight += 1
+			}
+			if rl.IsKeyDown(rl.KeyA) {
+				inRight -= 1
+			}
 		}
 		wasdActive := inFwd != 0 || inRight != 0
 		if wasdActive {
@@ -434,154 +459,300 @@ func main() {
 				inFwd /= mag
 				inRight /= mag
 			}
-			step := anchorSpeed * float32(dt.Seconds())
+			step := anchorSpeed * float32(dtReal.Seconds())
 			move := rl.Vector3{
 				X: step * (inFwd*(-sy) + inRight*cy),
 				Z: step * (inFwd*(-cy) + inRight*(-sy)),
 			}
 			*anchorPos = anchorPos.Add(move)
-			// WASD overrides any in-flight nav. The previous click is lost on
-			// purpose — direct control is the player's veto.
 			navPath = nil
 		}
 
-		shiftHeld := rl.IsKeyDown(rl.KeyLeftShift) || rl.IsKeyDown(rl.KeyRightShift)
+		// Map's content rect — the actual drawing surface, minus chrome. Cursor
+		// conversions go through this rather than panelMap.Bounds so clicks /
+		// zoom pivots align with what the player sees.
+		panelMapContent := ui.ContentRect(panelMap)
 
-		// ── LMB → selection ──
-		// Press → start marquee. Release → either treat as a click (small
-		// movement) or commit the marquee rectangle. Shift modifier toggles
-		// individual units / unions a marquee with the current selection.
-		if rl.IsMouseButtonPressed(rl.MouseButtonLeft) {
-			marqueeStart = rl.GetMousePosition()
-			marqueeActive = true
+		// ── Map pan / zoom (only when map focused) ──
+		if focused == ui.PanelMap {
+			if rl.IsMouseButtonPressed(rl.MouseButtonMiddle) {
+				mapPanning = true
+				mapPanCursor = cursor
+			}
+			if mapPanning && rl.IsMouseButtonDown(rl.MouseButtonMiddle) {
+				dx := cursor.X - mapPanCursor.X
+				dy := cursor.Y - mapPanCursor.Y
+				mapCam.Pan(dx, dy)
+				mapPanCursor = cursor
+			}
+			if rl.IsMouseButtonReleased(rl.MouseButtonMiddle) {
+				mapPanning = false
+			}
+			if wheel := rl.GetMouseWheelMove(); wheel != 0 {
+				factor := float32(math.Pow(1.15, float64(wheel)))
+				mapCam.ZoomAt(cursor, panelMapContent, factor)
+			}
+		} else {
+			mapPanning = false
 		}
-		if rl.IsMouseButtonReleased(rl.MouseButtonLeft) && marqueeActive {
-			end := rl.GetMousePosition()
-			dx := end.X - marqueeStart.X
-			dy := end.Y - marqueeStart.Y
-			dragDist := float32(math.Sqrt(float64(dx*dx + dy*dy)))
-			if dragDist < marqueeClickThreshold {
-				// Click — raycast to nearest unit.
-				if hit, ok := pickUnitFromMouse(unitRenderFilter, *anchorPos); ok {
-					if shiftHeld {
-						toggleSelected(hit)
-					} else {
-						selected = []ecs.Entity{hit}
+
+		// ── 3D panel cursor (content-rect-local) ──
+		// Cursor coords used for raycast / marquee / picking are relative to
+		// the 3D content rect (panel minus chrome), and viewW/H match the
+		// content rect — same as the RT — so GetScreenToWorldRayEx /
+		// GetWorldToScreenEx project consistently with what the player sees.
+		panel3DContent := ui.ContentRect(panel3D)
+		panel3DLocal := rl.Vector2{
+			X: cursor.X - panel3DContent.X,
+			Y: cursor.Y - panel3DContent.Y,
+		}
+		panel3DW := int32(panel3DContent.Width)
+		panel3DH := int32(panel3DContent.Height)
+		if panel3DW < 1 {
+			panel3DW = 1
+		}
+		if panel3DH < 1 {
+			panel3DH = 1
+		}
+
+		// ── LMB press ──
+		if rl.IsMouseButtonPressed(rl.MouseButtonLeft) {
+			switch focused {
+			case ui.Panel3D:
+				marqueeStart = cursor
+				marqueeActive = true
+				marqueeOrigin = ui.Panel3D
+			case ui.PanelMap:
+				// Click on map: pick squad marker, else clear selection.
+				mapCtx := ui.MapRenderCtx{
+					World: app.World, Cam: mapCam, SquadFilter: squadFilter,
+					SquadCenter: squadCenter,
+				}
+				hit := ui.PickSquadAt(cursor, mapCtx, panelMap, 12)
+				if hit != (ecs.Entity{}) && app.World.Alive(hit) {
+					if r := rosterMap.Get(hit); r != nil {
+						if shiftHeld {
+							for i := uint8(0); i < r.Count; i++ {
+								if isSelected(r.Members[i]) < 0 {
+									selected = append(selected, r.Members[i])
+								}
+							}
+						} else {
+							selected = append(selected[:0], r.Members[:r.Count]...)
+						}
 					}
 				} else if !shiftHeld {
 					selected = nil
 				}
-			} else {
-				// Marquee — collect units whose screen-projected position
-				// lies inside the rectangle.
-				minX, maxX := marqueeStart.X, end.X
-				if maxX < minX {
-					minX, maxX = maxX, minX
-				}
-				minY, maxY := marqueeStart.Y, end.Y
-				if maxY < minY {
-					minY, maxY = maxY, minY
-				}
-				hits := collectUnitsInRect(unitRenderFilter, minX, maxX, minY, maxY)
-				if shiftHeld {
-					for _, h := range hits {
-						if isSelected(h) < 0 {
-							selected = append(selected, h)
+			}
+		}
+
+		// ── LMB release → commit marquee or treat as a 3D click ──
+		if rl.IsMouseButtonReleased(rl.MouseButtonLeft) && marqueeActive {
+			end := cursor
+			dx := end.X - marqueeStart.X
+			dy := end.Y - marqueeStart.Y
+			dragDist := float32(math.Sqrt(float64(dx*dx + dy*dy)))
+			if marqueeOrigin == ui.Panel3D {
+				if dragDist < marqueeClickThreshold {
+					localEnd := rl.Vector2{X: end.X - panel3DContent.X, Y: end.Y - panel3DContent.Y}
+					if hit, ok := pickUnitFromMouse(unitRenderFilter, *anchorPos, localEnd, panel3DW, panel3DH); ok {
+						if shiftHeld {
+							toggleSelected(hit)
+						} else {
+							selected = []ecs.Entity{hit}
 						}
+					} else if !shiftHeld {
+						selected = nil
 					}
 				} else {
-					selected = hits
+					localStart := rl.Vector2{X: marqueeStart.X - panel3DContent.X, Y: marqueeStart.Y - panel3DContent.Y}
+					localEnd := rl.Vector2{X: end.X - panel3DContent.X, Y: end.Y - panel3DContent.Y}
+					minX, maxX := localStart.X, localEnd.X
+					if maxX < minX {
+						minX, maxX = maxX, minX
+					}
+					minY, maxY := localStart.Y, localEnd.Y
+					if maxY < minY {
+						minY, maxY = maxY, minY
+					}
+					hits := collectUnitsInRect(unitRenderFilter, minX, maxX, minY, maxY, panel3DW, panel3DH)
+					if shiftHeld {
+						for _, h := range hits {
+							if isSelected(h) < 0 {
+								selected = append(selected, h)
+							}
+						}
+					} else {
+						selected = hits
+					}
 				}
 			}
 			marqueeActive = false
 		}
 
-		// ── RMB → MoveTo order (selected units) OR anchor pathing fallback ──
+		// ── RMB → MoveTo (3D or map, shared resolver) ──
 		if rl.IsMouseButtonPressed(rl.MouseButtonRight) {
-			if target, ok := mouseTargetWorldPos(systems.CurrentCamera,
-				anchorPos.ToRenderSpace(systems.CurrentOriginChunk)); ok {
+			switch focused {
+			case ui.Panel3D:
+				target, ok := mouseTargetWorldPos(systems.CurrentCamera,
+					anchorPos.ToRenderSpace(systems.CurrentOriginChunk),
+					panel3DLocal, panel3DW, panel3DH)
+				if ok && len(selected) > 0 {
+					resolveRMBOrder(selected, target, shiftHeld, squadService, navService,
+						squadMemberMap, posMap, actionQueueMap)
+				}
+			case ui.PanelMap:
+				target := ui.MapPanelToWorld(cursor, mapCam, panelMapContent)
 				if len(selected) > 0 {
-					for _, e := range selected {
-						aq := actionQueueMap.Get(e)
-						pos := posMap.Get(e)
-						if aq == nil || pos == nil {
-							continue
-						}
-						// Per-unit MoveTo: plan from the unit's current pos
-						// so each one gets its own path. We just push the
-						// final waypoint as the action target — separation
-						// steering handles the close-quarters spread.
-						if !shiftHeld {
-							systems.ClearActions(aq)
-						}
-						path := navService.FindPath(*pos, target, systems.NavOpts{
-							Locomotion: components.LocomotionFoot,
-						})
-						if len(path) == 0 {
-							// Direct MoveTo even if A* gave up — better than
-							// stalling silently.
-							systems.PushAction(aq, components.Action{
-								Kind: components.ActionMoveTo, Target: target,
-							})
-						} else {
-							for _, wp := range path {
-								systems.PushAction(aq, components.Action{
-									Kind: components.ActionMoveTo, Target: wp,
-								})
-							}
-						}
+					resolveRMBOrder(selected, target, shiftHeld, squadService, navService,
+						squadMemberMap, posMap, actionQueueMap)
+				}
+			}
+		}
+
+		// ── H → Stop order (global hotkey) ──
+		if rl.IsKeyPressed(rl.KeyH) && len(selected) > 0 {
+			commonSquad, homogeneous := groupSelected(selected, squadMemberMap)
+			if homogeneous && commonSquad != (ecs.Entity{}) {
+				squadService.Stop(commonSquad)
+			} else {
+				for _, e := range selected {
+					if aq := actionQueueMap.Get(e); aq != nil {
+						systems.ClearActions(aq)
+						systems.PushAction(aq, components.Action{Kind: components.ActionStop})
 					}
 				}
 			}
 		}
 
-		// ── H → Stop order for the selected group ──
-		// (S is taken by WASD anchor movement; H = halt, conflict-free.)
-		if rl.IsKeyPressed(rl.KeyH) && len(selected) > 0 {
-			for _, e := range selected {
-				if aq := actionQueueMap.Get(e); aq != nil {
-					systems.ClearActions(aq)
-					systems.PushAction(aq, components.Action{Kind: components.ActionStop})
+		// ── T → form Squad ──
+		if rl.IsKeyPressed(rl.KeyT) && len(selected) >= 2 {
+			newSquad := squadService.CreateFromUnits(selected, components.FormationLine)
+			if newSquad != (ecs.Entity{}) && app.World.Alive(newSquad) {
+				if r := rosterMap.Get(newSquad); r != nil {
+					selected = append(selected[:0], r.Members[:r.Count]...)
 				}
 			}
 		}
 
-		// Anchor path follow. WASD wins; selection-driven orders go to units.
-		if !wasdActive && len(navPath) > 0 {
-			navPath = stepAlongPath(anchorPos, navPath, anchorSpeed*float32(dt.Seconds()))
-		}
-
-		if rl.IsKeyPressed(rl.KeyX) {
-			stamper.StampHeightmap(*anchorPos, systems.Crater(2.0, 4.0), 4.0)
-		}
-
-		// P (no Ctrl) → toggle expanded profiler HUD.
-		// Ctrl+P → stdout snapshot dump (M7.5.4). Both are press-edge, not
-		// hold, so the two branches are mutually exclusive on the Ctrl gate.
-		if rl.IsKeyPressed(rl.KeyP) {
-			if rl.IsKeyDown(rl.KeyLeftControl) || rl.IsKeyDown(rl.KeyRightControl) {
-				app.Prof.PrintSnapshot()
-				app.Trace.Mark("snapshot")
-			} else {
-				expandedHUDVisible = !expandedHUDVisible
+		// ── U → ungroup ──
+		if rl.IsKeyPressed(rl.KeyU) && len(selected) > 0 {
+			for _, e := range selected {
+				squadService.Leave(e)
 			}
 		}
 
-		app.Tick(dt)
+		// ── F1-F4 → change formation ──
+		if len(selected) > 0 {
+			if commonSquad, homo := groupSelected(selected, squadMemberMap); homo && commonSquad != (ecs.Entity{}) {
+				var newKind components.FormationKind
+				keyHit := false
+				switch {
+				case rl.IsKeyPressed(rl.KeyF1):
+					newKind = components.FormationLine
+					keyHit = true
+				case rl.IsKeyPressed(rl.KeyF2):
+					newKind = components.FormationColumn
+					keyHit = true
+				case rl.IsKeyPressed(rl.KeyF3):
+					newKind = components.FormationWedge
+					keyHit = true
+				case rl.IsKeyPressed(rl.KeyF4):
+					newKind = components.FormationLoose
+					keyHit = true
+				}
+				if keyHit && app.World.Alive(commonSquad) {
+					if fd := formationDataMap.Get(commonSquad); fd != nil {
+						fd.Type = newKind
+						fd.Spacing = systems.FormationSpacing(newKind)
+					}
+				}
+			}
+		}
 
-		// Re-fetch in case archetype mutations during Tick invalidated the
-		// previous pointer (defensive).
+		// ── Ctrl+1..5 bind / 1..5 recall ──
+		digitKeys := [5]int32{rl.KeyOne, rl.KeyTwo, rl.KeyThree, rl.KeyFour, rl.KeyFive}
+		for i, k := range digitKeys {
+			if !rl.IsKeyPressed(k) {
+				continue
+			}
+			if ctrlHeld {
+				if commonSquad, homo := groupSelected(selected, squadMemberMap); homo && commonSquad != (ecs.Entity{}) {
+					binds[i] = bindEntry{Squad: commonSquad}
+				} else {
+					cp := make([]ecs.Entity, len(selected))
+					copy(cp, selected)
+					binds[i] = bindEntry{Units: cp}
+				}
+			} else {
+				b := binds[i]
+				switch {
+				case b.Squad != (ecs.Entity{}) && app.World.Alive(b.Squad):
+					if r := rosterMap.Get(b.Squad); r != nil {
+						selected = append(selected[:0], r.Members[:r.Count]...)
+					} else {
+						selected = nil
+					}
+				case b.Squad != (ecs.Entity{}):
+					binds[i] = bindEntry{}
+					selected = nil
+				default:
+					selected = append(selected[:0], b.Units...)
+				}
+			}
+		}
+
+		if !wasdActive && len(navPath) > 0 {
+			navPath = stepAlongPath(anchorPos, navPath, anchorSpeed*float32(dtReal.Seconds()))
+		}
+
+		// ── X → crater (Panel3D only) ──
+		if focused == ui.Panel3D && rl.IsKeyPressed(rl.KeyX) {
+			stamper.StampHeightmap(*anchorPos, systems.Crater(2.0, 4.0), 4.0)
+		}
+
+		if rl.IsKeyPressed(rl.KeyP) {
+			if ctrlHeld {
+				app.Prof.PrintSnapshot()
+				app.Trace.Mark("snapshot")
+			} else {
+				expandedHUDOn = !expandedHUDOn
+			}
+		}
+
+		// ── Hover update ──
+		// Hover in Panel3D: closest unit under cursor (silent pick).
+		// Hover in PanelMap: closest squad marker within 12 px.
+		hovered = ecs.Entity{}
+		switch focused {
+		case ui.Panel3D:
+			if hit, ok := hoverUnitFromMouse(unitRenderFilter, *anchorPos, panel3DLocal, panel3DW, panel3DH); ok {
+				hovered = hit
+			}
+		case ui.PanelMap:
+			mapCtx := ui.MapRenderCtx{
+				World: app.World, Cam: mapCam, SquadFilter: squadFilter,
+				SquadCenter: squadCenter,
+			}
+			hovered = ui.PickSquadAt(cursor, mapCtx, panelMap, 12)
+		}
+
+		// Gate the 3D camera's orbit / wheel zoom by panel focus. Wheel events
+		// when the map panel is focused belong to the map's own zoom; RMB held
+		// while drawing a map marquee shouldn't spin the field camera.
+		systems.OrbitInputEnabled = focused == ui.Panel3D || focused == ui.PanelNone
+
+		app.Tick(dtReal)
+
 		anchorPos = posMap.Get(anchor)
 		anchorRender := anchorPos.ToRenderSpace(systems.CurrentOriginChunk)
 
-		rl.BeginDrawing()
+		// ── Render 3D scene into RT ──
+		rl.BeginTextureMode(scene3DRT.RT)
 		rl.ClearBackground(rl.RayWhite)
-
 		rl.BeginMode3D(systems.CurrentCamera)
 
-		// Terrain. The chunk's WorldPos is at its (0,0,0) corner; the mesh's
-		// local vertices already span [0, ChunkSize]. Per-draw matrix +
-		// DrawMesh (NOT DrawModel — see ChunkMesh comment).
 		chunksActiveLive := 0
 		chunksRelLive := 0
 		qcA := chunkActiveFilter.Query()
@@ -609,15 +780,14 @@ func main() {
 
 		rl.DrawCircle3D(anchorRender, 1, rl.Vector3{X: 1, Y: 0, Z: 0}, 90, rl.Blue)
 
-		// Phase 7 placeholder soldier: olive cube whose height follows Stance.
-		// Highlight selected units with a cyan circle + wires.
 		unitsLive := 0
 		qu := unitRenderFilter.Query()
 		for qu.Next() {
 			pos, _, st := qu.Get()
 			renderPos := pos.ToRenderSpace(systems.CurrentOriginChunk)
 			drawUnitCube(renderPos, *st)
-			if isSelected(qu.Entity()) >= 0 {
+			ent := qu.Entity()
+			if isSelected(ent) >= 0 {
 				height := unitStanceHeight(st.Code)
 				rl.DrawCircle3D(renderPos, 1.0, rl.Vector3{X: 1, Y: 0, Z: 0}, 90,
 					rl.Color{R: 0, G: 220, B: 220, A: 255})
@@ -625,12 +795,15 @@ func main() {
 				rl.DrawCubeWiresV(c, rl.Vector3{X: 0.7, Y: height + 0.1, Z: 0.7},
 					rl.Color{R: 0, G: 220, B: 220, A: 255})
 			}
+			if hovered == ent {
+				height := unitStanceHeight(st.Code)
+				c := rl.Vector3{X: renderPos.X, Y: renderPos.Y + height*0.5, Z: renderPos.Z}
+				rl.DrawCubeWiresV(c, rl.Vector3{X: 0.8, Y: height + 0.2, Z: 0.8},
+					rl.Color{R: 240, G: 240, B: 120, A: 255})
+			}
 			unitsLive++
 		}
 
-		// Props. Bridge tally is computed live (rather than as a static
-		// count) so it actually drops to zero when the host chunk evicts —
-		// visual proof for "bridges follow chunk lifecycle".
 		propLive := 0
 		bridgeLive := 0
 		qp := propFilter.Query()
@@ -644,7 +817,6 @@ func main() {
 			}
 		}
 
-		// Floors first so walls / stairs draw above without z-fighting.
 		floorLive := 0
 		qf := floorRenderFilter.Query()
 		for qf.Next() {
@@ -668,16 +840,14 @@ func main() {
 			drawBuildingStairs(renderPos, *st)
 		}
 
-		// Road-graph debug overlay. Hold G to draw the whole graph (lines +
-		// node markers) on top of the scene — useful for sanity-checking
-		// preprocessing and bridge detection without walking to every chunk.
+		// Debug overlays — all gated by hold-key. The hold-G road overlay also
+		// toggles the map's road / river / building debug layer for consistency.
 		if rl.IsKeyDown(rl.KeyG) {
 			drawRoadGraphDebug(&roadGraph)
+			showMapDebugLy = true
+		} else {
+			showMapDebugLy = false
 		}
-
-		// NavGrid debug overlay. Hold N — for every active-tier chunk, draw
-		// each cell as a flat coloured plate at surfaceY+0.05. Heavy (~50
-		// chunks × 4096 cells), so only on demand.
 		if rl.IsKeyDown(rl.KeyN) {
 			qNav := navOverlayFilter.Query()
 			for qNav.Next() {
@@ -685,9 +855,6 @@ func main() {
 				drawNavGridOverlay(*pos, *cc, grid, hm)
 			}
 		}
-
-		// CoverMap debug overlay. Hold C — translucent blue plate per cell,
-		// alpha proportional to BaseCover (popcount(DirMask) × 32).
 		if rl.IsKeyDown(rl.KeyC) {
 			qCov := coverOverlayFilter.Query()
 			for qCov.Next() {
@@ -696,8 +863,6 @@ func main() {
 			}
 		}
 
-		// Vision debug overlay. Hold Y — thin green line between every pair
-		// of units (a, b) where b ∈ a.Awareness.LastSeen.
 		visionPairs := 0
 		if rl.IsKeyDown(rl.KeyY) {
 			qV := visionAwareFilter.Query()
@@ -716,7 +881,6 @@ func main() {
 				}
 			}
 		} else {
-			// Cheap census for HUD even when overlay is off.
 			qV := visionAwareFilter.Query()
 			for qV.Next() {
 				_, aware := qV.Get()
@@ -728,9 +892,41 @@ func main() {
 			}
 		}
 
-		// FloorNavGrid debug overlay. Hold F — for every Floor entity, draw
-		// the baked FloorNavGrid cells as small plates lifted just above the
-		// floor surface.
+		squadsLive := 0
+		squadMembersLive := 0
+		drawAllSquads := rl.IsKeyDown(rl.KeyK)
+		selectedSquad, selectedHomo := groupSelected(selected, squadMemberMap)
+		qSq := squadFilter.Query()
+		for qSq.Next() {
+			_, roster := qSq.Get()
+			squadsLive++
+			squadMembersLive += int(roster.Count)
+			squadEnt := qSq.Entity()
+			isSelectedSquad := selectedHomo && selectedSquad != (ecs.Entity{}) && selectedSquad == squadEnt
+			if !drawAllSquads && !isSelectedSquad {
+				continue
+			}
+			centerWP, ok := systems.SquadCenter(app.World, roster, posMap)
+			if !ok {
+				continue
+			}
+			centerRender := centerWP.ToRenderSpace(systems.CurrentOriginChunk)
+			centerRender.Y += 0.2
+			memberPos := make([]rl.Vector3, 0, roster.Count)
+			for i := uint8(0); i < roster.Count; i++ {
+				mem := roster.Members[i]
+				if mem == (ecs.Entity{}) || !app.World.Alive(mem) {
+					continue
+				}
+				if p := posMap.Get(mem); p != nil {
+					r := p.ToRenderSpace(systems.CurrentOriginChunk)
+					r.Y += 0.2
+					memberPos = append(memberPos, r)
+				}
+			}
+			drawSquadConnections(centerRender, memberPos, squadColor(squadEnt.ID()))
+		}
+
 		if rl.IsKeyDown(rl.KeyF) {
 			qFloor := floorNavFilter.Query()
 			for qFloor.Next() {
@@ -739,8 +935,6 @@ func main() {
 			}
 		}
 
-		// Cover-slot debug overlay. Hold V — small yellow cube at every slot
-		// position with a short magenta arrow along OriginDir.
 		coverSlotLive := 0
 		if rl.IsKeyDown(rl.KeyV) {
 			qSlot := coverSlotFilter.Query()
@@ -757,7 +951,6 @@ func main() {
 				coverSlotLive++
 			}
 		} else {
-			// Cheap census even when overlay is off — used in HUD.
 			qSlot := coverSlotFilter.Query()
 			for qSlot.Next() {
 				qSlot.Get()
@@ -765,15 +958,71 @@ func main() {
 			}
 		}
 
-		// Active nav path: magenta line through every remaining waypoint, plus
-		// a marker at the next target.
 		drawNavPath(navPath, *anchorPos)
 
 		rl.EndMode3D()
+		rl.EndTextureMode()
 
-		// Marquee rectangle (2D, after EndMode3D).
-		if marqueeActive {
-			end := rl.GetMousePosition()
+		// ── 2D pass — clear bg, paint each panel ──
+		rl.BeginDrawing()
+		rl.ClearBackground(rl.Color{R: 8, G: 10, B: 14, A: 255})
+
+		// Panel content (background + body) drawn before chrome so the title
+		// bar overlays the content cleanly.
+		// Map panel.
+		mapCtx := ui.MapRenderCtx{
+			World:           app.World,
+			Cam:             mapCam,
+			Underlay:        &underlay,
+			AnchorPos:       *anchorPos,
+			Selected:        selected,
+			Hovered:         hovered,
+			PosMap:          posMap,
+			RosterMap:       rosterMap,
+			SquadMemberMap:  squadMemberMap,
+			SquadFilter:     squadFilter,
+			SquadCenter:     squadCenter,
+			SquadColor:      squadColor,
+			RoadGraph:       &roadGraph,
+			Rivers:          &rivers,
+			Buildings:       &buildingPlans,
+			ShowDebugLayers: showMapDebugLy,
+		}
+		ui.DrawMap(panelMap, mapCtx)
+
+		// Inspector panel.
+		ui.DrawInspector(panelMgr.Get(ui.PanelInspect), ui.InspectorCtx{
+			World:            app.World,
+			Selected:         selected,
+			Hovered:          hovered,
+			Font:             hudFont,
+			PosMap:           posMap,
+			StanceMap:        stanceMap,
+			MotionMap:        motionMap,
+			SuppressionMap:   suppressionMap,
+			EquipmentMap:     equipmentMap,
+			SquadMemberMap:   squadMemberMap,
+			RosterMap:        rosterMap,
+			FormationDataMap: formationDataMap,
+			MacroPathMap:     macroPathMap,
+			SquadFilter:      squadFilter,
+			SquadColor:       squadColor,
+		})
+
+		// Time panel.
+		ui.DrawTimePanel(panelMgr.Get(ui.PanelTime), hudFont, ui.TimeDisplay{
+			Scale:   app.TimeScale,
+			Elapsed: float32(app.Elapsed().Seconds()),
+		})
+
+		// 3D RT composite into Panel3D bounds.
+		scene3DRT.Composite(panel3D)
+
+		// Marquee (panel-local clipped). Drawn after composite so it sits over
+		// the 3D scene; scissored to Panel3D so dragging outside the panel
+		// doesn't leak. Only fired when the marquee originated in Panel3D.
+		if marqueeActive && marqueeOrigin == ui.Panel3D {
+			end := cursor
 			minX, maxX := marqueeStart.X, end.X
 			if maxX < minX {
 				minX, maxX = maxX, minX
@@ -782,27 +1031,28 @@ func main() {
 			if maxY < minY {
 				minY, maxY = maxY, minY
 			}
+			rl.BeginScissorMode(int32(panel3D.Bounds.X), int32(panel3D.Bounds.Y),
+				int32(panel3D.Bounds.Width), int32(panel3D.Bounds.Height))
 			rl.DrawRectangleLines(int32(minX), int32(minY),
 				int32(maxX-minX), int32(maxY-minY),
 				rl.Color{R: 0, G: 220, B: 220, A: 255})
 			rl.DrawRectangle(int32(minX), int32(minY),
 				int32(maxX-minX), int32(maxY-minY),
 				rl.Color{R: 0, G: 220, B: 220, A: 40})
+			rl.EndScissorMode()
 		}
 
-		// Left HUD — control hints only. Per-frame entity census moved to the
-		// right-side profiler HUD (M7.5.3). Vertical step = 24 px so 18-pt
-		// NotoSansMono ascenders/descenders don't crash into the next line;
-		// the default raylib bitmap font was forgiving on this, TTF isn't.
-		drawHUDText(hudFont, "RTS/FPS 3D ECS Prototype", 10, 10, 20, rl.Black)
-		drawHUDText(hudFont, "WASD = anchor; Shift = sprint; RMB-drag = orbit; wheel = zoom", 10, 40, 18, rl.DarkGray)
-		drawHUDText(hudFont, "LMB-click/drag = select units; Shift+LMB = add/toggle; RMB = MoveTo; H = halt", 10, 64, 18, rl.DarkGray)
-		drawHUDText(hudFont, "X = crater; G/N/C/V/F (hold) = road / nav / cover / cover-slot / floor-nav overlays", 10, 88, 18, rl.DarkGray)
-		drawHUDText(hudFont, "P = toggle profiler details; Ctrl+P = snapshot to stdout", 10, 112, 18, rl.DarkGray)
+		// Chrome (border + title) on every panel, drawn last so it overlays
+		// content (including marquee strokes that bleed onto the title bar).
+		for _, id := range []ui.PanelID{ui.Panel3D, ui.PanelMap, ui.PanelInspect, ui.PanelTime} {
+			ui.DrawChrome(panelMgr.Get(id), hudFont, 14)
+		}
 
-		// Profiler HUD. Heap + entity count refresh at 1 Hz — ReadMemStats /
-		// World.Stats() are stop-the-world-ish and we only need them on the
-		// human-readable scale.
+		// HUD hotkey hints moved into expanded profiler HUD (toggle with P).
+		// Phase 10: drawing them over the panel chrome on every frame conflicts
+		// with each panel's title bar; they're discoverable on demand instead.
+
+		// Profiler HUD — collapsed always, expanded behind P toggle.
 		const heapInterval = time.Second
 		if app.Prof.HeapStale(app.Elapsed(), heapInterval) {
 			var ms runtime.MemStats
@@ -814,10 +1064,11 @@ func main() {
 			app.Prof.SetEntityCount(st.Entities.Used, app.Elapsed())
 		}
 
-		// Census shared by HUD and trace. The Filter1 iterations are over
-		// small archetypes (units / weapons / stairs / nav chunks) so this is
-		// sub-µs in normal use; only when the player loads thousands of units
-		// would we want to gate it behind hold-P.
+		totalUnits := countFilter1(unitFilter)
+		soloists := totalUnits - squadMembersLive
+		if soloists < 0 {
+			soloists = 0
+		}
 		cen := census{
 			chunksActive: chunksActiveLive,
 			chunksRel:    chunksRelLive,
@@ -829,8 +1080,11 @@ func main() {
 			floors:       floorLive,
 			stairs:       countFilter1(stairsCountFilter),
 			coverSlots:   coverSlotLive,
-			units:        countFilter1(unitFilter),
+			units:        totalUnits,
 			weapons:      countFilter1(weaponFilter),
+			squads:       squadsLive,
+			squadMembers: squadMembersLive,
+			soloists:     soloists,
 			transitions:  transitionEdgeCount(&transitionRegistry),
 			visionPairs:  visionPairs,
 			selection:    len(selected),
@@ -843,18 +1097,36 @@ func main() {
 			trenches:     len(trenches.Lines),
 		}
 
-		drawCollapsedProfHUD(&app.Prof, screenWidth, hudFont)
-		if expandedHUDVisible {
-			drawExpandedProfHUD(&app.Prof, screenWidth, cen, hudFont)
+		drawCollapsedProfHUD(&app.Prof, screenW, hudFont)
+		if expandedHUDOn {
+			drawExpandedProfHUD(&app.Prof, screenW, cen, hudFont)
 		}
 
 		rl.EndDrawing()
 
-		// Build trace record after the frame is on screen — gives us the
-		// final FPS / frame_ms for this frame and matches the on-disk
-		// "this is what frame N looked like" semantics. No-op on builds
-		// without -tags trace.
 		recordTraceFrame(app, rl.GetFrameTime()*1000, rl.GetFPS(), cen)
 		handleTraceHotkeys(app)
 	}
+}
+
+// nextTimeScale advances the speed multiplier through 1 → 2 → 4 → 8 → 1
+// (step=+1) or backwards (step=-1). When currently paused, advancing forward
+// jumps to 1×; advancing back jumps to 8×. Used by the +/- hotkey.
+func nextTimeScale(cur float32, step int) float32 {
+	stops := [...]float32{1, 2, 4, 8}
+	if cur <= 0 {
+		if step > 0 {
+			return stops[0]
+		}
+		return stops[len(stops)-1]
+	}
+	idx := 0
+	for i, v := range stops {
+		if v == cur {
+			idx = i
+			break
+		}
+	}
+	idx = (idx + step + len(stops)) % len(stops)
+	return stops[idx]
 }

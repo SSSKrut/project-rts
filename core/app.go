@@ -65,11 +65,25 @@ type App struct {
 	// Trace is a build-tag-gated per-frame JSONL writer. On a normal build
 	// Tracer's methods compile to no-ops (see core/trace_off.go).
 	Trace Tracer
+
+	// TimeScale multiplies the real-time delta passed to Tick (Phase 10 P7).
+	// 0 = paused (no system update, but the render loop keeps going);
+	// 1 = real-time; 2/4/8 = compressed. `app.elapsed` accumulates the
+	// scaled delta so per-system LOD intervals are in game-time. Profiler /
+	// Trace use time.Now() / time.Since for their own bookkeeping, so perf
+	// numbers stay in real-time even when the simulation is paused.
+	TimeScale float32
+
+	// LastNonZeroScale remembers the speed we were running at before Space
+	// paused us, so an unpause restores it rather than snapping to 1×.
+	LastNonZeroScale float32
 }
 
 func NewApp() *App {
 	return &App{
-		World: ecs.NewWorld(1024),
+		World:            ecs.NewWorld(1024),
+		TimeScale:        1.0,
+		LastNonZeroScale: 1.0,
 	}
 }
 
@@ -86,6 +100,8 @@ func (app *App) AddSystem(sys System) {
 func (app *App) Elapsed() time.Duration { return app.elapsed }
 
 func (app *App) Tick(delta time.Duration) {
+	scaled := time.Duration(float64(delta) * float64(app.TimeScale))
+	delta = scaled
 	app.elapsed += delta
 
 	tickStart := time.Now()
