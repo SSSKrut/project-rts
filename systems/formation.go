@@ -240,7 +240,7 @@ func (sys *FormationSystem) processSquad(world *ecs.World, w formationWork, leav
 		if aq == nil {
 			continue
 		}
-		offX, offZ := formationOffset(fd.Type, i, fd.Spacing, fd.Forward)
+		offX, offZ := FormationOffset(fd.Type, i, fd.Spacing, fd.Forward)
 		target := centerTarget.Add(rl.Vector3{X: offX, Y: 0, Z: offZ})
 
 		// Re-push only if the new target meaningfully differs from the
@@ -262,10 +262,11 @@ func (sys *FormationSystem) processSquad(world *ecs.World, w formationWork, leav
 	}
 }
 
-// formationOffset returns the XZ offset of `slot` from the squad center for
+// FormationOffset returns the XZ offset of `slot` from the squad center for
 // each formation kind. Slot 0 always sits on center (commander). Output is in
-// world-space metres.
-func formationOffset(kind components.FormationKind, slot uint8, spacing float32, forward rl.Vector3) (float32, float32) {
+// world-space metres. Phase 13.6 M13.6.1: exported so ghost-preview code in
+// main.go can reuse the same slot layout that FormationSystem writes.
+func FormationOffset(kind components.FormationKind, slot uint8, spacing float32, forward rl.Vector3) (float32, float32) {
 	if slot == 0 {
 		return 0, 0
 	}

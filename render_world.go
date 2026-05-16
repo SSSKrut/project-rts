@@ -475,6 +475,92 @@ func drawUnitStaminaBar(renderPos rl.Vector3, st components.Stance, role compone
 		1, rl.Color{R: 10, G: 12, B: 16, A: 220})
 }
 
+// drawGhostUnit draws a translucent body cube (no role cap) at the given
+// position to preview where a unit would stand after a Move order completes.
+// Phase 13.6 M13.6.1: visual is intentionally subdued — neutral grey-white,
+// low alpha, no role tint — so real units stay dominant on screen. Stance
+// drives the cube height so ghosts crouch / prone-prone with the squad's
+// effective MovementProfile.
+func drawGhostUnit(pos rl.Vector3, st components.Stance, alpha uint8) {
+	height := unitStanceHeight(st.Code)
+	c := rl.Vector3{X: pos.X, Y: pos.Y + height*0.5, Z: pos.Z}
+	body := rl.Color{R: 200, G: 200, B: 220, A: alpha}
+	// Outline alpha is biased a bit higher than the fill so the cube reads
+	// even when many ghosts overlap (Loose formation can stack visually).
+	wires := rl.Color{R: 240, G: 240, B: 250, A: alpha + 40}
+	if wires.A < alpha {
+		wires.A = 255
+	}
+	rl.DrawCubeV(c, rl.Vector3{X: 0.6, Y: height, Z: 0.6}, body)
+	rl.DrawCubeWiresV(c, rl.Vector3{X: 0.6, Y: height, Z: 0.6}, wires)
+}
+
+// drawGhostArc draws a wedge-shaped sector indicator at ground level — two
+// outline rays from `center` along `facingYaw ± halfAngleRad`, plus a fan of
+// translucent triangles filling the wedge. Used by DefendPosition ghost to
+// show the held overwatch sector. Phase 13.6 M13.6.1: visual stub; Phase 14
+// EngagementRules.SectorYaw/SectorHalfDot will be the runtime enforcement.
+//
+// `center` is render-space at ground level; `length` is the wedge radius in
+// metres. The colour's RGB drives both fill and outline; outline uses A→255
+// for legibility, fill uses A as-given (typically 60).
+func drawGhostArc(center rl.Vector3, facingYaw, halfAngleRad, length float32, col rl.Color) {
+	if length <= 0 || halfAngleRad <= 0 {
+		return
+	}
+	// Yaw convention matches Motion.Yaw: rotation around +Y in radians,
+	// 0 = +Z forward, increases clockwise (atan2(dx, dz)).
+	const steps = 12
+	startAng := float64(facingYaw - halfAngleRad)
+	endAng := float64(facingYaw + halfAngleRad)
+	lift := float32(0.05)
+
+	// Triangle fan fill — pivot on the center, fan to `steps` points on the
+	// arc. Alpha low so terrain reads through.
+	fill := rl.Color{R: col.R, G: col.G, B: col.B, A: col.A}
+	c := rl.Vector3{X: center.X, Y: center.Y + lift, Z: center.Z}
+	prevX := c.X + length*float32(math.Sin(startAng))
+	prevZ := c.Z + length*float32(math.Cos(startAng))
+	for i := 1; i <= steps; i++ {
+		t := float64(i) / steps
+		ang := startAng + (endAng-startAng)*t
+		nx := c.X + length*float32(math.Sin(ang))
+		nz := c.Z + length*float32(math.Cos(ang))
+		p1 := rl.Vector3{X: prevX, Y: c.Y, Z: prevZ}
+		p2 := rl.Vector3{X: nx, Y: c.Y, Z: nz}
+		// raylib DrawTriangle3D winds CCW for front faces; the camera looks
+		// down so either winding renders, but we keep the obvious one.
+		rl.DrawTriangle3D(c, p1, p2, fill)
+		prevX, prevZ = nx, nz
+	}
+
+	// Outline rays from center to wedge edges. Boost alpha for the lines so
+	// the wedge boundary is clearly visible.
+	outline := rl.Color{R: col.R, G: col.G, B: col.B, A: 220}
+	leftEnd := rl.Vector3{
+		X: c.X + length*float32(math.Sin(startAng)),
+		Y: c.Y, Z: c.Z + length*float32(math.Cos(startAng)),
+	}
+	rightEnd := rl.Vector3{
+		X: c.X + length*float32(math.Sin(endAng)),
+		Y: c.Y, Z: c.Z + length*float32(math.Cos(endAng)),
+	}
+	rl.DrawLine3D(c, leftEnd, outline)
+	rl.DrawLine3D(c, rightEnd, outline)
+	// Connect arc tip-to-tip along the curve.
+	prev := leftEnd
+	for i := 1; i <= steps; i++ {
+		t := float64(i) / steps
+		ang := startAng + (endAng-startAng)*t
+		next := rl.Vector3{
+			X: c.X + length*float32(math.Sin(ang)),
+			Y: c.Y, Z: c.Z + length*float32(math.Cos(ang)),
+		}
+		rl.DrawLine3D(prev, next, outline)
+		prev = next
+	}
+}
+
 func unitStanceHeight(code components.StanceCode) float32 {
 	switch code {
 	case components.StanceCrouch:

@@ -240,6 +240,29 @@ func resolveRMBOrder(
 	posMap *ecs.Map[components.WorldPos],
 	actionQueueMap *ecs.Map[components.ActionQueue],
 ) {
+	params := applyModifiersToParams(systems.OrderParams{}, mods)
+	resolveRMBOrderWithParams(selected, target, shiftHeld, kindOverride, params, hitTester,
+		squadService, navService, squadMemberMap, posMap, actionQueueMap)
+}
+
+// resolveRMBOrderWithParams is the lower-level entry that accepts a fully-
+// formed OrderParams. Phase 13.6 M13.6.4: lets the facing-drag path pass
+// HasFacing / FacingYawRad without going through the modifier translation
+// path. Modifier-bearing callers (default tap, pie commit) still flow
+// through resolveRMBOrder for convenience.
+func resolveRMBOrderWithParams(
+	selected []ecs.Entity,
+	target components.WorldPos,
+	shiftHeld bool,
+	kindOverride *components.OrderKindCode,
+	params systems.OrderParams,
+	hitTester *HitTester,
+	squadService *systems.SquadService,
+	navService *systems.NavService,
+	squadMemberMap *ecs.Map[components.SquadMember],
+	posMap *ecs.Map[components.WorldPos],
+	actionQueueMap *ecs.Map[components.ActionQueue],
+) {
 	if len(selected) == 0 {
 		return
 	}
@@ -255,7 +278,6 @@ func resolveRMBOrder(
 	// the unique squads touched by the selection; Soloists are units not in
 	// any squad. Never call SquadService.Leave — that was the ISSUES #3 bug.
 	groups := groupSelectionByOwner(selected, squadMemberMap)
-	params := applyModifiersToParams(systems.OrderParams{}, mods)
 	for _, s := range groups.SquadsToOrder {
 		squadService.IssueOrder(s, kind, target, entityTarget, shiftHeld, params)
 	}

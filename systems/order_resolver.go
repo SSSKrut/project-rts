@@ -52,6 +52,12 @@ type OrderResolverSystem struct {
 	orderPatrolMap   *ecs.Map[components.OrderParamPatrol]
 	orderIssuedAtMap *ecs.Map[components.OrderIssuedAt]
 	orderOwnerMap    *ecs.Map[components.OrderOwner]
+	orderFacingMap   *ecs.Map[components.OrderParamFacing]
+
+	// Phase 13.6 M13.6.4: read on MoveTo / DefendPosition completion to apply
+	// arrived-facing to every roster member's Motion.Yaw. Instant snap; Phase
+	// 25 polish may smooth the rotation.
+	motionMap *ecs.Map[components.Motion]
 
 	// Building / trench target resolution.
 	buildingMap    *ecs.Map[components.Building]
@@ -82,6 +88,8 @@ func (sys *OrderResolverSystem) InitUI(w *ecs.World) {
 	sys.orderPatrolMap = ecs.NewMap[components.OrderParamPatrol](w)
 	sys.orderIssuedAtMap = ecs.NewMap[components.OrderIssuedAt](w)
 	sys.orderOwnerMap = ecs.NewMap[components.OrderOwner](w)
+	sys.orderFacingMap = ecs.NewMap[components.OrderParamFacing](w)
+	sys.motionMap = ecs.NewMap[components.Motion](w)
 
 	sys.buildingMap = ecs.NewMap[components.Building](w)
 	sys.trenchRootMap = ecs.NewMap[components.TrenchRoot](w)
@@ -181,6 +189,13 @@ func (sys *OrderResolverSystem) Update(ctx core.UpdateContext) {
 				if pr := sys.orderProgressMap.Get(ord); pr != nil {
 					pr.Value = 1
 				}
+				// Phase 13.6 M13.6.4: arrived-facing — if the order carries an
+				// OrderParamFacing param, snap every roster member's Motion.Yaw
+				// to the target yaw. MoveTo and DefendPosition both benefit
+				// (Defend never reaches Completed via the InProgress→done path,
+				// but the snapshot here is harmless for any other kind that
+				// gets a facing param).
+				sys.applyArrivedFacing(squad, ord)
 			} else {
 				sys.updateProgress(squad, ord, target)
 			}
@@ -366,6 +381,37 @@ func (sys *OrderResolverSystem) updateProgress(squad, ord ecs.Entity, target *co
 		v = 1
 	}
 	pr.Value = v
+}
+
+// applyArrivedFacing reads the optional OrderParamFacing on a freshly-
+// completed order and snaps every roster member's Motion.Yaw to the requested
+// yaw. Phase 13.6 M13.6.4: instant rotation — no easing. Phase 25 polish may
+// interpolate; the writer side is the same, just the reader (UnitMovement)
+// becomes lerp-aware.
+//
+// No-op when the order has no facing param, the squad has no roster, or a
+// member lacks a Motion component (defensive — Phase 7 spawns guarantee it).
+func (sys *OrderResolverSystem) applyArrivedFacing(squad, ord ecs.Entity) {
+	if sys.orderFacingMap == nil || sys.motionMap == nil {
+		return
+	}
+	facing := sys.orderFacingMap.Get(ord)
+	if facing == nil {
+		return
+	}
+	roster := sys.rosterMap.Get(squad)
+	if roster == nil {
+		return
+	}
+	for i := uint8(0); i < roster.Count; i++ {
+		mem := roster.Members[i]
+		if mem == (ecs.Entity{}) || !sys.squadService.world.Alive(mem) {
+			continue
+		}
+		if m := sys.motionMap.Get(mem); m != nil {
+			m.Yaw = facing.YawRad
+		}
+	}
 }
 
 // pointNearPolyline returns true when p is within `radius` of any segment of

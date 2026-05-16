@@ -29,6 +29,27 @@ type PieMenu struct {
 	// SourcePanel records which panel started the press, so map releases
 	// can route through map coordinate flow and 3D releases through 3D.
 	SourcePanel PanelID
+
+	// Phase 13.6 M13.6.4: facing-drag.
+	//
+	// HasSelection is set by Begin to the current selection count > 0; drives
+	// the drag-disambig branch in Tick — without a squad to face, drag still
+	// reclassifies as camera-orbit (legacy behaviour).
+	//
+	// InFacingDrag is true once the cursor has moved past DragCancelThreshold
+	// AND HasSelection — RMB-drag is committed to facing input rather than
+	// camera orbit. SourcePanel stays non-None so OrbitSystem keeps its hands
+	// off (gated by main.go through OrbitInputEnabled).
+	HasSelection bool
+	InFacingDrag bool
+
+	// Phase 13.6 M13.6.5: while Active, HoveringKind tracks which segment is
+	// currently under the cursor (matches the value Draw highlights). Caller
+	// reads this to swap the ghost preview to a kind-specific visualisation —
+	// e.g. DefendPosition draws a sector arc indicator. Zero / not-Active
+	// means no hover info available.
+	HoveringKind  components.OrderKindCode
+	HoveringValid bool
 }
 
 // HoldThreshold is how long RMB must stay down before the menu opens. Below
@@ -61,12 +82,20 @@ var pieSegments = []components.OrderKindCode{
 // Begin records the press position and target. Caller invokes this on
 // IsMouseButtonPressed(MouseButtonRight). Doesn't open the menu yet —
 // Tick(cursor, isDown) does that once the hold threshold passes.
-func (m *PieMenu) Begin(origin rl.Vector2, target components.WorldPos, source PanelID) {
+//
+// Phase 13.6 M13.6.4: hasSelection flips the drag-disambig branch — when a
+// squad is selected, a drag past DragCancelThreshold commits to facing-input
+// (InFacingDrag) instead of falling through to camera-orbit. Caller must keep
+// passing the current selection state; capturing it at press time matches
+// the modifier-snapshot semantics used elsewhere.
+func (m *PieMenu) Begin(origin rl.Vector2, target components.WorldPos, source PanelID, hasSelection bool) {
 	m.Origin = origin
 	m.StartedAt = time.Now()
 	m.Target = target
 	m.SourcePanel = source
 	m.Active = false
+	m.HasSelection = hasSelection
+	m.InFacingDrag = false
 }
 
 // PieTickResult bundles the per-frame outcome. ReleasedAsTap is true when
@@ -75,12 +104,20 @@ func (m *PieMenu) Begin(origin rl.Vector2, target components.WorldPos, source Pa
 // to reclassify as a camera-orbit drag (caller does nothing — orbit already
 // happened). ReleasedAsCommit means the player chose `Kind`. Cancelled means
 // they released over the centre cancel zone.
+//
+// Phase 13.6 M13.6.4: ReleasedAsFacingDrag means HasSelection was true and the
+// cursor moved past the drag threshold — drag committed to facing input.
+// FacingYaw carries the screen-derived yaw at release (atan2(dx, -dy), so
+// 0 = up, increases clockwise — matches Motion.Yaw / FormationOffset
+// rotation around +Y).
 type PieTickResult struct {
-	ReleasedAsTap    bool
-	ReleasedAsDrag   bool
-	ReleasedAsCommit bool
-	Cancelled        bool
-	Kind             components.OrderKindCode
+	ReleasedAsTap        bool
+	ReleasedAsDrag       bool
+	ReleasedAsCommit     bool
+	ReleasedAsFacingDrag bool
+	Cancelled            bool
+	Kind                 components.OrderKindCode
+	FacingYaw            float32
 }
 
 // Tick advances the state machine. PHASE-11.md P12 + drag reclassification:
@@ -95,28 +132,66 @@ type PieTickResult struct {
 //
 // Called every frame while SourcePanel != PanelNone.
 func (m *PieMenu) Tick(cursor rl.Vector2, rmbDown, rmbReleased bool) PieTickResult {
-	// Drag reclass: once the cursor moves far enough, abandon the pie state.
-	if rmbDown && !m.Active {
+	// Drag reclass: once the cursor moves far enough, route the input.
+	// Phase 13.6 M13.6.4: when HasSelection is true, drag commits to
+	// facing-input (InFacingDrag) instead of releasing the pie to camera
+	// orbit. The pie remains "owned" (SourcePanel stays set) so OrbitSystem
+	// stays gated off until release.
+	if rmbDown && !m.Active && !m.InFacingDrag {
 		dx := cursor.X - m.Origin.X
 		dy := cursor.Y - m.Origin.Y
 		if dx*dx+dy*dy > DragCancelThreshold*DragCancelThreshold {
-			m.SourcePanel = PanelNone
-			m.Active = false
-			if rmbReleased {
-				return PieTickResult{ReleasedAsDrag: true}
+			if m.HasSelection {
+				m.InFacingDrag = true
+				// Fall through to release handling below — facing-drag is the
+				// new active mode.
+			} else {
+				m.SourcePanel = PanelNone
+				m.Active = false
+				if rmbReleased {
+					return PieTickResult{ReleasedAsDrag: true}
+				}
+				return PieTickResult{ReleasedAsDrag: false} // drag in progress
 			}
-			return PieTickResult{ReleasedAsDrag: false} // drag in progress
 		}
 	}
 
-	if !m.Active && rmbDown && time.Since(m.StartedAt) >= HoldThreshold {
+	if !m.Active && !m.InFacingDrag && rmbDown && time.Since(m.StartedAt) >= HoldThreshold {
 		m.Active = true
+	}
+
+	// Phase 13.6 M13.6.5: track which segment the cursor is over so the ghost
+	// preview can adapt while the pie is open. Drop the hover when the pie
+	// isn't active (no menu = no segments to hover).
+	if m.Active {
+		if seg, ok := m.segmentAt(cursor); ok {
+			m.HoveringKind = seg
+			m.HoveringValid = true
+		} else {
+			m.HoveringValid = false
+		}
+	} else {
+		m.HoveringValid = false
 	}
 
 	if !rmbReleased {
 		return PieTickResult{}
 	}
 
+	if m.InFacingDrag {
+		// Compute yaw from cursor delta. Screen Y grows downward, so we
+		// flip dy: atan2(dx, -dy) yields 0 = up (away from camera = +Z),
+		// increasing clockwise. Matches Motion.Yaw / FormationOffset
+		// convention. P-note in PHASE-13.6.md "Facing-drag yaw conversion":
+		// this screen-space approximation works because the camera looks
+		// down at the ground; if camera angles ever produce wrong-feel
+		// facing, we'll project both cursor positions to world space.
+		dx := cursor.X - m.Origin.X
+		dy := cursor.Y - m.Origin.Y
+		yaw := float32(math.Atan2(float64(dx), float64(-dy)))
+		m.Reset()
+		return PieTickResult{ReleasedAsFacingDrag: true, FacingYaw: yaw}
+	}
 	if !m.Active {
 		// Released without menu and without drag = tap.
 		m.Reset()
@@ -137,6 +212,9 @@ func (m *PieMenu) IsActive() bool { return m.Active }
 func (m *PieMenu) Reset() {
 	m.Active = false
 	m.SourcePanel = PanelNone
+	m.InFacingDrag = false
+	m.HasSelection = false
+	m.HoveringValid = false
 }
 
 // segmentAt returns the kind under the cursor (or (0, false) if inside the

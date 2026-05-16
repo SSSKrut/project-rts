@@ -409,6 +409,32 @@ func main() {
 		TrenchHitRadius: 2.5,
 	}
 
+	// Phase 13.6 ghost preview context — bundles the maps drawSelectionGhost
+	// needs (squad roster + formation + stance + movement profile). One
+	// allocation up-front so the render loop just passes &ghostCtx.
+	//
+	// M13.6.3 fields (hitTester / buildingIndex / wallMap / windowMap /
+	// trenches / trenchRootMap) drive per-kind placement: cursor over a
+	// building → ghosts in N first windows; over a trench → ghosts equal-
+	// spaced along the polyline.
+	ghostWallMap := ecs.NewMap[components.WallSegment](app.World)
+	ghostWindowMap := ecs.NewMap[components.Window](app.World)
+	ghostCtx := &ghostContext{
+		world:            app.World,
+		posMap:           posMap,
+		rosterMap:        rosterMap,
+		formationDataMap: formationDataMap,
+		stanceMap:        stanceMap,
+		movementMap:      movementProfileMap,
+		squadMemberMap:   squadMemberMap,
+		hitTester:        hitTester,
+		buildingIndex:    &buildingIndex,
+		wallMap:          ghostWallMap,
+		windowMap:        ghostWindowMap,
+		trenches:         &trenches,
+		trenchRootMap:    trenchRootMap,
+	}
+
 	terrainMaterial := rl.LoadMaterialDefault()
 	defer rl.UnloadMaterial(terrainMaterial)
 
@@ -860,7 +886,10 @@ func main() {
 				rmbPressAlt = altHeld
 				rmbPressDouble = (now - lastRMBPressAt) <= rmbDoubleWindow
 				lastRMBPressAt = now
-				pieMenu.Begin(cursor, pressTarget, focused)
+				// Phase 13.6 M13.6.4: capture selection state at press-time so
+				// Tick can disambiguate facing-drag (squad selected) from
+				// camera-orbit drag (no selection).
+				pieMenu.Begin(cursor, pressTarget, focused, len(selected) > 0)
 			}
 		}
 
@@ -875,12 +904,38 @@ func main() {
 			case res.ReleasedAsCommit:
 				k := res.Kind
 				mods := rmbModifiersFromPress(rmbPressCtrl, rmbPressAlt, rmbPressDouble)
-				resolveRMBOrder(selected, pieMenu.Target, shiftHeld, &k, mods, hitTester,
+				params := applyModifiersToParams(systems.OrderParams{}, mods)
+				// Phase 13.6 M13.6.5: DefendPosition pie commit attaches the
+				// hover-derived facing (squad center → press target) so the
+				// arrived sector matches the ghost-arc the player just saw.
+				// Other kinds keep no facing — Phase 14 may add Garrison/
+				// OccupyTrench facing once cover-slot orientation is wired.
+				if k == components.OrderKindDefendPosition {
+					if yaw, ok := facingFromSquadToTarget(ghostCtx, selected, pieMenu.Target); ok {
+						params.HasFacing = true
+						params.FacingYawRad = yaw
+					}
+				}
+				resolveRMBOrderWithParams(selected, pieMenu.Target, shiftHeld, &k, params, hitTester,
 					squadService, navService, squadMemberMap, posMap, actionQueueMap)
 				pieMenu.SourcePanel = ui.PanelNone
 			case res.ReleasedAsTap:
 				mods := rmbModifiersFromPress(rmbPressCtrl, rmbPressAlt, rmbPressDouble)
 				resolveRMBOrder(selected, pieMenu.Target, shiftHeld, nil, mods, hitTester,
+					squadService, navService, squadMemberMap, posMap, actionQueueMap)
+				pieMenu.SourcePanel = ui.PanelNone
+			case res.ReleasedAsFacingDrag:
+				// Phase 13.6 M13.6.4: facing-drag commit. Default order kind
+				// from hit-test (MoveTo / Garrison / OccupyTrench); facing yaw
+				// attaches via OrderParams.HasFacing. UnitMovement-side reads
+				// it through OrderResolverSystem.applyArrivedFacing on order
+				// completion.
+				mods := rmbModifiersFromPress(rmbPressCtrl, rmbPressAlt, rmbPressDouble)
+				params := applyModifiersToParams(systems.OrderParams{
+					HasFacing:    true,
+					FacingYawRad: res.FacingYaw,
+				}, mods)
+				resolveRMBOrderWithParams(selected, pieMenu.Target, shiftHeld, nil, params, hitTester,
 					squadService, navService, squadMemberMap, posMap, actionQueueMap)
 				pieMenu.SourcePanel = ui.PanelNone
 			case res.Cancelled, res.ReleasedAsDrag:
@@ -1045,6 +1100,20 @@ func main() {
 				MapMarkerCache: &mapMarkerCache,
 			}
 			hovered = ui.PickSquadAt(cursor, mapCtx, panelMap, 12)
+		}
+
+		// Phase 13.6 M13.6.2: cursor target in WorldPos for the ghost preview.
+		// Recomputed every frame (continuous hover tracking); the raycast is one
+		// per-frame, cheap. When the cursor leaves Panel3D or the ray misses
+		// the ground plane (sky / parallel), the ghost pass skips itself.
+		var (
+			ghostTarget   components.WorldPos
+			ghostTargetOK bool
+		)
+		if focused == ui.Panel3D {
+			ghostTarget, ghostTargetOK = mouseTargetWorldPos(systems.CurrentCamera,
+				anchorPos.ToRenderSpace(systems.CurrentOriginChunk),
+				panel3DLocal, panel3DW, panel3DH)
 		}
 
 		// Gate the 3D camera's orbit / wheel zoom by panel focus. Wheel events
@@ -1278,6 +1347,43 @@ func main() {
 		}
 
 		drawNavPath(navPath, *anchorPos)
+
+		// Phase 13.6 M13.6.2 / M13.6.4: ghost-preview formation. Continuous
+		// render of where the selected squad would arrive if the player issued
+		// a Move order at the current cursor target. No-op when cursor isn't
+		// in Panel3D, no squad in selection, or raycast missed the ground.
+		// While the player is facing-dragging, ghosts rotate live to match the
+		// drag-derived yaw so the orientation preview is honest about what
+		// release will commit to.
+		var ghostDragFacing *float32
+		if pieMenu.InFacingDrag {
+			// Recompute the current yaw — pieMenu.Tick only writes FacingYaw
+			// on release. We mirror the same screen-space formula here so the
+			// preview matches the eventual commit value exactly.
+			dx := cursor.X - pieMenu.Origin.X
+			dy := cursor.Y - pieMenu.Origin.Y
+			yaw := float32(math.Atan2(float64(dx), float64(-dy)))
+			ghostDragFacing = &yaw
+			// Pin the ghost to the cursor's press-time target while dragging
+			// so the formation orientation rotates around a stable anchor.
+			ghostTarget = pieMenu.Target
+			ghostTargetOK = true
+		}
+		// Phase 13.6 M13.6.5: when the pie menu is open and the cursor is
+		// hovering a segment, expose the kind to ghost rendering so it can
+		// preview the segment-specific visualisation (DefendPosition arc,
+		// future Patrol waypoint chain, etc.).
+		var ghostPieHover *components.OrderKindCode
+		if pieMenu.IsActive() && pieMenu.HoveringValid {
+			k := pieMenu.HoveringKind
+			ghostPieHover = &k
+			// Anchor the ghost at the press-time target while the menu is open
+			// — the player is choosing a kind for that point, not for whatever
+			// is under the cursor now (cursor lives on the segment ring).
+			ghostTarget = pieMenu.Target
+			ghostTargetOK = true
+		}
+		drawSelectionGhost(ghostCtx, selected, focused == ui.Panel3D, ghostTarget, ghostTargetOK, ghostDragFacing, ghostPieHover)
 
 		rl.EndMode3D()
 		rl.EndTextureMode()
