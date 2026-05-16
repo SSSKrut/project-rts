@@ -34,3 +34,4 @@ go.work.sum
 
 # Persisted world data (chunk deltas)
 /save/
+rts-go
