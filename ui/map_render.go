@@ -32,6 +32,10 @@ type MapRenderCtx struct {
 	// / drawOrderMarkers / PickSquadAt read from it; nil falls back to per-call
 	// SquadCenter.
 	MapMarkerCache *components.MapMarkerCache
+	// Phase 12: commander role drives the ShortLabel rendered inside the
+	// squad marker. Nil → marker stays a plain coloured dot.
+	RoleMap *ecs.Map[components.UnitRole]
+	Font    rl.Font
 	// SquadColor mirrors InspectorCtx.SquadColor.
 	SquadColor func(id uint32) rl.Color
 	// Optional debug layers — checked by drawDebugLayers.
@@ -272,10 +276,33 @@ func drawSquadMarkers(content rl.Rectangle, ctx MapRenderCtx) {
 		if ctx.SquadColor != nil {
 			col = ctx.SquadColor(ent.ID())
 		}
-		const radius float32 = 7
+		// Phase 12 P6 / Note: marker radius bumped 7 → 9 so 1-2 char commander
+		// ShortLabel ("L", "MG", "AT") fits inside the disc legibly.
+		const radius float32 = 9
 		rl.DrawCircleV(screen, radius, col)
 		rl.DrawCircleLines(int32(screen.X), int32(screen.Y), radius,
 			rl.Color{R: 20, G: 20, B: 20, A: 200})
+		// Commander ShortLabel inside the disc. Contrast colour picked off
+		// the squad's palette colour so 8 different squad tints all stay
+		// readable.
+		if ctx.RoleMap != nil && roster.Count > 0 {
+			commander := roster.Members[0]
+			if commander != (ecs.Entity{}) && ctx.World.Alive(commander) {
+				if r := ctx.RoleMap.Get(commander); r != nil {
+					label := r.Kind.ShortLabel()
+					const fontSize float32 = 11
+					sz := rl.MeasureTextEx(ctx.Font, label, fontSize, 1)
+					txt := rl.Color{R: 0, G: 0, B: 0, A: 230}
+					if (0.299*float32(col.R) + 0.587*float32(col.G) + 0.114*float32(col.B)) < 140 {
+						txt = rl.Color{R: 255, G: 255, B: 255, A: 240}
+					}
+					rl.DrawTextEx(ctx.Font, label, rl.Vector2{
+						X: screen.X - sz.X*0.5,
+						Y: screen.Y - sz.Y*0.5,
+					}, fontSize, 1, txt)
+				}
+			}
+		}
 		// Hover & selection rings.
 		hoverHere := ctx.Hovered == ent
 		selectedHere := mapAnyMemberSelected(ctx.Selected, roster)

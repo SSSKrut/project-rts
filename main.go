@@ -289,11 +289,6 @@ func main() {
 		alwaysActiveMap.Add(ent, &components.AlwaysActive{})
 	}
 
-	unitPositions := []rl.Vector3{
-		{X: -22, Z: -38}, {X: -28, Z: -38}, {X: -22, Z: -42}, {X: -28, Z: -42},
-		{X: 38, Z: 28}, {X: 42, Z: 28}, {X: 38, Z: 32}, {X: 42, Z: 32},
-		{X: -28, Z: 52}, {X: -32, Z: 52}, {X: -28, Z: 58}, {X: -32, Z: 58},
-	}
 	unitMap := ecs.NewMap[components.Unit](app.World)
 	stanceMap := ecs.NewMap[components.Stance](app.World)
 	motionMap := ecs.NewMap[components.Motion](app.World)
@@ -304,8 +299,15 @@ func main() {
 	blackboardMap := ecs.NewMap[components.LocalBlackboard](app.World)
 	actionQueueMap := ecs.NewMap[components.ActionQueue](app.World)
 	equipmentMap := ecs.NewMap[components.Equipment](app.World)
+	// Phase 12: RoleService owns weapon / radio / medkit / spade lifecycle so
+	// the Unit-side spawn block stays narrow. main.go just reads the maps
+	// (Inspector + render).
 	weaponMap := ecs.NewMap[components.Weapon](app.World)
-	ownedByMap := ecs.NewMap[components.OwnedBy](app.World)
+	_ = weaponMap // referenced by render-time stats display; keep handle live.
+	// roleMap is read by 3D render (cap colour + label) and the Inspector
+	// (role-tinted roster rows) + map commander icon. Phase 12 only reads;
+	// RoleService is the canonical writer.
+	roleMap := ecs.NewMap[components.UnitRole](app.World)
 	squadMemberMap := ecs.NewMap[components.SquadMember](app.World)
 	rosterMap := ecs.NewMap[components.CommandRoster](app.World)
 	formationDataMap := ecs.NewMap[components.FormationData](app.World)
@@ -318,10 +320,18 @@ func main() {
 	orderTargetMap := ecs.NewMap[components.OrderTarget](app.World)
 	orderProgressMap := ecs.NewMap[components.OrderProgress](app.World)
 	orderChainMap := ecs.NewMap[components.OrderChain](app.World)
-	unitEnts := make([]ecs.Entity, 0, len(unitPositions))
-	for _, p := range unitPositions {
+
+	// Phase 12 role service. Owns UnitRole + per-role Equipment sub-entities
+	// (Primary weapon, Secondary gear: Radio / Medkit / Spade / sidearm).
+	roleService := systems.NewRoleService(app.World)
+
+	// unitFactory creates a "naked" soldier — every component the simulation
+	// needs (Unit / Stance / Motion / Vision / etc.) but no UnitRole and no
+	// Equipment entities. CreateFromTemplate calls this once per slot, then
+	// RoleService.AssignRole stamps the role + spawns the weapon/gear.
+	unitFactory := func(spawn components.WorldPos) ecs.Entity {
 		ent := app.World.NewEntity()
-		wp := components.WorldPos{}.Add(p)
+		wp := spawn
 		posMap.Add(ent, &wp)
 		unitMap.Add(ent, &components.Unit{})
 		stanceMap.Add(ent, &components.Stance{Code: components.StanceStand})
@@ -332,26 +342,24 @@ func main() {
 		awarenessMap.Add(ent, &components.Awareness{})
 		blackboardMap.Add(ent, &components.LocalBlackboard{})
 		actionQueueMap.Add(ent, &components.ActionQueue{})
-		// Phase 11.5 P6: units no longer carry LOD markers. Simulation systems
-		// (UnitMovement / Vision / Formation / SquadMacroPath / OrderResolver)
-		// iterate every unit each tick; LODSystem also excludes the Unit
-		// archetype to avoid thrashing markers that nothing reads.
-
-		weapon := app.World.NewEntity()
-		weaponMap.Add(weapon, &components.Weapon{
-			Kind: components.WeaponAK47, Ammo: 30, RangeM: 200, RoF: 10, Damage: 30,
-		})
-		ownedByMap.Add(weapon, &components.OwnedBy{Owner: ent})
-		wpW := wp
-		posMap.Add(weapon, &wpW)
-		equipmentMap.Add(ent, &components.Equipment{Primary: weapon, Active: weapon})
-
-		unitEnts = append(unitEnts, ent)
+		return ent
 	}
 
-	squadService.CreateFromUnits(unitEnts[0:4], components.FormationLine)
-	squadService.CreateFromUnits(unitEnts[4:8], components.FormationWedge)
-	squadService.CreateFromUnits(unitEnts[8:12], components.FormationColumn)
+	// Phase 12 starter scene: three 4-soldier squads with distinct templates
+	// so the role differentiation (cap colours, ShortLabel, map icon) is
+	// visible immediately at startup.
+	squadService.CreateFromTemplate(
+		systems.TmplLightInfantry,
+		components.WorldPos{}.Add(rl.Vector3{X: -25, Z: -40}),
+		components.FormationLine, roleService, unitFactory)
+	squadService.CreateFromTemplate(
+		systems.TmplMGTeam,
+		components.WorldPos{}.Add(rl.Vector3{X: 40, Z: 30}),
+		components.FormationWedge, roleService, unitFactory)
+	squadService.CreateFromTemplate(
+		systems.TmplATTeam,
+		components.WorldPos{}.Add(rl.Vector3{X: -30, Z: 55}),
+		components.FormationColumn, roleService, unitFactory)
 
 	// Render filters.
 	unitRenderFilter := ecs.NewFilter3[components.WorldPos, components.Unit, components.Stance](app.World)
@@ -895,8 +903,15 @@ func main() {
 		for qu.Next() {
 			pos, _, st := qu.Get()
 			renderPos := pos.ToRenderSpace(systems.CurrentOriginChunk)
-			drawUnitCube(renderPos, *st)
 			ent := qu.Entity()
+			// Phase 12: role drives cap colour + ShortLabel. Fall back to
+			// Rifleman if a unit somehow lacks UnitRole — keeps render
+			// resilient if a future spawn path forgets AssignRole.
+			role := components.RoleRifleman
+			if r := roleMap.Get(ent); r != nil {
+				role = r.Kind
+			}
+			drawUnitCube(renderPos, *st, role)
 			if isSelected(ent) >= 0 {
 				height := unitStanceHeight(st.Code)
 				rl.DrawCircle3D(renderPos, 1.0, rl.Vector3{X: 1, Y: 0, Z: 0}, 90,
@@ -1103,6 +1118,8 @@ func main() {
 			OrderChainMap:    orderChainMap,
 			SmoothedSquadPos: smoothedSquadPos,
 			MapMarkerCache:   &mapMarkerCache,
+			RoleMap:          roleMap,
+			Font:             hudFont,
 		}
 		ui.DrawMap(panelMap, mapCtx)
 
@@ -1130,6 +1147,7 @@ func main() {
 			OrderChainMap:    orderChainMap,
 			BuildingMap:      buildingMap,
 			TrenchRootMap:    trenchRootMap,
+			RoleMap:          roleMap,
 			SquadColor:       squadColor,
 		})
 
@@ -1141,6 +1159,24 @@ func main() {
 
 		// 3D RT composite into Panel3D bounds.
 		scene3DRT.Composite(panel3D)
+
+		// Phase 12 role labels — 2D screen-projected ShortLabel pills above
+		// every unit. Done after RT composite so the labels overlay the
+		// scene; scissored to Panel3D content rect so they don't bleed onto
+		// neighbouring panels.
+		rl.BeginScissorMode(int32(panel3DContent.X), int32(panel3DContent.Y),
+			int32(panel3DContent.Width), int32(panel3DContent.Height))
+		quLabels := unitRenderFilter.Query()
+		for quLabels.Next() {
+			pos, _, st := quLabels.Get()
+			renderPos := pos.ToRenderSpace(systems.CurrentOriginChunk)
+			role := components.RoleRifleman
+			if r := roleMap.Get(quLabels.Entity()); r != nil {
+				role = r.Kind
+			}
+			drawUnitRoleLabel(renderPos, *st, role, hudFont, panel3DContent)
+		}
+		rl.EndScissorMode()
 
 		// Marquee (panel-local clipped). Drawn after composite so it sits over
 		// the 3D scene; scissored to Panel3D so dragging outside the panel

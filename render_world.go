@@ -326,15 +326,95 @@ func drawBuildingWall(pos rl.Vector3, w components.WallSegment) {
 
 // drawUnitCube draws a placeholder soldier as an olive cube sitting on the
 // terrain at WorldPos. Height collapses with Stance — standing = 1.8 m,
-// crouching = 1.1 m, prone = 0.4 m. Phase 16 polish replaces this with proper
-// animated meshes.
-func drawUnitCube(pos rl.Vector3, st components.Stance) {
+// crouching = 1.1 m, prone = 0.4 m. Phase 12 adds a role cap on top of the
+// body — a small flat sub-cube tinted to the role colour. Leaders get a
+// slightly taller cap so they read as senior at a glance. Phase 25 polish
+// replaces the cubes with proper animated meshes.
+func drawUnitCube(pos rl.Vector3, st components.Stance, role components.UnitRoleKind) {
 	height := unitStanceHeight(st.Code)
 	c := rl.Vector3{X: pos.X, Y: pos.Y + height*0.5, Z: pos.Z}
 	rl.DrawCubeV(c, rl.Vector3{X: 0.6, Y: height, Z: 0.6},
 		rl.Color{R: 80, G: 95, B: 55, A: 255})
 	rl.DrawCubeWiresV(c, rl.Vector3{X: 0.6, Y: height, Z: 0.6},
 		rl.Color{R: 40, G: 50, B: 30, A: 255})
+
+	// Role cap. Riflemen keep the olive body colour (the cap blends into the
+	// soldier) so vanilla infantry doesn't visually shout; specialists get a
+	// bright cap that reads at squad-glance distance. Leaders draw a taller
+	// cap so they stand out even before the floating label catches the eye.
+	capHeight := float32(0.15)
+	if role == components.RoleLeader {
+		capHeight = 0.30
+	}
+	capPos := rl.Vector3{X: pos.X, Y: pos.Y + height + capHeight*0.5, Z: pos.Z}
+	capColor := components.RoleColor(role)
+	rl.DrawCubeV(capPos, rl.Vector3{X: 0.55, Y: capHeight, Z: 0.55}, capColor)
+	rl.DrawCubeWiresV(capPos, rl.Vector3{X: 0.55, Y: capHeight, Z: 0.55},
+		rl.Color{R: 20, G: 20, B: 20, A: 220})
+}
+
+// drawUnitRoleLabel projects the unit's head-above-cap point into the 3D
+// panel's content rect and draws the role ShortLabel as a small floating
+// pill. Called from the 2D pass (after the 3D RT has been composited) so the
+// label sits on top of the scene without depth fighting.
+//
+// `renderPos` is the unit's render-space WorldPos (output of WorldPos.ToRenderSpace).
+// `panel3DContent` is the rectangle the 3D scene composites into — used to
+// offset the screen-space coordinates and to cull labels for off-screen
+// units.
+func drawUnitRoleLabel(renderPos rl.Vector3, st components.Stance, role components.UnitRoleKind,
+	font rl.Font, panel3DContent rl.Rectangle) {
+	height := unitStanceHeight(st.Code)
+	capHeight := float32(0.15)
+	if role == components.RoleLeader {
+		capHeight = 0.30
+	}
+	// Label hangs 0.6 m above the cap so it doesn't visually collide with
+	// the selection wireframe drawn around the body.
+	headPos := rl.Vector3{
+		X: renderPos.X,
+		Y: renderPos.Y + height + capHeight + 0.6,
+		Z: renderPos.Z,
+	}
+	w := int32(panel3DContent.Width)
+	h := int32(panel3DContent.Height)
+	if w < 1 || h < 1 {
+		return
+	}
+	sp := rl.GetWorldToScreenEx(headPos, systems.CurrentCamera, w, h)
+	// Cull labels for points behind the camera / off-panel.
+	if sp.X < 0 || sp.Y < 0 || sp.X > panel3DContent.Width || sp.Y > panel3DContent.Height {
+		return
+	}
+	label := role.ShortLabel()
+	const fontSize float32 = 12
+	size := rl.MeasureTextEx(font, label, fontSize, 1)
+	// Position so the label centre lines up with the projected head.
+	screenX := panel3DContent.X + sp.X - size.X*0.5
+	screenY := panel3DContent.Y + sp.Y - size.Y*0.5
+
+	// Pill background — role colour with low alpha so multiple labels can
+	// overlap without becoming an opaque smear. Border keeps the pill
+	// legible against terrain.
+	bg := components.RoleColor(role)
+	bg.A = 200
+	const padX float32 = 3
+	const padY float32 = 1
+	rect := rl.Rectangle{
+		X: screenX - padX, Y: screenY - padY,
+		Width: size.X + 2*padX, Height: size.Y + 2*padY,
+	}
+	rl.DrawRectangleRec(rect, bg)
+	rl.DrawRectangleLinesEx(rect, 1, rl.Color{R: 20, G: 20, B: 20, A: 220})
+
+	// Text colour: choose white or black per role-colour luminance so the
+	// label always reads.
+	lum := 0.299*float32(bg.R) + 0.587*float32(bg.G) + 0.114*float32(bg.B)
+	textColor := rl.Color{R: 0, G: 0, B: 0, A: 255}
+	if lum < 140 {
+		textColor = rl.Color{R: 255, G: 255, B: 255, A: 255}
+	}
+	rl.DrawTextEx(font, label, rl.Vector2{X: screenX, Y: screenY}, fontSize, 1, textColor)
 }
 
 func unitStanceHeight(code components.StanceCode) float32 {

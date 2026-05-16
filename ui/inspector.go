@@ -38,10 +38,27 @@ type InspectorCtx struct {
 	OrderChainMap    *ecs.Map[components.OrderChain]
 	BuildingMap      *ecs.Map[components.Building]
 	TrenchRootMap    *ecs.Map[components.TrenchRoot]
+	// Phase 12 role map. When non-nil drawInspectorUnit / drawInspectorSquad
+	// show role-tinted roster rows and a Role: header on the single-unit
+	// view. Nil falls back to "Rifleman placeholder" — keeps backwards-compat
+	// for any caller that hasn't wired the map yet.
+	RoleMap *ecs.Map[components.UnitRole]
 	// SquadColor picks a stable palette colour from a squad entity ID so the
 	// inspector and the map render use the same shade. Injected as a func to
 	// avoid a UI → render-package cycle.
 	SquadColor func(id uint32) rl.Color
+}
+
+// roleOf is a small helper that resolves the unit's role with a Rifleman
+// fallback. Mirrors the pattern used by render_world.go::drawUnitCube.
+func roleOf(ctx InspectorCtx, ent ecs.Entity) components.UnitRoleKind {
+	if ctx.RoleMap == nil {
+		return components.RoleRifleman
+	}
+	if r := ctx.RoleMap.Get(ent); r != nil {
+		return r.Kind
+	}
+	return components.RoleRifleman
 }
 
 const (
@@ -186,8 +203,19 @@ func drawInspectorUnit(ctx InspectorCtx, ent ecs.Entity, x, y int32) {
 	drawText(ctx.Font, fmt.Sprintf("Unit #%X", ent.ID()&0xFFFF),
 		x, y, inspectorFontSize, inspectorText)
 	y += inspectorRowH
-	drawText(ctx.Font, "Role: Rifleman (placeholder)",
-		x, y, inspectorFontSize, inspectorTextDim)
+	// Phase 12: role header. ShortLabel pill + full name, tinted by role.
+	role := roleOf(ctx, ent)
+	tint := components.RoleColor(role)
+	rl.DrawRectangle(x, y+2, 24, inspectorRowH-4, tint)
+	rl.DrawRectangleLines(x, y+2, 24, inspectorRowH-4, rl.Color{R: 20, G: 20, B: 20, A: 220})
+	labelColor := contrastTextColor(tint)
+	short := role.ShortLabel()
+	size := rl.MeasureTextEx(ctx.Font, short, float32(inspectorFontSize), 1)
+	rl.DrawTextEx(ctx.Font, short, rl.Vector2{
+		X: float32(x) + 12 - size.X*0.5,
+		Y: float32(y) + 2 + (float32(inspectorRowH-4)-size.Y)*0.5,
+	}, float32(inspectorFontSize), 1, labelColor)
+	drawText(ctx.Font, "Role: "+role.String(), x+32, y, inspectorFontSize, inspectorText)
 	y += inspectorRowH * 2
 
 	if st := ctx.StanceMap.Get(ent); st != nil {
@@ -271,24 +299,50 @@ func drawInspectorSquad(ctx InspectorCtx, squad ecs.Entity, x, y, width int32) {
 		if mem == (ecs.Entity{}) || !ctx.World.Alive(mem) {
 			continue
 		}
-		bg := rl.Color{}
+		role := roleOf(ctx, mem)
+		// Phase 12: row background tint by role. Selection / hover override
+		// the role tint so the focus state stays unambiguous.
+		bg := components.RoleColor(role)
+		bg.A = 90
 		if isSelected(ctx.Selected, mem) {
 			bg = inspectorRowSelectBG
 		}
 		if ctx.Hovered == mem {
 			bg = inspectorRowHoverBG
 		}
-		if bg.A != 0 {
-			rl.DrawRectangle(x-2, y-2, width, inspectorRowH, bg)
-		}
+		rl.DrawRectangle(x-2, y-2, width, inspectorRowH, bg)
+
+		// ShortLabel chip on the left so the role reads at a glance even
+		// when the row tint is dimmed by selection state.
+		chip := components.RoleColor(role)
+		rl.DrawRectangle(x, y+2, 22, inspectorRowH-4, chip)
+		rl.DrawRectangleLines(x, y+2, 22, inspectorRowH-4, rl.Color{R: 20, G: 20, B: 20, A: 200})
+		short := role.ShortLabel()
+		sizeShort := rl.MeasureTextEx(ctx.Font, short, float32(inspectorFontSize), 1)
+		rl.DrawTextEx(ctx.Font, short, rl.Vector2{
+			X: float32(x) + 11 - sizeShort.X*0.5,
+			Y: float32(y) + 2 + (float32(inspectorRowH-4)-sizeShort.Y)*0.5,
+		}, float32(inspectorFontSize), 1, contrastTextColor(chip))
+
 		stance := "-"
 		if st := ctx.StanceMap.Get(mem); st != nil {
 			stance = stanceLabel(st.Code)
 		}
-		drawText(ctx.Font, fmt.Sprintf("  %d  #%-6X %s", i, mem.ID()&0xFFFFFF, stance),
-			x, y, inspectorFontSize, inspectorText)
+		drawText(ctx.Font, fmt.Sprintf("%d  #%-6X %s", i, mem.ID()&0xFFFFFF, stance),
+			x+28, y, inspectorFontSize, inspectorText)
 		y += inspectorRowH
 	}
+}
+
+// contrastTextColor returns black or white depending on the perceived
+// luminance of `bg`, so the small chips / labels stay readable across the
+// full role palette.
+func contrastTextColor(bg rl.Color) rl.Color {
+	lum := 0.299*float32(bg.R) + 0.587*float32(bg.G) + 0.114*float32(bg.B)
+	if lum < 140 {
+		return rl.Color{R: 255, G: 255, B: 255, A: 255}
+	}
+	return rl.Color{R: 0, G: 0, B: 0, A: 255}
 }
 
 func drawInspectorMulti(ctx InspectorCtx, x, y int32) {

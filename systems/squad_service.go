@@ -38,6 +38,11 @@ type SquadService struct {
 	orderChainMap    *ecs.Map[components.OrderChain]
 	orderFacingMap   *ecs.Map[components.OrderParamFacing]
 	orderPatrolMap   *ecs.Map[components.OrderParamPatrol]
+	// Phase 12 handles. hasRadiomanInRoster walks Equipment.Secondary on
+	// every member and checks the Radio marker, so SquadService needs both
+	// maps live.
+	equipmentMap *ecs.Map[components.Equipment]
+	radioGearMap *ecs.Map[components.Radio]
 	// Session-time clock for OrderIssuedAt. Advanced by SetClock (called
 	// from main.go each frame before input handlers run).
 	clock float32
@@ -64,6 +69,8 @@ func NewSquadService(w *ecs.World) *SquadService {
 		orderChainMap:    ecs.NewMap[components.OrderChain](w),
 		orderFacingMap:   ecs.NewMap[components.OrderParamFacing](w),
 		orderPatrolMap:   ecs.NewMap[components.OrderParamPatrol](w),
+		equipmentMap:     ecs.NewMap[components.Equipment](w),
+		radioGearMap:     ecs.NewMap[components.Radio](w),
 	}
 }
 
@@ -162,7 +169,7 @@ func (s *SquadService) CreateFromUnits(units []ecs.Entity, kind components.Forma
 	s.macroPathMap.Add(squad, &components.MacroPath{})
 	s.radioMap.Add(squad, &components.RadioNetwork{
 		Frequency:   0,
-		HasRadioman: hasRadiomanInRoster(s.world, prepared),
+		HasRadioman: s.hasRadiomanInRoster(prepared),
 		HQReachable: false,
 	})
 	s.orderQueueMap.Add(squad, &components.OrderQueueHead{})
@@ -315,6 +322,78 @@ func (s *SquadService) Despawn(squad ecs.Entity) {
 	}
 }
 
+// CreateFromTemplate is the Phase 12 high-level spawn helper. It walks the
+// template's role list, calls `unitFactory(spawnPos)` to materialise each
+// unit's base archetype (Unit + Stance + Motion + ... — main.go owns the
+// component list), stamps the role + equipment via RoleService.AssignRole,
+// then bundles the result into a Squad through CreateFromUnits.
+//
+// `pos` is the squad centre; units fan out on a 2 m grid. `unitFactory` is a
+// callback (rather than a SquadService method) because main.go is the
+// canonical owner of the unit component graph — duplicating that list inside
+// SquadService would re-implement half of unit.go.
+//
+// Returns the new Squad entity, or zero if the template was empty / the
+// factory failed every slot.
+func (s *SquadService) CreateFromTemplate(
+	template SquadTemplate,
+	pos components.WorldPos,
+	formation components.FormationKind,
+	roleService *RoleService,
+	unitFactory func(spawn components.WorldPos) ecs.Entity,
+) ecs.Entity {
+	roster := TemplateRoster(template)
+	if len(roster) == 0 || unitFactory == nil || roleService == nil {
+		return ecs.Entity{}
+	}
+
+	// Layout: column-major 2 m grid centred on `pos`. Slot 0 (leader) sits
+	// dead-centre, the rest fill outwards row by row. Keeping the leader on
+	// the centre matches the slot-0=commander invariant the rest of the code
+	// expects (formation offsets, map-marker projection).
+	const spacing = 2.0
+	cols := 4
+	if len(roster) < cols {
+		cols = len(roster)
+	}
+
+	units := make([]ecs.Entity, 0, len(roster))
+	for i, role := range roster {
+		offX, offZ := templateGridOffset(i, cols, spacing)
+		spawn := pos
+		spawn.Local.X += offX
+		spawn.Local.Z += offZ
+		u := unitFactory(spawn)
+		if u == (ecs.Entity{}) {
+			continue
+		}
+		roleService.AssignRole(u, role)
+		units = append(units, u)
+	}
+	if len(units) == 0 {
+		return ecs.Entity{}
+	}
+	return s.CreateFromUnits(units, formation)
+}
+
+// templateGridOffset spreads slot indices onto a small grid. Slot 0 stays at
+// (0,0); slot 1 goes right of centre, slot 2 below, etc. Output is XZ offset
+// in metres.
+func templateGridOffset(slot, cols int, spacing float32) (float32, float32) {
+	if slot == 0 || cols <= 0 {
+		return 0, 0
+	}
+	idx := slot - 1
+	row := idx / cols
+	col := idx % cols
+	// Centre the row: half-width pulled left so the leader sits roughly in
+	// the middle of the formation, not at one corner.
+	halfCols := float32(cols-1) * 0.5
+	x := (float32(col) - halfCols) * spacing
+	z := float32(row+1) * spacing
+	return x, z
+}
+
 // OrderParams bundles the optional per-kind fields IssueOrder accepts. Zero
 // values are fine for kinds that don't read them.
 type OrderParams struct {
@@ -445,11 +524,26 @@ func (s *SquadService) Stop(squad ecs.Entity) {
 	s.CancelAllOrders(squad)
 }
 
-// hasRadiomanInRoster — Phase 12 scaffold (PHASE-9.md M9.6). In Phase 9 no
-// unit carries a Radio sub-entity, so this is always false. The helper exists
-// so Phase 12 has a single point to wire real detection through.
-func hasRadiomanInRoster(w *ecs.World, units []ecs.Entity) bool {
-	_ = w
-	_ = units
+// hasRadiomanInRoster walks every unit and asks "does this soldier carry a
+// Radio in Equipment.Secondary?". Phase 12 ships the real implementation —
+// previously this was a Phase 9 placeholder returning false. The result
+// goes into RadioNetwork.HasRadioman; Phase 20 (Comms) will read that to
+// gate player input on radio-less squads.
+func (s *SquadService) hasRadiomanInRoster(units []ecs.Entity) bool {
+	for _, u := range units {
+		if u == (ecs.Entity{}) || !s.world.Alive(u) {
+			continue
+		}
+		eq := s.equipmentMap.Get(u)
+		if eq == nil || eq.Secondary == (ecs.Entity{}) {
+			continue
+		}
+		if !s.world.Alive(eq.Secondary) {
+			continue
+		}
+		if s.radioGearMap.Has(eq.Secondary) {
+			return true
+		}
+	}
 	return false
 }
