@@ -43,6 +43,19 @@ type SquadService struct {
 	// maps live.
 	equipmentMap *ecs.Map[components.Equipment]
 	radioGearMap *ecs.Map[components.Radio]
+	// Phase 13 standing-rule handles. CreateFromTemplate aggregates per-role
+	// defaults from the leader and template-specific overrides into these
+	// squad-level components. Idempotent: not overwritten if already set
+	// (P8 — protects player-edited values across role changes).
+	movementProfileMap *ecs.Map[components.MovementProfile]
+	engagementRulesMap *ecs.Map[components.EngagementRules]
+	behaviorRulesMap   *ecs.Map[components.BehaviorRules]
+	// OrderParamMovementProfile handle for issuing orders with movement
+	// overrides (M13.5: Ctrl+RMB Stealth, Double-RMB Sprint).
+	orderMovementOverrideMap *ecs.Map[components.OrderParamMovementProfile]
+	// OrderParamAttackMove handle for Alt+RMB AttackMove scaffold (M13.5).
+	// Phase 14 WeaponSystem is the canonical reader.
+	orderAttackMoveMap *ecs.Map[components.OrderParamAttackMove]
 	// Session-time clock for OrderIssuedAt. Advanced by SetClock (called
 	// from main.go each frame before input handlers run).
 	clock float32
@@ -68,9 +81,14 @@ func NewSquadService(w *ecs.World) *SquadService {
 		orderProgressMap: ecs.NewMap[components.OrderProgress](w),
 		orderChainMap:    ecs.NewMap[components.OrderChain](w),
 		orderFacingMap:   ecs.NewMap[components.OrderParamFacing](w),
-		orderPatrolMap:   ecs.NewMap[components.OrderParamPatrol](w),
-		equipmentMap:     ecs.NewMap[components.Equipment](w),
-		radioGearMap:     ecs.NewMap[components.Radio](w),
+		orderPatrolMap:           ecs.NewMap[components.OrderParamPatrol](w),
+		equipmentMap:             ecs.NewMap[components.Equipment](w),
+		radioGearMap:             ecs.NewMap[components.Radio](w),
+		movementProfileMap:       ecs.NewMap[components.MovementProfile](w),
+		engagementRulesMap:       ecs.NewMap[components.EngagementRules](w),
+		behaviorRulesMap:         ecs.NewMap[components.BehaviorRules](w),
+		orderMovementOverrideMap: ecs.NewMap[components.OrderParamMovementProfile](w),
+		orderAttackMoveMap:       ecs.NewMap[components.OrderParamAttackMove](w),
 	}
 }
 
@@ -83,6 +101,27 @@ func (s *SquadService) SetClock(t float32) { s.clock = t }
 // OrderResolverSystem to compute progress / timeouts without re-importing
 // elapsed.
 func (s *SquadService) Clock() float32 { return s.clock }
+
+// MovementProfileMap / EngagementRulesMap / BehaviorRulesMap expose the
+// Phase 13 standing-rule handles so external readers (UnitMovementSystem,
+// SquadMacroPathSystem, Inspector) can fetch components without instantiating
+// their own ecs.Map. Returned pointers must not be retained across world
+// archetype changes — caller uses them inline.
+func (s *SquadService) MovementProfileMap() *ecs.Map[components.MovementProfile] {
+	return s.movementProfileMap
+}
+func (s *SquadService) EngagementRulesMap() *ecs.Map[components.EngagementRules] {
+	return s.engagementRulesMap
+}
+func (s *SquadService) BehaviorRulesMap() *ecs.Map[components.BehaviorRules] {
+	return s.behaviorRulesMap
+}
+
+// OrderMovementOverrideMap returns the OrderParamMovementProfile handle used
+// by IssueOrderWithMovementOverride (M13.5).
+func (s *SquadService) OrderMovementOverrideMap() *ecs.Map[components.OrderParamMovementProfile] {
+	return s.orderMovementOverrideMap
+}
 
 // FormationSpacing returns the default spacing (metres) for each formation
 // kind. F1-F4 hotkeys use this table; Phase 14 may swap it for a slider.
@@ -373,7 +412,67 @@ func (s *SquadService) CreateFromTemplate(
 	if len(units) == 0 {
 		return ecs.Entity{}
 	}
-	return s.CreateFromUnits(units, formation)
+	squad := s.CreateFromUnits(units, formation)
+	if squad == (ecs.Entity{}) {
+		return squad
+	}
+
+	// Phase 13 M13.2: install squad-level standing rules. Aggregation rule
+	// (PHASE-13.md P7): defaults come from the leader's role (slot 0 in the
+	// template roster), then template-specific tweaks override individual
+	// fields. Idempotent (P8) — if the player has already edited the squad's
+	// rules (gameplay reassignment, hot-reload), preserve those values.
+	s.applyTemplateStandingRules(squad, template, roster)
+	return squad
+}
+
+// applyTemplateStandingRules writes MovementProfile / EngagementRules /
+// BehaviorRules onto the squad entity using per-role defaults from
+// RoleService helpers + template-specific overrides. Skips any component
+// that already exists on the squad (P8: don't clobber player edits).
+func (s *SquadService) applyTemplateStandingRules(
+	squad ecs.Entity,
+	template SquadTemplate,
+	roster []components.UnitRoleKind,
+) {
+	leader := components.RoleRifleman
+	if len(roster) > 0 {
+		leader = roster[0]
+	}
+	movement := MovementDefaultForRole(leader)
+	engagement := EngagementDefaultForRole(leader)
+	behavior := BehaviorDefaultForRole(leader)
+
+	// Template-specific overrides — capture squad-level character that
+	// pure leader-role aggregation can't (e.g. Recon = stealth, AT = no-inf).
+	switch template {
+	case TmplRecon:
+		movement.PathStyle = components.PathStyleCoverSeek
+		movement.Posture = components.PostureQuiet
+		engagement.Mode = components.HoldFire
+	case TmplATTeam:
+		// AT team holds fire until armour appears.
+		engagement.Mode = components.HoldFire
+		engagement.FireOnInf = false
+		engagement.FireOnArm = true
+	case TmplMGTeam:
+		// MG team starts crouched — they're a fire base, not assault.
+		movement.Stance = components.StanceCrouch
+	case TmplEngineering:
+		// Engineers stay cautious — building tasks are slow and exposed.
+		movement.Pace = components.PaceWalk
+		engagement.Mode = components.ReturnFire
+	}
+
+	if !s.movementProfileMap.Has(squad) {
+		s.movementProfileMap.Add(squad, &movement)
+	}
+	if !s.engagementRulesMap.Has(squad) {
+		s.engagementRulesMap.Add(squad, &engagement)
+	}
+	if !s.behaviorRulesMap.Has(squad) {
+		s.behaviorRulesMap.Add(squad, &behavior)
+	}
 }
 
 // templateGridOffset spreads slot indices onto a small grid. Slot 0 stays at
@@ -396,10 +495,20 @@ func templateGridOffset(slot, cols int, spacing float32) (float32, float32) {
 
 // OrderParams bundles the optional per-kind fields IssueOrder accepts. Zero
 // values are fine for kinds that don't read them.
+//
+// Phase 13 M13.5 additions:
+//   - MovementOverride: when non-nil, attaches an OrderParamMovementProfile
+//     to the spawned order. The unit movement / macro path systems use this
+//     in place of the squad's standing MovementProfile until the order
+//     leaves InProgress.
+//   - AttackMove: when true, attaches an OrderParamAttackMove marker. Phase 14
+//     WeaponSystem reads it to permit fire-without-cancel-of-move.
 type OrderParams struct {
-	FacingYawRad float32
-	HasFacing    bool
-	PatrolLoop   bool
+	FacingYawRad     float32
+	HasFacing        bool
+	PatrolLoop       bool
+	MovementOverride *components.MovementProfile
+	AttackMove       bool
 }
 
 // IssueOrder spawns a new Order entity owned by `squad`. If append=false the
@@ -447,6 +556,15 @@ func (s *SquadService) IssueOrder(
 	}
 	if kind == components.OrderKindPatrol {
 		s.orderPatrolMap.Add(ord, &components.OrderParamPatrol{Loop: params.PatrolLoop})
+	}
+	// Phase 13 M13.5: optional movement / attack-move overrides.
+	if params.MovementOverride != nil {
+		s.orderMovementOverrideMap.Add(ord, &components.OrderParamMovementProfile{
+			Profile: *params.MovementOverride,
+		})
+	}
+	if params.AttackMove {
+		s.orderAttackMoveMap.Add(ord, &components.OrderParamAttackMove{})
 	}
 
 	// Wire into the chain. The squad's MacroPath also gets ReplanAt=0 so

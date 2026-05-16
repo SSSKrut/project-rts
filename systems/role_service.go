@@ -10,6 +10,12 @@ import (
 // sub-entities (Primary weapon, Secondary gear). Mirrors the SquadService /
 // Stamper pattern — pre-built handles, no archetype mutations inside ECS
 // queries. main.go owns one instance and passes it into spawn helpers.
+//
+// Phase 13 extension: AssignRole also installs a per-Unit Stamina component
+// with role-specific MaxLevel (heavy-equipment carriers fatigue faster).
+// Squad-level standing rules (MovementProfile, EngagementRules, BehaviorRules)
+// are written by SquadService.CreateFromTemplate from per-role helper lookups
+// exposed here — RoleService does not touch the Squad archetype directly.
 type RoleService struct {
 	world *ecs.World
 
@@ -21,6 +27,7 @@ type RoleService struct {
 	medkitMap    *ecs.Map[components.Medkit]
 	spadeMap     *ecs.Map[components.Spade]
 	ownedByMap   *ecs.Map[components.OwnedBy]
+	staminaMap   *ecs.Map[components.Stamina]
 }
 
 // NewRoleService wires the map handles. Must be called after world creation
@@ -36,6 +43,7 @@ func NewRoleService(w *ecs.World) *RoleService {
 		medkitMap:    ecs.NewMap[components.Medkit](w),
 		spadeMap:     ecs.NewMap[components.Spade](w),
 		ownedByMap:   ecs.NewMap[components.OwnedBy](w),
+		staminaMap:   ecs.NewMap[components.Stamina](w),
 	}
 }
 
@@ -85,6 +93,26 @@ func (s *RoleService) AssignRole(unit ecs.Entity, role components.UnitRoleKind) 
 	eq.Secondary = secondary
 	// Active defaults to Primary — Phase 7 used the same rule for AK47.
 	eq.Active = primary
+
+	// Phase 13 M13.2: install / refresh Stamina with the per-role MaxLevel.
+	// Idempotent — if a unit already carries Stamina (e.g. AssignRole was
+	// called twice with different roles), we keep its Current value so a
+	// fatigued soldier doesn't magically refill on a role swap. Only
+	// MaxLevel and RecoverRate are recomputed.
+	maxLevel := StaminaMaxForRole(role)
+	if existing := s.staminaMap.Get(unit); existing != nil {
+		existing.MaxLevel = maxLevel
+		existing.RecoverRate = staminaRecoverRate
+		if existing.Current > maxLevel {
+			existing.Current = maxLevel
+		}
+	} else {
+		s.staminaMap.Add(unit, &components.Stamina{
+			Current:     maxLevel,
+			MaxLevel:    maxLevel,
+			RecoverRate: staminaRecoverRate,
+		})
+	}
 }
 
 func (s *RoleService) destroyIfAlive(e ecs.Entity) {
@@ -139,6 +167,154 @@ func (s *RoleService) spawnSecondary(unit ecs.Entity, role components.UnitRoleKi
 		})
 	}
 	return ent
+}
+
+// staminaRecoverRate is the per-second Stamina regen at Pace=Walk + Stance ∈
+// {Stand, Crouch}. PHASE-13.md P2 sets this as a fixed value across all roles;
+// Phase 15 doctrines may introduce per-doctrine scaling later.
+const staminaRecoverRate float32 = 0.05
+
+// StaminaMaxForRole returns the per-role MaxLevel modifier. Heavy-equipment
+// carriers (MG / AT / Engineer / DemoMan / Radio) have a smaller tank because
+// they're hauling more weight. PHASE-13.md P2 table.
+func StaminaMaxForRole(role components.UnitRoleKind) float32 {
+	switch role {
+	case components.RoleMachineGunner, components.RoleATGunner:
+		return 0.7
+	case components.RoleEngineer, components.RoleDemoMan:
+		return 0.8
+	case components.RoleRadioOperator:
+		return 0.85
+	default:
+		return 1.0
+	}
+}
+
+// MovementDefaultForRole returns the per-role default MovementProfile applied
+// at squad creation. Squad-level aggregation pulls from the leader's role
+// (see SquadService.CreateFromTemplate), then template-specific tweaks may
+// override individual fields. PHASE-13.md P7 + COMMAND-MODEL.md §4 table.
+func MovementDefaultForRole(role components.UnitRoleKind) components.MovementProfile {
+	switch role {
+	case components.RoleMachineGunner:
+		// Deployed weapon — squad sits crouched once setup.
+		return components.MovementProfile{
+			Pace: components.PaceWalk, Stance: components.StanceCrouch,
+			Posture: components.PostureStandard, PathStyle: components.PathStyleDirect,
+		}
+	case components.RoleSniper:
+		return components.MovementProfile{
+			Pace: components.PaceWalk, Stance: components.StanceProne,
+			Posture: components.PostureQuiet, PathStyle: components.PathStyleCoverSeek,
+		}
+	case components.RoleATGunner:
+		return components.MovementProfile{
+			Pace: components.PaceWalk, Stance: components.StanceCrouch,
+			Posture: components.PostureStandard, PathStyle: components.PathStyleCoverSeek,
+		}
+	case components.RoleMedic, components.RoleRadioOperator:
+		return components.MovementProfile{
+			Pace: components.PaceWalk, Stance: components.StanceCrouch,
+			Posture: components.PostureStandard, PathStyle: components.PathStyleDirect,
+		}
+	default:
+		// Leader / Rifleman / Grenadier / Engineer / DemoMan — standing default.
+		return components.MovementProfile{
+			Pace: components.PaceWalk, Stance: components.StanceStand,
+			Posture: components.PostureStandard, PathStyle: components.PathStyleDirect,
+		}
+	}
+}
+
+// EngagementDefaultForRole returns the per-role default EngagementRules.
+// Same per-role table as COMMAND-MODEL.md §4. Phase 14 WeaponSystem is the
+// real reader; Phase 13 only surfaces these in the Inspector quick-bar.
+func EngagementDefaultForRole(role components.UnitRoleKind) components.EngagementRules {
+	switch role {
+	case components.RoleMachineGunner:
+		return components.EngagementRules{Mode: components.FreeFire, FireOnInf: true, FireOnArm: false}
+	case components.RoleGrenadier:
+		return components.EngagementRules{Mode: components.FreeFire, FireOnInf: true, FireOnArm: true, FireOnStruct: true}
+	case components.RoleSniper:
+		// Hold fire until ordered — sniper picks targets deliberately.
+		return components.EngagementRules{Mode: components.HoldFire, FireOnInf: true, FireOnArm: false}
+	case components.RoleATGunner:
+		// Anti-armour only — wastes RPG on infantry otherwise.
+		return components.EngagementRules{Mode: components.HoldFire, FireOnInf: false, FireOnArm: true}
+	case components.RoleMedic, components.RoleRadioOperator, components.RoleEngineer, components.RoleDemoMan:
+		return components.EngagementRules{Mode: components.ReturnFire, FireOnInf: true}
+	default:
+		// Leader / Rifleman.
+		return components.EngagementRules{Mode: components.FreeFire, FireOnInf: true, FireOnArm: true}
+	}
+}
+
+// BehaviorDefaultForRole returns the per-role default BehaviorRules. These
+// are gate flags; Phase 15 SurvivalInstinct will read them. SuppressionThreshold
+// stays at 0.30 for everyone (Phase 15 tunes empirically).
+func BehaviorDefaultForRole(role components.UnitRoleKind) components.BehaviorRules {
+	const defaultThreshold = 0.30
+	switch role {
+	case components.RoleMachineGunner:
+		// Deployed — don't reposition under fire (would lose Suppression
+		// effect). Auto-stance ok.
+		return components.BehaviorRules{
+			AllowAutoReposition:  false,
+			AllowAutoStance:      true,
+			HoldUntilOrdered:     false,
+			AllowReturnFire:      true,
+			SuppressionThreshold: defaultThreshold,
+		}
+	case components.RoleSniper, components.RoleATGunner:
+		return components.BehaviorRules{
+			AllowAutoReposition:  false,
+			AllowAutoStance:      false,
+			HoldUntilOrdered:     true,
+			AllowReturnFire:      false,
+			SuppressionThreshold: defaultThreshold,
+		}
+	case components.RoleMedic:
+		return components.BehaviorRules{
+			AllowAutoReposition:  false, // stays with the wounded
+			AllowAutoStance:      true,
+			HoldUntilOrdered:     false,
+			AllowReturnFire:      true,
+			SuppressionThreshold: defaultThreshold,
+		}
+	case components.RoleRadioOperator:
+		return components.BehaviorRules{
+			AllowAutoReposition:  false,
+			AllowAutoStance:      true,
+			HoldUntilOrdered:     false,
+			AllowReturnFire:      true,
+			SuppressionThreshold: defaultThreshold,
+		}
+	case components.RoleEngineer:
+		return components.BehaviorRules{
+			AllowAutoReposition:  false, // pauses on building task
+			AllowAutoStance:      true,
+			HoldUntilOrdered:     false,
+			AllowReturnFire:      true,
+			SuppressionThreshold: defaultThreshold,
+		}
+	case components.RoleDemoMan:
+		return components.BehaviorRules{
+			AllowAutoReposition:  true,
+			AllowAutoStance:      true,
+			HoldUntilOrdered:     false,
+			AllowReturnFire:      true,
+			SuppressionThreshold: defaultThreshold,
+		}
+	default:
+		// Leader / Rifleman / Grenadier — full reactive set.
+		return components.BehaviorRules{
+			AllowAutoReposition:  true,
+			AllowAutoStance:      true,
+			HoldUntilOrdered:     false,
+			AllowReturnFire:      true,
+			SuppressionThreshold: defaultThreshold,
+		}
+	}
 }
 
 // primaryStats returns the placeholder Weapon fields for each role's primary.

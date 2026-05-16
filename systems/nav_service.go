@@ -44,6 +44,10 @@ type NavOpts struct {
 	Locomotion components.Locomotion
 	// AvoidOpenedDoors — Phase 12 stealth stub; ignored in Phase 7.
 	AvoidOpenedDoors bool
+	// PathStyle is the per-squad routing preference (PHASE-13.md P4). The
+	// modifier table is applied as a float multiplier on NavCell.Cost
+	// during A* expansion. Default Direct = ×1.0 (no change).
+	PathStyle components.PathStyle
 }
 
 // navMaxIter caps the number of cells A* will expand per call.
@@ -58,9 +62,11 @@ const navArrivalRadius float32 = 0.5
 // same cell. The multi-graph A* expansion picks up surface↔floor transitions
 // from the TransitionRegistry resource so a path through a doorway or up a
 // staircase just works.
+//
+// PHASE-13.md P4: opts.PathStyle scales NavCell.Cost via styleCellCost. Direct
+// is a no-op; RoadPrefer / RoadAvoid bias by NavOnRoad flag; CoverSeek biases
+// by NavCell.CoverDistance (baked in M13.4 SpatialBakeSystem Pass 2).
 func (s *NavService) FindPath(from, to components.WorldPos, opts NavOpts) []components.WorldPos {
-	_ = opts
-
 	idx := s.indexRes.Get()
 	if idx == nil {
 		return []components.WorldPos{}
@@ -128,7 +134,7 @@ func (s *NavService) FindPath(from, to components.WorldPos, opts NavOpts) []comp
 			if n.diag {
 				step = sqrt2
 			}
-			tentativeG := curG + float32(cell.Cost)*step
+			tentativeG := curG + styleCellCost(cell, opts.PathStyle)*step
 			if existing, has := states[n.node]; has && tentativeG >= existing.g {
 				continue
 			}
@@ -462,6 +468,45 @@ func (h *nodeHeap) siftDown(i int) {
 		}
 		h.entries[i], h.entries[s] = h.entries[s], h.entries[i]
 		i = s
+	}
+}
+
+// styleCellCost applies the PathStyle modifier to NavCell.Cost. PHASE-13.md
+// P4 table:
+//
+//	Direct      ×1.0
+//	RoadPrefer  road×0.5,  off-road×1.5
+//	RoadAvoid   road×2.0,  off-road×1.0 (cover-rich cells get an extra ×0.8)
+//	CoverSeek   CoverDistance<threshold ×0.7, else ×1.0
+//
+// Multipliers stay strictly positive so A* admissibility holds. Result is a
+// float that the planner multiplies by step length (1 m NSEW, √2 m diagonal).
+func styleCellCost(cell components.NavCell, style components.PathStyle) float32 {
+	base := float32(cell.Cost)
+	onRoad := cell.Flags&components.NavOnRoad != 0
+	switch style {
+	case components.PathStyleRoadPrefer:
+		if onRoad {
+			return base * 0.5
+		}
+		return base * 1.5
+	case components.PathStyleRoadAvoid:
+		if onRoad {
+			return base * 2.0
+		}
+		// Cover-rich cells inherit a small bonus so the unit naturally
+		// drifts toward cover when avoiding roads.
+		if cell.CoverDistance < components.CoverSeekThreshold {
+			return base * 0.8
+		}
+		return base
+	case components.PathStyleCoverSeek:
+		if cell.CoverDistance < components.CoverSeekThreshold {
+			return base * 0.7
+		}
+		return base
+	default:
+		return base
 	}
 }
 

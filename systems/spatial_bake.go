@@ -74,6 +74,10 @@ type SpatialBakeSystem struct {
 	transitionRes     ecs.Resource[components.TransitionRegistry]
 	stairsFilter      *ecs.Filter2[components.WorldPos, components.Stairs]
 	floorComponentMap *ecs.Map[components.Floor]
+	// Phase 13 M13.4: CoverDistance bake — query all cover-slot entities and
+	// bucket by host chunk, then re-write NavCell.CoverDistance for cells
+	// within scan radius of any slot in the 9-chunk window.
+	coverSlotFilter *ecs.Filter2[components.WorldPos, components.CoverSlot]
 }
 
 func (sys *SpatialBakeSystem) InitUI(w *ecs.World) {
@@ -105,6 +109,7 @@ func (sys *SpatialBakeSystem) InitUI(w *ecs.World) {
 	sys.transitionRes = ecs.NewResource[components.TransitionRegistry](w)
 	sys.stairsFilter = ecs.NewFilter2[components.WorldPos, components.Stairs](w)
 	sys.floorComponentMap = ecs.NewMap[components.Floor](w)
+	sys.coverSlotFilter = ecs.NewFilter2[components.WorldPos, components.CoverSlot](w)
 	sys.memberMap = ecs.NewMap[components.BuildingMember](w)
 	sys.coverDirMap = ecs.NewMap[components.CoverDirection](w)
 	sys.coverSlotMap = ecs.NewMap[components.CoverSlot](w)
@@ -309,6 +314,12 @@ func (sys SpatialBakeSystem) Update(ctx core.UpdateContext) {
 
 			sys.spawnCoverSlots(ctx.World, rec.cc, propIdx, registry, coverIdx, buildingIdx)
 		}
+
+		// Phase 13 M13.4: CoverDistance bake for every chunk whose NavGrid is
+		// already built (chunks that completed Pass 1 in some earlier tick).
+		// Done here in Pass 2 so newly spawned cover slots are visible to the
+		// distance scan.
+		sys.bakeCoverDistance(coverTodo)
 	}
 
 	// ── Pass 3: FloorNavGrid bake ──
@@ -668,7 +679,13 @@ func bakeNavSlope(grid *components.NavGrid, hm *components.Heightmap) {
 			default:
 				cost = 0
 			}
-			grid.Cells[cj*components.NavGridSide+ci] = components.NavCell{Cost: cost}
+			// Phase 13 M13.4: CoverDistance defaults to "no cover within
+			// scan radius"; Pass 2 (CoverDistance bake, after cover slot
+			// spawn) overwrites this for cells near slots.
+			grid.Cells[cj*components.NavGridSide+ci] = components.NavCell{
+				Cost:          cost,
+				CoverDistance: components.CoverDistanceFar,
+			}
 		}
 	}
 }
@@ -1461,6 +1478,87 @@ func maxF32(a, b float32) float32 {
 		return a
 	}
 	return b
+}
+
+// bakeCoverDistance writes NavCell.CoverDistance for every chunk in coverTodo
+// using cover-slot entities in the 9-chunk window. Scan radius is the same
+// as CoverSeekThreshold — slots beyond stay at CoverDistanceFar.
+//
+// Phase 13 M13.4: brute-force O(cells × slots-in-9-chunks) per chunk. On the
+// placeholder scene (50 slots / chunk × 4096 cells × 9 chunks ≈ 1.8 M ops) it
+// fits in the spatial_bake budget; if Phase 14+ grows the slot population a
+// KD-tree / spatial-hash pass would replace this.
+func (sys *SpatialBakeSystem) bakeCoverDistance(coverTodo []spatialBakeChunkRec) {
+	if len(coverTodo) == 0 {
+		return
+	}
+	// Snapshot every cover slot in the world once, bucketed by host chunk.
+	// Position is captured as chunk-local XZ — the scan converts to world
+	// coords lazily per neighbour.
+	type slotRec struct {
+		x, z float32 // chunk-local XZ
+	}
+	slotsByChunk := map[components.ChunkCoord][]slotRec{}
+	qS := sys.coverSlotFilter.Query()
+	for qS.Next() {
+		pos, _ := qS.Get()
+		slotsByChunk[pos.Chunk] = append(slotsByChunk[pos.Chunk], slotRec{x: pos.Local.X, z: pos.Local.Z})
+	}
+	if len(slotsByChunk) == 0 {
+		// No slots anywhere — nothing to do. CoverDistance stays at Far for
+		// every cell, which is the correct "no cover bias" answer.
+		return
+	}
+
+	scan := float32(components.CoverSeekThreshold)
+	scanSq := scan * scan
+	for _, rec := range coverTodo {
+		grid := sys.navGridMap.Get(rec.id)
+		if grid == nil {
+			continue
+		}
+		for dz := int32(-1); dz <= 1; dz++ {
+			for dx := int32(-1); dx <= 1; dx++ {
+				nb := components.ChunkCoord{X: rec.cc.X + dx, Z: rec.cc.Z + dz}
+				slots, ok := slotsByChunk[nb]
+				if !ok {
+					continue
+				}
+				// Slot positions are chunk-local; translate to "relative to
+				// rec.cc local origin" so cells (ci+0.5, cj+0.5) can be
+				// compared directly without world-coord conversion.
+				originDX := float32(dx) * components.ChunkSize
+				originDZ := float32(dz) * components.ChunkSize
+				for si := range slots {
+					sx := slots[si].x + originDX
+					sz := slots[si].z + originDZ
+					// AABB cull around the slot.
+					iMin, iMax := clampCellRange(sx-scan, sx+scan)
+					jMin, jMax := clampCellRange(sz-scan, sz+scan)
+					if iMin >= iMax || jMin >= jMax {
+						continue
+					}
+					for cj := jMin; cj < jMax; cj++ {
+						for ci := iMin; ci < iMax; ci++ {
+							cx := float32(ci) + 0.5
+							cz := float32(cj) + 0.5
+							ddx := cx - sx
+							ddz := cz - sz
+							dSq := ddx*ddx + ddz*ddz
+							if dSq > scanSq {
+								continue
+							}
+							d := uint8(math.Sqrt(float64(dSq)))
+							cell := &grid.Cells[cj*components.NavGridSide+ci]
+							if d < cell.CoverDistance {
+								cell.CoverDistance = d
+							}
+						}
+					}
+				}
+			}
+		}
+	}
 }
 
 // clampCellRange — half-open [iMin, iMax) NavGrid cell indices that cover the

@@ -25,28 +25,36 @@ import rl "github.com/gen2brain/raylib-go/raylib"
 
 const timeBarHeight int32 = 64
 
-// rightColRatio is the side column's share of screen width. Wide enough that
-// inspector text rows aren't clipped at 1600×900; narrow enough that the big
-// slot stays usable for marquee selects.
-const rightColRatio float32 = 0.25
+// DefaultRightColRatio is the side column's default share of screen width.
+// Wide enough that inspector text rows aren't clipped at 1600×900; narrow
+// enough that the big slot stays usable for marquee selects.
+//
+// Phase 13.5 M13.5.1: ratios moved from package consts to PanelManager fields
+// so splitter drag (M13.5.2) can mutate them at runtime. NewPanelManager
+// seeds the fields with these defaults; loadLayout (M13.5.5) overrides them
+// from save/layout.json on startup when present.
+const DefaultRightColRatio float32 = 0.25
 
-// inspectorRatio splits the side column vertically. Inspector gets the top
-// share, the secondary view (map in Field, 3D in Command) gets the rest.
-const inspectorRatio float32 = 0.4
+// DefaultInspectorRatio splits the side column vertically. Inspector gets the
+// top share, the secondary view (map in Field, 3D in Command) gets the rest.
+const DefaultInspectorRatio float32 = 0.4
 
-func layoutField(screenW, screenH int32) map[PanelID]rl.Rectangle {
-	return splitGrid(screenW, screenH, Panel3D, PanelMap)
+func layoutField(screenW, screenH int32, rightCol, inspector float32) map[PanelID]rl.Rectangle {
+	return splitGrid(screenW, screenH, Panel3D, PanelMap, rightCol, inspector)
 }
 
-func layoutCommand(screenW, screenH int32) map[PanelID]rl.Rectangle {
-	return splitGrid(screenW, screenH, PanelMap, Panel3D)
+func layoutCommand(screenW, screenH int32, rightCol, inspector float32) map[PanelID]rl.Rectangle {
+	return splitGrid(screenW, screenH, PanelMap, Panel3D, rightCol, inspector)
 }
 
 // splitGrid computes the four panel rects when `big` occupies the left/main
 // column and `side` sits in the lower right beneath the inspector. Returns
 // rectangles for all four canonical PanelIDs.
-func splitGrid(screenW, screenH int32, big, side PanelID) map[PanelID]rl.Rectangle {
-	rightW := int32(float32(screenW) * rightColRatio)
+//
+// rightCol = side column width as a fraction of screen width (0..1).
+// inspector = inspector's share of the side column height (0..1).
+func splitGrid(screenW, screenH int32, big, side PanelID, rightCol, inspector float32) map[PanelID]rl.Rectangle {
+	rightW := int32(float32(screenW) * rightCol)
 	leftW := screenW - rightW
 	contentH := screenH - timeBarHeight
 
@@ -55,7 +63,7 @@ func splitGrid(screenW, screenH int32, big, side PanelID) map[PanelID]rl.Rectang
 		Width:  float32(leftW),
 		Height: float32(contentH),
 	}
-	inspectH := int32(float32(contentH) * inspectorRatio)
+	inspectH := int32(float32(contentH) * inspector)
 	inspectRect := rl.Rectangle{
 		X:      float32(leftW),
 		Y:      0,

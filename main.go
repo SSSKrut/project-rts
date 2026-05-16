@@ -321,6 +321,17 @@ func main() {
 	orderProgressMap := ecs.NewMap[components.OrderProgress](app.World)
 	orderChainMap := ecs.NewMap[components.OrderChain](app.World)
 
+	// Phase 13 maps. Read by Inspector quick-bars (M13.6) for visual state and
+	// by the chip-click handlers to write back into the squad's standing rules.
+	// Writes also originate from RoleService.AssignRole (Stamina) and
+	// SquadService.CreateFromTemplate (Movement / Engagement / Behavior).
+	movementProfileMap := ecs.NewMap[components.MovementProfile](app.World)
+	engagementRulesMap := ecs.NewMap[components.EngagementRules](app.World)
+	behaviorRulesMap := ecs.NewMap[components.BehaviorRules](app.World)
+	staminaMap := ecs.NewMap[components.Stamina](app.World)
+	orderAttackMoveMap := ecs.NewMap[components.OrderParamAttackMove](app.World)
+	orderMovementOverrideMap := ecs.NewMap[components.OrderParamMovementProfile](app.World)
+
 	// Phase 12 role service. Owns UnitRole + per-role Equipment sub-entities
 	// (Primary weapon, Secondary gear: Radio / Medkit / Spade / sidearm).
 	roleService := systems.NewRoleService(app.World)
@@ -404,7 +415,14 @@ func main() {
 	// Phase 10 UI scaffold.
 	screenW, screenH := initialScreenWidth, initialScreenHeight
 	panelMgr := ui.NewPanelManager()
+	// Phase 13.5 M13.5.5: restore split ratios from disk before the first
+	// Recompute so panels start at the user's last layout. Missing/corrupt
+	// file silently falls back to defaults.
+	loadLayout(panelMgr)
 	panelMgr.Recompute(screenW, screenH)
+	// Fail-safe: persist on shutdown in case the user resized but didn't end
+	// the drag (or the EndDrag persistence missed an edge case).
+	defer saveLayout(panelMgr)
 	scene3DRT := ui.NewScene3DRT(panelMgr.Get(ui.Panel3D))
 	defer scene3DRT.Unload()
 
@@ -419,6 +437,34 @@ func main() {
 	var mapPanning bool
 	var mapPanCursor rl.Vector2
 	var pieMenu ui.PieMenu
+	// Phase 13 M13.5: RMB modifier capture. Ctrl+RMB / Double-RMB / Alt+RMB
+	// set the order's MovementProfile override (Stealth / Sprint) or attach
+	// the AttackMove flag. We snapshot the modifier state at press-time so a
+	// release after the player lets go of Ctrl still applies the intended
+	// override.
+	var (
+		rmbPressCtrl   bool
+		rmbPressAlt    bool
+		rmbPressDouble bool
+		lastRMBPressAt float32 // session-time of the previous press
+	)
+	// Window for treating consecutive RMB presses as a double-click. PHASE-13.md
+	// заметка про Double-RMB: 300 ms is empirical — wide enough for relaxed
+	// chains, narrow enough that two deliberate sequential clicks don't fuse.
+	const rmbDoubleWindow float32 = 0.30
+	// Phase 13.5 M13.5.4: scrollbar thumb drag state. scrollDragging = true
+	// while LMB is held on a scrollbar thumb; scrollDragStartCursorY +
+	// scrollDragStartOffset capture the press-time anchor so cursor delta
+	// translates linearly to scroll offset.
+	var (
+		scrollDragging         bool
+		scrollDragStartCursorY float32
+		scrollDragStartOffset  float32
+	)
+	// One wheel-tick of `rl.GetMouseWheelMove()` scrolls Inspector by this
+	// many pixels (~3 rows at fontSize=14). Tunable in M13.5.6 if it feels
+	// off in playtest.
+	const wheelScrollSpeed float32 = 30
 	// Inter-frame smoothing for map squad markers (ISSUES #1 polish).
 	smoothedSquadPos := make(map[ecs.Entity]components.WorldPos, 8)
 
@@ -477,17 +523,78 @@ func main() {
 		focused := panelMgr.FocusedAt(cursor)
 		shiftHeld := rl.IsKeyDown(rl.KeyLeftShift) || rl.IsKeyDown(rl.KeyRightShift)
 		ctrlHeld := rl.IsKeyDown(rl.KeyLeftControl) || rl.IsKeyDown(rl.KeyRightControl)
+		altHeld := rl.IsKeyDown(rl.KeyLeftAlt) || rl.IsKeyDown(rl.KeyRightAlt)
 
 		panel3D := panelMgr.Get(ui.Panel3D)
 		panelMap := panelMgr.Get(ui.PanelMap)
 
 		// ── Tab → toggle layout preset ──
 		if rl.IsKeyPressed(rl.KeyTab) {
+			// Phase 13.5: Tab during a splitter drag aborts the drag (revert
+			// to pre-drag ratio) before flipping the preset — avoids weird
+			// half-applied resize state on preset swap.
+			if panelMgr.IsDragging() {
+				panelMgr.AbortDrag()
+			}
 			panelMgr.TogglePreset()
 			panelMgr.Recompute(screenW, screenH)
 			scene3DRT.EnsureSize(panelMgr.Get(ui.Panel3D))
 			panel3D = panelMgr.Get(ui.Panel3D)
 			panelMap = panelMgr.Get(ui.PanelMap)
+		}
+
+		// ── Phase 13.5 M13.5.2 — splitter hover / drag ──
+		// Splitter takes priority over panel-content input: hover sets the
+		// resize cursor; LMB-press on a splitter starts a drag that consumes
+		// LMB until release. Drag updates RightColRatio / InspectorRatio live
+		// and re-runs Recompute so other code (chrome, content) sees the new
+		// bounds the same frame.
+		splitterHover := panelMgr.SplitterAt(cursor)
+		switch {
+		case panelMgr.IsDragging():
+			// Show resize cursor for the splitter we're actively dragging.
+			switch panelMgr.DraggingSplitter() {
+			case ui.SplitterMain:
+				rl.SetMouseCursor(rl.MouseCursorResizeEW)
+			case ui.SplitterRight:
+				rl.SetMouseCursor(rl.MouseCursorResizeNS)
+			}
+		case splitterHover != ui.SplitterNone:
+			switch splitterHover {
+			case ui.SplitterMain:
+				rl.SetMouseCursor(rl.MouseCursorResizeEW)
+			case ui.SplitterRight:
+				rl.SetMouseCursor(rl.MouseCursorResizeNS)
+			}
+		default:
+			rl.SetMouseCursor(rl.MouseCursorDefault)
+		}
+		// LMB on splitter → BeginDrag. Consumes the press so the rest of the
+		// frame's LMB handlers (selection / marquee) skip.
+		if !panelMgr.IsDragging() && splitterHover != ui.SplitterNone &&
+			rl.IsMouseButtonPressed(rl.MouseButtonLeft) {
+			panelMgr.BeginDrag(splitterHover)
+		}
+		// Active drag — apply cursor pos to ratio. On release, persist if
+		// changed (M13.5.5 will wire actual saveLayout call; for now the
+		// release just ends the drag).
+		if panelMgr.IsDragging() {
+			if rl.IsMouseButtonDown(rl.MouseButtonLeft) {
+				panelMgr.UpdateDrag(cursor)
+				// Re-sync local panel handles since Recompute moved them.
+				panel3D = panelMgr.Get(ui.Panel3D)
+				panelMap = panelMgr.Get(ui.PanelMap)
+				scene3DRT.EnsureSize(panel3D)
+			} else {
+				if panelMgr.EndDrag() {
+					// Phase 13.5 M13.5.5: persist on EndDrag returning
+					// changed=true. Atomic write — failure logged, not fatal.
+					saveLayout(panelMgr)
+				}
+				panel3D = panelMgr.Get(ui.Panel3D)
+				panelMap = panelMgr.Get(ui.PanelMap)
+				scene3DRT.EnsureSize(panel3D)
+			}
 		}
 
 		// ── Space → toggle pause; +/− → cycle speed 1→2→4→8→1 ──
@@ -579,6 +686,50 @@ func main() {
 			mapPanning = false
 		}
 
+		// ── Phase 13.5 M13.5.4 — Inspector wheel scroll + thumb drag ──
+		// Wheel only fires when the cursor is over the Inspector panel and
+		// no splitter drag is active. MapCamera's wheel block above is gated
+		// on focused == ui.PanelMap, so the two paths are mutually exclusive.
+		if focused == ui.PanelInspect && !panelMgr.IsDragging() {
+			if wheel := rl.GetMouseWheelMove(); wheel != 0 {
+				if scroll := panelMgr.ScrollByID(ui.PanelInspect); scroll != nil {
+					scroll.OffsetY -= wheel * wheelScrollSpeed
+					ui.ClampScrollOffset(panelMgr.Get(ui.PanelInspect), scroll)
+				}
+			}
+		}
+		// Thumb drag — LMB-press on thumb rect starts the drag, regardless of
+		// focused panel (the thumb itself is always inside Inspector bounds).
+		// Splitter drag has priority — it uses LMB too, so guard against both.
+		inspScrollPanel := panelMgr.Get(ui.PanelInspect)
+		inspScroll := panelMgr.ScrollByID(ui.PanelInspect)
+		if !panelMgr.IsDragging() && inspScroll != nil {
+			thumb := ui.ScrollbarThumbRect(inspScrollPanel, inspScroll)
+			if !scrollDragging && thumb.Width > 0 && thumb.Height > 0 &&
+				rl.IsMouseButtonPressed(rl.MouseButtonLeft) &&
+				cursor.X >= thumb.X && cursor.X < thumb.X+thumb.Width &&
+				cursor.Y >= thumb.Y && cursor.Y < thumb.Y+thumb.Height {
+				scrollDragging = true
+				scrollDragStartCursorY = cursor.Y
+				scrollDragStartOffset = inspScroll.OffsetY
+			}
+		}
+		if scrollDragging {
+			if rl.IsMouseButtonDown(rl.MouseButtonLeft) && inspScroll != nil {
+				track := ui.ScrollbarRect(inspScrollPanel)
+				maxOffset := inspScroll.ContentHeight - track.Height
+				thumbH := ui.ScrollbarThumbRect(inspScrollPanel, inspScroll).Height
+				scrollableTrack := track.Height - thumbH
+				if scrollableTrack > 0 && maxOffset > 0 {
+					dy := cursor.Y - scrollDragStartCursorY
+					inspScroll.OffsetY = scrollDragStartOffset + dy*(maxOffset/scrollableTrack)
+					ui.ClampScrollOffset(inspScrollPanel, inspScroll)
+				}
+			} else {
+				scrollDragging = false
+			}
+		}
+
 		// ── 3D panel cursor (content-rect-local) ──
 		// Cursor coords used for raycast / marquee / picking are relative to
 		// the 3D content rect (panel minus chrome), and viewW/H match the
@@ -599,7 +750,10 @@ func main() {
 		}
 
 		// ── LMB press ──
-		if rl.IsMouseButtonPressed(rl.MouseButtonLeft) {
+		// Phase 13.5 guard: a splitter drag claims LMB exclusively. Skip
+		// selection / marquee / map-pick on the press that started the drag
+		// AND every frame the drag is active.
+		if !panelMgr.IsDragging() && rl.IsMouseButtonPressed(rl.MouseButtonLeft) {
 			switch focused {
 			case ui.Panel3D:
 				marqueeStart = cursor
@@ -698,6 +852,14 @@ func main() {
 				targetOK = true
 			}
 			if targetOK && len(selected) > 0 && (focused == ui.Panel3D || focused == ui.PanelMap) {
+				// Phase 13 M13.5: snapshot modifiers + double-click decision
+				// at the moment of press. Held key state may change before the
+				// release that commits the order, so we lock it now.
+				now := float32(app.Elapsed().Seconds())
+				rmbPressCtrl = ctrlHeld
+				rmbPressAlt = altHeld
+				rmbPressDouble = (now - lastRMBPressAt) <= rmbDoubleWindow
+				lastRMBPressAt = now
 				pieMenu.Begin(cursor, pressTarget, focused)
 			}
 		}
@@ -712,11 +874,13 @@ func main() {
 			switch {
 			case res.ReleasedAsCommit:
 				k := res.Kind
-				resolveRMBOrder(selected, pieMenu.Target, shiftHeld, &k, hitTester,
+				mods := rmbModifiersFromPress(rmbPressCtrl, rmbPressAlt, rmbPressDouble)
+				resolveRMBOrder(selected, pieMenu.Target, shiftHeld, &k, mods, hitTester,
 					squadService, navService, squadMemberMap, posMap, actionQueueMap)
 				pieMenu.SourcePanel = ui.PanelNone
 			case res.ReleasedAsTap:
-				resolveRMBOrder(selected, pieMenu.Target, shiftHeld, nil, hitTester,
+				mods := rmbModifiersFromPress(rmbPressCtrl, rmbPressAlt, rmbPressDouble)
+				resolveRMBOrder(selected, pieMenu.Target, shiftHeld, nil, mods, hitTester,
 					squadService, navService, squadMemberMap, posMap, actionQueueMap)
 				pieMenu.SourcePanel = ui.PanelNone
 			case res.Cancelled, res.ReleasedAsDrag:
@@ -780,6 +944,36 @@ func main() {
 					if fd := formationDataMap.Get(commonSquad); fd != nil {
 						fd.Type = newKind
 						fd.Spacing = systems.FormationSpacing(newKind)
+					}
+				}
+			}
+		}
+
+		// ── Phase 13 M13.7 — MovementProfile hotkeys ──
+		// `[` / `]` cycle MovementProfile presets prev/next. `'` toggles
+		// Posture Standard ↔ Quiet. Stance hotkeys (Z/X/C) are deferred to
+		// Phase 21 because Z/X are already taken (crater, cover overlay) and
+		// the Inspector quick-bar covers the case meanwhile.
+		//
+		// Hotkeys apply when a homogeneous squad is selected — same gate as
+		// formation hotkeys above.
+		if len(selected) > 0 {
+			if commonSquad, homo := groupSelected(selected, squadMemberMap); homo && commonSquad != (ecs.Entity{}) {
+				if app.World.Alive(commonSquad) {
+					profile := movementProfileMap.Get(commonSquad)
+					if profile != nil {
+						switch {
+						case rl.IsKeyPressed(rl.KeyLeftBracket):
+							*profile = components.ApplyPreset(cyclePreset(detectPreset(*profile), -1))
+						case rl.IsKeyPressed(rl.KeyRightBracket):
+							*profile = components.ApplyPreset(cyclePreset(detectPreset(*profile), +1))
+						case rl.IsKeyPressed(rl.KeyApostrophe):
+							if profile.Posture == components.PostureStandard {
+								profile.Posture = components.PostureQuiet
+							} else {
+								profile.Posture = components.PostureStandard
+							}
+						}
 					}
 				}
 			}
@@ -1124,32 +1318,59 @@ func main() {
 		ui.DrawMap(panelMap, mapCtx)
 
 		// Inspector panel.
-		ui.DrawInspector(panelMgr.Get(ui.PanelInspect), ui.InspectorCtx{
-			World:            app.World,
-			Selected:         selected,
-			Hovered:          hovered,
-			Font:             hudFont,
-			PosMap:           posMap,
-			StanceMap:        stanceMap,
-			MotionMap:        motionMap,
-			SuppressionMap:   suppressionMap,
-			EquipmentMap:     equipmentMap,
-			SquadMemberMap:   squadMemberMap,
-			RosterMap:        rosterMap,
-			FormationDataMap: formationDataMap,
-			MacroPathMap:     macroPathMap,
-			SquadFilter:      squadFilter,
-			OrderQueueMap:    orderQueueMap,
-			OrderKindMap:     orderKindMap,
-			OrderStateMap:    orderStateMap,
-			OrderTargetMap:   orderTargetMap,
-			OrderProgressMap: orderProgressMap,
-			OrderChainMap:    orderChainMap,
-			BuildingMap:      buildingMap,
-			TrenchRootMap:    trenchRootMap,
-			RoleMap:          roleMap,
-			SquadColor:       squadColor,
+		// Phase 13 M13.6: feed click state + standing-rule handles for the
+		// quick-bar sections. LMBPressed mirrors the single press edge so
+		// chips fire once per click. PanelFocused gates clicks so a drag
+		// originating elsewhere doesn't accidentally trigger toggles.
+		// Phase 13.5 M13.5.3: pass the per-panel scroll handle so DrawInspector
+		// can subtract OffsetY and write back ContentHeight.
+		inspectorFocused := panelMgr.FocusedAt(cursor) == ui.PanelInspect
+		inspectorPanel := panelMgr.Get(ui.PanelInspect)
+		inspectorScroll := panelMgr.ScrollByID(ui.PanelInspect)
+		ui.DrawInspector(inspectorPanel, ui.InspectorCtx{
+			World:                    app.World,
+			Selected:                 selected,
+			Hovered:                  hovered,
+			Font:                     hudFont,
+			PosMap:                   posMap,
+			StanceMap:                stanceMap,
+			MotionMap:                motionMap,
+			SuppressionMap:           suppressionMap,
+			EquipmentMap:             equipmentMap,
+			SquadMemberMap:           squadMemberMap,
+			RosterMap:                rosterMap,
+			FormationDataMap:         formationDataMap,
+			MacroPathMap:             macroPathMap,
+			SquadFilter:              squadFilter,
+			OrderQueueMap:            orderQueueMap,
+			OrderKindMap:             orderKindMap,
+			OrderStateMap:            orderStateMap,
+			OrderTargetMap:           orderTargetMap,
+			OrderProgressMap:         orderProgressMap,
+			OrderChainMap:            orderChainMap,
+			BuildingMap:              buildingMap,
+			TrenchRootMap:            trenchRootMap,
+			RoleMap:                  roleMap,
+			MovementProfileMap:       movementProfileMap,
+			EngagementRulesMap:       engagementRulesMap,
+			BehaviorRulesMap:         behaviorRulesMap,
+			StaminaMap:               staminaMap,
+			OrderAttackMoveMap:       orderAttackMoveMap,
+			OrderMovementOverrideMap: orderMovementOverrideMap,
+			Cursor:                   cursor,
+			LMBPressed:               !panelMgr.IsDragging() && !scrollDragging && rl.IsMouseButtonPressed(rl.MouseButtonLeft),
+			PanelFocused:             inspectorFocused,
+			Scroll:                   inspectorScroll,
+			SquadColor:               squadColor,
 		})
+		// Phase 13.5 M13.5.3: scrollbar overlay drawn AFTER DrawInspector so
+		// the EndScissorMode released its clip first. ClampScrollOffset keeps
+		// the offset valid if a content shrink (selection switch) made the
+		// previous offset out-of-range.
+		if inspectorScroll != nil {
+			ui.ClampScrollOffset(inspectorPanel, inspectorScroll)
+			ui.DrawScrollbar(inspectorPanel, inspectorScroll)
+		}
 
 		// Time panel.
 		ui.DrawTimePanel(panelMgr.Get(ui.PanelTime), hudFont, ui.TimeDisplay{
@@ -1169,12 +1390,17 @@ func main() {
 		quLabels := unitRenderFilter.Query()
 		for quLabels.Next() {
 			pos, _, st := quLabels.Get()
+			ent := quLabels.Entity()
 			renderPos := pos.ToRenderSpace(systems.CurrentOriginChunk)
 			role := components.RoleRifleman
-			if r := roleMap.Get(quLabels.Entity()); r != nil {
+			if r := roleMap.Get(ent); r != nil {
 				role = r.Kind
 			}
 			drawUnitRoleLabel(renderPos, *st, role, hudFont, panel3DContent)
+			// Phase 13 M13.7: thin Stamina bar above the cap when < 80%.
+			if stam := staminaMap.Get(ent); stam != nil {
+				drawUnitStaminaBar(renderPos, *st, role, stam.Current, stam.MaxLevel, panel3DContent)
+			}
 		}
 		rl.EndScissorMode()
 

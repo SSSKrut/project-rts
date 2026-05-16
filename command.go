@@ -146,8 +146,75 @@ func resolveTargetIntoOrder(hit HitTestResult, kindOverride *components.OrderKin
 	}
 }
 
+// detectPreset returns the MovementPreset whose profile equals `p`, or
+// PresetDefault if no preset matches (player has hand-edited an axis). Used
+// by the `[` / `]` hotkeys to find the current position in the preset cycle.
+func detectPreset(p components.MovementProfile) components.MovementPreset {
+	presets := [6]components.MovementPreset{
+		components.PresetDefault, components.PresetCautious, components.PresetRush,
+		components.PresetSprint, components.PresetStealth, components.PresetProneCrawl,
+	}
+	for _, preset := range presets {
+		if components.ApplyPreset(preset) == p {
+			return preset
+		}
+	}
+	return components.PresetDefault
+}
+
+// cyclePreset advances the preset index by `step` (typically ±1) with wrap.
+// Hotkeys `[` (step=-1) and `]` (step=+1) drive this.
+func cyclePreset(cur components.MovementPreset, step int) components.MovementPreset {
+	const count = 6
+	next := (int(cur) + step) % count
+	if next < 0 {
+		next += count
+	}
+	return components.MovementPreset(next)
+}
+
+// RMBModifiers captures the keyboard modifier state at the moment of RMB
+// press (snapshot semantics: held-key state may change before the release
+// that actually commits the order, so we lock it on press). Phase 13 M13.5
+// uses these to attach optional OrderParamMovementProfile / OrderParamAttackMove
+// to the spawned order entity.
+type RMBModifiers struct {
+	Sneak      bool // Ctrl+RMB: Stealth preset MovementProfile override
+	Sprint     bool // Double-RMB (within rmbDoubleWindow): Sprint preset
+	AttackMove bool // Alt+RMB: OrderParamAttackMove flag (Phase 14 scaffold)
+}
+
+// rmbModifiersFromPress maps captured press-time modifier flags into the
+// canonical RMBModifiers struct. Wraps the boolean state so the resolver
+// signature stays stable when more modifiers land (Phase 19+ joint, etc.).
+func rmbModifiersFromPress(ctrl, alt, double bool) RMBModifiers {
+	return RMBModifiers{
+		Sneak:      ctrl,
+		Sprint:     double,
+		AttackMove: alt,
+	}
+}
+
+// applyModifiersToParams converts press-time modifiers into the per-order
+// OrderParams fields. Sneak / Sprint write OrderParams.MovementOverride;
+// AttackMove sets the bool flag. Sprint wins over Sneak when both are set
+// (intentional — double-Ctrl+RMB sprints quietly is not a meaningful combo).
+func applyModifiersToParams(p systems.OrderParams, mods RMBModifiers) systems.OrderParams {
+	if mods.Sprint {
+		profile := components.ApplyPreset(components.PresetSprint)
+		p.MovementOverride = &profile
+	} else if mods.Sneak {
+		profile := components.ApplyPreset(components.PresetStealth)
+		p.MovementOverride = &profile
+	}
+	if mods.AttackMove {
+		p.AttackMove = true
+	}
+	return p
+}
+
 // resolveRMBOrder is the shared RMB entry point for 3D-panel and Map-panel
-// clicks. Phase 11 reshape (M11.3 + M11.5):
+// clicks. Phase 11 reshape (M11.3 + M11.5) + Phase 13 M13.5 extension:
 //
 //   - Hit-test classifies the target as Terrain / Building / Trench, mapping
 //     to OrderKindCode {MoveTo / Garrison / OccupyTrench}.
@@ -158,11 +225,14 @@ func resolveTargetIntoOrder(hit HitTestResult, kindOverride *components.OrderKin
 //     OrderChain.Next).
 //   - `kindOverride` from a pie menu commit forces the kind regardless of
 //     hit-test.
+//   - mods carries the press-time modifier state (Phase 13 M13.5): Ctrl =
+//     Stealth preset, Double-RMB = Sprint preset, Alt = AttackMove flag.
 func resolveRMBOrder(
 	selected []ecs.Entity,
 	target components.WorldPos,
 	shiftHeld bool,
 	kindOverride *components.OrderKindCode,
+	mods RMBModifiers,
 	hitTester *HitTester,
 	squadService *systems.SquadService,
 	navService *systems.NavService,
@@ -185,8 +255,9 @@ func resolveRMBOrder(
 	// the unique squads touched by the selection; Soloists are units not in
 	// any squad. Never call SquadService.Leave — that was the ISSUES #3 bug.
 	groups := groupSelectionByOwner(selected, squadMemberMap)
+	params := applyModifiersToParams(systems.OrderParams{}, mods)
 	for _, s := range groups.SquadsToOrder {
-		squadService.IssueOrder(s, kind, target, entityTarget, shiftHeld, systems.OrderParams{})
+		squadService.IssueOrder(s, kind, target, entityTarget, shiftHeld, params)
 	}
 
 	if len(groups.Soloists) == 0 {

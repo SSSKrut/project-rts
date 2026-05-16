@@ -43,6 +43,28 @@ type InspectorCtx struct {
 	// view. Nil falls back to "Rifleman placeholder" — keeps backwards-compat
 	// for any caller that hasn't wired the map yet.
 	RoleMap *ecs.Map[components.UnitRole]
+	// Phase 13 maps for the quick-bar sections + Stamina display. When all
+	// three standing-rule maps are non-nil, drawInspectorSquad appends the
+	// Movement / Engagement / Behavior sections under the roster.
+	MovementProfileMap       *ecs.Map[components.MovementProfile]
+	EngagementRulesMap       *ecs.Map[components.EngagementRules]
+	BehaviorRulesMap         *ecs.Map[components.BehaviorRules]
+	StaminaMap               *ecs.Map[components.Stamina]
+	OrderAttackMoveMap       *ecs.Map[components.OrderParamAttackMove]
+	OrderMovementOverrideMap *ecs.Map[components.OrderParamMovementProfile]
+	// Phase 13 click input. Cursor is the current mouse position in screen
+	// coords; LMBPressed is true exactly on the frame the left button was
+	// pressed (passed through from main.go's rl.IsMouseButtonPressed call);
+	// PanelFocused gates clicks so chips don't react to drags / clicks that
+	// belong to other panels.
+	Cursor       rl.Vector2
+	LMBPressed   bool
+	PanelFocused bool
+	// Phase 13.5 M13.5.3: scroll handle. DrawInspector subtracts Scroll.OffsetY
+	// from initial y and writes total content height into Scroll.ContentHeight
+	// at the end of the draw — caller's DrawScrollbar reads it next frame.
+	// Nil → behave as if scroll==0 with no measurement (legacy callers).
+	Scroll *ScrollState
 	// SquadColor picks a stable palette colour from a squad entity ID so the
 	// inspector and the map render use the same shade. Injected as a func to
 	// avoid a UI → render-package cycle.
@@ -85,6 +107,12 @@ var (
 //   - Multi-select    → counts (units, squads).
 //
 // Hovered entity (a unit or squad) is highlighted by a tinted row background.
+//
+// Phase 13.5 M13.5.3: when ctx.Scroll != nil, the initial y is shifted up by
+// Scroll.OffsetY (so on-screen content scrolls), and at the end of the draw
+// the total used height is written back into Scroll.ContentHeight so the
+// scrollbar can size + clamp correctly. Caller (main.go) draws the scrollbar
+// after EndScissorMode.
 func DrawInspector(panel Panel, ctx InspectorCtx) {
 	content := ContentRect(panel)
 	rl.DrawRectangleRec(content, inspectorBG)
@@ -92,22 +120,42 @@ func DrawInspector(panel Panel, ctx InspectorCtx) {
 	defer rl.EndScissorMode()
 
 	x := int32(content.X) + inspectorPadX
-	y := int32(content.Y) + inspectorPadY
+	y0 := int32(content.Y) + inspectorPadY
+	scrollOffset := int32(0)
+	if ctx.Scroll != nil {
+		scrollOffset = int32(ctx.Scroll.OffsetY)
+	}
+	// Reserve room for the scrollbar on the right so chips/text aren't
+	// drawn under it. Scrollbar width is small (8 px) so subtracting per-row
+	// would be wasteful; just shrink usable width once.
+	usableWidth := int32(content.Width) - 2*inspectorPadX - int32(scrollbarTrackWidth)
+	y := y0 - scrollOffset
 
+	var endY int32
 	switch describeSelection(ctx) {
 	case selEmpty:
-		drawInspectorEmpty(ctx, x, y, int32(content.Width)-2*inspectorPadX)
+		endY = drawInspectorEmpty(ctx, x, y, usableWidth)
 	case selSingleUnit:
-		drawInspectorUnit(ctx, ctx.Selected[0], x, y)
+		endY = drawInspectorUnit(ctx, ctx.Selected[0], x, y)
 	case selSingleSquad:
 		// One squad selected = the roster's count matches len(selected) and
 		// every member shares the same Squad. We resolve the squad through
 		// the first member's SquadMember.
 		if sm := ctx.SquadMemberMap.Get(ctx.Selected[0]); sm != nil {
-			drawInspectorSquad(ctx, sm.Squad, x, y, int32(content.Width)-2*inspectorPadX)
+			endY = drawInspectorSquad(ctx, sm.Squad, x, y, usableWidth)
+		} else {
+			endY = y
 		}
 	case selMulti:
-		drawInspectorMulti(ctx, x, y)
+		endY = drawInspectorMulti(ctx, x, y)
+	default:
+		endY = y
+	}
+
+	if ctx.Scroll != nil {
+		// Total used height = (endY + scrollOffset) - y0. Add inspectorPadY
+		// of bottom padding so the last row isn't hugging the panel edge.
+		ctx.Scroll.ContentHeight = float32(endY+scrollOffset-y0) + float32(inspectorPadY)
 	}
 }
 
@@ -162,7 +210,7 @@ func groupSelectedHelper(selected []ecs.Entity,
 	return common, true
 }
 
-func drawInspectorEmpty(ctx InspectorCtx, x, y, width int32) {
+func drawInspectorEmpty(ctx InspectorCtx, x, y, width int32) int32 {
 	drawText(ctx.Font, "No selection", x, y, inspectorFontSize, inspectorText)
 	y += inspectorRowH * 2
 
@@ -193,12 +241,13 @@ func drawInspectorEmpty(ctx InspectorCtx, x, y, width int32) {
 			x+16, y, inspectorFontSize, rowText)
 		y += inspectorRowH
 	}
+	return y
 }
 
-func drawInspectorUnit(ctx InspectorCtx, ent ecs.Entity, x, y int32) {
+func drawInspectorUnit(ctx InspectorCtx, ent ecs.Entity, x, y int32) int32 {
 	if !ctx.World.Alive(ent) {
 		drawText(ctx.Font, "(unit no longer alive)", x, y, inspectorFontSize, inspectorTextDim)
-		return
+		return y + inspectorRowH
 	}
 	drawText(ctx.Font, fmt.Sprintf("Unit #%X", ent.ID()&0xFFFF),
 		x, y, inspectorFontSize, inspectorText)
@@ -234,6 +283,15 @@ func drawInspectorUnit(ctx InspectorCtx, ent ecs.Entity, x, y int32) {
 			x, y, inspectorFontSize, inspectorText)
 		y += inspectorRowH
 	}
+	// Phase 13 M13.6: per-unit Stamina row. When the unit has no Stamina
+	// component (legacy / orphaned spawn) we skip rather than printing zeros.
+	if ctx.StaminaMap != nil {
+		if st := ctx.StaminaMap.Get(ent); st != nil && st.MaxLevel > 0 {
+			drawText(ctx.Font, fmt.Sprintf("Stamina:   %.2f / %.2f", st.Current, st.MaxLevel),
+				x, y, inspectorFontSize, inspectorText)
+			y += inspectorRowH
+		}
+	}
 	if sm := ctx.SquadMemberMap.Get(ent); sm != nil && sm.Squad != (ecs.Entity{}) {
 		drawText(ctx.Font, fmt.Sprintf("Squad:     #%X slot %d", sm.Squad.ID()&0xFFF, sm.SlotIndex),
 			x, y, inspectorFontSize, inspectorText)
@@ -248,17 +306,18 @@ func drawInspectorUnit(ctx InspectorCtx, ent ecs.Entity, x, y int32) {
 			x, y, inspectorFontSize, inspectorText)
 		y += inspectorRowH
 	}
+	return y
 }
 
-func drawInspectorSquad(ctx InspectorCtx, squad ecs.Entity, x, y, width int32) {
+func drawInspectorSquad(ctx InspectorCtx, squad ecs.Entity, x, y, width int32) int32 {
 	if !ctx.World.Alive(squad) {
 		drawText(ctx.Font, "(squad destroyed)", x, y, inspectorFontSize, inspectorTextDim)
-		return
+		return y + inspectorRowH
 	}
 	roster := ctx.RosterMap.Get(squad)
 	if roster == nil {
 		drawText(ctx.Font, "(no roster)", x, y, inspectorFontSize, inspectorTextDim)
-		return
+		return y + inspectorRowH
 	}
 
 	colorChip := rl.Color{R: 80, G: 80, B: 80, A: 255}
@@ -332,6 +391,15 @@ func drawInspectorSquad(ctx InspectorCtx, squad ecs.Entity, x, y, width int32) {
 			x+28, y, inspectorFontSize, inspectorText)
 		y += inspectorRowH
 	}
+
+	// Phase 13 M13.6: standing-rule quick-bars under the roster. Guard on the
+	// new maps so a caller that hasn't wired them (older test) still gets the
+	// Phase 12 layout without quick-bars.
+	if ctx.MovementProfileMap != nil && ctx.EngagementRulesMap != nil && ctx.BehaviorRulesMap != nil {
+		y += inspectorRowH / 2
+		y = drawStandingRulesSections(ctx, squad, x, y, width)
+	}
+	return y
 }
 
 // contrastTextColor returns black or white depending on the perceived
@@ -345,7 +413,7 @@ func contrastTextColor(bg rl.Color) rl.Color {
 	return rl.Color{R: 0, G: 0, B: 0, A: 255}
 }
 
-func drawInspectorMulti(ctx InspectorCtx, x, y int32) {
+func drawInspectorMulti(ctx InspectorCtx, x, y int32) int32 {
 	units := 0
 	soloists := 0
 	squadSet := make(map[ecs.Entity]struct{})
@@ -367,6 +435,7 @@ func drawInspectorMulti(ctx InspectorCtx, x, y int32) {
 	y += inspectorRowH
 	drawText(ctx.Font, fmt.Sprintf("Soloists:       %d", soloists),
 		x, y, inspectorFontSize, inspectorText)
+	return y + inspectorRowH
 }
 
 func isSelected(selected []ecs.Entity, e ecs.Entity) bool {

@@ -25,10 +25,29 @@ const (
 // NavCell is one A*-eligible square. Cost = 0 means "impassable" (slope, wall,
 // closed door, deep water, blocking prop). Cost > 0 is a relative step cost
 // applied as cost × stepLength (1 m NSEW, √2 m diagonal) by the planner.
+//
+// Phase 13 M13.4 adds CoverDistance: the distance in cells (1 m = 1 unit) to
+// the nearest cover slot in the 9-chunk window around this cell. 0 = on a
+// slot, 255 = no slot within range (CoverDistanceFar). NavService.FindPath
+// reads this when PathStyle=CoverSeek to bias the route through cover-rich
+// cells (PHASE-13.md P4 / P12).
 type NavCell struct {
-	Cost  uint8
-	Flags NavFlags
+	Cost          uint8
+	Flags         NavFlags
+	CoverDistance uint8
 }
+
+// CoverDistanceFar is the "no cover within scan radius" sentinel for
+// NavCell.CoverDistance. NavService uses CoverDistance < CoverSeekThreshold
+// to decide whether to apply the CoverSeek bonus.
+const CoverDistanceFar uint8 = 255
+
+// CoverSeekThreshold is the cell-count distance below which CoverSeek
+// PathStyle applies the cost multiplier (PHASE-13.md P4). 8 cells = 8 m
+// scan radius. Tunable empirically — if units zig-zag too much during
+// playtest, raise this. Stored as a typed constant so the planner and the
+// debug overlay use the same value.
+const CoverSeekThreshold uint8 = 8
 
 // NavGrid is the per-chunk navigation bake. ~8 KB by value, packed into the
 // chunk archetype with no extra indirection.

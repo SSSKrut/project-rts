@@ -33,8 +33,12 @@ type SquadMacroPathSystem struct {
 	orderKindMap   *ecs.Map[components.OrderKind]
 	orderTargetMap *ecs.Map[components.OrderTarget]
 	orderStateMap  *ecs.Map[components.OrderState]
-	nav            *NavService
-	pool           *core.WorkerPool
+	// Phase 13 M13.4: read the squad's MovementProfile.PathStyle (or the
+	// order-level override) so FindPath can apply the modifier.
+	movementProfileMap       *ecs.Map[components.MovementProfile]
+	orderMovementOverrideMap *ecs.Map[components.OrderParamMovementProfile]
+	nav                      *NavService
+	pool                     *core.WorkerPool
 
 	// Phase 11.6 M11.6.2: reusable snapshot buffer.
 	workBuf []macroPathWork
@@ -58,6 +62,8 @@ func (sys *SquadMacroPathSystem) InitUI(w *ecs.World) {
 	sys.orderKindMap = ecs.NewMap[components.OrderKind](w)
 	sys.orderTargetMap = ecs.NewMap[components.OrderTarget](w)
 	sys.orderStateMap = ecs.NewMap[components.OrderState](w)
+	sys.movementProfileMap = ecs.NewMap[components.MovementProfile](w)
+	sys.orderMovementOverrideMap = ecs.NewMap[components.OrderParamMovementProfile](w)
 }
 
 func (SquadMacroPathSystem) Name() string { return "squad_macro_path" }
@@ -90,10 +96,11 @@ const (
 
 // macroPathWork — snapshot row for the parallel per-squad pass.
 type macroPathWork struct {
-	roster *components.CommandRoster
-	mp     *components.MacroPath
-	fd     *components.FormationData
-	head   *components.OrderQueueHead
+	roster    *components.CommandRoster
+	mp        *components.MacroPath
+	fd        *components.FormationData
+	head      *components.OrderQueueHead
+	pathStyle components.PathStyle // resolved in the serial snapshot pass
 }
 
 func (sys *SquadMacroPathSystem) Update(ctx core.UpdateContext) {
@@ -103,7 +110,22 @@ func (sys *SquadMacroPathSystem) Update(ctx core.UpdateContext) {
 	q := sys.filter.Query()
 	for q.Next() {
 		_, roster, mp, fd, head := q.Get()
-		sys.workBuf = append(sys.workBuf, macroPathWork{roster: roster, mp: mp, fd: fd, head: head})
+		sq := q.Entity()
+		// Phase 13 M13.4: resolve PathStyle from the squad's MovementProfile
+		// or the active Order's override. Stays serial because Ark map.Get
+		// is concurrent-safe but it's just cheaper to do it once here.
+		pathStyle := components.PathStyleDirect
+		if profile := sys.movementProfileMap.Get(sq); profile != nil {
+			pathStyle = profile.PathStyle
+		}
+		if head.First != (ecs.Entity{}) {
+			if override := sys.orderMovementOverrideMap.Get(head.First); override != nil {
+				pathStyle = override.Profile.PathStyle
+			}
+		}
+		sys.workBuf = append(sys.workBuf, macroPathWork{
+			roster: roster, mp: mp, fd: fd, head: head, pathStyle: pathStyle,
+		})
 	}
 	work := sys.workBuf
 
@@ -197,7 +219,10 @@ func (sys *SquadMacroPathSystem) processSquad(world *ecs.World, w macroPathWork,
 		return
 	}
 
-	path := sys.nav.FindPath(center, mp.Goal, NavOpts{Locomotion: components.LocomotionFoot})
+	path := sys.nav.FindPath(center, mp.Goal, NavOpts{
+		Locomotion: components.LocomotionFoot,
+		PathStyle:  w.pathStyle,
+	})
 
 	mp.Head = 0
 	mp.Count = 0

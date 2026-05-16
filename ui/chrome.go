@@ -58,3 +58,95 @@ func ContentRect(p Panel) rl.Rectangle {
 func PanelBackground(p Panel, fill rl.Color) {
 	rl.DrawRectangleRec(ContentRect(p), fill)
 }
+
+// Scrollbar visual constants (Phase 13.5 M13.5.3).
+const (
+	scrollbarTrackWidth float32 = 8
+	scrollbarThumbMin   float32 = 30
+)
+
+var (
+	scrollbarTrackColor = rl.Color{R: 28, G: 32, B: 38, A: 200}
+	scrollbarThumbColor = rl.Color{R: 80, G: 90, B: 105, A: 220}
+)
+
+// ScrollbarRect returns the on-screen rectangle of the vertical scrollbar
+// track for a panel. Phase 13.5 places it inside the content rect along the
+// right edge so existing content scissor still clips correctly.
+func ScrollbarRect(p Panel) rl.Rectangle {
+	c := ContentRect(p)
+	return rl.Rectangle{
+		X:      c.X + c.Width - scrollbarTrackWidth,
+		Y:      c.Y,
+		Width:  scrollbarTrackWidth,
+		Height: c.Height,
+	}
+}
+
+// ScrollbarThumbRect returns the position + size of the scrollbar thumb based
+// on the panel's content height vs visible height. Returns zero rect when no
+// scroll is needed (content fits).
+func ScrollbarThumbRect(p Panel, scroll *ScrollState) rl.Rectangle {
+	if scroll == nil {
+		return rl.Rectangle{}
+	}
+	track := ScrollbarRect(p)
+	if scroll.ContentHeight <= track.Height || track.Height <= 0 {
+		return rl.Rectangle{}
+	}
+	thumbH := track.Height * (track.Height / scroll.ContentHeight)
+	if thumbH < scrollbarThumbMin {
+		thumbH = scrollbarThumbMin
+	}
+	if thumbH > track.Height {
+		thumbH = track.Height
+	}
+	maxOffset := scroll.ContentHeight - track.Height
+	scrollableTrack := track.Height - thumbH
+	thumbY := track.Y
+	if maxOffset > 0 && scrollableTrack > 0 {
+		thumbY += scrollableTrack * (scroll.OffsetY / maxOffset)
+	}
+	return rl.Rectangle{
+		X:      track.X,
+		Y:      thumbY,
+		Width:  track.Width,
+		Height: thumbH,
+	}
+}
+
+// DrawScrollbar paints the vertical scrollbar track + thumb on the right
+// edge of `p`'s content rect. Skipped silently when content fits (no
+// overflow) — caller doesn't need an "if needed" check.
+func DrawScrollbar(p Panel, scroll *ScrollState) {
+	if scroll == nil {
+		return
+	}
+	track := ScrollbarRect(p)
+	if scroll.ContentHeight <= track.Height || track.Height <= 0 {
+		return
+	}
+	rl.DrawRectangleRec(track, scrollbarTrackColor)
+	thumb := ScrollbarThumbRect(p, scroll)
+	rl.DrawRectangleRec(thumb, scrollbarThumbColor)
+}
+
+// ClampScrollOffset constrains scroll.OffsetY to a valid range given the
+// current ContentHeight. Called from input handlers + after Recompute so a
+// panel resize that suddenly fits the content doesn't leave a stale offset.
+func ClampScrollOffset(p Panel, scroll *ScrollState) {
+	if scroll == nil {
+		return
+	}
+	track := ScrollbarRect(p)
+	maxOffset := scroll.ContentHeight - track.Height
+	if maxOffset < 0 {
+		maxOffset = 0
+	}
+	if scroll.OffsetY < 0 {
+		scroll.OffsetY = 0
+	}
+	if scroll.OffsetY > maxOffset {
+		scroll.OffsetY = maxOffset
+	}
+}

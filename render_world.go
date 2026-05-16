@@ -417,6 +417,64 @@ func drawUnitRoleLabel(renderPos rl.Vector3, st components.Stance, role componen
 	rl.DrawTextEx(font, label, rl.Vector2{X: screenX, Y: screenY}, fontSize, 1, textColor)
 }
 
+// drawUnitStaminaBar projects the unit's cap-top point and draws a thin
+// horizontal Stamina bar at PHASE-13.md P12: shown only when Current/MaxLevel
+// < 0.8. Width 40 px, height 3 px; colour green / yellow / red by ratio
+// zone (≥0.5 / ≥0.2 / below). 2D screen-space pass, same render order as
+// the role label (drawn after the 3D RT composites).
+func drawUnitStaminaBar(renderPos rl.Vector3, st components.Stance, role components.UnitRoleKind,
+	current, maxLevel float32, panel3DContent rl.Rectangle) {
+	if maxLevel <= 0 {
+		return
+	}
+	ratio := current / maxLevel
+	if ratio < 0 {
+		ratio = 0
+	}
+	if ratio >= 0.8 {
+		return
+	}
+
+	height := unitStanceHeight(st.Code)
+	capHeight := float32(0.15)
+	if role == components.RoleLeader {
+		capHeight = 0.30
+	}
+	// Bar sits just above the cap, below where the role label lives. 0.25 m
+	// keeps it readable without colliding with the role pill.
+	topPos := rl.Vector3{
+		X: renderPos.X,
+		Y: renderPos.Y + height + capHeight + 0.25,
+		Z: renderPos.Z,
+	}
+	w := int32(panel3DContent.Width)
+	h := int32(panel3DContent.Height)
+	if w < 1 || h < 1 {
+		return
+	}
+	sp := rl.GetWorldToScreenEx(topPos, systems.CurrentCamera, w, h)
+	if sp.X < 0 || sp.Y < 0 || sp.X > panel3DContent.Width || sp.Y > panel3DContent.Height {
+		return
+	}
+	const barW, barH float32 = 40, 3
+	screenX := panel3DContent.X + sp.X - barW*0.5
+	screenY := panel3DContent.Y + sp.Y - barH*0.5
+	rl.DrawRectangleRec(rl.Rectangle{X: screenX, Y: screenY, Width: barW, Height: barH},
+		rl.Color{R: 28, G: 30, B: 36, A: 220})
+	fill := rl.Color{R: 80, G: 200, B: 80, A: 255}
+	switch {
+	case ratio < 0.2:
+		fill = rl.Color{R: 220, G: 60, B: 60, A: 255}
+	case ratio < 0.5:
+		fill = rl.Color{R: 220, G: 200, B: 50, A: 255}
+	}
+	rl.DrawRectangleRec(rl.Rectangle{
+		X: screenX, Y: screenY, Width: barW * ratio, Height: barH,
+	}, fill)
+	rl.DrawRectangleLinesEx(rl.Rectangle{X: screenX, Y: screenY, Width: barW, Height: barH},
+		1, rl.Color{R: 10, G: 12, B: 16, A: 220})
+}
+
 func unitStanceHeight(code components.StanceCode) float32 {
 	switch code {
 	case components.StanceCrouch:
