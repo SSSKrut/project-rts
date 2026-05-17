@@ -4,6 +4,7 @@ import (
 	"math"
 
 	rl "github.com/gen2brain/raylib-go/raylib"
+	"github.com/mlange-42/ark/ecs"
 
 	"rts-go/components"
 	"rts-go/systems"
@@ -475,6 +476,117 @@ func drawUnitStaminaBar(renderPos rl.Vector3, st components.Stance, role compone
 		1, rl.Color{R: 10, G: 12, B: 16, A: 220})
 }
 
+// drawUnitHPBar — Phase 14 M14.6: thin red/yellow/green pill above the
+// Stamina bar. Hidden when Current >= Max (no damage). Mirrors
+// drawUnitStaminaBar geometry but sits +0.25 m higher so they stack
+// readably.
+func drawUnitHPBar(renderPos rl.Vector3, st components.Stance, role components.UnitRoleKind,
+	current, max float32, panel3DContent rl.Rectangle) {
+	if max <= 0 {
+		return
+	}
+	ratio := current / max
+	if ratio < 0 {
+		ratio = 0
+	}
+	if ratio >= 1 {
+		return // full HP — keep the screen quiet.
+	}
+
+	height := unitStanceHeight(st.Code)
+	capHeight := float32(0.15)
+	if role == components.RoleLeader {
+		capHeight = 0.30
+	}
+	// HP sits above Stamina (0.25 m above cap) at +0.50 m — clear separation
+	// so the two bars don't fuse visually when both are present.
+	topPos := rl.Vector3{
+		X: renderPos.X,
+		Y: renderPos.Y + height + capHeight + 0.50,
+		Z: renderPos.Z,
+	}
+	w := int32(panel3DContent.Width)
+	h := int32(panel3DContent.Height)
+	if w < 1 || h < 1 {
+		return
+	}
+	sp := rl.GetWorldToScreenEx(topPos, systems.CurrentCamera, w, h)
+	if sp.X < 0 || sp.Y < 0 || sp.X > panel3DContent.Width || sp.Y > panel3DContent.Height {
+		return
+	}
+	const barW, barH float32 = 50, 3
+	screenX := panel3DContent.X + sp.X - barW*0.5
+	screenY := panel3DContent.Y + sp.Y - barH*0.5
+	rl.DrawRectangleRec(rl.Rectangle{X: screenX, Y: screenY, Width: barW, Height: barH},
+		rl.Color{R: 28, G: 30, B: 36, A: 220})
+	fill := rl.Color{R: 80, G: 200, B: 80, A: 255}
+	switch {
+	case ratio < 0.3:
+		fill = rl.Color{R: 220, G: 60, B: 60, A: 255}
+	case ratio < 0.6:
+		fill = rl.Color{R: 220, G: 200, B: 50, A: 255}
+	}
+	rl.DrawRectangleRec(rl.Rectangle{
+		X: screenX, Y: screenY, Width: barW * ratio, Height: barH,
+	}, fill)
+	rl.DrawRectangleLinesEx(rl.Rectangle{X: screenX, Y: screenY, Width: barW, Height: barH},
+		1, rl.Color{R: 10, G: 12, B: 16, A: 220})
+}
+
+// drawTracers — Phase 14 M14.6: walk the VisualEvents tracer slice and draw
+// each segment as a 3D line in muzzle→impact space, fading alpha by age.
+// World coords convert to render space via the global origin chunk.
+//
+// Lines are drawn unconditionally regardless of camera occlusion; raylib
+// doesn't depth-test thin lines reliably, so a tracer behind a wall will
+// still show through. Phase 14.5 (particle system) replaces this with a
+// proper instanced-quad pipeline that respects depth.
+func drawTracers(events *components.VisualEvents, now float32) {
+	if events == nil {
+		return
+	}
+	originChunk := systems.CurrentOriginChunk
+	originBaseX := float32(originChunk.X) * components.ChunkSize
+	originBaseZ := float32(originChunk.Z) * components.ChunkSize
+	for i := range events.Tracers {
+		t := &events.Tracers[i]
+		age := now - t.SpawnTime
+		if age < 0 || age > t.TTL {
+			continue
+		}
+		fade := 1 - age/t.TTL
+		col := rl.Color{R: t.Color.R, G: t.Color.G, B: t.Color.B,
+			A: uint8(float32(t.Color.A) * fade)}
+		from := rl.Vector3{X: t.From.X - originBaseX, Y: t.From.Y, Z: t.From.Z - originBaseZ}
+		to := rl.Vector3{X: t.To.X - originBaseX, Y: t.To.Y, Z: t.To.Z - originBaseZ}
+		rl.DrawLine3D(from, to, col)
+	}
+}
+
+// drawImpacts — sphere pings at bullet terminus points. Same fade rule as
+// drawTracers. Radius is constant (0.1 m) — too small to overshadow units,
+// big enough to read at typical camera distance.
+func drawImpacts(events *components.VisualEvents, now float32) {
+	if events == nil {
+		return
+	}
+	originChunk := systems.CurrentOriginChunk
+	originBaseX := float32(originChunk.X) * components.ChunkSize
+	originBaseZ := float32(originChunk.Z) * components.ChunkSize
+	for i := range events.Impacts {
+		im := &events.Impacts[i]
+		age := now - im.SpawnTime
+		if age < 0 || age > im.TTL {
+			continue
+		}
+		fade := 1 - age/im.TTL
+		col := rl.Color{R: im.Color.R, G: im.Color.G, B: im.Color.B,
+			A: uint8(float32(im.Color.A) * fade)}
+		c := rl.Vector3{X: im.Pos.X - originBaseX, Y: im.Pos.Y, Z: im.Pos.Z - originBaseZ}
+		rl.DrawSphere(c, 0.1, col)
+	}
+}
+
 // drawGhostUnit draws a translucent body cube (no role cap) at the given
 // position to preview where a unit would stand after a Move order completes.
 // Phase 13.6 M13.6.1: visual is intentionally subdued — neutral grey-white,
@@ -572,31 +684,45 @@ func unitStanceHeight(code components.StanceCode) float32 {
 	}
 }
 
-// squadPalette is a small fixed palette of distinguishable colours. Each
-// Squad picks a slot deterministically from its entity ID, so the same squad
-// keeps the same colour across frames. Eight entries is enough until the
-// scene grows beyond ~8 squads; collisions are visually obvious in worst case
-// (Phase 14 may move to per-squad-stored colour with player override).
-var squadPalette = [...]rl.Color{
-	{R: 220, G: 80, B: 80, A: 230},
-	{R: 80, G: 200, B: 90, A: 230},
-	{R: 80, G: 130, B: 230, A: 230},
-	{R: 230, G: 190, B: 60, A: 230},
-	{R: 180, G: 100, B: 220, A: 230},
-	{R: 230, G: 130, B: 200, A: 230},
-	{R: 60, G: 200, B: 200, A: 230},
-	{R: 230, G: 150, B: 80, A: 230},
+// Phase 14 M14.6 — faction-split palettes. Player squads pull from a
+// blue/green spectrum; enemy squads from a red/orange spectrum. Same SplitMix
+// hash inside each faction so two squads of the same side stay visually
+// distinct. Slots-per-faction = 4 to keep close-hue variety without the
+// player blue / enemy red feel becoming muddy.
+var squadPalettePlayer = [...]rl.Color{
+	{R: 80, G: 200, B: 90, A: 230},   // grass green
+	{R: 80, G: 130, B: 230, A: 230},  // cobalt blue
+	{R: 60, G: 200, B: 200, A: 230},  // teal
+	{R: 130, G: 220, B: 130, A: 230}, // light leaf
 }
 
-// squadColor maps an entity ID to a palette slot via a SplitMix-style mix.
-func squadColor(id uint32) rl.Color {
+var squadPaletteEnemy = [...]rl.Color{
+	{R: 220, G: 80, B: 80, A: 230},   // crimson
+	{R: 230, G: 150, B: 80, A: 230},  // burnt orange
+	{R: 200, G: 60, B: 100, A: 230},  // magenta-red
+	{R: 220, G: 110, B: 50, A: 230},  // brick
+}
+
+// squadColor maps an entity to a palette slot, split first by Faction so the
+// player vs enemy distinction is immediately visible. Inside each faction a
+// SplitMix hash on the entity ID picks a per-squad shade.
+//
+// Reads the global factionMap closure — squadColor itself is wired in main.go
+// once factionMap exists. Missing Faction component → Player palette
+// (backwards-compat for any spawn path that didn't stamp one).
+func squadColorFor(ent ecs.Entity, faction uint8) rl.Color {
+	palette := squadPalettePlayer[:]
+	if faction != components.FactionPlayer {
+		palette = squadPaletteEnemy[:]
+	}
+	id := ent.ID()
 	x := id ^ 0x9e3779b9
 	x ^= x >> 16
 	x *= 0x7feb352d
 	x ^= x >> 15
 	x *= 0x846ca68b
 	x ^= x >> 16
-	return squadPalette[int(x%uint32(len(squadPalette)))]
+	return palette[int(x%uint32(len(palette)))]
 }
 
 // drawSquadConnections draws a small circle at the squad center plus lines

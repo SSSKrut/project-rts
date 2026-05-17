@@ -109,12 +109,21 @@ func main() {
 	ecs.AddResource(app.World, &transitionRegistry)
 	mapMarkerCache := components.NewMapMarkerCache()
 	ecs.AddResource(app.World, &mapMarkerCache)
+	// Phase 14 M14.2: transient combat-visual buffer shared between
+	// WeaponSystem (writer) and the 3D render pass (reader). Must be
+	// registered before WeaponSystem.InitUI runs.
+	visualEvents := components.NewVisualEvents()
+	ecs.AddResource(app.World, &visualEvents)
 
 	defer systems.FlushModifiedChunks(app.World, systems.SaveDir)
 
 	stamper := systems.NewStamper(app.World)
 	navService := systems.NewNavService(app.World)
 	squadService := systems.NewSquadService(app.World)
+	// Phase 14 M14.1/M14.2: damage service handles HP decrement and the
+	// death-despawn path; WeaponSystem hands every applied hit through it.
+	// Constructed before WeaponSystem.InitUI so the handle is live by then.
+	damageService := systems.NewDamageService(app.World, squadService)
 
 	terrainStreamingSys := &systems.TerrainStreamingSystem{}
 	terrainStreamingSys.InitUI(app.World)
@@ -154,6 +163,16 @@ func main() {
 
 	visionSys := systems.NewVisionSystem(workerPool)
 	visionSys.InitUI(app.World)
+
+	// Phase 14 M14.2: WeaponSystem runs after Vision so it sees the freshest
+	// Awareness FIFO entries each tick.
+	weaponSys := systems.NewWeaponSystem(workerPool, damageService)
+	weaponSys.InitUI(app.World)
+
+	// Phase 14 M14.5: cleanup of expired ThreatSource entities — Phase 15
+	// SurvivalInstinct will read live ones to pick cover slots.
+	threatDecaySys := systems.NewThreatDecaySystem()
+	threatDecaySys.InitUI(app.World)
 
 	orderResolverSys := systems.NewOrderResolverSystem(squadService)
 	orderResolverSys.InitUI(app.World)
@@ -205,6 +224,8 @@ func main() {
 	app.AddSystem(groundStickSys)
 	app.AddSystem(unitMovementSys)
 	app.AddSystem(visionSys)
+	app.AddSystem(weaponSys)
+	app.AddSystem(threatDecaySys)
 	app.AddSystem(orderResolverSys)
 	app.AddSystem(squadMacroPathSys)
 	app.AddSystem(formationSys)
@@ -332,6 +353,25 @@ func main() {
 	orderAttackMoveMap := ecs.NewMap[components.OrderParamAttackMove](app.World)
 	orderMovementOverrideMap := ecs.NewMap[components.OrderParamMovementProfile](app.World)
 
+	// Phase 14 M14.1: HP + Faction read handles for the Inspector / render
+	// loop. Writes flow through DamageService (HP) and SquadService.
+	// CreateFromTemplate (Faction).
+	hpMap := ecs.NewMap[components.HP](app.World)
+	factionMap := ecs.NewMap[components.Faction](app.World)
+
+	// Phase 14 M14.6: faction-aware squad colour. Lookups the entity's
+	// Faction and picks the player or enemy palette accordingly. Missing
+	// Faction (legacy spawns) falls through to FactionPlayer.
+	squadColor := func(ent ecs.Entity) rl.Color {
+		faction := components.FactionPlayer
+		if ent != (ecs.Entity{}) && app.World.Alive(ent) {
+			if f := factionMap.Get(ent); f != nil {
+				faction = f.ID
+			}
+		}
+		return squadColorFor(ent, faction)
+	}
+
 	// Phase 12 role service. Owns UnitRole + per-role Equipment sub-entities
 	// (Primary weapon, Secondary gear: Radio / Medkit / Spade / sidearm).
 	roleService := systems.NewRoleService(app.World)
@@ -358,19 +398,35 @@ func main() {
 
 	// Phase 12 starter scene: three 4-soldier squads with distinct templates
 	// so the role differentiation (cap colours, ShortLabel, map icon) is
-	// visible immediately at startup.
+	// visible immediately at startup. Phase 14 M14.1: stamped FactionPlayer.
+	playerFaction := components.Faction{ID: components.FactionPlayer}
 	squadService.CreateFromTemplate(
 		systems.TmplLightInfantry,
 		components.WorldPos{}.Add(rl.Vector3{X: -25, Z: -40}),
-		components.FormationLine, roleService, unitFactory)
+		components.FormationLine, playerFaction, roleService, unitFactory)
 	squadService.CreateFromTemplate(
 		systems.TmplMGTeam,
 		components.WorldPos{}.Add(rl.Vector3{X: 40, Z: 30}),
-		components.FormationWedge, roleService, unitFactory)
+		components.FormationWedge, playerFaction, roleService, unitFactory)
 	squadService.CreateFromTemplate(
 		systems.TmplATTeam,
 		components.WorldPos{}.Add(rl.Vector3{X: -30, Z: 55}),
-		components.FormationColumn, roleService, unitFactory)
+		components.FormationColumn, playerFaction, roleService, unitFactory)
+
+	// Phase 14 M14.1: hostile MotorRifle squad ~60 m from the player base on
+	// the opposite side. DefendPosition order parks them in place (Phase 14
+	// simple: enemies don't patrol — Phase 15 reactive movement). Once
+	// WeaponSystem lands in M14.2 the player can engage by hand.
+	enemySpawn := components.WorldPos{}.Add(rl.Vector3{X: 5, Z: -90})
+	enemySquad := squadService.CreateFromTemplate(
+		systems.TmplMotorRifle, enemySpawn,
+		components.FormationLine, components.Faction{ID: components.FactionEnemyRed},
+		roleService, unitFactory)
+	if enemySquad != (ecs.Entity{}) {
+		squadService.IssueOrder(enemySquad,
+			components.OrderKindDefendPosition, enemySpawn, ecs.Entity{},
+			false, systems.OrderParams{})
+	}
 
 	// Render filters.
 	unitRenderFilter := ecs.NewFilter3[components.WorldPos, components.Unit, components.Stance](app.World)
@@ -400,6 +456,11 @@ func main() {
 	// buildingMap; the Trench-root filter walks the small startup-spawned set.
 	buildingFilter := ecs.NewFilter1[components.Building](app.World)
 	trenchRootFilter := ecs.NewFilter1[components.TrenchRoot](app.World)
+	// Phase 14 M14.4: unit hit-test wired with a Filter2[Unit, WorldPos] and
+	// the global Faction map. 1.5 m snap radius matches the standing-unit
+	// collider (0.35 m) plus a ~1 m forgiveness margin so the player doesn't
+	// have to click pixel-perfect on a unit's torso.
+	unitHitFilter := ecs.NewFilter2[components.Unit, components.WorldPos](app.World)
 	hitTester := &HitTester{
 		BuildingFilter:  buildingFilter,
 		BuildingMap:     buildingMap,
@@ -407,6 +468,9 @@ func main() {
 		TrenchRoots:     trenchRootFilter,
 		Trenches:        &trenches,
 		TrenchHitRadius: 2.5,
+		UnitFilter:      unitHitFilter,
+		FactionMap:      factionMap,
+		UnitHitRadius:   1.5,
 	}
 
 	// Phase 13.6 ghost preview context — bundles the maps drawSelectionGhost
@@ -433,6 +497,7 @@ func main() {
 		windowMap:        ghostWindowMap,
 		trenches:         &trenches,
 		trenchRootMap:    trenchRootMap,
+		squadColor:       squadColor,
 	}
 
 	terrainMaterial := rl.LoadMaterialDefault()
@@ -1129,6 +1194,11 @@ func main() {
 		anchorPos = posMap.Get(anchor)
 		anchorRender := anchorPos.ToRenderSpace(systems.CurrentOriginChunk)
 
+		// Phase 14 M14.2: trim expired tracer / impact records. M14.6 will
+		// wire the actual draw pass; keeping Decay here means the buffer
+		// stays bounded even before any render code exists.
+		visualEvents.Decay(float32(app.Elapsed().Seconds()))
+
 		// ── Render 3D scene into RT ──
 		rl.BeginTextureMode(scene3DRT.RT)
 		rl.ClearBackground(rl.RayWhite)
@@ -1312,7 +1382,7 @@ func main() {
 					memberPos = append(memberPos, r)
 				}
 			}
-			drawSquadConnections(centerRender, memberPos, squadColor(squadEnt.ID()))
+			drawSquadConnections(centerRender, memberPos, squadColor(squadEnt))
 		}
 
 		if rl.IsKeyDown(rl.KeyF) {
@@ -1384,6 +1454,12 @@ func main() {
 			ghostTargetOK = true
 		}
 		drawSelectionGhost(ghostCtx, selected, focused == ui.Panel3D, ghostTarget, ghostTargetOK, ghostDragFacing, ghostPieHover)
+
+		// Phase 14 M14.6: tracer lines + impact spheres on top of the
+		// world geometry. Drawn last in the 3D pass so they layer over
+		// units / props; alpha-fading handled inside the helpers.
+		drawTracers(&visualEvents, float32(app.Elapsed().Seconds()))
+		drawImpacts(&visualEvents, float32(app.Elapsed().Seconds()))
 
 		rl.EndMode3D()
 		rl.EndTextureMode()
@@ -1463,6 +1539,8 @@ func main() {
 			StaminaMap:               staminaMap,
 			OrderAttackMoveMap:       orderAttackMoveMap,
 			OrderMovementOverrideMap: orderMovementOverrideMap,
+			HPMap:                    hpMap,
+			FactionMap:               factionMap,
 			Cursor:                   cursor,
 			LMBPressed:               !panelMgr.IsDragging() && !scrollDragging && rl.IsMouseButtonPressed(rl.MouseButtonLeft),
 			PanelFocused:             inspectorFocused,
@@ -1506,6 +1584,10 @@ func main() {
 			// Phase 13 M13.7: thin Stamina bar above the cap when < 80%.
 			if stam := staminaMap.Get(ent); stam != nil {
 				drawUnitStaminaBar(renderPos, *st, role, stam.Current, stam.MaxLevel, panel3DContent)
+			}
+			// Phase 14 M14.6: HP bar above Stamina when damaged.
+			if hp := hpMap.Get(ent); hp != nil {
+				drawUnitHPBar(renderPos, *st, role, hp.Current, hp.Max, panel3DContent)
 			}
 		}
 		rl.EndScissorMode()

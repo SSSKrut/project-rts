@@ -53,6 +53,8 @@ type OrderResolverSystem struct {
 	orderIssuedAtMap *ecs.Map[components.OrderIssuedAt]
 	orderOwnerMap    *ecs.Map[components.OrderOwner]
 	orderFacingMap   *ecs.Map[components.OrderParamFacing]
+	// Phase 14 M14.4 — SuppressFire timer reader.
+	orderSuppressMap *ecs.Map[components.OrderParamSuppress]
 
 	// Phase 13.6 M13.6.4: read on MoveTo / DefendPosition completion to apply
 	// arrived-facing to every roster member's Motion.Yaw. Instant snap; Phase
@@ -89,6 +91,7 @@ func (sys *OrderResolverSystem) InitUI(w *ecs.World) {
 	sys.orderIssuedAtMap = ecs.NewMap[components.OrderIssuedAt](w)
 	sys.orderOwnerMap = ecs.NewMap[components.OrderOwner](w)
 	sys.orderFacingMap = ecs.NewMap[components.OrderParamFacing](w)
+	sys.orderSuppressMap = ecs.NewMap[components.OrderParamSuppress](w)
 	sys.motionMap = ecs.NewMap[components.Motion](w)
 
 	sys.buildingMap = ecs.NewMap[components.Building](w)
@@ -314,6 +317,29 @@ func (sys *OrderResolverSystem) checkCompletion(
 	case components.OrderKindDefendPosition:
 		// Never auto-completes; only Cancelled by the player.
 		return false
+
+	case components.OrderKindAttackTarget:
+		// Phase 14 M14.4: completes when the target entity is gone
+		// (DamageSystem.ApplyDeath despawned it) or the OrderTarget was
+		// never resolved. Phase 15 will add "lost LOS for N seconds" once
+		// SurvivalInstinct lands.
+		if target.Entity == (ecs.Entity{}) {
+			return true
+		}
+		return !sys.squadService.world.Alive(target.Entity)
+
+	case components.OrderKindSuppressFire:
+		// Phase 14 simple: timer-only completion. Read StartTime from the
+		// optional OrderParamSuppress; fall back to OrderIssuedAt for
+		// orders that didn't get the param attached (defensive — should
+		// never happen since IssueOrder always attaches one).
+		startTime := float32(0)
+		if sp := sys.orderSuppressMap.Get(ord); sp != nil {
+			startTime = sp.StartTime
+		} else if ia := sys.orderIssuedAtMap.Get(ord); ia != nil {
+			startTime = ia.Time
+		}
+		return sys.squadService.Clock()-startTime > suppressDuration
 
 	case components.OrderKindGarrison:
 		// "Squad center inside the building footprint" is the MVP completion

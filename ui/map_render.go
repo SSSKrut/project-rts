@@ -37,7 +37,7 @@ type MapRenderCtx struct {
 	RoleMap *ecs.Map[components.UnitRole]
 	Font    rl.Font
 	// SquadColor mirrors InspectorCtx.SquadColor.
-	SquadColor func(id uint32) rl.Color
+	SquadColor func(ent ecs.Entity) rl.Color
 	// Optional debug layers — checked by drawDebugLayers.
 	RoadGraph *components.RoadGraph
 	Rivers    *components.Rivers
@@ -116,7 +116,7 @@ func drawOrderMarkers(content rl.Rectangle, ctx MapRenderCtx) {
 		}
 		col := rl.Color{R: 230, G: 230, B: 230, A: 220}
 		if ctx.SquadColor != nil {
-			col = ctx.SquadColor(squad.ID())
+			col = ctx.SquadColor(squad)
 		}
 		from := MapWorldToPanel(center, ctx.Cam, content)
 		to := MapWorldToPanel(target.Pos, ctx.Cam, content)
@@ -274,7 +274,7 @@ func drawSquadMarkers(content rl.Rectangle, ctx MapRenderCtx) {
 		screen := MapWorldToPanel(center, ctx.Cam, content)
 		col := rl.Color{R: 200, G: 200, B: 200, A: 240}
 		if ctx.SquadColor != nil {
-			col = ctx.SquadColor(ent.ID())
+			col = ctx.SquadColor(ent)
 		}
 		// Phase 12 P6 / Note: marker radius bumped 7 → 9 so 1-2 char commander
 		// ShortLabel ("L", "MG", "AT") fits inside the disc legibly.

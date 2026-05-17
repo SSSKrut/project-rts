@@ -77,6 +77,11 @@ var pieSegments = []components.OrderKindCode{
 	components.OrderKindOccupyTrench,
 	components.OrderKindDefendPosition,
 	components.OrderKindPatrol,
+	// Phase 14 M14.4: SuppressFire — drench a sector with fire. Commit
+	// resolves with terrain Pos (entity zero); AmmoCap / Radius come from
+	// the per-order OrderParamSuppress, which IssueOrder default-fills
+	// when the param is missing.
+	components.OrderKindSuppressFire,
 }
 
 // Begin records the press position and target. Caller invokes this on
@@ -338,6 +343,10 @@ func pieKindLabel(k components.OrderKindCode) string {
 		return "Defend"
 	case components.OrderKindPatrol:
 		return "Patrol"
+	case components.OrderKindSuppressFire:
+		return "Suppress"
+	case components.OrderKindAttackTarget:
+		return "Attack"
 	}
 	return "?"
 }

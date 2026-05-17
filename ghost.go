@@ -47,6 +47,10 @@ type ghostContext struct {
 	windowMap     *ecs.Map[components.Window]
 	trenches      *components.TrenchNetwork
 	trenchRootMap *ecs.Map[components.TrenchRoot]
+	// Phase 14 M14.6: faction-aware colour picker for the DefendPosition
+	// arc (and any future ghost overlays that need to match the squad's
+	// inspector / map tint).
+	squadColor func(ent ecs.Entity) rl.Color
 }
 
 // primarySquadForGhost returns the first Squad entity touched by `selected`,
@@ -160,7 +164,7 @@ func drawSelectionGhost(
 	// the cursor is over, not from the pie choice alone.
 	if pieHovering != nil && *pieHovering == components.OrderKindDefendPosition {
 		drawGhostFormation(cursorTarget, fd.Type, fd.Spacing, roster.Count, forward, stance)
-		drawDefendPositionArc(cursorTarget, forward, squad)
+		drawDefendPositionArc(cursorTarget, forward, squad, g.squadColor)
 		return
 	}
 
@@ -194,13 +198,17 @@ func drawSelectionGhost(
 // Sector colour reuses the per-squad palette so multi-squad scenes can tell
 // arcs apart visually; alpha is low for fill / high for outline so the wedge
 // is unmistakable without obscuring the terrain underneath.
-func drawDefendPositionArc(target components.WorldPos, forward rl.Vector3, squad ecs.Entity) {
+func drawDefendPositionArc(target components.WorldPos, forward rl.Vector3, squad ecs.Entity,
+	colorFn func(ecs.Entity) rl.Color) {
 	const halfAngle = math.Pi / 4 // 45° each side → 90° total wedge
 	const length float32 = 8
 	// atan2(fx, fz) recovers the yaw used by FormationOffset.
 	yaw := float32(math.Atan2(float64(forward.X), float64(forward.Z)))
 	center := target.ToRenderSpace(systems.CurrentOriginChunk)
-	col := squadColor(squad.ID())
+	col := rl.Color{R: 200, G: 200, B: 220, A: 230}
+	if colorFn != nil {
+		col = colorFn(squad)
+	}
 	// Lower alpha for fill; outline pumped via drawGhostArc internals.
 	fill := rl.Color{R: col.R, G: col.G, B: col.B, A: 60}
 	drawGhostArc(center, yaw, halfAngle, length, fill)

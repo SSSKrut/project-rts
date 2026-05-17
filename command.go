@@ -15,6 +15,9 @@ const (
 	HitTerrain HitTestKind = iota
 	HitBuilding
 	HitTrench
+	// HitUnit — Phase 14 M14.4: a unit entity inside hostility-snap radius
+	// of the target Pos. Drives OrderKindAttackTarget resolution.
+	HitUnit
 )
 
 // HitTestResult is the answer to "what's under this target Pos?". For
@@ -38,15 +41,53 @@ type HitTester struct {
 	// TrenchHitRadius is how close (metres) the target must be to a polyline
 	// segment to count as a trench hit. PHASE-11.md P6 suggests 2-3 m.
 	TrenchHitRadius float32
+	// Phase 14 M14.4: unit hit-test for RMB-on-enemy → AttackTarget.
+	// UnitFilter walks every live unit with a Faction; a hit is recorded
+	// when the candidate's XZ position is within UnitHitRadius of the
+	// target Pos AND the candidate's Faction differs from PlayerFaction
+	// (selected squads are always Player in Phase 14).
+	UnitFilter    *ecs.Filter2[components.Unit, components.WorldPos]
+	FactionMap    *ecs.Map[components.Faction]
+	UnitHitRadius float32
 }
 
-// HitTest classifies a WorldPos. Priority: Building (point-in-AABB) → Trench
-// (distance-to-polyline) → Terrain. Building wins over trench when an
-// authored trench accidentally clips a footprint; that's the rarer case in
-// real maps and the easier mistake to read.
+// HitTest classifies a WorldPos. Priority: Unit (closest in radius) →
+// Building (point-in-AABB) → Trench (distance-to-polyline) → Terrain. Unit
+// wins so RMB on an enemy standing inside a building footprint reads as
+// AttackTarget, not Garrison.
 func (h *HitTester) HitTest(target components.WorldPos) HitTestResult {
 	wx := float32(target.Chunk.X)*components.ChunkSize + target.Local.X
 	wz := float32(target.Chunk.Z)*components.ChunkSize + target.Local.Z
+
+	// Phase 14 M14.4: enemy-unit hit. Walk live units, take the closest
+	// hostile inside the snap radius.
+	if h.UnitFilter != nil && h.FactionMap != nil {
+		radius := h.UnitHitRadius
+		if radius <= 0 {
+			radius = 1.5
+		}
+		bestDSq := radius * radius
+		var bestEnt ecs.Entity
+		q := h.UnitFilter.Query()
+		for q.Next() {
+			_, pos := q.Get()
+			ent := q.Entity()
+			f := h.FactionMap.Get(ent)
+			if f == nil || f.ID == components.FactionPlayer {
+				continue
+			}
+			ux := float32(pos.Chunk.X)*components.ChunkSize + pos.Local.X
+			uz := float32(pos.Chunk.Z)*components.ChunkSize + pos.Local.Z
+			dSq := (ux-wx)*(ux-wx) + (uz-wz)*(uz-wz)
+			if dSq < bestDSq {
+				bestDSq = dSq
+				bestEnt = ent
+			}
+		}
+		if bestEnt != (ecs.Entity{}) {
+			return HitTestResult{Kind: HitUnit, Entity: bestEnt}
+		}
+	}
 
 	if h.BuildingFilter != nil {
 		q := h.BuildingFilter.Query()
@@ -132,6 +173,14 @@ func resolveTargetIntoOrder(hit HitTestResult, kindOverride *components.OrderKin
 				return components.OrderKindOccupyTrench, hit.Entity
 			}
 			return components.OrderKindOccupyTrench, ecs.Entity{}
+		case components.OrderKindAttackTarget:
+			// Pie-menu commit for AttackTarget only makes sense if the
+			// cursor was on an enemy unit — otherwise fall back to MoveTo
+			// (UX: clicking Attack on empty terrain is a misclick).
+			if hit.Kind == HitUnit {
+				return components.OrderKindAttackTarget, hit.Entity
+			}
+			return components.OrderKindMoveTo, ecs.Entity{}
 		default:
 			return *kindOverride, ecs.Entity{}
 		}
@@ -141,6 +190,9 @@ func resolveTargetIntoOrder(hit HitTestResult, kindOverride *components.OrderKin
 		return components.OrderKindGarrison, hit.Entity
 	case HitTrench:
 		return components.OrderKindOccupyTrench, hit.Entity
+	case HitUnit:
+		// Phase 14 M14.4: hostile-unit hit → focus-fire order.
+		return components.OrderKindAttackTarget, hit.Entity
 	default:
 		return components.OrderKindMoveTo, ecs.Entity{}
 	}

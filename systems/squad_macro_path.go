@@ -176,6 +176,19 @@ func (sys *SquadMacroPathSystem) processSquad(world *ecs.World, w macroPathWork,
 		mp.Count = 0
 		return
 	}
+	// Phase 14 M14.4: combat-hold orders don't drive macro pathing — the
+	// squad stays put and lets WeaponSystem do the work. AttackTarget
+	// assumes the squad is already in range (out-of-range case is a
+	// "log warning, Order failed" upgrade for Phase 15); SuppressFire is
+	// always in-place by design.
+	switch orderKind {
+	case components.OrderKindAttackTarget, components.OrderKindSuppressFire:
+		mp.HasGoal = false
+		mp.Head = 0
+		mp.Count = 0
+		return
+	}
+
 	// Pull the order target into MacroPath.Goal so FormationSystem (which
 	// still reads Goal as a fallback) and the rest of the legacy code
 	// stay correct.

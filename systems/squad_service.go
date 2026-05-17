@@ -56,6 +56,11 @@ type SquadService struct {
 	// OrderParamAttackMove handle for Alt+RMB AttackMove scaffold (M13.5).
 	// Phase 14 WeaponSystem is the canonical reader.
 	orderAttackMoveMap *ecs.Map[components.OrderParamAttackMove]
+	// Phase 14 M14.4: optional Suppress params on SuppressFire orders.
+	orderSuppressMap *ecs.Map[components.OrderParamSuppress]
+	// Phase 14 M14.1: Faction handle. CreateFromTemplate stamps each spawned
+	// unit so WeaponSystem can gate firing on hostility.
+	factionMap *ecs.Map[components.Faction]
 	// Session-time clock for OrderIssuedAt. Advanced by SetClock (called
 	// from main.go each frame before input handlers run).
 	clock float32
@@ -89,6 +94,8 @@ func NewSquadService(w *ecs.World) *SquadService {
 		behaviorRulesMap:         ecs.NewMap[components.BehaviorRules](w),
 		orderMovementOverrideMap: ecs.NewMap[components.OrderParamMovementProfile](w),
 		orderAttackMoveMap:       ecs.NewMap[components.OrderParamAttackMove](w),
+		orderSuppressMap:         ecs.NewMap[components.OrderParamSuppress](w),
+		factionMap:               ecs.NewMap[components.Faction](w),
 	}
 }
 
@@ -122,6 +129,16 @@ func (s *SquadService) BehaviorRulesMap() *ecs.Map[components.BehaviorRules] {
 func (s *SquadService) OrderMovementOverrideMap() *ecs.Map[components.OrderParamMovementProfile] {
 	return s.orderMovementOverrideMap
 }
+
+// suppressDefaultRadius — default OrderParamSuppress.Radius (metres) when
+// the caller doesn't override. PHASE-14.md M14.4 picks 8 m to roughly cover
+// one cover-cluster (sandbag stack or 2-3 trench segments).
+const suppressDefaultRadius float32 = 8.0
+
+// suppressDuration — Phase 14 simple completion timer (seconds) for
+// OrderKindSuppressFire when no AmmoCap reader exists. PHASE-14.md M14.4:
+// 30 s engagement window.
+const suppressDuration float32 = 30.0
 
 // FormationSpacing returns the default spacing (metres) for each formation
 // kind. F1-F4 hotkeys use this table; Phase 14 may swap it for a slider.
@@ -378,6 +395,7 @@ func (s *SquadService) CreateFromTemplate(
 	template SquadTemplate,
 	pos components.WorldPos,
 	formation components.FormationKind,
+	faction components.Faction,
 	roleService *RoleService,
 	unitFactory func(spawn components.WorldPos) ecs.Entity,
 ) ecs.Entity {
@@ -407,6 +425,14 @@ func (s *SquadService) CreateFromTemplate(
 			continue
 		}
 		roleService.AssignRole(u, role)
+		// Phase 14 M14.1: stamp Faction onto the unit. Idempotent — if the
+		// factory already wrote one (unlikely but harmless), overwrite so the
+		// template's intent wins.
+		if existing := s.factionMap.Get(u); existing != nil {
+			*existing = faction
+		} else {
+			s.factionMap.Add(u, &faction)
+		}
 		units = append(units, u)
 	}
 	if len(units) == 0 {
@@ -415,6 +441,15 @@ func (s *SquadService) CreateFromTemplate(
 	squad := s.CreateFromUnits(units, formation)
 	if squad == (ecs.Entity{}) {
 		return squad
+	}
+
+	// Phase 14 M14.6: stamp Faction onto the squad entity as well so the
+	// map / inspector colour-picker can tint by hostility without walking
+	// to a roster member. Idempotent — repeated template calls overwrite.
+	if s.factionMap.Has(squad) {
+		*s.factionMap.Get(squad) = faction
+	} else {
+		s.factionMap.Add(squad, &faction)
 	}
 
 	// Phase 13 M13.2: install squad-level standing rules. Aggregation rule
@@ -509,6 +544,9 @@ type OrderParams struct {
 	PatrolLoop       bool
 	MovementOverride *components.MovementProfile
 	AttackMove       bool
+	// Phase 14 M14.4: when non-nil, attach an OrderParamSuppress to the
+	// spawned SuppressFire order. Other kinds ignore the field.
+	Suppress *components.OrderParamSuppress
 }
 
 // IssueOrder spawns a new Order entity owned by `squad`. If append=false the
@@ -565,6 +603,21 @@ func (s *SquadService) IssueOrder(
 	}
 	if params.AttackMove {
 		s.orderAttackMoveMap.Add(ord, &components.OrderParamAttackMove{})
+	}
+	// Phase 14 M14.4: only SuppressFire reads OrderParamSuppress. Default
+	// the StartTime to the current clock if the caller didn't set it.
+	if kind == components.OrderKindSuppressFire {
+		sp := components.OrderParamSuppress{}
+		if params.Suppress != nil {
+			sp = *params.Suppress
+		}
+		if sp.StartTime == 0 {
+			sp.StartTime = s.clock
+		}
+		if sp.Radius == 0 {
+			sp.Radius = suppressDefaultRadius
+		}
+		s.orderSuppressMap.Add(ord, &sp)
 	}
 
 	// Wire into the chain. The squad's MacroPath also gets ReplanAt=0 so

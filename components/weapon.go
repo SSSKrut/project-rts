@@ -16,15 +16,19 @@ const (
 
 // Weapon — per-instance state for a weapon entity. Sits on a separate entity
 // (alongside OwnedBy + WorldPos) so a soldier can pass, drop, or pick up a
-// weapon without touching the Unit archetype. Phase 7 wires only Kind +
-// ownership; ballistic fields are populated for forward-compat, no system
-// reads them yet.
+// weapon without touching the Unit archetype.
+//
+// Phase 14 M14.2 fields: LastFiredAt + Dispersion. RoF gates per-tick firing
+// (one shot per 1/RoF seconds); Dispersion is the small-angle aiming spread
+// in radians (multiplied by range to get lateral deflection at the target).
 type Weapon struct {
-	Kind   WeaponKind
-	Ammo   uint16
-	RangeM float32
-	RoF    float32
-	Damage uint16
+	Kind        WeaponKind
+	Ammo        uint16
+	RangeM      float32
+	RoF         float32
+	Damage      uint16
+	LastFiredAt float32 // session-time of the most recent shot; 0 = never fired
+	Dispersion  float32 // radians (small-angle); 0 = perfect aim
 }
 
 // Radio is a marker placed on the Equipment.Secondary entity of a

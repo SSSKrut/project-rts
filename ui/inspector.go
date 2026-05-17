@@ -52,6 +52,11 @@ type InspectorCtx struct {
 	StaminaMap               *ecs.Map[components.Stamina]
 	OrderAttackMoveMap       *ecs.Map[components.OrderParamAttackMove]
 	OrderMovementOverrideMap *ecs.Map[components.OrderParamMovementProfile]
+	// Phase 14 M14.1: HP + Faction read handles. drawInspectorUnit shows the
+	// HP row under Stamina; Faction is surfaced in the squad header so the
+	// player can tell two squads of the same template apart at a glance.
+	HPMap      *ecs.Map[components.HP]
+	FactionMap *ecs.Map[components.Faction]
 	// Phase 13 click input. Cursor is the current mouse position in screen
 	// coords; LMBPressed is true exactly on the frame the left button was
 	// pressed (passed through from main.go's rl.IsMouseButtonPressed call);
@@ -65,10 +70,12 @@ type InspectorCtx struct {
 	// at the end of the draw — caller's DrawScrollbar reads it next frame.
 	// Nil → behave as if scroll==0 with no measurement (legacy callers).
 	Scroll *ScrollState
-	// SquadColor picks a stable palette colour from a squad entity ID so the
+	// SquadColor picks a stable palette colour from a squad entity so the
 	// inspector and the map render use the same shade. Injected as a func to
-	// avoid a UI → render-package cycle.
-	SquadColor func(id uint32) rl.Color
+	// avoid a UI → render-package cycle. Phase 14 M14.6: signature takes
+	// ecs.Entity (not just ID) so the colour function can read Faction off
+	// the squad entity directly.
+	SquadColor func(ent ecs.Entity) rl.Color
 }
 
 // roleOf is a small helper that resolves the unit's role with a Rifleman
@@ -233,7 +240,7 @@ func drawInspectorEmpty(ctx InspectorCtx, x, y, width int32) int32 {
 
 		colorChip := rl.Color{R: 80, G: 80, B: 80, A: 255}
 		if ctx.SquadColor != nil {
-			colorChip = ctx.SquadColor(ent.ID())
+			colorChip = ctx.SquadColor(ent)
 		}
 		rl.DrawRectangle(x, y+2, 10, 10, colorChip)
 		drawText(ctx.Font, fmt.Sprintf("Squad #%X -%d members",
@@ -292,6 +299,25 @@ func drawInspectorUnit(ctx InspectorCtx, ent ecs.Entity, x, y int32) int32 {
 			y += inspectorRowH
 		}
 	}
+	// Phase 14 M14.1: HP row, sits below Stamina (same "tank" UX). Same
+	// nil-skip rule as Stamina.
+	if ctx.HPMap != nil {
+		if hp := ctx.HPMap.Get(ent); hp != nil && hp.Max > 0 {
+			drawText(ctx.Font, fmt.Sprintf("HP:        %.1f / %.1f", hp.Current, hp.Max),
+				x, y, inspectorFontSize, inspectorText)
+			y += inspectorRowH
+		}
+	}
+	// Phase 14 M14.1: Faction badge. Player squads stay quiet ("Faction:
+	// Player"); enemy factions get a short label so the player can tell two
+	// MotorRifle squads (one player, one hostile) apart in the Inspector.
+	if ctx.FactionMap != nil {
+		if f := ctx.FactionMap.Get(ent); f != nil {
+			drawText(ctx.Font, "Faction:   "+factionLabel(f.ID),
+				x, y, inspectorFontSize, inspectorText)
+			y += inspectorRowH
+		}
+	}
 	if sm := ctx.SquadMemberMap.Get(ent); sm != nil && sm.Squad != (ecs.Entity{}) {
 		drawText(ctx.Font, fmt.Sprintf("Squad:     #%X slot %d", sm.Squad.ID()&0xFFF, sm.SlotIndex),
 			x, y, inspectorFontSize, inspectorText)
@@ -322,7 +348,7 @@ func drawInspectorSquad(ctx InspectorCtx, squad ecs.Entity, x, y, width int32) i
 
 	colorChip := rl.Color{R: 80, G: 80, B: 80, A: 255}
 	if ctx.SquadColor != nil {
-		colorChip = ctx.SquadColor(squad.ID())
+		colorChip = ctx.SquadColor(squad)
 	}
 	rl.DrawRectangle(x, y+3, 12, 12, colorChip)
 	drawText(ctx.Font, fmt.Sprintf("Squad #%X", squad.ID()&0xFFF),
@@ -455,6 +481,17 @@ func stanceLabel(s components.StanceCode) string {
 		return "Prone"
 	default:
 		return "Stand"
+	}
+}
+
+func factionLabel(id uint8) string {
+	switch id {
+	case components.FactionPlayer:
+		return "Player"
+	case components.FactionEnemyRed:
+		return "EnemyRed"
+	default:
+		return fmt.Sprintf("F%d", id)
 	}
 }
 

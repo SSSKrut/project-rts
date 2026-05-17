@@ -28,6 +28,7 @@ type RoleService struct {
 	spadeMap     *ecs.Map[components.Spade]
 	ownedByMap   *ecs.Map[components.OwnedBy]
 	staminaMap   *ecs.Map[components.Stamina]
+	hpMap        *ecs.Map[components.HP]
 }
 
 // NewRoleService wires the map handles. Must be called after world creation
@@ -44,6 +45,7 @@ func NewRoleService(w *ecs.World) *RoleService {
 		spadeMap:     ecs.NewMap[components.Spade](w),
 		ownedByMap:   ecs.NewMap[components.OwnedBy](w),
 		staminaMap:   ecs.NewMap[components.Stamina](w),
+		hpMap:        ecs.NewMap[components.HP](w),
 	}
 }
 
@@ -113,6 +115,19 @@ func (s *RoleService) AssignRole(unit ecs.Entity, role components.UnitRoleKind) 
 			RecoverRate: staminaRecoverRate,
 		})
 	}
+
+	// Phase 14 M14.1: per-role HP pool. Same idempotency rule as Stamina —
+	// don't refill a damaged unit because of a role swap; only refresh Max
+	// (and clamp Current down if the new Max is lower).
+	hpMax := HPMaxForRole(role)
+	if existing := s.hpMap.Get(unit); existing != nil {
+		existing.Max = hpMax
+		if existing.Current > hpMax {
+			existing.Current = hpMax
+		}
+	} else {
+		s.hpMap.Add(unit, &components.HP{Current: hpMax, Max: hpMax})
+	}
 }
 
 func (s *RoleService) destroyIfAlive(e ecs.Entity) {
@@ -122,17 +137,18 @@ func (s *RoleService) destroyIfAlive(e ecs.Entity) {
 	s.world.RemoveEntity(e)
 }
 
-// spawnPrimary spawns the role's primary weapon entity. Stats here are
-// placeholders — Phase 14 (Combat) will overwrite with real numbers.
+// spawnPrimary spawns the role's primary weapon entity with the Phase 14
+// M14.7 stats (damage / range / RoF / dispersion).
 func (s *RoleService) spawnPrimary(unit ecs.Entity, role components.UnitRoleKind, pos components.WorldPos) ecs.Entity {
-	weaponKind, ammo, rangeM, rof, dmg := primaryStats(role)
+	weaponKind, ammo, rangeM, rof, dmg, dispersion := primaryStats(role)
 	ent := s.world.NewEntity()
 	s.weaponMap.Add(ent, &components.Weapon{
-		Kind:   weaponKind,
-		Ammo:   ammo,
-		RangeM: rangeM,
-		RoF:    rof,
-		Damage: dmg,
+		Kind:       weaponKind,
+		Ammo:       ammo,
+		RangeM:     rangeM,
+		RoF:        rof,
+		Damage:     dmg,
+		Dispersion: dispersion,
 	})
 	s.ownedByMap.Add(ent, &components.OwnedBy{Owner: unit})
 	posCopy := pos
@@ -157,13 +173,15 @@ func (s *RoleService) spawnSecondary(unit ecs.Entity, role components.UnitRoleKi
 	case components.RoleEngineer, components.RoleDemoMan:
 		s.spadeMap.Add(ent, &components.Spade{})
 	default:
-		// All other roles carry a Makarov sidearm.
+		// All other roles carry a Makarov sidearm. Phase 14 M14.7: lower
+		// range / damage / wider dispersion than the AK47 primary.
 		s.weaponMap.Add(ent, &components.Weapon{
-			Kind:   components.WeaponMakarov,
-			Ammo:   8,
-			RangeM: 50,
-			RoF:    4,
-			Damage: 20,
+			Kind:       components.WeaponMakarov,
+			Ammo:       8,
+			RangeM:     30,
+			RoF:        3,
+			Damage:     18,
+			Dispersion: 0.06,
 		})
 	}
 	return ent
@@ -173,6 +191,24 @@ func (s *RoleService) spawnSecondary(unit ecs.Entity, role components.UnitRoleKi
 // {Stand, Crouch}. PHASE-13.md P2 sets this as a fixed value across all roles;
 // Phase 15 doctrines may introduce per-doctrine scaling later.
 const staminaRecoverRate float32 = 0.05
+
+// HPMaxForRole returns the per-role HP pool. PHASE-14.md P1 table:
+//   - MachineGunner: 110 (vest + extra mass).
+//   - Sniper / ATGunner: 90 (lighter loadout).
+//   - everyone else: 100 (Rifleman / Leader / Grenadier / Medic /
+//     Radio / Engineer / Demo).
+//
+// Numbers are placeholders; final balance lands in M14.7 playtest.
+func HPMaxForRole(role components.UnitRoleKind) float32 {
+	switch role {
+	case components.RoleMachineGunner:
+		return 110
+	case components.RoleSniper, components.RoleATGunner:
+		return 90
+	default:
+		return 100
+	}
+}
 
 // StaminaMaxForRole returns the per-role MaxLevel modifier. Heavy-equipment
 // carriers (MG / AT / Engineer / DemoMan / Radio) have a smaller tank because
@@ -317,21 +353,34 @@ func BehaviorDefaultForRole(role components.UnitRoleKind) components.BehaviorRul
 	}
 }
 
-// primaryStats returns the placeholder Weapon fields for each role's primary.
-// Numbers are coarse — real balance lives in Phase 14.
-func primaryStats(role components.UnitRoleKind) (kind components.WeaponKind, ammo uint16, rangeM, rof float32, dmg uint16) {
+// primaryStats returns the per-role Weapon fields. PHASE-14.md M14.7 table
+// (P10 lock-in): realistic damage / range / RoF / dispersion. Numbers stay
+// rough placeholders — real balance pass is Phase 25 polish, but these are
+// close enough that a 4-vs-8 firefight at ~50 m feels like a tactical
+// engagement (target: ~30-45 s to wipe one side, per M14.7 closure).
+//
+// Dispersion = small-angle radians; lateral deflection at the target is
+// dispersion × range. Examples: AK47 0.030 at 100 m → 3 m spread; SVD 0.005
+// at 100 m → 0.5 m (precision shot).
+func primaryStats(role components.UnitRoleKind) (kind components.WeaponKind, ammo uint16, rangeM, rof float32, dmg uint16, dispersion float32) {
 	switch role {
 	case components.RoleMachineGunner:
-		return components.WeaponPKM, 100, 800, 10, 35
+		// PKM: 7.62×54 belt — high RoF, wider dispersion (burst fire),
+		// good range. Numbers a touch above AK to reflect role weight.
+		return components.WeaponPKM, 100, 500, 8.0, 30, 0.05
 	case components.RoleSniper:
-		return components.WeaponSVD, 10, 800, 1, 80
+		// SVD: long range, low RoF, tight dispersion (precision rifle).
+		return components.WeaponSVD, 10, 600, 0.5, 70, 0.005
 	case components.RoleATGunner:
-		return components.WeaponRPG7, 3, 300, 0.2, 400
+		// RPG7: rare shots, AP/HE — vs Inf splash placeholder. Phase 14.5
+		// will add real splash radius; for now single-target only.
+		return components.WeaponRPG7, 3, 200, 0.1, 200, 0.02
 	case components.RoleGrenadier:
-		return components.WeaponGP25, 30, 400, 0.5, 60
+		// GP25: under-barrel grenade launcher. Splash placeholder.
+		return components.WeaponGP25, 8, 150, 0.3, 50, 0.04
 	default:
-		// Leader / Rifleman / Medic / RadioOperator / Engineer / DemoMan all
-		// carry an AK47 as their primary in the Phase 12 placeholder.
-		return components.WeaponAK47, 30, 400, 10, 30
+		// Leader / Rifleman / Medic / RadioOperator / Engineer / DemoMan
+		// all carry an AK47 as their primary.
+		return components.WeaponAK47, 30, 300, 4.0, 28, 0.03
 	}
 }

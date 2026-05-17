@@ -29,6 +29,18 @@ const (
 	OrderKindOccupyTrench
 	OrderKindDefendPosition
 	OrderKindPatrol
+	// Phase 14 M14.4 — combat orders.
+	//
+	// OrderKindAttackTarget — focus fire on a specific entity (Faction !=
+	// own). Resolved by RMB on an enemy unit (HitUnit hit-test path).
+	// Completes when the target is dead/missing; Phase 15 may add "lost
+	// LOS for N seconds → Failed" once SurvivalInstinct lands.
+	OrderKindAttackTarget
+	// OrderKindSuppressFire — drench a terrain sector with fire. Resolved
+	// by pie-menu choice on terrain. Completes on a timer (Phase 14
+	// simple: 30 s default — Phase 21 will surface AmmoCap progress in
+	// the UI).
+	OrderKindSuppressFire
 )
 
 // OrderKind on the order entity. Wraps the code so the filter-target is one
