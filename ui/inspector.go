@@ -473,15 +473,10 @@ func isSelected(selected []ecs.Entity, e ecs.Entity) bool {
 	return false
 }
 
+// stanceLabel reads the canonical name from components.StanceSpecs. Phase
+// 14.5 M14.5.1 — switch replaced.
 func stanceLabel(s components.StanceCode) string {
-	switch s {
-	case components.StanceCrouch:
-		return "Crouch"
-	case components.StanceProne:
-		return "Prone"
-	default:
-		return "Stand"
-	}
+	return components.SpecForStance(s).Name
 }
 
 func factionLabel(id uint8) string {
@@ -599,18 +594,11 @@ func drawOrderRow(ctx InspectorCtx, ord ecs.Entity, prefix string, x, y, width i
 	return y + inspectorRowH
 }
 
+// orderKindLabel reads the spec table's Name. Phase 14.5 M14.5.0 — old
+// hand-maintained switch replaced.
 func orderKindLabel(k components.OrderKindCode) string {
-	switch k {
-	case components.OrderKindMoveTo:
-		return "MoveTo"
-	case components.OrderKindGarrison:
-		return "Garrison"
-	case components.OrderKindOccupyTrench:
-		return "OccupyTr."
-	case components.OrderKindDefendPosition:
-		return "Defend"
-	case components.OrderKindPatrol:
-		return "Patrol"
+	if spec := components.SpecForOrderKind(k); spec.Name != "" {
+		return spec.Name
 	}
 	return "?"
 }

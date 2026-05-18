@@ -10,12 +10,8 @@ import (
 	"rts-go/core"
 )
 
-// MaxSpeed by stance (m/s). Phase 7 P4.
-var unitMaxSpeed = [...]float32{
-	components.StanceStand:  5.0,
-	components.StanceCrouch: 3.0,
-	components.StanceProne:  1.5,
-}
+// Phase 14.5 M14.5.1 — unitMaxSpeed table folded into components.StanceSpecs.
+// Readers use components.SpecForStance(code).MaxSpeed.
 
 // Separation parameters. Phase 7 P4: only separation force, no alignment /
 // cohesion. Phase 9 layers formation logic on top via the same system.
@@ -52,9 +48,15 @@ const stopDuration float32 = 0.1
 // marker add/remove uses per-worker buffers + serial post-pass to keep
 // archetype mutations off the parallel critical path.
 type UnitMovementSystem struct {
-	unitFilter      *ecs.Filter5[components.Unit, components.WorldPos, components.Motion, components.ActionQueue, components.Stance]
-	neighbourFilter *ecs.Filter2[components.Unit, components.WorldPos]
-	pool            *core.WorkerPool
+	unitFilter *ecs.Filter5[components.Unit, components.WorldPos, components.Motion, components.ActionQueue, components.Stance]
+	pool       *core.WorkerPool
+	// Phase 14.5 M14.5.2: separation pass reads from the shared SpatialHash
+	// resource (rebuilt by SpatialHashRebuildSystem each tick before this
+	// system runs). Replaces the per-tick O(N²) neighbour walk.
+	spatialHash ecs.Resource[core.SpatialHash]
+	// Phase 14.5: world handle for stale-entity alive-check in the
+	// separation callback.
+	world *ecs.World
 
 	// Phase 13 handles.
 	memberMap                *ecs.Map[components.SquadMember]
@@ -63,12 +65,12 @@ type UnitMovementSystem struct {
 	orderQueueMap            *ecs.Map[components.OrderQueueHead]
 	orderMovementOverrideMap *ecs.Map[components.OrderParamMovementProfile]
 	movementProfileMap       *ecs.Map[components.MovementProfile]
+	posMap                   *ecs.Map[components.WorldPos]
 
-	// Reusable snapshot buffers. Filled in the serial pre-pass, read-only by
+	// Reusable snapshot buffer. Filled in the serial pre-pass, read-only by
 	// workers during ParallelFor — safe because writes are indexed and never
 	// concurrent.
-	workBuf      []unitWork
-	neighbourBuf []unitNeighbour
+	workBuf []unitWork
 
 	// Per-worker buffers for StaminaExhausted marker toggles. Workers can't
 	// mutate archetypes concurrently, so they record pending Add / Remove
@@ -94,7 +96,6 @@ func NewUnitMovementSystem(pool *core.WorkerPool) *UnitMovementSystem {
 	return &UnitMovementSystem{
 		pool:                   pool,
 		workBuf:                make([]unitWork, 0, 64),
-		neighbourBuf:           make([]unitNeighbour, 0, 64),
 		workerExhaustedAdds:    make([][]ecs.Entity, workers),
 		workerExhaustedRemoves: make([][]ecs.Entity, workers),
 	}
@@ -102,13 +103,15 @@ func NewUnitMovementSystem(pool *core.WorkerPool) *UnitMovementSystem {
 
 func (sys *UnitMovementSystem) InitUI(w *ecs.World) {
 	sys.unitFilter = ecs.NewFilter5[components.Unit, components.WorldPos, components.Motion, components.ActionQueue, components.Stance](w)
-	sys.neighbourFilter = ecs.NewFilter2[components.Unit, components.WorldPos](w)
 	sys.memberMap = ecs.NewMap[components.SquadMember](w)
 	sys.staminaMap = ecs.NewMap[components.Stamina](w)
 	sys.staminaExhaustedMap = ecs.NewMap[components.StaminaExhausted](w)
 	sys.orderQueueMap = ecs.NewMap[components.OrderQueueHead](w)
 	sys.orderMovementOverrideMap = ecs.NewMap[components.OrderParamMovementProfile](w)
 	sys.movementProfileMap = ecs.NewMap[components.MovementProfile](w)
+	sys.posMap = ecs.NewMap[components.WorldPos](w)
+	sys.spatialHash = ecs.NewResource[core.SpatialHash](w)
+	sys.world = w
 }
 
 func (UnitMovementSystem) Name() string { return "unit_movement" }
@@ -120,13 +123,6 @@ func (UnitMovementSystem) LODPolicy() core.LODPolicy {
 		RelevantEvery: core.LODDisabled,
 		DormantEvery:  core.LODDisabled,
 	}
-}
-
-// unitNeighbour — XZ-only positional record used for the separation pass.
-type unitNeighbour struct {
-	ent ecs.Entity
-	wx  float32
-	wz  float32
 }
 
 // unitWork — snapshot row for the parallel step pass. Pointers stay valid
@@ -151,19 +147,10 @@ func (sys *UnitMovementSystem) Update(ctx core.UpdateContext) {
 	}
 	sys.elapsed += dt
 
-	// Snapshot neighbours (XZ-only) for the separation pass. Phase 14 will
-	// swap this O(N²) scan for a spatial hash.
-	sys.neighbourBuf = sys.neighbourBuf[:0]
-	qN := sys.neighbourFilter.Query()
-	for qN.Next() {
-		_, pos := qN.Get()
-		sys.neighbourBuf = append(sys.neighbourBuf, unitNeighbour{
-			ent: qN.Entity(),
-			wx:  float32(pos.Chunk.X)*components.ChunkSize + pos.Local.X,
-			wz:  float32(pos.Chunk.Z)*components.ChunkSize + pos.Local.Z,
-		})
-	}
-	neighbours := sys.neighbourBuf
+	// Phase 14.5 M14.5.2: neighbour data comes from the shared SpatialHash
+	// rebuilt this tick by SpatialHashRebuildSystem. The separation pass
+	// queries it directly inside step() — no per-tick O(N²) snapshot.
+	hash := sys.spatialHash.Get()
 
 	// Snapshot units (component pointers) so the parallel pass can index into
 	// a slice without holding the live ECS query. Phase 13: also snapshot the
@@ -205,7 +192,7 @@ func (sys *UnitMovementSystem) Update(ctx core.UpdateContext) {
 		}
 		for i := start; i < end; i++ {
 			w := work[i]
-			markerOp := sys.step(w, dt, neighbours)
+			markerOp := sys.step(w, dt, hash)
 			switch markerOp {
 			case staminaMarkerAdd:
 				sys.workerExhaustedAdds[chunkIdx] = append(sys.workerExhaustedAdds[chunkIdx], w.ent)
@@ -280,10 +267,13 @@ func (sys *UnitMovementSystem) resolveProfile(unit ecs.Entity) components.Moveme
 // the snapshot's per-unit pointers and never touches shared maps / resources.
 // Returns the StaminaExhausted marker toggle decision (caller batches it into
 // the per-worker buffer for the serial post-pass).
+//
+// Phase 14.5 M14.5.2: separation queries the shared SpatialHash (read-only
+// during the parallel section).
 func (sys *UnitMovementSystem) step(
 	w unitWork,
 	dt float32,
-	neighbours []unitNeighbour,
+	hash *core.SpatialHash,
 ) staminaMarkerOp {
 	// Pace selection: StaminaExhausted forces Walk (P3). Otherwise use the
 	// effective profile's Pace.
@@ -332,7 +322,7 @@ func (sys *UnitMovementSystem) step(
 	}
 
 	// Speed lookup uses the unit's current Stance × effective Pace.
-	maxSpeed := unitMaxSpeed[w.stance.Code] * components.PaceSpeedMul[effectivePace]
+	maxSpeed := components.SpecForStance(w.stance.Code).MaxSpeed * components.PaceSpeedMul[effectivePace]
 
 	if w.queue.Count == 0 {
 		w.mot.Speed = 0
@@ -352,23 +342,44 @@ func (sys *UnitMovementSystem) step(
 		desiredX := diff.X * invDist
 		desiredZ := diff.Z * invDist
 
-		// Separation force from neighbours in XZ.
+		// Phase 14.5 M14.5.2: separation force pulled from the SpatialHash.
+		// Callback receives nearby entries inline — no intermediate slice
+		// allocation. Self is filtered via ent check; alive-check is cheap
+		// here (the hash may carry indices for entities removed since rebuild,
+		// but the world.Alive guard skips dead reads).
 		selfX := float32(w.pos.Chunk.X)*components.ChunkSize + w.pos.Local.X
 		selfZ := float32(w.pos.Chunk.Z)*components.ChunkSize + w.pos.Local.Z
 		var sepX, sepZ float32
-		for _, n := range neighbours {
-			if n.ent == w.ent {
-				continue
-			}
-			dx := selfX - n.wx
-			dz := selfZ - n.wz
-			dSq := dx*dx + dz*dz
-			if dSq <= 1e-4 || dSq > separationRadius*separationRadius {
-				continue
-			}
-			invD := 1 / dSq
-			sepX += dx * invD
-			sepZ += dz * invD
+		if hash != nil {
+			hash.ForEachInRadius(selfX, selfZ, separationRadius, func(ent ecs.Entity, dSq float32) {
+				if ent == w.ent || dSq <= 1e-4 {
+					return
+				}
+				// Stale-entity guard: SpatialHash invariant — readers MUST
+				// alive-check every callback target before further work.
+				if !sys.world.Alive(ent) {
+					return
+				}
+				// Recompute dx/dz so the falloff direction is from the live
+				// position (SpatialEntry is a 1-tick stale snapshot, but the
+				// resolution mismatch is ≤ a few cm at top speed — irrelevant
+				// for separation force direction).
+				np := sys.posMap.Get(ent)
+				if np == nil {
+					return
+				}
+				nx := float32(np.Chunk.X)*components.ChunkSize + np.Local.X
+				nz := float32(np.Chunk.Z)*components.ChunkSize + np.Local.Z
+				dx := selfX - nx
+				dz := selfZ - nz
+				dd := dx*dx + dz*dz
+				if dd <= 1e-4 {
+					return
+				}
+				inv := 1 / dd
+				sepX += dx * inv
+				sepZ += dz * inv
+			})
 		}
 
 		vx := desiredX*maxSpeed + sepX*separationWeight

@@ -137,18 +137,21 @@ func (s *RoleService) destroyIfAlive(e ecs.Entity) {
 	s.world.RemoveEntity(e)
 }
 
-// spawnPrimary spawns the role's primary weapon entity with the Phase 14
-// M14.7 stats (damage / range / RoF / dispersion).
+// spawnPrimary spawns the role's primary weapon entity. Phase 14.5 M14.5.1:
+// role → WeaponKind mapping stays here (small switch); the per-WeaponKind
+// stats come from components.WeaponSpecs so adding a new weapon doesn't
+// require touching this file.
 func (s *RoleService) spawnPrimary(unit ecs.Entity, role components.UnitRoleKind, pos components.WorldPos) ecs.Entity {
-	weaponKind, ammo, rangeM, rof, dmg, dispersion := primaryStats(role)
+	weaponKind := primaryWeaponForRole(role)
+	spec := components.SpecForWeapon(weaponKind)
 	ent := s.world.NewEntity()
 	s.weaponMap.Add(ent, &components.Weapon{
 		Kind:       weaponKind,
-		Ammo:       ammo,
-		RangeM:     rangeM,
-		RoF:        rof,
-		Damage:     dmg,
-		Dispersion: dispersion,
+		Ammo:       spec.Ammo,
+		RangeM:     spec.RangeM,
+		RoF:        spec.RoF,
+		Damage:     spec.Damage,
+		Dispersion: spec.Dispersion,
 	})
 	s.ownedByMap.Add(ent, &components.OwnedBy{Owner: unit})
 	posCopy := pos
@@ -173,15 +176,12 @@ func (s *RoleService) spawnSecondary(unit ecs.Entity, role components.UnitRoleKi
 	case components.RoleEngineer, components.RoleDemoMan:
 		s.spadeMap.Add(ent, &components.Spade{})
 	default:
-		// All other roles carry a Makarov sidearm. Phase 14 M14.7: lower
-		// range / damage / wider dispersion than the AK47 primary.
+		// All other roles carry a Makarov sidearm. Phase 14.5 M14.5.1 —
+		// stats sourced from components.WeaponSpecs.
+		mk := components.SpecForWeapon(components.WeaponMakarov)
 		s.weaponMap.Add(ent, &components.Weapon{
-			Kind:       components.WeaponMakarov,
-			Ammo:       8,
-			RangeM:     30,
-			RoF:        3,
-			Damage:     18,
-			Dispersion: 0.06,
+			Kind: mk.Kind, Ammo: mk.Ammo, RangeM: mk.RangeM, RoF: mk.RoF,
+			Damage: mk.Damage, Dispersion: mk.Dispersion,
 		})
 	}
 	return ent
@@ -353,34 +353,24 @@ func BehaviorDefaultForRole(role components.UnitRoleKind) components.BehaviorRul
 	}
 }
 
-// primaryStats returns the per-role Weapon fields. PHASE-14.md M14.7 table
-// (P10 lock-in): realistic damage / range / RoF / dispersion. Numbers stay
-// rough placeholders — real balance pass is Phase 25 polish, but these are
-// close enough that a 4-vs-8 firefight at ~50 m feels like a tactical
-// engagement (target: ~30-45 s to wipe one side, per M14.7 closure).
-//
-// Dispersion = small-angle radians; lateral deflection at the target is
-// dispersion × range. Examples: AK47 0.030 at 100 m → 3 m spread; SVD 0.005
-// at 100 m → 0.5 m (precision shot).
-func primaryStats(role components.UnitRoleKind) (kind components.WeaponKind, ammo uint16, rangeM, rof float32, dmg uint16, dispersion float32) {
+// primaryWeaponForRole maps a UnitRole to its primary WeaponKind. Phase 14.5
+// M14.5.1 — actual weapon stats now live in components.WeaponSpecs (read by
+// spawnPrimary). Keeping the role → WeaponKind mapping here as a small
+// switch is intentional: roles and weapons are independent enums and we
+// don't want to bolt a `PrimaryFor RoleKind` field onto WeaponSpec.
+func primaryWeaponForRole(role components.UnitRoleKind) components.WeaponKind {
 	switch role {
 	case components.RoleMachineGunner:
-		// PKM: 7.62×54 belt — high RoF, wider dispersion (burst fire),
-		// good range. Numbers a touch above AK to reflect role weight.
-		return components.WeaponPKM, 100, 500, 8.0, 30, 0.05
+		return components.WeaponPKM
 	case components.RoleSniper:
-		// SVD: long range, low RoF, tight dispersion (precision rifle).
-		return components.WeaponSVD, 10, 600, 0.5, 70, 0.005
+		return components.WeaponSVD
 	case components.RoleATGunner:
-		// RPG7: rare shots, AP/HE — vs Inf splash placeholder. Phase 14.5
-		// will add real splash radius; for now single-target only.
-		return components.WeaponRPG7, 3, 200, 0.1, 200, 0.02
+		return components.WeaponRPG7
 	case components.RoleGrenadier:
-		// GP25: under-barrel grenade launcher. Splash placeholder.
-		return components.WeaponGP25, 8, 150, 0.3, 50, 0.04
+		return components.WeaponGP25
 	default:
 		// Leader / Rifleman / Medic / RadioOperator / Engineer / DemoMan
 		// all carry an AK47 as their primary.
-		return components.WeaponAK47, 30, 300, 4.0, 28, 0.03
+		return components.WeaponAK47
 	}
 }

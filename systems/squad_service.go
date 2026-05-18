@@ -58,6 +58,8 @@ type SquadService struct {
 	orderAttackMoveMap *ecs.Map[components.OrderParamAttackMove]
 	// Phase 14 M14.4: optional Suppress params on SuppressFire orders.
 	orderSuppressMap *ecs.Map[components.OrderParamSuppress]
+	// Phase 14.5 M14.5.0: Issue #10 out-of-range tracker for AttackTarget.
+	orderOutOfRangeMap *ecs.Map[components.OrderOutOfRangeTracker]
 	// Phase 14 M14.1: Faction handle. CreateFromTemplate stamps each spawned
 	// unit so WeaponSystem can gate firing on hostility.
 	factionMap *ecs.Map[components.Faction]
@@ -95,6 +97,7 @@ func NewSquadService(w *ecs.World) *SquadService {
 		orderMovementOverrideMap: ecs.NewMap[components.OrderParamMovementProfile](w),
 		orderAttackMoveMap:       ecs.NewMap[components.OrderParamAttackMove](w),
 		orderSuppressMap:         ecs.NewMap[components.OrderParamSuppress](w),
+		orderOutOfRangeMap:       ecs.NewMap[components.OrderOutOfRangeTracker](w),
 		factionMap:               ecs.NewMap[components.Faction](w),
 	}
 }
@@ -603,6 +606,12 @@ func (s *SquadService) IssueOrder(
 	}
 	if params.AttackMove {
 		s.orderAttackMoveMap.Add(ord, &components.OrderParamAttackMove{})
+	}
+	// Phase 14.5 M14.5.0 (Issue #10): orders whose spec carries a max
+	// out-of-range window get the tracker installed up-front. Resolver
+	// reads the spec and decides per-tick if the squad is in range.
+	if spec := components.SpecForOrderKind(kind); spec.MaxOutOfRangeSeconds > 0 {
+		s.orderOutOfRangeMap.Add(ord, &components.OrderOutOfRangeTracker{})
 	}
 	// Phase 14 M14.4: only SuppressFire reads OrderParamSuppress. Default
 	// the StartTime to the current clock if the caller didn't set it.

@@ -133,6 +133,20 @@ type OrderChain struct {
 	Next ecs.Entity
 }
 
+// OrderOutOfRangeTracker — Phase 14.5 M14.5.0, Issue #10 fix. Added only on
+// orders whose Spec.MaxOutOfRangeSeconds > 0 (AttackTarget). When the squad's
+// effective weapon range cannot reach the target, OrderResolverSystem
+// accumulates `Elapsed`; once it crosses Spec.MaxOutOfRangeSeconds the order
+// transitions to Failed. Resets to zero on any tick where at least one squad
+// member is in range — the timer rewards intermittent in-range moments
+// instead of demanding continuous coverage.
+//
+// Separate component (rather than a field on OrderIssuedAt) so the resolver's
+// in-range hot path can skip the cost when the order doesn't need tracking.
+type OrderOutOfRangeTracker struct {
+	Elapsed float32
+}
+
 // OrderQueueHead lives on the Squad entity (not the order entity). First =
 // zero ⇒ squad is idle. The chain extends via OrderChain.Next on the head
 // order. Phase 11 P2: this is the *primary* order state on the squad;

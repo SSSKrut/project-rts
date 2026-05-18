@@ -69,19 +69,35 @@ const (
 	PieOuterRadius float32 = 110
 )
 
-// pieSegments is the canonical kind ordering for the menu. Index = segment
-// slot, starting at the top and going clockwise.
-var pieSegments = []components.OrderKindCode{
-	components.OrderKindMoveTo,
-	components.OrderKindGarrison,
-	components.OrderKindOccupyTrench,
-	components.OrderKindDefendPosition,
-	components.OrderKindPatrol,
-	// Phase 14 M14.4: SuppressFire — drench a sector with fire. Commit
-	// resolves with terrain Pos (entity zero); AmmoCap / Radius come from
-	// the per-order OrderParamSuppress, which IssueOrder default-fills
-	// when the param is missing.
-	components.OrderKindSuppressFire,
+// pieSegments is the canonical kind ordering for the menu. Phase 14.5 M14.5.0:
+// derived once at init time from `components.OrderKindSpecs` — every spec
+// with `InPieMenu == true` contributes a segment, sorted by `PieSegmentOrder`.
+// Adding / removing a pie segment is now a one-line edit to the spec table.
+var pieSegments = buildPieSegments()
+
+func buildPieSegments() []components.OrderKindCode {
+	type entry struct {
+		code  components.OrderKindCode
+		order uint8
+	}
+	var entries []entry
+	for i := range components.OrderKindSpecs {
+		spec := &components.OrderKindSpecs[i]
+		if spec.InPieMenu {
+			entries = append(entries, entry{code: spec.Code, order: spec.PieSegmentOrder})
+		}
+	}
+	// Stable insertion sort by PieSegmentOrder — tiny N, no allocation.
+	for i := 1; i < len(entries); i++ {
+		for j := i; j > 0 && entries[j-1].order > entries[j].order; j-- {
+			entries[j-1], entries[j] = entries[j], entries[j-1]
+		}
+	}
+	out := make([]components.OrderKindCode, len(entries))
+	for i, e := range entries {
+		out[i] = e.code
+	}
+	return out
 }
 
 // Begin records the press position and target. Caller invokes this on
@@ -331,22 +347,11 @@ func drawPieWedge(centre rl.Vector2, rIn, rOut float32, angStart, angEnd float64
 	}
 }
 
+// pieKindLabel reads the canonical short Name from the spec table. Phase
+// 14.5 M14.5.0 — switch removed.
 func pieKindLabel(k components.OrderKindCode) string {
-	switch k {
-	case components.OrderKindMoveTo:
-		return "Move"
-	case components.OrderKindGarrison:
-		return "Garrison"
-	case components.OrderKindOccupyTrench:
-		return "Trench"
-	case components.OrderKindDefendPosition:
-		return "Defend"
-	case components.OrderKindPatrol:
-		return "Patrol"
-	case components.OrderKindSuppressFire:
-		return "Suppress"
-	case components.OrderKindAttackTarget:
-		return "Attack"
+	if spec := components.SpecForOrderKind(k); spec.Name != "" {
+		return spec.Name
 	}
 	return "?"
 }

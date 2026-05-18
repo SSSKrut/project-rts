@@ -38,26 +38,14 @@ func main() {
 		defer rl.UnloadFont(hudFont)
 	}
 
-	rl.InitAudioDevice()
-	defer rl.CloseAudioDevice()
-
 	rl.SetTargetFPS(60)
 
-	samples := make([]byte, 44100*2)
-	for i := 0; i < len(samples); i += 2 {
-		val := int16(4000)
-		if (i/200)%2 == 0 {
-			val = -4000
-		}
-		samples[i] = byte(val & 0xFF)
-		samples[i+1] = byte(val >> 8)
-	}
-	wave := rl.NewWave(44100, 44100, 16, 1, samples)
-	defer rl.UnloadWave(wave)
-
-	audioManager := systems.NewAudioManager(8)
-	audioManager.RegisterWave("engine", wave)
-	defer audioManager.Unload()
+	// Phase 14.5 cleanup: audio scaffolding (placeholder square-wave +
+	// SpatialAudioSystem) removed from main; the engine-tone test sound
+	// and voice limiter served as a Phase 7 placeholder for vehicle/unit
+	// sound. Real audio (footsteps, gunfire, voices) lands in Phase 25
+	// polish — reintroduce wiring here when the audio asset pipeline
+	// exists.
 
 	app := core.NewApp()
 
@@ -109,11 +97,15 @@ func main() {
 	ecs.AddResource(app.World, &transitionRegistry)
 	mapMarkerCache := components.NewMapMarkerCache()
 	ecs.AddResource(app.World, &mapMarkerCache)
-	// Phase 14 M14.2: transient combat-visual buffer shared between
-	// WeaponSystem (writer) and the 3D render pass (reader). Must be
-	// registered before WeaponSystem.InitUI runs.
-	visualEvents := components.NewVisualEvents()
-	ecs.AddResource(app.World, &visualEvents)
+	// Phase 14.5 M14.5.4 — VisualEvents resource replaced by ECS-entity
+	// particles. Spawn handles + ParticleSystem registered below.
+	// Phase 14.5 M14.5.2: SpatialHash for Unit XZ positions. Rebuilt every
+	// tick (serial pass) before UnitMovement so this frame's separation
+	// steering sees fresh positions. Consumed by UnitMovement.separation,
+	// WeaponSystem.resolveShot (unit-vs-ray), WeaponSystem.propagateSuppression,
+	// and VisionSystem.processVisionSeer (M14.5.3).
+	unitSpatialHash := core.NewSpatialHash(32.0)
+	ecs.AddResource(app.World, unitSpatialHash)
 
 	defer systems.FlushModifiedChunks(app.World, systems.SaveDir)
 
@@ -158,15 +150,26 @@ func main() {
 	groundStickSys := &systems.GroundStickSystem{}
 	groundStickSys.InitUI(app.World)
 
+	// Phase 14.5 M14.5.2: SpatialHash rebuild runs before UnitMovement so
+	// this tick's separation steering reads fresh positions.
+	spatialHashRebuildSys := systems.NewSpatialHashRebuildSystem()
+	spatialHashRebuildSys.InitUI(app.World)
+
 	unitMovementSys := systems.NewUnitMovementSystem(workerPool)
 	unitMovementSys.InitUI(app.World)
 
 	visionSys := systems.NewVisionSystem(workerPool)
 	visionSys.InitUI(app.World)
 
+	// Phase 14.5 M14.5.4: particle spawn handles + ParticleSystem. Handles
+	// built before WeaponSystem so its constructor can take a non-nil ref.
+	particleHandles := systems.NewSpawnHandles(app.World)
+	particleSys := systems.NewParticleSystem()
+	particleSys.InitUI(app.World)
+
 	// Phase 14 M14.2: WeaponSystem runs after Vision so it sees the freshest
 	// Awareness FIFO entries each tick.
-	weaponSys := systems.NewWeaponSystem(workerPool, damageService)
+	weaponSys := systems.NewWeaponSystem(workerPool, damageService, particleHandles)
 	weaponSys.InitUI(app.World)
 
 	// Phase 14 M14.5: cleanup of expired ThreatSource entities — Phase 15
@@ -196,12 +199,6 @@ func main() {
 	movementSys := &systems.MovementSystem{}
 	movementSys.InitUI(app.World)
 
-	audioSys := &systems.SpatialAudioSystem{
-		Manager:     audioManager,
-		MaxPerChunk: 2,
-	}
-	audioSys.InitUI(app.World)
-
 	streamingSys := &systems.StreamingSystem{}
 	streamingSys.InitUI(app.World)
 
@@ -222,9 +219,11 @@ func main() {
 	app.AddSystem(spatialBakeSys)
 	app.AddSystem(terrainMeshSys)
 	app.AddSystem(groundStickSys)
+	app.AddSystem(spatialHashRebuildSys)
 	app.AddSystem(unitMovementSys)
 	app.AddSystem(visionSys)
 	app.AddSystem(weaponSys)
+	app.AddSystem(particleSys)
 	app.AddSystem(threatDecaySys)
 	app.AddSystem(orderResolverSys)
 	app.AddSystem(squadMacroPathSys)
@@ -232,7 +231,6 @@ func main() {
 	app.AddSystem(mapMarkerCacheSys)
 	app.AddSystem(lodSys)
 	app.AddSystem(movementSys)
-	app.AddSystem(audioSys)
 	app.AddSystem(streamingSys)
 	app.AddSystem(orbitSys)
 	app.AddSystem(cameraSys)
@@ -498,6 +496,13 @@ func main() {
 		trenches:         &trenches,
 		trenchRootMap:    trenchRootMap,
 		squadColor:       squadColor,
+	}
+
+	// Phase 14.5 M14.5.4: ParticleRenderCtx — handles for drawParticles.
+	// Built once; reused every frame in the 3D pass.
+	particleRenderCtx := ParticleRenderCtx{
+		Filter: ecs.NewFilter3[components.Particle, components.WorldPos, components.ParticleVisual](app.World),
+		EndMap: ecs.NewMap[components.ParticleEnd](app.World),
 	}
 
 	terrainMaterial := rl.LoadMaterialDefault()
@@ -1194,10 +1199,9 @@ func main() {
 		anchorPos = posMap.Get(anchor)
 		anchorRender := anchorPos.ToRenderSpace(systems.CurrentOriginChunk)
 
-		// Phase 14 M14.2: trim expired tracer / impact records. M14.6 will
-		// wire the actual draw pass; keeping Decay here means the buffer
-		// stays bounded even before any render code exists.
-		visualEvents.Decay(float32(app.Elapsed().Seconds()))
+		// Phase 14.5 M14.5.4: particles are ECS entities now — lifecycle
+		// (age + despawn) lives in ParticleSystem.Update. No per-frame
+		// decay needed here.
 
 		// ── Render 3D scene into RT ──
 		rl.BeginTextureMode(scene3DRT.RT)
@@ -1455,11 +1459,10 @@ func main() {
 		}
 		drawSelectionGhost(ghostCtx, selected, focused == ui.Panel3D, ghostTarget, ghostTargetOK, ghostDragFacing, ghostPieHover)
 
-		// Phase 14 M14.6: tracer lines + impact spheres on top of the
-		// world geometry. Drawn last in the 3D pass so they layer over
-		// units / props; alpha-fading handled inside the helpers.
-		drawTracers(&visualEvents, float32(app.Elapsed().Seconds()))
-		drawImpacts(&visualEvents, float32(app.Elapsed().Seconds()))
+		// Phase 14.5 M14.5.4: ECS-particle render walks the Particle filter.
+		// Per-kind dispatch (tracer line / impact sphere / smoke / dust /
+		// debris cube / muzzle flash) lives in drawParticles.
+		drawParticles(particleRenderCtx, float32(app.Elapsed().Seconds()))
 
 		rl.EndMode3D()
 		rl.EndTextureMode()

@@ -158,40 +158,50 @@ func (h *HitTester) HitTest(target components.WorldPos) HitTestResult {
 // resolveTargetIntoOrder converts a HitTestResult to an OrderKindCode + entity
 // target. PHASE-11.md P6 mapping. `kindOverride != nil` (from pie menu) wins
 // over hit-test.
+//
+// Phase 14.5 M14.5.0: the kind-override branch reads `Spec.NeedsEntity` /
+// `Spec.NeedsTerrain` instead of a kind-by-kind switch. The hit kind is
+// classified once into the "this hit is an entity vs terrain" bucket; the
+// spec decides whether the chosen kind can accept it. Mismatch falls back to
+// MoveTo (matches Phase 11 misclick behaviour: pie-Attack on empty terrain
+// becomes a Move).
 func resolveTargetIntoOrder(hit HitTestResult, kindOverride *components.OrderKindCode) (components.OrderKindCode, ecs.Entity) {
-	if kindOverride != nil {
-		// Pie menu override: keep the entity from hit-test if the kind matches
-		// the natural mapping; otherwise drop entity (terrain Pos suffices).
-		switch *kindOverride {
+	hitIsEntity := hit.Kind == HitBuilding || hit.Kind == HitTrench || hit.Kind == HitUnit
+	hitMatchesKind := func(k components.OrderKindCode) bool {
+		switch k {
 		case components.OrderKindGarrison:
-			if hit.Kind == HitBuilding {
-				return components.OrderKindGarrison, hit.Entity
-			}
-			return components.OrderKindGarrison, ecs.Entity{}
+			return hit.Kind == HitBuilding
 		case components.OrderKindOccupyTrench:
-			if hit.Kind == HitTrench {
-				return components.OrderKindOccupyTrench, hit.Entity
-			}
-			return components.OrderKindOccupyTrench, ecs.Entity{}
+			return hit.Kind == HitTrench
 		case components.OrderKindAttackTarget:
-			// Pie-menu commit for AttackTarget only makes sense if the
-			// cursor was on an enemy unit — otherwise fall back to MoveTo
-			// (UX: clicking Attack on empty terrain is a misclick).
-			if hit.Kind == HitUnit {
-				return components.OrderKindAttackTarget, hit.Entity
+			return hit.Kind == HitUnit
+		}
+		return false
+	}
+
+	if kindOverride != nil {
+		spec := components.SpecForOrderKind(*kindOverride)
+		// If the spec demands an entity but the hit isn't a compatible one,
+		// fall back to MoveTo (misclick). Same rule for entity-typed kinds
+		// with the wrong entity (Garrison on a trench).
+		if spec.NeedsEntity {
+			if hitIsEntity && hitMatchesKind(*kindOverride) {
+				return *kindOverride, hit.Entity
 			}
 			return components.OrderKindMoveTo, ecs.Entity{}
-		default:
-			return *kindOverride, ecs.Entity{}
 		}
+		// Terrain / position-only kind. Drop entity — overriding pie commit
+		// implies "use the cursor Pos verbatim".
+		return *kindOverride, ecs.Entity{}
 	}
+	// No override: hit-test classifies the kind. Building → Garrison, Trench
+	// → OccupyTrench, hostile unit → AttackTarget, else MoveTo.
 	switch hit.Kind {
 	case HitBuilding:
 		return components.OrderKindGarrison, hit.Entity
 	case HitTrench:
 		return components.OrderKindOccupyTrench, hit.Entity
 	case HitUnit:
-		// Phase 14 M14.4: hostile-unit hit → focus-fire order.
 		return components.OrderKindAttackTarget, hit.Entity
 	default:
 		return components.OrderKindMoveTo, ecs.Entity{}

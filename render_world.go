@@ -533,57 +533,70 @@ func drawUnitHPBar(renderPos rl.Vector3, st components.Stance, role components.U
 		1, rl.Color{R: 10, G: 12, B: 16, A: 220})
 }
 
-// drawTracers — Phase 14 M14.6: walk the VisualEvents tracer slice and draw
-// each segment as a 3D line in muzzle→impact space, fading alpha by age.
-// World coords convert to render space via the global origin chunk.
-//
-// Lines are drawn unconditionally regardless of camera occlusion; raylib
-// doesn't depth-test thin lines reliably, so a tracer behind a wall will
-// still show through. Phase 14.5 (particle system) replaces this with a
-// proper instanced-quad pipeline that respects depth.
-func drawTracers(events *components.VisualEvents, now float32) {
-	if events == nil {
-		return
-	}
-	originChunk := systems.CurrentOriginChunk
-	originBaseX := float32(originChunk.X) * components.ChunkSize
-	originBaseZ := float32(originChunk.Z) * components.ChunkSize
-	for i := range events.Tracers {
-		t := &events.Tracers[i]
-		age := now - t.SpawnTime
-		if age < 0 || age > t.TTL {
-			continue
-		}
-		fade := 1 - age/t.TTL
-		col := rl.Color{R: t.Color.R, G: t.Color.G, B: t.Color.B,
-			A: uint8(float32(t.Color.A) * fade)}
-		from := rl.Vector3{X: t.From.X - originBaseX, Y: t.From.Y, Z: t.From.Z - originBaseZ}
-		to := rl.Vector3{X: t.To.X - originBaseX, Y: t.To.Y, Z: t.To.Z - originBaseZ}
-		rl.DrawLine3D(from, to, col)
-	}
+// ParticleRenderCtx bundles ECS handles needed to walk every live particle.
+// main.go builds one and passes to drawParticles each frame. Phase 14.5 M14.5.4.
+type ParticleRenderCtx struct {
+	Filter    *ecs.Filter3[components.Particle, components.WorldPos, components.ParticleVisual]
+	EndMap    *ecs.Map[components.ParticleEnd]
 }
 
-// drawImpacts — sphere pings at bullet terminus points. Same fade rule as
-// drawTracers. Radius is constant (0.1 m) — too small to overshadow units,
-// big enough to read at typical camera distance.
-func drawImpacts(events *components.VisualEvents, now float32) {
-	if events == nil {
+// drawParticles walks every live Particle entity and dispatches per-kind
+// draw calls. Replaces drawTracers + drawImpacts; the new kinds (smoke,
+// dust, debris, muzzle flash) share the same pipeline.
+//
+// Phase 14.5 M14.5.4: raylib's DrawLine3D / DrawSphere / DrawCube are not
+// instanced — each particle is its own draw call. Acceptable at the cap of
+// 2000 live entries; Phase 16 may revisit if firefight density grows.
+func drawParticles(ctx ParticleRenderCtx, now float32) {
+	if ctx.Filter == nil {
 		return
 	}
 	originChunk := systems.CurrentOriginChunk
 	originBaseX := float32(originChunk.X) * components.ChunkSize
 	originBaseZ := float32(originChunk.Z) * components.ChunkSize
-	for i := range events.Impacts {
-		im := &events.Impacts[i]
-		age := now - im.SpawnTime
-		if age < 0 || age > im.TTL {
+	q := ctx.Filter.Query()
+	for q.Next() {
+		_, pos, vis := q.Get()
+		age := now - vis.SpawnTime
+		if age < 0 || age > vis.TTL {
 			continue
 		}
-		fade := 1 - age/im.TTL
-		col := rl.Color{R: im.Color.R, G: im.Color.G, B: im.Color.B,
-			A: uint8(float32(im.Color.A) * fade)}
-		c := rl.Vector3{X: im.Pos.X - originBaseX, Y: im.Pos.Y, Z: im.Pos.Z - originBaseZ}
-		rl.DrawSphere(c, 0.1, col)
+		fade := 1 - age/vis.TTL
+		col := rl.Color{R: vis.Color.R, G: vis.Color.G, B: vis.Color.B,
+			A: uint8(float32(vis.Color.A) * fade)}
+		// Particle WorldPos.Local is the absolute world-space position
+		// (writers set Chunk=0 to keep this simple); subtract the render
+		// origin to get camera-relative coords. This mirrors the old
+		// VisualEvents code path exactly.
+		from := rl.Vector3{
+			X: pos.Local.X - originBaseX,
+			Y: pos.Local.Y,
+			Z: pos.Local.Z - originBaseZ,
+		}
+		switch vis.Kind {
+		case components.ParticleTracer:
+			if end := ctx.EndMap.Get(q.Entity()); end != nil {
+				to := rl.Vector3{
+					X: end.To.X - originBaseX,
+					Y: end.To.Y,
+					Z: end.To.Z - originBaseZ,
+				}
+				rl.DrawLine3D(from, to, col)
+			}
+		case components.ParticleImpact, components.ParticleMuzzleFlash,
+			components.ParticleSmoke, components.ParticleDust:
+			r := vis.Size
+			if r <= 0 {
+				r = 0.1
+			}
+			rl.DrawSphere(from, r, col)
+		case components.ParticleDebris:
+			s := vis.Size
+			if s <= 0 {
+				s = 0.15
+			}
+			rl.DrawCube(from, s, s, s, col)
+		}
 	}
 }
 
@@ -673,15 +686,10 @@ func drawGhostArc(center rl.Vector3, facingYaw, halfAngleRad, length float32, co
 	}
 }
 
+// unitStanceHeight reads body height from components.StanceSpecs. Phase 14.5
+// M14.5.1 — old hard-coded switch replaced.
 func unitStanceHeight(code components.StanceCode) float32 {
-	switch code {
-	case components.StanceCrouch:
-		return 1.1
-	case components.StanceProne:
-		return 0.4
-	default:
-		return 1.8
-	}
+	return components.SpecForStance(code).BodyHeight
 }
 
 // Phase 14 M14.6 — faction-split palettes. Player squads pull from a

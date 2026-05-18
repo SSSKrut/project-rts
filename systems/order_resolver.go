@@ -55,6 +55,12 @@ type OrderResolverSystem struct {
 	orderFacingMap   *ecs.Map[components.OrderParamFacing]
 	// Phase 14 M14.4 — SuppressFire timer reader.
 	orderSuppressMap *ecs.Map[components.OrderParamSuppress]
+	// Phase 14.5 M14.5.0 — Issue #10 fix: per-order out-of-range timer.
+	orderOutOfRangeMap *ecs.Map[components.OrderOutOfRangeTracker]
+	// Equipment / Weapon — read to compute the squad's effective weapon range
+	// for the out-of-range check. Use the maximum range across roster members.
+	equipmentMap *ecs.Map[components.Equipment]
+	weaponMap    *ecs.Map[components.Weapon]
 
 	// Phase 13.6 M13.6.4: read on MoveTo / DefendPosition completion to apply
 	// arrived-facing to every roster member's Motion.Yaw. Instant snap; Phase
@@ -92,6 +98,9 @@ func (sys *OrderResolverSystem) InitUI(w *ecs.World) {
 	sys.orderOwnerMap = ecs.NewMap[components.OrderOwner](w)
 	sys.orderFacingMap = ecs.NewMap[components.OrderParamFacing](w)
 	sys.orderSuppressMap = ecs.NewMap[components.OrderParamSuppress](w)
+	sys.orderOutOfRangeMap = ecs.NewMap[components.OrderOutOfRangeTracker](w)
+	sys.equipmentMap = ecs.NewMap[components.Equipment](w)
+	sys.weaponMap = ecs.NewMap[components.Weapon](w)
 	sys.motionMap = ecs.NewMap[components.Motion](w)
 
 	sys.buildingMap = ecs.NewMap[components.Building](w)
@@ -114,24 +123,15 @@ func (OrderResolverSystem) LODPolicy() core.LODPolicy {
 	}
 }
 
-// Order-arrival radii. Garrison / OccupyTrench tolerate larger squads since
-// the "in footprint" / "on polyline" check is already coarse.
-const (
-	orderArrivalMoveTo       float32 = 2.5
-	orderArrivalGarrison     float32 = 4.0
-	orderArrivalOccupyTrench float32 = 3.0
-)
-
-// arrivalsByKind is a small lookup so per-kind constants stay readable.
+// Order-arrival radii — Phase 14.5 M14.5.0: now driven by OrderKindSpec.
+// arrivalRadiusFor reads Spec.ArrivalRadius; falls back to MoveTo default for
+// kinds whose spec didn't fill the field (none in Phase 14.5, but defensive).
 func arrivalRadiusFor(kind components.OrderKindCode) float32 {
-	switch kind {
-	case components.OrderKindGarrison:
-		return orderArrivalGarrison
-	case components.OrderKindOccupyTrench:
-		return orderArrivalOccupyTrench
-	default:
-		return orderArrivalMoveTo
+	spec := components.SpecForOrderKind(kind)
+	if spec.ArrivalRadius > 0 {
+		return spec.ArrivalRadius
 	}
+	return 2.5
 }
 
 func (sys *OrderResolverSystem) Update(ctx core.UpdateContext) {
@@ -186,8 +186,10 @@ func (sys *OrderResolverSystem) Update(ctx core.UpdateContext) {
 			}
 
 		case components.OrderStateInProgress:
-			done := sys.checkCompletion(squad, ord, kind.Code, target)
-			if done {
+			spec := components.SpecForOrderKind(kind.Code)
+			outcome := sys.evaluateCompletion(squad, ord, spec, target, float32(ctx.Delta.Seconds()))
+			switch outcome {
+			case completionDone:
 				state.Code = components.OrderStateCompleted
 				if pr := sys.orderProgressMap.Get(ord); pr != nil {
 					pr.Value = 1
@@ -199,7 +201,12 @@ func (sys *OrderResolverSystem) Update(ctx core.UpdateContext) {
 				// but the snapshot here is harmless for any other kind that
 				// gets a facing param).
 				sys.applyArrivedFacing(squad, ord)
-			} else {
+			case completionFailed:
+				// Phase 14.5 Issue #10: AttackTarget on out-of-range alive
+				// target after MaxOutOfRangeSeconds → Failed (so Inspector
+				// stops claiming the squad is engaging).
+				state.Code = components.OrderStateFailed
+			case completionPending:
 				sys.updateProgress(squad, ord, target)
 			}
 
@@ -297,85 +304,199 @@ func (sys *OrderResolverSystem) resolveTargetPos(kind components.OrderKindCode, 
 	}
 }
 
-// checkCompletion runs the per-kind arrival test. Returns true when the
-// order should transition to Completed.
-func (sys *OrderResolverSystem) checkCompletion(
+// completionOutcome carries the per-tick decision for an in-progress order:
+// pending (keep going), done (transition to Completed), or failed (transition
+// to Failed — Issue #10 for AttackTarget out-of-range).
+type completionOutcome uint8
+
+const (
+	completionPending completionOutcome = iota
+	completionDone
+	completionFailed
+)
+
+// evaluateCompletion is Phase 14.5 M14.5.0's replacement for the old
+// per-OrderKindCode switch. It dispatches by `Spec.Completion`, which keeps
+// the resolver oblivious to enum identities: a new completion rule is one
+// `case` here, plus the spec row pointing at it.
+//
+// `dt` is the current tick's delta (passed through Update). Required by
+// CompletionTargetDeath to advance the out-of-range tracker.
+func (sys *OrderResolverSystem) evaluateCompletion(
 	squad, ord ecs.Entity,
-	kind components.OrderKindCode,
+	spec *components.OrderKindSpec,
 	target *components.OrderTarget,
-) bool {
+	dt float32,
+) completionOutcome {
 	roster := sys.rosterMap.Get(squad)
 	if roster == nil {
-		return false
+		return completionPending
 	}
 	center, ok := SquadCenter(sys.squadService.world, roster, sys.posMap)
 	if !ok {
-		return false
+		return completionPending
 	}
 
-	switch kind {
-	case components.OrderKindDefendPosition:
-		// Never auto-completes; only Cancelled by the player.
-		return false
+	switch spec.Completion {
+	case components.CompletionNever:
+		// DefendPosition — only Cancelled by the player.
+		return completionPending
 
-	case components.OrderKindAttackTarget:
-		// Phase 14 M14.4: completes when the target entity is gone
-		// (DamageSystem.ApplyDeath despawned it) or the OrderTarget was
-		// never resolved. Phase 15 will add "lost LOS for N seconds" once
-		// SurvivalInstinct lands.
-		if target.Entity == (ecs.Entity{}) {
-			return true
+	case components.CompletionTargetDeath:
+		// AttackTarget: order ends when target dies. Issue #10 extension:
+		// transition to Failed when out-of-range too long.
+		if target.Entity == (ecs.Entity{}) || !sys.squadService.world.Alive(target.Entity) {
+			return completionDone
 		}
-		return !sys.squadService.world.Alive(target.Entity)
+		if spec.MaxOutOfRangeSeconds > 0 {
+			if sys.advanceOutOfRange(squad, ord, target, dt) > spec.MaxOutOfRangeSeconds {
+				return completionFailed
+			}
+		}
+		return completionPending
 
-	case components.OrderKindSuppressFire:
-		// Phase 14 simple: timer-only completion. Read StartTime from the
-		// optional OrderParamSuppress; fall back to OrderIssuedAt for
-		// orders that didn't get the param attached (defensive — should
-		// never happen since IssueOrder always attaches one).
+	case components.CompletionTimer:
+		// SuppressFire (and any future timer-gated kind). Spec.DurationSeconds
+		// is the per-kind cap; OrderParamSuppress.StartTime overrides the
+		// timing anchor when present (so a player Issue-then-pause sequence
+		// uses the original StartTime, not a refreshed one).
 		startTime := float32(0)
 		if sp := sys.orderSuppressMap.Get(ord); sp != nil {
 			startTime = sp.StartTime
 		} else if ia := sys.orderIssuedAtMap.Get(ord); ia != nil {
 			startTime = ia.Time
 		}
-		return sys.squadService.Clock()-startTime > suppressDuration
-
-	case components.OrderKindGarrison:
-		// "Squad center inside the building footprint" is the MVP completion
-		// gate. Phase 15 will replace with "every roster member has window
-		// cover-slot assigned".
-		if b := sys.buildingMap.Get(target.Entity); b != nil {
-			cx := float32(center.Chunk.X)*components.ChunkSize + center.Local.X
-			cz := float32(center.Chunk.Z)*components.ChunkSize + center.Local.Z
-			fp := b.Footprint
-			if cx >= fp.MinX && cx <= fp.MaxX && cz >= fp.MinZ && cz <= fp.MaxZ {
-				return true
-			}
+		if sys.squadService.Clock()-startTime > spec.DurationSeconds {
+			return completionDone
 		}
-		// Fallback: standard arrival radius against target.Pos.
-		r := arrivalRadiusFor(kind)
-		return centerXZDistSq(center, target.Pos) < r*r
+		return completionPending
 
-	case components.OrderKindOccupyTrench:
-		if root := sys.trenchRootMap.Get(target.Entity); root != nil {
-			tn := sys.trenchResource.Get()
-			if tn != nil && root.Index >= 0 && root.Index < len(tn.Lines) {
-				line := &tn.Lines[root.Index]
-				r := arrivalRadiusFor(kind)
-				if pointNearPolyline(center, line.Points, r) {
-					return true
+	case components.CompletionEveryMemberOnFloor:
+		// M14.5.6 will wire — for Phase 14.5.0 nothing maps onto this rule yet
+		// (Garrison still rides CompletionArrivalRadius). Returning pending
+		// keeps any test entity using this rule alive until M14.5.6 lands.
+		return completionPending
+
+	case components.CompletionArrivalRadius:
+		// MoveTo / Patrol / OccupyTrench / Garrison fallback. Per-kind
+		// shape-aware short-circuits (Garrison footprint AABB, OccupyTrench
+		// polyline) run first; the radius is the universal fallback.
+		switch spec.Code {
+		case components.OrderKindGarrison:
+			if b := sys.buildingMap.Get(target.Entity); b != nil {
+				cx := float32(center.Chunk.X)*components.ChunkSize + center.Local.X
+				cz := float32(center.Chunk.Z)*components.ChunkSize + center.Local.Z
+				fp := b.Footprint
+				if cx >= fp.MinX && cx <= fp.MaxX && cz >= fp.MinZ && cz <= fp.MaxZ {
+					return completionDone
+				}
+			}
+		case components.OrderKindOccupyTrench:
+			if root := sys.trenchRootMap.Get(target.Entity); root != nil {
+				tn := sys.trenchResource.Get()
+				if tn != nil && root.Index >= 0 && root.Index < len(tn.Lines) {
+					line := &tn.Lines[root.Index]
+					if pointNearPolyline(center, line.Points, spec.ArrivalRadius) {
+						return completionDone
+					}
 				}
 			}
 		}
-		// Fallback to Pos arrival.
-		r := arrivalRadiusFor(kind)
-		return centerXZDistSq(center, target.Pos) < r*r
-
-	default:
-		r := arrivalRadiusFor(kind)
-		return centerXZDistSq(center, target.Pos) < r*r
+		r := spec.ArrivalRadius
+		if r <= 0 {
+			r = 2.5
+		}
+		if centerXZDistSq(center, target.Pos) < r*r {
+			return completionDone
+		}
+		return completionPending
 	}
+	return completionPending
+}
+
+// advanceOutOfRange updates the out-of-range tracker on `ord` and returns the
+// accumulated elapsed seconds. Resets to zero whenever at least one alive
+// roster member sits within the squad's max weapon range of the target. Used
+// by the CompletionTargetDeath arm to enforce Spec.MaxOutOfRangeSeconds.
+func (sys *OrderResolverSystem) advanceOutOfRange(
+	squad, ord ecs.Entity,
+	target *components.OrderTarget,
+	dt float32,
+) float32 {
+	tracker := sys.orderOutOfRangeMap.Get(ord)
+	if tracker == nil {
+		// Defensive — IssueOrder installs the tracker for any kind whose
+		// spec has MaxOutOfRangeSeconds > 0. If we somehow got here without
+		// one, install lazily so the next tick has a place to write.
+		sys.orderOutOfRangeMap.Add(ord, &components.OrderOutOfRangeTracker{})
+		tracker = sys.orderOutOfRangeMap.Get(ord)
+		if tracker == nil {
+			return 0
+		}
+	}
+	// Compute max weapon range across roster.
+	maxRange := sys.maxSquadWeaponRange(squad)
+	if maxRange <= 0 {
+		// No weapons or all dead — treat as in-range so we don't insta-fail.
+		// (Squad with no working weapons can't complete AttackTarget anyway;
+		// Phase 15 SurvivalInstinct will surface this differently.)
+		tracker.Elapsed = 0
+		return 0
+	}
+	targetPos := target.Pos
+	if live := sys.posMap.Get(target.Entity); live != nil {
+		targetPos = *live
+	}
+	roster := sys.rosterMap.Get(squad)
+	anyInRange := false
+	for i := uint8(0); i < roster.Count; i++ {
+		mem := roster.Members[i]
+		if mem == (ecs.Entity{}) || !sys.squadService.world.Alive(mem) {
+			continue
+		}
+		mp := sys.posMap.Get(mem)
+		if mp == nil {
+			continue
+		}
+		if centerXZDistSq(*mp, targetPos) <= maxRange*maxRange {
+			anyInRange = true
+			break
+		}
+	}
+	if anyInRange {
+		tracker.Elapsed = 0
+		return 0
+	}
+	tracker.Elapsed += dt
+	return tracker.Elapsed
+}
+
+// maxSquadWeaponRange returns the largest Weapon.RangeM across all live
+// roster members' Equipment.Primary. Zero if no weapons.
+func (sys *OrderResolverSystem) maxSquadWeaponRange(squad ecs.Entity) float32 {
+	roster := sys.rosterMap.Get(squad)
+	if roster == nil {
+		return 0
+	}
+	var best float32
+	for i := uint8(0); i < roster.Count; i++ {
+		mem := roster.Members[i]
+		if mem == (ecs.Entity{}) || !sys.squadService.world.Alive(mem) {
+			continue
+		}
+		eq := sys.equipmentMap.Get(mem)
+		if eq == nil || eq.Primary == (ecs.Entity{}) {
+			continue
+		}
+		w := sys.weaponMap.Get(eq.Primary)
+		if w == nil {
+			continue
+		}
+		if w.RangeM > best {
+			best = w.RangeM
+		}
+	}
+	return best
 }
 
 // updateProgress writes a rough 0..1 progress value for the head order.
