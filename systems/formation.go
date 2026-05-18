@@ -251,10 +251,14 @@ func (sys *FormationSystem) processSquad(world *ecs.World, w formationWork, leav
 		offX, offZ := FormationOffset(fd.Type, i, fd.Spacing, fd.Forward)
 		target := centerTarget.Add(rl.Vector3{X: offX, Y: 0, Z: offZ})
 		// Phase 14.6 M14.6.1 — keep slot targets out of building interiors and
-		// blocked cells; the unit's ActionQueue is a straight-line MoveTo, so
-		// pushing the slot inside a wall makes the unit walk through it. A
-		// short spiral search picks the nearest walkable surface cell.
-		target = sys.clampSlotXZ(target)
+		// blocked cells when approaching from outside. Once the squad center
+		// has crossed into a footprint (commander entered through a door),
+		// let inside slots stand — UnitMovement.reflectAgainstWalls keeps
+		// trailing members away from walls while they funnel through the
+		// open door behind the commander.
+		if !sys.cellInsideBuilding(centerTarget) {
+			target = sys.clampSlotXZ(target)
+		}
 
 		// Re-push only if the new target meaningfully differs from the
 		// last queued MoveTo. Cuts the per-tick pop-push cycle at the
@@ -371,6 +375,41 @@ func (sys *FormationSystem) clampSlotXZ(target components.WorldPos) components.W
 		}
 	}
 	return target
+}
+
+// cellInsideBuilding returns true when the surface NavGrid cell covering
+// `pos` has the NavInBuilding bit set. Used by processSquad to gate the
+// outside-of-building slot clamp.
+func (sys *FormationSystem) cellInsideBuilding(pos components.WorldPos) bool {
+	if sys.navGridMap == nil {
+		return false
+	}
+	idx := sys.chunkIndexRes.Get()
+	if idx == nil {
+		return false
+	}
+	worldX := float32(pos.Chunk.X)*components.ChunkSize + pos.Local.X
+	worldZ := float32(pos.Chunk.Z)*components.ChunkSize + pos.Local.Z
+	cc := components.ChunkCoord{
+		X: int32(math.Floor(float64(worldX / components.ChunkSize))),
+		Z: int32(math.Floor(float64(worldZ / components.ChunkSize))),
+	}
+	ent, ok := idx.Loaded[cc]
+	if !ok {
+		return false
+	}
+	grid := sys.navGridMap.Get(ent)
+	if grid == nil {
+		return false
+	}
+	lx := worldX - float32(cc.X)*components.ChunkSize
+	lz := worldZ - float32(cc.Z)*components.ChunkSize
+	ci := int(math.Floor(float64(lx)))
+	cj := int(math.Floor(float64(lz)))
+	if ci < 0 || ci >= components.NavGridSide || cj < 0 || cj >= components.NavGridSide {
+		return false
+	}
+	return grid.Cells[cj*components.NavGridSide+ci].Flags&components.NavInBuilding != 0
 }
 
 // cellWalkableAt returns true when the surface NavGrid cell covering `pos`

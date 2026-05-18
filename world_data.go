@@ -88,31 +88,32 @@ func makeStartingTrenches() []components.Trench {
 // coords. Two rivers cross the spawn area so the player sees water + cut +
 // water-prop visuals without wandering far.
 func makeStartingRivers() []components.RiverPolyline {
-	wp := func(wx, wz float32) components.WorldPos {
-		return components.WorldPos{}.Add(rl.Vector3{X: wx, Y: 0, Z: wz})
-	}
-	return []components.RiverPolyline{
-		// Diagonal river NW → SE through chunk (0,0).
-		{
-			Points: []components.WorldPos{
-				wp(-100, -80),
-				wp(-30, -20),
-				wp(20, 30),
-				wp(80, 90),
-				wp(160, 150),
-			},
-			Width: 5.0,
-			Depth: 1.5,
-		},
-		// Smaller stream branching westward.
-		{
-			Points: []components.WorldPos{
-				wp(-90, 40),
-				wp(-30, 20),
-				wp(20, 30),
-			},
-			Width: 3.5,
-			Depth: 1.0,
-		},
-	}
+	// wp := func(wx, wz float32) components.WorldPos {
+	// 	return components.WorldPos{}.Add(rl.Vector3{X: wx, Y: 0, Z: wz})
+	// }
+	// return []components.RiverPolyline{
+	// 	// Diagonal river NW → SE through chunk (0,0).
+	// 	{
+	// 		Points: []components.WorldPos{
+	// 			wp(-100, -80),
+	// 			wp(-30, -20),
+	// 			wp(20, 30),
+	// 			wp(80, 90),
+	// 			wp(160, 150),
+	// 		},
+	// 		Width: 5.0,
+	// 		Depth: 1.5,
+	// 	},
+	// 	// Smaller stream branching westward.
+	// 	{
+	// 		Points: []components.WorldPos{
+	// 			wp(-90, 40),
+	// 			wp(-30, 20),
+	// 			wp(20, 30),
+	// 		},
+	// 		Width: 3.5,
+	// 		Depth: 1.0,
+	// 	},
+	// }
+	return []components.RiverPolyline{}
 }

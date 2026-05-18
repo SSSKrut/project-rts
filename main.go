@@ -410,6 +410,10 @@ func main() {
 		systems.TmplATTeam,
 		components.WorldPos{}.Add(rl.Vector3{X: -30, Z: 55}),
 		components.FormationColumn, playerFaction, roleService, unitFactory)
+	squadService.CreateFromTemplate(
+		systems.TmplMotorRifle,
+		components.WorldPos{}.Add(rl.Vector3{X: -20, Z: 0}),
+		components.FormationLoose, playerFaction, roleService, unitFactory)
 
 	// Phase 14 M14.1: hostile MotorRifle squad ~60 m from the player base on
 	// the opposite side. DefendPosition order parks them in place (Phase 14
@@ -1475,22 +1479,22 @@ func main() {
 		// bar overlays the content cleanly.
 		// Map panel.
 		mapCtx := ui.MapRenderCtx{
-			World:           app.World,
-			Cam:             mapCam,
-			Underlay:        &underlay,
-			AnchorPos:       *anchorPos,
-			Selected:        selected,
-			Hovered:         hovered,
-			PosMap:          posMap,
-			RosterMap:       rosterMap,
-			SquadMemberMap:  squadMemberMap,
-			SquadFilter:     squadFilter,
-			SquadCenter:     squadCenter,
-			SquadColor:      squadColor,
-			RoadGraph:       &roadGraph,
-			Rivers:          &rivers,
-			Buildings:       &buildingPlans,
-			ShowDebugLayers: showMapDebugLy,
+			World:            app.World,
+			Cam:              mapCam,
+			Underlay:         &underlay,
+			AnchorPos:        *anchorPos,
+			Selected:         selected,
+			Hovered:          hovered,
+			PosMap:           posMap,
+			RosterMap:        rosterMap,
+			SquadMemberMap:   squadMemberMap,
+			SquadFilter:      squadFilter,
+			SquadCenter:      squadCenter,
+			SquadColor:       squadColor,
+			RoadGraph:        &roadGraph,
+			Rivers:           &rivers,
+			Buildings:        &buildingPlans,
+			ShowDebugLayers:  showMapDebugLy,
 			OrderQueueMap:    orderQueueMap,
 			OrderKindMap:     orderKindMap,
 			OrderTargetMap:   orderTargetMap,

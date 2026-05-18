@@ -165,8 +165,12 @@ func (sys BuildingSystem) Update(ctx core.UpdateContext) {
 			sys.coverDirectionMap.Add(e, &components.CoverDirection{Dir: p.spec.OutwardNormal})
 			switch w.OpeningKind {
 			case components.OpeningDoor:
+				// Phase 14.6 followup — default doors to Open so squads can
+				// route through them via NavService TransitionEdges
+				// (closed-door edges cost=0 / impassable). Player-driven
+				// open/close interactions land in Phase 24 polish.
 				sys.doorMap.Add(e, &components.Door{
-					State:               components.DoorClosed,
+					State:               components.DoorOpen,
 					Material:            components.DoorWood,
 					BlocksLOSWhenClosed: true,
 				})

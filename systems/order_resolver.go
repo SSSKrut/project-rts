@@ -77,6 +77,14 @@ type OrderResolverSystem struct {
 	// inside the footprint AABB).
 	floorFilter *ecs.Filter2[components.WorldPos, components.Floor]
 
+	// Phase 14.6 followup — Garrison target.Pos points at a Floor entity's
+	// WorldPos (NodeFloor in the multi-graph A*) so NavService.FindPath can
+	// route through a Door TransitionEdge. Surface-inside-footprint cells
+	// are NavInBuilding (M14.6.1) and refuse expansion — without a floor
+	// goal the resolver path would terminate at the wall.
+	buildingChildIndex ecs.Resource[BuildingChildIndex]
+	floorComponentMap  *ecs.Map[components.Floor]
+
 	squadService *SquadService
 }
 
@@ -112,6 +120,8 @@ func (sys *OrderResolverSystem) InitUI(w *ecs.World) {
 	sys.trenchRootMap = ecs.NewMap[components.TrenchRoot](w)
 	sys.trenchResource = ecs.NewResource[components.TrenchNetwork](w)
 	sys.floorFilter = ecs.NewFilter2[components.WorldPos, components.Floor](w)
+	sys.buildingChildIndex = ecs.NewResource[BuildingChildIndex](w)
+	sys.floorComponentMap = ecs.NewMap[components.Floor](w)
 }
 
 func (OrderResolverSystem) Name() string { return "order_resolver" }
@@ -300,9 +310,17 @@ func (sys *OrderResolverSystem) resolveTargetPos(kind components.OrderKindCode, 
 	switch kind {
 	case components.OrderKindGarrison:
 		if b := sys.buildingMap.Get(target.Entity); b != nil {
-			cx := b.Footprint.CenterX()
-			cz := b.Footprint.CenterZ()
-			target.Pos = (components.WorldPos{}).Add(rlVec3XZ(cx, cz))
+			// Phase 14.6 followup — prefer the ground-floor (lowest Level)
+			// child's WorldPos. NavService.resolveNode matches it as a
+			// NodeFloor, so A* routes through a Door TransitionEdge instead
+			// of dead-ending at a NavInBuilding surface cell.
+			if fp, ok := sys.firstFloorPos(target.Entity); ok {
+				target.Pos = fp
+			} else {
+				cx := b.Footprint.CenterX()
+				cz := b.Footprint.CenterZ()
+				target.Pos = (components.WorldPos{}).Add(rlVec3XZ(cx, cz))
+			}
 		}
 	case components.OrderKindOccupyTrench:
 		if root := sys.trenchRootMap.Get(target.Entity); root != nil {
@@ -611,6 +629,41 @@ func (sys *OrderResolverSystem) applyArrivedFacing(squad, ord ecs.Entity) {
 			m.Yaw = facing.YawRad
 		}
 	}
+}
+
+// firstFloorPos returns the WorldPos of the lowest-Level Floor child of
+// `building`. Used by resolveTargetPos to anchor a Garrison goal on a Floor
+// NavNode (reachable through Door TransitionEdges) rather than a surface
+// NavInBuilding cell that A* would refuse. (_, false) when the building has
+// no live Floor children (chunk evicted, or layout has not yet generated).
+func (sys *OrderResolverSystem) firstFloorPos(building ecs.Entity) (components.WorldPos, bool) {
+	idx := sys.buildingChildIndex.Get()
+	if idx == nil {
+		return components.WorldPos{}, false
+	}
+	children, ok := idx.Loaded[building]
+	if !ok || len(children) == 0 {
+		return components.WorldPos{}, false
+	}
+	var bestPos components.WorldPos
+	bestLevel := uint8(255)
+	found := false
+	for _, c := range children {
+		floor := sys.floorComponentMap.Get(c)
+		if floor == nil {
+			continue
+		}
+		pos := sys.posMap.Get(c)
+		if pos == nil {
+			continue
+		}
+		if !found || floor.Level < bestLevel {
+			bestPos = *pos
+			bestLevel = floor.Level
+			found = true
+		}
+	}
+	return bestPos, found
 }
 
 // countInsideBuilding tallies how many of `roster`'s live members sit inside
