@@ -2,7 +2,7 @@ package components
 
 // RoadKind selects gameplay attributes (width, surface) and visual placeholder
 // of a road edge. RoadBridge is auto-assigned by PreprocessRoadGraph on the
-// sub-edges that lie inside a river polyline strip — users do not author it
+// sub-edges that lie inside a river polyline strip - users do not author it
 // directly.
 type RoadKind uint8
 
@@ -30,18 +30,18 @@ type RoadEdge struct {
 // RoadGraph is the singleton resource holding every road segment in the world.
 // Read by RoadSystem (per chunk), prop_spawn (clearance), Phase 6 NavGrid and
 // Phase 8 vehicle pathfinder. Mutated only at startup (PreprocessRoadGraph)
-// and on rare runtime events (Phase 11 — bridge destruction).
+// and on rare runtime events (Phase 11 - bridge destruction).
 type RoadGraph struct {
 	Nodes []RoadNode
 	Edges []RoadEdge
 }
 
 // RoadProcessed marks a chunk whose RoadFlatten pass has run. Filter excludes
-// Modified — player edits aren't re-flattened. Local marker, not serialised:
+// Modified - player edits aren't re-flattened. Local marker, not serialised:
 // pristine respawn re-runs the flatten deterministically.
 type RoadProcessed struct{}
 
 // RoadPropsSpawned marks a chunk whose road-surface / bridge / junction props
-// have been spawned. Independent of Modified — surface props survive on
+// have been spawned. Independent of Modified - surface props survive on
 // player-edited chunks even when the heightmap flatten is frozen.
 type RoadPropsSpawned struct{}

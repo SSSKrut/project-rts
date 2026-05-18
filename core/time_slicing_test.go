@@ -16,7 +16,7 @@ func TestShouldProcessBucketSingle(t *testing.T) {
 }
 
 func TestShouldProcessBucketModulo(t *testing.T) {
-	// id=5, bucketCount=10 → true only when frameIdx%10 == 5.
+	// id=5, bucketCount=10 -> true only when frameIdx%10 == 5.
 	for f := uint32(0); f < 30; f++ {
 		want := (f % 10) == 5
 		got := ShouldProcessBucket(5, 10, f)

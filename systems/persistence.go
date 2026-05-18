@@ -13,7 +13,7 @@ import (
 )
 
 // SaveDir holds per-chunk binary blobs under chunks/{x}_{z}.bin. When we
-// migrate to region-files, only WriteChunk/ReadChunk change — callers keep
+// migrate to region-files, only WriteChunk/ReadChunk change - callers keep
 // the same API.
 const SaveDir = "./save/world-default"
 
@@ -25,7 +25,7 @@ const SaveDir = "./save/world-default"
 //	     6     2   flags   uint16 LE  (reserved, 0)
 //	     8     4   ChunkCoord.X int32 LE
 //	    12     4   ChunkCoord.Z int32 LE
-//	    16 16900   heights — ChunkResolution^2 × float32 LE, row-major by +Z
+//	    16 16900   heights - ChunkResolution^2 × float32 LE, row-major by +Z
 //
 // Total = 16 916 bytes at ChunkResolution = 65. Bumping the format bumps the
 // version: ReadChunk treats version mismatch as "not loadable" and callers
@@ -43,7 +43,7 @@ func chunkFilePath(saveDir string, cc components.ChunkCoord) string {
 	return filepath.Join(saveDir, "chunks", fmt.Sprintf("%d_%d.bin", cc.X, cc.Z))
 }
 
-// WriteChunk serializes heights to disk atomically (tmp + rename). No fsync —
+// WriteChunk serializes heights to disk atomically (tmp + rename). No fsync -
 // eviction-time durability isn't worth the syscall cost. heights is taken by
 // pointer to avoid copying ~17 KB on every call.
 func WriteChunk(saveDir string, cc components.ChunkCoord, heights *[persistHeightCount]float32) error {
@@ -78,9 +78,9 @@ func WriteChunk(saveDir string, cc components.ChunkCoord, heights *[persistHeigh
 
 // ReadChunk loads heights into *out.
 //
-//   - file missing  → (false, nil); pristine, not an error.
-//   - corrupt/version → (false, err); caller logs and falls back to procgen.
-//   - success       → (true, nil).
+//   - file missing  -> (false, nil); pristine, not an error.
+//   - corrupt/version -> (false, err); caller logs and falls back to procgen.
+//   - success       -> (true, nil).
 func ReadChunk(saveDir string, cc components.ChunkCoord, out *[persistHeightCount]float32) (bool, error) {
 	path := chunkFilePath(saveDir, cc)
 	buf, err := os.ReadFile(path)

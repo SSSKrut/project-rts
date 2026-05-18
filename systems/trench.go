@@ -9,7 +9,7 @@ import (
 
 // TrenchSystem applies cosine-cut earthworks along every Trench polyline that
 // intersects a pristine chunk. Mirror-image of RiverSystem but without
-// water-prop spawn — earthworks are bare cuts. Filter excludes Modified to
+// water-prop spawn - earthworks are bare cuts. Filter excludes Modified to
 // preserve player edits.
 type TrenchSystem struct {
 	chunkFilter        *ecs.Filter3[components.ChunkCoord, components.Heightmap, components.WorldPos]

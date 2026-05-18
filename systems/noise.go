@@ -5,7 +5,7 @@ import (
 	"math/rand"
 )
 
-// Terrain noise — single source of truth for ground height. Sampled in *world*
+// Terrain noise - single source of truth for ground height. Sampled in *world*
 // coordinates so neighbouring chunks line up by construction. Both procgen
 // and the ground-stick controller call GroundHeight, guaranteeing the anchor
 // sits exactly on the surface and chunk seams stay continuous.

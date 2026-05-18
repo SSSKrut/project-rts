@@ -18,9 +18,9 @@ import (
 //
 // Phase 11.5 M11.5.3 / M11.5.5: tier-gating dropped; per-squad processing is
 // dispatched through WorkerPool.ParallelFor. Each worker writes only to
-// members of its own squad — disjoint sets across workers, so no shared
+// members of its own squad - disjoint sets across workers, so no shared
 // writes. Stragglers (when ejection is enabled) drop into leaveBuffer for a
-// serial post-pass. M11.5.6 / P8: leash 4 → 8 and auto-ejection gated off.
+// serial post-pass. M11.5.6 / P8: leash 4 -> 8 and auto-ejection gated off.
 type FormationSystem struct {
 	filter         *ecs.Filter4[components.Squad, components.CommandRoster, components.MacroPath, components.FormationData]
 	posMap         *ecs.Map[components.WorldPos]
@@ -28,7 +28,7 @@ type FormationSystem struct {
 	pool           *core.WorkerPool
 	squadService   *SquadService
 
-	// Phase 14.6 M14.6.1 — slot clamping reads the surface NavGrid to avoid
+	// Phase 14.6 M14.6.1 - slot clamping reads the surface NavGrid to avoid
 	// pushing members onto NavInBuilding / blocked cells (units would walk
 	// straight into walls otherwise).
 	navGridMap    *ecs.Map[components.NavGrid]
@@ -75,7 +75,7 @@ func (sys *FormationSystem) InitUI(w *ecs.World) {
 func (FormationSystem) Name() string { return "formation" }
 
 func (FormationSystem) LODPolicy() core.LODPolicy {
-	// Phase 11.5 P1: universal sim — single 100 ms interval. The old
+	// Phase 11.5 P1: universal sim - single 100 ms interval. The old
 	// Relevant/Dormant fallbacks are gone since members no longer carry LOD
 	// markers; FormationSystem touches every alive squad each cycle.
 	return core.LODPolicy{
@@ -88,10 +88,10 @@ func (FormationSystem) LODPolicy() core.LODPolicy {
 // CohesionLeashCoeff × Spacing = max distance member-to-center before the
 // member would fall out of the roster.
 //
-// Phase 11.5 P8: bumped 4 → 8. For Line Spacing=2 m this widens the leash
+// Phase 11.5 P8: bumped 4 -> 8. For Line Spacing=2 m this widens the leash
 // from 8 m to 16 m so a member that briefly snags on a tree / chunk seam
 // doesn't get ejected by the next FormationSystem tick. The auto-ejection
-// branch is also gated off (see cohesionEjectionEnabled) — stragglers are
+// branch is also gated off (see cohesionEjectionEnabled) - stragglers are
 // only flagged for future Tactical AI.
 const CohesionLeashCoeff float32 = 8.0
 
@@ -101,7 +101,7 @@ const CohesionLeashCoeff float32 = 8.0
 // turn it back on per-doctrine (Patrol = strict, Assault = loose).
 const cohesionEjectionEnabled = false
 
-// formationPushTolerance — minimum target shift that re-pushes the unit's
+// formationPushTolerance - minimum target shift that re-pushes the unit's
 // MoveTo. Below this, the unit keeps its existing queue. Without the gate the
 // formation re-writes ActionQueue every 100 ms, the unit's
 // arrival-pop / new-push cycle oscillates around the destination, and
@@ -109,13 +109,13 @@ const cohesionEjectionEnabled = false
 // UnitMovementSystem.arrivalRadius (0.6) so we don't re-issue on the cusp.
 const formationPushTolerance float32 = 0.7
 
-// formationForwardLockDist — once the center is within this many metres of
+// formationForwardLockDist - once the center is within this many metres of
 // the macro target, freeze Forward instead of recomputing it from
 // (target - center). Avoids the unit-vector swing near arrival that twisted
 // offsets into circular motion in the original Phase 9 build.
 const formationForwardLockDist float32 = 5.0
 
-// formationWork — snapshot row for the parallel per-squad pass. Pointers are
+// formationWork - snapshot row for the parallel per-squad pass. Pointers are
 // stable between snapshot and ParallelFor since neither branch changes
 // archetype for snapshotted entities.
 type formationWork struct {
@@ -125,9 +125,9 @@ type formationWork struct {
 }
 
 func (sys *FormationSystem) Update(ctx core.UpdateContext) {
-	// Snapshot squads. Workers write per-squad → per-member ActionQueue (each
+	// Snapshot squads. Workers write per-squad -> per-member ActionQueue (each
 	// member belongs to exactly one squad, so the write set is disjoint
-	// across workers — no shared writes).
+	// across workers - no shared writes).
 	sys.workBuf = sys.workBuf[:0]
 	q := sys.filter.Query()
 	for q.Next() {
@@ -147,7 +147,7 @@ func (sys *FormationSystem) Update(ctx core.UpdateContext) {
 
 	world := ctx.World
 	sys.pool.ParallelForIndexed(len(work), func(chunkIdx, start, end int) {
-		// Bound the index — defensive in case ParallelForIndexed ever splits
+		// Bound the index - defensive in case ParallelForIndexed ever splits
 		// into more chunks than the buffer slice (shouldn't happen with our
 		// constructor, but cheap to be safe).
 		if chunkIdx >= len(sys.workerLeaveBufs) {
@@ -183,7 +183,7 @@ func (sys *FormationSystem) processSquad(world *ecs.World, w formationWork, leav
 		return
 	}
 
-	// Pop reached waypoints — SquadMacroPathSystem runs only every 1 s,
+	// Pop reached waypoints - SquadMacroPathSystem runs only every 1 s,
 	// FormationSystem at 100 ms is the responsive pace for head advance.
 	for mp.Head < mp.Count {
 		d := center.Sub(mp.Waypoints[mp.Head])
@@ -206,7 +206,7 @@ func (sys *FormationSystem) processSquad(world *ecs.World, w formationWork, leav
 		haveTarget = true
 	}
 
-	// Update Forward toward the macro target — but only while the squad
+	// Update Forward toward the macro target - but only while the squad
 	// is still far enough out that the unit vector (target - center) /
 	// mag is geometrically stable. Once we're inside formationForwardLockDist
 	// (or Forward was never set), the existing Forward stays.
@@ -250,10 +250,10 @@ func (sys *FormationSystem) processSquad(world *ecs.World, w formationWork, leav
 		}
 		offX, offZ := FormationOffset(fd.Type, i, fd.Spacing, fd.Forward)
 		target := centerTarget.Add(rl.Vector3{X: offX, Y: 0, Z: offZ})
-		// Phase 14.6 M14.6.1 — keep slot targets out of building interiors and
+		// Phase 14.6 M14.6.1 - keep slot targets out of building interiors and
 		// blocked cells when approaching from outside. Once the squad center
 		// has crossed into a footprint (commander entered through a door),
-		// let inside slots stand — UnitMovement.reflectAgainstWalls keeps
+		// let inside slots stand - UnitMovement.reflectAgainstWalls keeps
 		// trailing members away from walls while they funnel through the
 		// open door behind the commander.
 		if !sys.cellInsideBuilding(centerTarget) {
@@ -326,7 +326,7 @@ func FormationOffset(kind components.FormationKind, slot uint8, spacing float32,
 		return ox, oz
 
 	case components.FormationLoose:
-		// Deterministic radial scatter — hash only on slot index so the
+		// Deterministic radial scatter - hash only on slot index so the
 		// pattern doesn't shimmer when members swap squads (P-note in
 		// PHASE-9.md "Что НЕ делать в formationOffset").
 		h := slotHash32(uint32(slot))
@@ -345,7 +345,7 @@ func FormationOffset(kind components.FormationKind, slot uint8, spacing float32,
 // clampSlotXZ moves `target` to the nearest walkable surface cell when it
 // lands inside a building footprint or on a blocked cell. Phase 14.6 M14.6.1:
 // commander macro path already routes through doors via NavService, but each
-// member's individual slot is a raw offset from the squad center — without
+// member's individual slot is a raw offset from the squad center - without
 // this clamp a side-slot whose XZ falls inside the building would make the
 // member walk straight at the wall.
 //
@@ -353,7 +353,7 @@ func FormationOffset(kind components.FormationKind, slot uint8, spacing float32,
 // (24 cell lookups worst-case) and runs at most once per member per
 // FormationSystem tick (100 ms cadence). When no walkable cell exists in the
 // radius (e.g. the slot fell into an unloaded chunk), return the original
-// target — the member will walk toward it and either UnitMovement's
+// target - the member will walk toward it and either UnitMovement's
 // wall-reflection (M14.6.1 step 4) catches the wall, or the next tick's
 // recompute moves the slot.
 func (sys *FormationSystem) clampSlotXZ(target components.WorldPos) components.WorldPos {
@@ -417,7 +417,7 @@ func (sys *FormationSystem) cellInsideBuilding(pos components.WorldPos) bool {
 // (unloaded chunk, blocked cell, or interior-of-building cell).
 func (sys *FormationSystem) cellWalkableAt(pos components.WorldPos) bool {
 	if sys.navGridMap == nil {
-		return true // pre-init, can't validate — assume walkable.
+		return true // pre-init, can't validate - assume walkable.
 	}
 	idx := sys.chunkIndexRes.Get()
 	if idx == nil {
@@ -454,7 +454,7 @@ func (sys *FormationSystem) cellWalkableAt(pos components.WorldPos) bool {
 	return true
 }
 
-// slotHash32 — SplitMix-style 32-bit finalizer used by FormationLoose.
+// slotHash32 - SplitMix-style 32-bit finalizer used by FormationLoose.
 func slotHash32(x uint32) uint32 {
 	x ^= x >> 16
 	x *= 0x7feb352d

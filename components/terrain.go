@@ -15,13 +15,13 @@ type Heightmap struct {
 // ChunkMesh holds the GPU-uploaded mesh for one terrain chunk.
 //
 // We deliberately store rl.Mesh (not rl.Model): raylib-go's UnloadModel calls
-// C.free on mesh-data pointers — undefined behaviour for our Go-allocated
+// C.free on mesh-data pointers - undefined behaviour for our Go-allocated
 // buffers (we upload via rl.UploadMesh). UnloadMesh tracks Go-managed VAO IDs
 // and skips the free; that's what teardown uses. Rendering goes through
 // rl.DrawMesh + a shared material set up in main.go.
 //
 // Uploaded distinguishes "we own a live mesh that needs UnloadMesh" from "this
-// slot has never been filled" — important on tier transitions and eviction.
+// slot has never been filled" - important on tier transitions and eviction.
 type ChunkMesh struct {
 	Mesh     rl.Mesh
 	Uploaded bool

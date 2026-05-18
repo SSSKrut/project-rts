@@ -5,7 +5,7 @@ package main
 import "rts-go/core"
 
 // initTrace is a no-op on builds without `-tags trace`. flag.Parse() is never
-// called either, so an unknown -trace argument cannot crash the binary —
+// called either, so an unknown -trace argument cannot crash the binary -
 // users get the same UX as before, the flag simply doesn't exist.
 func initTrace(_ *core.App) {}
 

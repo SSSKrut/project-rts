@@ -2,25 +2,13 @@ package components
 
 import "github.com/mlange-42/ark/ecs"
 
-// Phase 11 P1: Order is a first-class ECS entity. Each issued order is its own
-// entity composed of several small components — same DOD style as Unit /
-// Weapon. Per-kind optional params are separate components added only when
-// needed (OrderParamFacing for DefendPosition, OrderParamPatrol for Patrol).
-//
-// Why ECS-entity instead of "field on Squad"? Three reasons (GAMEDESIGN §3):
-//
-//  1. Lifecycle is observable — `OrderState.Code` + filters let any system
-//     query "every InProgress order" without walking squads.
-//  2. Queueing is trivial — `OrderChain.Next` is a pointer, append/cancel is
-//     pointer surgery, no slice-shuffling on the hot squad row.
-//  3. Phase 19 (multi-squad coordination) needs `OrderGroup{GroupID}` to
-//     correlate joint orders — clean to bolt on as another component on the
-//     order entity later.
+// Order is a first-class ECS entity. Per-kind optional params live on
+// sibling components added only when needed (OrderParamFacing, OrderParamPatrol).
 
 // Order is the marker. Filter target only.
 type Order struct{}
 
-// OrderKindCode is the type of order. MVP set (Phase 11):
+// OrderKindCode is the type of order.
 type OrderKindCode uint8
 
 const (
@@ -29,48 +17,29 @@ const (
 	OrderKindOccupyTrench
 	OrderKindDefendPosition
 	OrderKindPatrol
-	// Phase 14 M14.4 — combat orders.
-	//
-	// OrderKindAttackTarget — focus fire on a specific entity (Faction !=
-	// own). Resolved by RMB on an enemy unit (HitUnit hit-test path).
-	// Completes when the target is dead/missing; Phase 15 may add "lost
-	// LOS for N seconds → Failed" once SurvivalInstinct lands.
+	// OrderKindAttackTarget: focus fire on a specific entity (Faction != own).
+	// Resolved by RMB on an enemy unit. Completes when target dies.
 	OrderKindAttackTarget
-	// OrderKindSuppressFire — drench a terrain sector with fire. Resolved
-	// by pie-menu choice on terrain. Completes on a timer (Phase 14
-	// simple: 30 s default — Phase 21 will surface AmmoCap progress in
-	// the UI).
+	// OrderKindSuppressFire: drench a terrain sector with fire on a timer.
+	// Resolved via pie-menu on terrain.
 	OrderKindSuppressFire
 )
 
 // OrderKind on the order entity. Wraps the code so the filter-target is one
-// concrete struct — Ark stores by component type, not by raw enum.
+// concrete struct - Ark stores by component type, not by raw enum.
 type OrderKind struct {
 	Code OrderKindCode
 }
 
-// OrderStateCode tracks lifecycle. Transitions are owned by
-// OrderResolverSystem (P3 in PHASE-11.md).
+// OrderStateCode tracks lifecycle. Transitions are owned by OrderResolverSystem.
 type OrderStateCode uint8
 
 const (
-	// OrderStateIssued — freshly created, awaiting first pass. Signals
-	// SquadMacroPathSystem to immediately replan (via ReplanAt = 0).
 	OrderStateIssued OrderStateCode = iota
-	// OrderStateInProgress — being executed; SquadMacroPathSystem keeps the
-	// MacroPath fresh, FormationSystem drives the roster.
 	OrderStateInProgress
-	// OrderStateBlocked — execution stalled (no path / target dead). Resolver
-	// retries or escalates to Failed.
 	OrderStateBlocked
-	// OrderStateCompleted — squad reached the target. OrderResolverSystem
-	// advances the chain head and removes this entity within a tick.
 	OrderStateCompleted
-	// OrderStateCancelled — player aborted (H key / replaced by new RMB
-	// without Shift). Same cleanup path as Completed.
 	OrderStateCancelled
-	// OrderStateFailed — gave up after Blocked retries. Cleanup same as
-	// Cancelled; Inspector / Phase 13 UI may surface this differently.
 	OrderStateFailed
 )
 
@@ -80,86 +49,73 @@ type OrderState struct {
 }
 
 // OrderOwner is the back-reference to the Squad entity executing this order.
-// One-to-one — every order belongs to exactly one squad. (Joint orders in
-// Phase 19 add a separate OrderGroup component, not a list of owners.)
+// One-to-one. Joint orders (Phase 20+) add a sibling OrderGroup, not a list.
 type OrderOwner struct {
 	Squad ecs.Entity
 }
 
-// OrderTarget bundles the spatial and entity targets. Only one of (Pos,
-// Entity) is meaningful per kind:
+// OrderTarget bundles spatial and entity targets. Only one of (Pos, Entity)
+// is meaningful per kind:
 //   - MoveTo / DefendPosition / Patrol: Pos, Entity = zero
-//   - Garrison: Entity = Building root, Pos = footprint center (resolved at
-//     issuance and refreshed during execution)
+//   - Garrison: Entity = Building root, Pos = floor cell (resolved at runtime)
 //   - OccupyTrench: Entity = TrenchRoot, Pos = nearest polyline point
 type OrderTarget struct {
 	Pos    WorldPos
 	Entity ecs.Entity
 }
 
-// OrderIssuedAt records the session-time when the order was created. Used
-// for timeouts (Blocked → Failed after N seconds — Phase 13) and for UI
-// "issued 5s ago" display.
-//
-// Name avoids clash with OrderStateIssued (the lifecycle value).
+// OrderIssuedAt records the session-time when the order was created. Used for
+// timeouts and Inspector "issued 5s ago" display. Name avoids clash with
+// OrderStateIssued.
 type OrderIssuedAt struct {
 	Time float32
 }
 
-// OrderProgress is 0..1 progress toward completion. Currently a coarse signal
-// — MoveTo writes 1 - (distToGoal / initialDist). Phase 18 (Engineering)
-// will reuse this for Build progress.
+// OrderProgress is 0..1 progress toward completion. Per-kind semantics:
+// MoveTo writes 1 - distToGoal/initialDist; Garrison writes inside/alive.
 type OrderProgress struct {
 	Value float32
 }
 
-// OrderParamFacing is optional. Present only on DefendPosition orders that
-// have an explicit sector. Phase 13 (RoE / sectors) will read this.
+// OrderParamFacing is optional. Present only on orders that have an explicit
+// arrival yaw (DefendPosition sector, facing-drag MoveTo).
 type OrderParamFacing struct {
 	YawRad float32
 }
 
-// OrderParamPatrol is optional. Present only on Patrol orders. Loop = true
-// re-issues the chain when the last waypoint is reached (P-note in
-// PHASE-11.md: simpler than circular Chain.Next pointer).
+// OrderParamPatrol is optional. Loop=true re-issues the chain when the last
+// waypoint is reached.
 type OrderParamPatrol struct {
 	Loop bool
 }
 
 // OrderChain links an order to the next queued order belonging to the same
-// squad. Zero Entity = chain end. Shift+RMB appends to the tail; H clears the
-// whole chain via OrderResolverSystem / CancelAllOrders.
+// squad. Zero Entity = chain end. Shift+RMB appends to the tail.
 type OrderChain struct {
 	Next ecs.Entity
 }
 
-// OrderOutOfRangeTracker — Phase 14.5 M14.5.0, Issue #10 fix. Added only on
-// orders whose Spec.MaxOutOfRangeSeconds > 0 (AttackTarget). When the squad's
-// effective weapon range cannot reach the target, OrderResolverSystem
-// accumulates `Elapsed`; once it crosses Spec.MaxOutOfRangeSeconds the order
-// transitions to Failed. Resets to zero on any tick where at least one squad
-// member is in range — the timer rewards intermittent in-range moments
-// instead of demanding continuous coverage.
+// OrderOutOfRangeTracker is added only on orders whose Spec.MaxOutOfRangeSeconds
+// is > 0 (AttackTarget). Resolver accumulates `Elapsed` when no roster member
+// can reach the target; once it crosses the spec cap the order becomes Failed.
+// Resets to zero on any tick where at least one member is in range.
 //
-// Separate component (rather than a field on OrderIssuedAt) so the resolver's
-// in-range hot path can skip the cost when the order doesn't need tracking.
+// Separate component (vs field on OrderIssuedAt) so the resolver's in-range
+// hot path skips the cost when the order doesn't need tracking.
 type OrderOutOfRangeTracker struct {
 	Elapsed float32
 }
 
-// OrderQueueHead lives on the Squad entity (not the order entity). First =
-// zero ⇒ squad is idle. The chain extends via OrderChain.Next on the head
-// order. Phase 11 P2: this is the *primary* order state on the squad;
-// MacroPath becomes derived/cached.
+// OrderQueueHead lives on the Squad entity. First = zero => squad is idle.
+// The chain extends via OrderChain.Next on the head order. This is the primary
+// order state on the squad; MacroPath becomes derived/cached.
 type OrderQueueHead struct {
 	First ecs.Entity
 }
 
-// TrenchRoot is the small marker spawned at startup, one per Trench polyline
-// in TrenchNetwork.Lines. Index reverse-references the polyline so order
-// resolvers / hit-tests can map an OrderTarget.Entity back to its line data
-// without copying the polyline points onto the entity. Mirrors how Building
-// roots reference BuildingPlanList.
+// TrenchRoot is the marker spawned at startup, one per Trench polyline in
+// TrenchNetwork.Lines. Index reverse-references the polyline so hit-tests can
+// map OrderTarget.Entity back to line data without copying points on-entity.
 type TrenchRoot struct {
 	Index int
 }

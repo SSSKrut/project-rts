@@ -14,12 +14,12 @@ import (
 type HeightKernel func(dx, dz float32) float32
 
 // Crater returns a kernel that subtracts a smooth round bowl. Profile is half
-// a cosine wave —
+// a cosine wave -
 //
 //	delta(d) = -depth * 0.5 * (1 + cos(pi * d/radius))    for d <= radius
 //	delta(d) = 0                                          for d >  radius
 //
-// — so the lip blends to zero with no sharp edges.
+// - so the lip blends to zero with no sharp edges.
 func Crater(depth, radius float32) HeightKernel {
 	if radius <= 0 {
 		return func(dx, dz float32) float32 { return 0 }
@@ -60,7 +60,7 @@ func NewStamper(w *ecs.World) *Stamper {
 // of center (in world XZ). Touched chunks get MeshDirty (rebuild next frame)
 // and Modified (survive eviction).
 //
-// Chunks not currently loaded are silently skipped — streaming owns load
+// Chunks not currently loaded are silently skipped - streaming owns load
 // lifecycle. Callers that need a guaranteed effect must ensure the affected
 // chunks are within streaming range first.
 //
@@ -76,7 +76,7 @@ func (s *Stamper) StampHeightmap(center components.WorldPos, kernel HeightKernel
 	cx := float32(center.Chunk.X)*components.ChunkSize + center.Local.X
 	cz := float32(center.Chunk.Z)*components.ChunkSize + center.Local.Z
 
-	// Floor-divide so negatives land in the right chunk (x = -0.5 → chunk -1).
+	// Floor-divide so negatives land in the right chunk (x = -0.5 -> chunk -1).
 	minCX := int32(math.Floor(float64((cx - radius) / components.ChunkSize)))
 	maxCX := int32(math.Floor(float64((cx + radius) / components.ChunkSize)))
 	minCZ := int32(math.Floor(float64((cz - radius) / components.ChunkSize)))
@@ -138,7 +138,7 @@ func (s *Stamper) StampHeightmap(center components.WorldPos, kernel HeightKernel
 
 // RiverCut applies a cosine half-falloff cut along a polyline. Wrapper over
 // cutAlongPolyline; semantically a "river bed", but the kernel is identical to
-// the Trench cut. Does NOT set Modified — derivable on respawn.
+// the Trench cut. Does NOT set Modified - derivable on respawn.
 func (s *Stamper) RiverCut(cc components.ChunkCoord, polyline []components.WorldPos, width, depth float32) {
 	s.cutAlongPolyline(cc, polyline, width, depth)
 }
@@ -220,7 +220,7 @@ func (s *Stamper) cutAlongPolyline(cc components.ChunkCoord, polyline []componen
 // AABB footprint, with a cosine-falloff skirt of falloffWidth metres outside
 // the footprint blending back to the original. Used to sink bunker pads into
 // the surface. targetY is referenceY - depth where referenceY is the procgen
-// surface at the footprint centre — gives a flat floor regardless of natural
+// surface at the footprint centre - gives a flat floor regardless of natural
 // slope under the building. Does NOT set Modified.
 func (s *Stamper) RectCut(cc components.ChunkCoord, footprint components.AABB2D, depth, falloffWidth float32) {
 	if falloffWidth < 0 {
@@ -275,14 +275,14 @@ func (s *Stamper) RectCut(cc components.ChunkCoord, footprint components.AABB2D,
 // RoadFlatten blends the chunk's heightmap toward a linear road profile
 // between two world-space endpoints over a strip of the given width. Profile
 // at distance d from the centre line is a cosine ramp from full replacement
-// (d = 0) to no change (d ≥ width/2):
+// (d = 0) to no change (d >= width/2):
 //
 //	w(d) = 0.5 * (1 + cos(pi * d / (width/2)))
 //	h    = lerp(h, target, w)
 //
 // where target is interpolated linearly between fromY and toY along the road.
 //
-// Unlike RiverCut (additive), this is a *blend toward target* — flattens a
+// Unlike RiverCut (additive), this is a *blend toward target* - flattens a
 // strip of land to road height, fading back to the surrounding terrain at the
 // strip edges. Per-chunk; the caller (RoadSystem) decides which chunks an edge
 // touches. Modified is NOT set, by the same rule as river cuts.

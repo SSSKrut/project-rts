@@ -65,7 +65,7 @@ func reliefColor(y, ny float32) (uint8, uint8, uint8) {
 	} else if ny > 1 {
 		ny = 1
 	}
-	// 0.45 darkest (vertical wall) → 1.0 brightest (flat).
+	// 0.45 darkest (vertical wall) -> 1.0 brightest (flat).
 	shade := 0.45 + 0.55*ny
 	return uint8(rr * shade), uint8(gg * shade), uint8(bb * shade)
 }
@@ -190,8 +190,8 @@ func buildChunkMesh(heights [components.ChunkResolution * components.ChunkResolu
 }
 
 // buildDecimatedMesh samples every (srcRes-1)/(dstRes-1) source vertex along
-// each axis. Border vertices are sampled exactly — index 0 hits source 0,
-// index dstRes-1 hits source srcRes-1 — so edge geometry joins cleanly to a
+// each axis. Border vertices are sampled exactly - index 0 hits source 0,
+// index dstRes-1 hits source srcRes-1 - so edge geometry joins cleanly to a
 // neighbour at the same tier. Across-tier seams are hidden by skirts.
 func buildDecimatedMesh(heights [components.ChunkResolution * components.ChunkResolution]float32, srcRes, dstRes int) builtMesh {
 	srcStep := (srcRes - 1) / (dstRes - 1)

@@ -84,7 +84,7 @@ func (sys OrbitSystem) Update(ctx core.UpdateContext) {
 			orbit.Radius = orbit.MaxRadius
 		}
 
-		// Spherical → cartesian world-space offset from target.
+		// Spherical -> cartesian world-space offset from target.
 		cp := float32(math.Cos(float64(orbit.Pitch)))
 		sp := float32(math.Sin(float64(orbit.Pitch)))
 		sy := float32(math.Sin(float64(orbit.Yaw)))

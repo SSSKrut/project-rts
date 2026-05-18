@@ -1,7 +1,7 @@
 package systems
 
 // BiomeKind selects which density mask to sample. Densities are independent
-// across kinds — bushes can grow inside forests, rocks can sit in plains; the
+// across kinds - bushes can grow inside forests, rocks can sit in plains; the
 // spawner unions independent rolls instead of choosing one biome per cell.
 type BiomeKind uint8
 
@@ -12,7 +12,7 @@ const (
 	BiomePlains                    // mostly empty
 )
 
-// Biome fBm tuning. Lower frequency than terrain (1/96) → larger homogeneous
+// Biome fBm tuning. Lower frequency than terrain (1/96) -> larger homogeneous
 // patches: forests several chunks wide, not vertex-scale speckle. Two octaves
 // = soft blobs, no detail.
 const (
@@ -27,7 +27,7 @@ const (
 // BiomeDensity returns a [0, 1] mask value at (wx, wz) for the requested
 // biome. Same Perlin permutation as GroundHeight, but with a per-kind
 // coordinate offset so the four masks decorrelate (we don't have a runtime-
-// keyable Perlin — perm table built once in init — so input-plane shifting is
+// keyable Perlin - perm table built once in init - so input-plane shifting is
 // the standard trick).
 //
 // Result is shaped so ~half the world rolls > 0.5; spawner thresholds pick

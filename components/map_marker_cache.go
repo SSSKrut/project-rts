@@ -4,7 +4,7 @@ import "github.com/mlange-42/ark/ecs"
 
 // MapMarkerCache holds pre-computed squad-marker positions for the 2D map
 // panel. Refreshed by MapMarkerCacheSystem at a coarse cadence (250 ms) so the
-// map renderer doesn't pay SquadCenter every frame for every squad — at 100
+// map renderer doesn't pay SquadCenter every frame for every squad - at 100
 // squads that's 6000 calls/sec, here it's 400.
 //
 // The map renderer reads `Position` and interpolates inter-frame toward the

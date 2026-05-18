@@ -12,11 +12,11 @@ import (
 // BuildingSystem runs two independent passes per tick over chunks needing
 // building work:
 //
-//  1. Terrain pass — for chunks with Heightmap, no Modified, no
+//  1. Terrain pass - for chunks with Heightmap, no Modified, no
 //     BuildingTerrainProcessed: apply Stamper.RectCut for every Bunker
 //     building whose Pos.Chunk equals this chunk. Marks BuildingTerrainProcessed.
 //
-//  2. Child pass — for chunks with Heightmap, no BuildingsProcessed: spawn
+//  2. Child pass - for chunks with Heightmap, no BuildingsProcessed: spawn
 //     wall / floor / stairs entities (plus Doors / Windows / Smart Object
 //     attachments) for every Building in this chunk. Independent of Modified.
 //
@@ -93,7 +93,7 @@ func (sys BuildingSystem) Update(ctx core.UpdateContext) {
 		return
 	}
 
-	// Bucket buildings by host chunk in one pass — used twice (terrain + child)
+	// Bucket buildings by host chunk in one pass - used twice (terrain + child)
 	// and several times per tick when chunks reload, so the bucketing pays off.
 	byChunk := make(map[components.ChunkCoord][]buildingRec)
 	qb := sys.buildingFilter.Query()
@@ -165,7 +165,7 @@ func (sys BuildingSystem) Update(ctx core.UpdateContext) {
 			sys.coverDirectionMap.Add(e, &components.CoverDirection{Dir: p.spec.OutwardNormal})
 			switch w.OpeningKind {
 			case components.OpeningDoor:
-				// Phase 14.6 followup — default doors to Open so squads can
+				// Phase 14.6 followup - default doors to Open so squads can
 				// route through them via NavService TransitionEdges
 				// (closed-door edges cost=0 / impassable). Player-driven
 				// open/close interactions land in Phase 24 polish.

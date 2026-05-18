@@ -13,7 +13,7 @@ import (
 //
 // Runs every tick: freshly-spawned chunks must have heights ready for the
 // mesh system on the same frame. ~4225 noise evals per chunk; world startup
-// at 25 chunks ~= 100k evals — acceptable one-time spike.
+// at 25 chunks ~= 100k evals - acceptable one-time spike.
 type TerrainGenSystem struct {
 	dirtyFilter    *ecs.Filter2[components.ChunkCoord, components.HeightmapDirty]
 	heightmapMap   *ecs.Map[components.Heightmap]

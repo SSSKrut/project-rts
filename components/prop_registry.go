@@ -20,12 +20,12 @@ const (
 // O(1) without a map lookup.
 //
 // Size semantics by primitive:
-//   Cube     — Size.X/Y/Z are full side lengths.
-//   Sphere   — Size.X is radius; Y/Z unused.
-//   Cylinder — Size.X = radius, Size.Y = height.
-//   Cone     — Size.X = base radius, Size.Y = height.
-//   Plane    — Size.X/Z are full extents on XZ.
-//   Tree     — Size.X = trunk radius, Size.Y = trunk height,
+//   Cube     - Size.X/Y/Z are full side lengths.
+//   Sphere   - Size.X is radius; Y/Z unused.
+//   Cylinder - Size.X = radius, Size.Y = height.
+//   Cone     - Size.X = base radius, Size.Y = height.
+//   Plane    - Size.X/Z are full extents on XZ.
+//   Tree     - Size.X = trunk radius, Size.Y = trunk height,
 //              Size.Z = canopy radius. Canopy height = 1.5 × trunk height.
 type PropMeta struct {
 	Primitive   PrimitiveKind

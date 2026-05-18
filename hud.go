@@ -56,7 +56,7 @@ func countFilter1[A any](f *ecs.Filter1[A]) int {
 }
 
 // transitionEdgeCount sums outgoing-edge slice lengths across every NavNode in
-// the TransitionRegistry. Cheap — the map is keyed per node, edge counts are
+// the TransitionRegistry. Cheap - the map is keyed per node, edge counts are
 // small. Called from the hold-P branch only.
 func transitionEdgeCount(reg *components.TransitionRegistry) int {
 	n := 0
@@ -68,7 +68,7 @@ func transitionEdgeCount(reg *components.TransitionRegistry) int {
 
 // hudFontAtlasSize is the rasterised size of the loaded TTF glyph atlas.
 // Set ~2× the largest draw size (20 pt title) so the bilinear filter in
-// loadHUDFont keeps strokes sharp when we render at 16/18 pt body text —
+// loadHUDFont keeps strokes sharp when we render at 16/18 pt body text -
 // at 1× ratio the default POINT filter aliases glyph edges, which reads
 // as "wobbly" / "drifting" characters on a monospace face.
 const hudFontAtlasSize int32 = 40
@@ -94,7 +94,7 @@ var hudFontPaths = []string{
 }
 
 // loadHUDFont walks hudFontPaths, returns the first TTF that loads cleanly.
-// Second return is true when a real TTF was loaded — caller defers UnloadFont
+// Second return is true when a real TTF was loaded - caller defers UnloadFont
 // only in that case (raylib's default font is owned by the engine and must
 // not be unloaded by us).
 func loadHUDFont() (rl.Font, bool) {
@@ -105,7 +105,7 @@ func loadHUDFont() (rl.Font, bool) {
 		f := rl.LoadFontEx(p, hudFontAtlasSize, nil)
 		// LoadFontEx returns BaseSize=0 on failure (e.g. unreadable file).
 		if f.BaseSize > 0 {
-			// Bilinear sampling — required because we draw at sizes smaller
+			// Bilinear sampling - required because we draw at sizes smaller
 			// than the atlas. Without it the glyphs sample point-filtered
 			// from the over-sized atlas and look distorted.
 			rl.SetTextureFilter(f.Texture, rl.FilterBilinear)
@@ -116,7 +116,7 @@ func loadHUDFont() (rl.Font, bool) {
 }
 
 // drawHUDText is a thin wrapper over DrawTextEx that takes integer screen
-// coords. Spacing is 1 px — narrower than raylib's default and looks tighter
+// coords. Spacing is 1 px - narrower than raylib's default and looks tighter
 // on monospace.
 func drawHUDText(font rl.Font, text string, x, y int32, size int32, tint rl.Color) {
 	rl.DrawTextEx(font, text,

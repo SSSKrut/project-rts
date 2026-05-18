@@ -12,13 +12,13 @@ import (
 //   - Apply(target, dmg) decrements HP.Current; on <= 0 it triggers
 //     ApplyDeath, which despawns the unit cleanly (Leave squad, destroy
 //     equipment sub-entities, RemoveEntity).
-//   - No wounded state, no corpses, no lootable equipment — those land in
+//   - No wounded state, no corpses, no lootable equipment - those land in
 //     Phase 15 / 25.
 //
 // Pattern mirrors Stamper / NavService / SquadService: a pre-built handle
 // object created in main.go after the ECS world and the SquadService exist,
 // then handed to WeaponSystem (M14.2) for use from its serial post-pass.
-// It is intentionally *not* a core.System — there's no per-tick Update; the
+// It is intentionally *not* a core.System - there's no per-tick Update; the
 // only entry points are the public Apply / ApplyDeath methods, which run
 // inline at the call site after the parallel raycast phase resolves hits.
 //
@@ -31,7 +31,7 @@ type DamageService struct {
 	equipmentMap   *ecs.Map[components.Equipment]
 	factionMap     *ecs.Map[components.Faction]
 	squadMemberMap *ecs.Map[components.SquadMember]
-	// Phase 14.6 M14.6.0 — awareness sweep on death wipes any LastSeen entry
+	// Phase 14.6 M14.6.0 - awareness sweep on death wipes any LastSeen entry
 	// pointing at the just-killed unit, so readers (WeaponSystem.pickTarget,
 	// future tactical AI) can't dereference a recycled slot through stale
 	// Awareness data.
@@ -71,7 +71,7 @@ func (d *DamageService) Apply(target ecs.Entity, dmg float32) bool {
 	}
 	if hp.Current <= 0 {
 		// Already dead this tick but not yet reaped (multiple hits landed
-		// in the same parallel batch). Skip — ApplyDeath was called once.
+		// in the same parallel batch). Skip - ApplyDeath was called once.
 		return false
 	}
 	hp.Current -= dmg
@@ -85,11 +85,11 @@ func (d *DamageService) Apply(target ecs.Entity, dmg float32) bool {
 
 // ApplyDeath despawns a unit cleanly:
 //  1. Sweep every live unit's Awareness FIFO to clear LastSeen slots that
-//     point at this entity (Phase 14.6 M14.6.0 — closes Issue #11 class).
+//     point at this entity (Phase 14.6 M14.6.0 - closes Issue #11 class).
 //  2. Detach from squad (SquadService.Leave compacts the roster and
 //     auto-despawns the squad when emptied).
 //  3. Destroy Primary / Secondary equipment sub-entities (mirrors the
-//     RoleService.AssignRole teardown logic — no leaked weapon entities).
+//     RoleService.AssignRole teardown logic - no leaked weapon entities).
 //  4. world.RemoveEntity(unit).
 //
 // Idempotent: a dead / zero entity short-circuits to no-op.
@@ -98,7 +98,7 @@ func (d *DamageService) ApplyDeath(unit ecs.Entity) {
 		return
 	}
 	// Capture equipment IDs by value before SquadService.Leave touches the
-	// archetype — Ark's swap-on-remove compaction would invalidate a held
+	// archetype - Ark's swap-on-remove compaction would invalidate a held
 	// pointer otherwise.
 	var primary, secondary ecs.Entity
 	if eq := d.equipmentMap.Get(unit); eq != nil {
@@ -142,7 +142,7 @@ func (d *DamageService) sweepAwareness(dying ecs.Entity) {
 
 // HPMap exposes the HP handle for read-only callers (Inspector single-unit
 // view, render-time HP bar). Returned pointer must not be retained across
-// archetype mutations — caller uses it inline.
+// archetype mutations - caller uses it inline.
 func (d *DamageService) HPMap() *ecs.Map[components.HP] { return d.hpMap }
 
 // FactionMap exposes the Faction handle for read-only callers (WeaponSystem

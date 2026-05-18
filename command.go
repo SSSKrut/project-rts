@@ -8,14 +8,14 @@ import (
 )
 
 // HitTestKind tags what kind of world entity the cursor's WorldPos landed on.
-// PHASE-11.md P6: resolver maps cursor-hit → OrderKindCode.
+// PHASE-11.md P6: resolver maps cursor-hit -> OrderKindCode.
 type HitTestKind uint8
 
 const (
 	HitTerrain HitTestKind = iota
 	HitBuilding
 	HitTrench
-	// HitUnit — Phase 14 M14.4: a unit entity inside hostility-snap radius
+	// HitUnit - Phase 14 M14.4: a unit entity inside hostility-snap radius
 	// of the target Pos. Drives OrderKindAttackTarget resolution.
 	HitUnit
 )
@@ -41,7 +41,7 @@ type HitTester struct {
 	// TrenchHitRadius is how close (metres) the target must be to a polyline
 	// segment to count as a trench hit. PHASE-11.md P6 suggests 2-3 m.
 	TrenchHitRadius float32
-	// Phase 14 M14.4: unit hit-test for RMB-on-enemy → AttackTarget.
+	// Phase 14 M14.4: unit hit-test for RMB-on-enemy -> AttackTarget.
 	// UnitFilter walks every live unit with a Faction; a hit is recorded
 	// when the candidate's XZ position is within UnitHitRadius of the
 	// target Pos AND the candidate's Faction differs from PlayerFaction
@@ -51,8 +51,8 @@ type HitTester struct {
 	UnitHitRadius float32
 }
 
-// HitTest classifies a WorldPos. Priority: Unit (closest in radius) →
-// Building (point-in-AABB) → Trench (distance-to-polyline) → Terrain. Unit
+// HitTest classifies a WorldPos. Priority: Unit (closest in radius) ->
+// Building (point-in-AABB) -> Trench (distance-to-polyline) -> Terrain. Unit
 // wins so RMB on an enemy standing inside a building footprint reads as
 // AttackTarget, not Garrison.
 func (h *HitTester) HitTest(target components.WorldPos) HitTestResult {
@@ -190,12 +190,12 @@ func resolveTargetIntoOrder(hit HitTestResult, kindOverride *components.OrderKin
 			}
 			return components.OrderKindMoveTo, ecs.Entity{}
 		}
-		// Terrain / position-only kind. Drop entity — overriding pie commit
+		// Terrain / position-only kind. Drop entity - overriding pie commit
 		// implies "use the cursor Pos verbatim".
 		return *kindOverride, ecs.Entity{}
 	}
-	// No override: hit-test classifies the kind. Building → Garrison, Trench
-	// → OccupyTrench, hostile unit → AttackTarget, else MoveTo.
+	// No override: hit-test classifies the kind. Building -> Garrison, Trench
+	// -> OccupyTrench, hostile unit -> AttackTarget, else MoveTo.
 	switch hit.Kind {
 	case HitBuilding:
 		return components.OrderKindGarrison, hit.Entity
@@ -260,7 +260,7 @@ func rmbModifiersFromPress(ctrl, alt, double bool) RMBModifiers {
 // applyModifiersToParams converts press-time modifiers into the per-order
 // OrderParams fields. Sneak / Sprint write OrderParams.MovementOverride;
 // AttackMove sets the bool flag. Sprint wins over Sneak when both are set
-// (intentional — double-Ctrl+RMB sprints quietly is not a meaningful combo).
+// (intentional - double-Ctrl+RMB sprints quietly is not a meaningful combo).
 func applyModifiersToParams(p systems.OrderParams, mods RMBModifiers) systems.OrderParams {
 	if mods.Sprint {
 		profile := components.ApplyPreset(components.PresetSprint)
@@ -338,7 +338,7 @@ func resolveRMBOrderWithParams(
 
 	// PHASE-11.md P9: distribute orders by squad ownership. SquadsToOrder is
 	// the unique squads touched by the selection; Soloists are units not in
-	// any squad. Never call SquadService.Leave — that was the ISSUES #3 bug.
+	// any squad. Never call SquadService.Leave - that was the ISSUES #3 bug.
 	groups := groupSelectionByOwner(selected, squadMemberMap)
 	for _, s := range groups.SquadsToOrder {
 		squadService.IssueOrder(s, kind, target, entityTarget, shiftHeld, params)

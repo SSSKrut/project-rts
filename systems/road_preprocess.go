@@ -8,16 +8,16 @@ import (
 
 // preprocessSamples controls how finely we sample each edge to detect "in
 // river" transitions. At 200 samples per edge a 100 m road resolves to 0.5 m
-// step — well below the smallest river width — so transition points land in
+// step - well below the smallest river width - so transition points land in
 // the right sub-edge with no aliasing.
 const preprocessSamples = 200
 
 // PreprocessRoadGraph splits every edge that crosses a river polyline strip
 // at the entry/exit boundaries and tags the inside-the-strip sub-edges as
-// RoadBridge. After this, no system needs to do river-vs-road geometry — the
+// RoadBridge. After this, no system needs to do river-vs-road geometry - the
 // graph is the truth.
 //
-// Determinism: same input graph + same rivers ⇒ identical output. Safe to
+// Determinism: same input graph + same rivers => identical output. Safe to
 // call once at startup before any system reads the graph.
 func PreprocessRoadGraph(g *components.RoadGraph, rivers *components.Rivers) {
 	if g == nil || rivers == nil || len(g.Edges) == 0 || len(rivers.Polylines) == 0 {
@@ -83,7 +83,7 @@ func makeSubEdge(g *components.RoadGraph, base components.RoadEdge,
 }
 
 // isInRiverStrip returns true if (wx, wz) lies within Width/2 of any river
-// polyline segment — i.e. inside the cosine-cut river bed.
+// polyline segment - i.e. inside the cosine-cut river bed.
 func isInRiverStrip(wx, wz float32, rivers *components.Rivers) bool {
 	for pi := range rivers.Polylines {
 		pl := &rivers.Polylines[pi]

@@ -25,7 +25,7 @@ type HeightSampler func(worldX, worldZ float32) float32
 
 // BakeUnderlay generates the hill-shade underlay for a square area
 // `sizeM × sizeM` metres centred at (centerX, centerZ). Sample step is
-// `scaleM` metres per pixel — 4 m/px for the 2 km Phase 10 placeholder
+// `scaleM` metres per pixel - 4 m/px for the 2 km Phase 10 placeholder
 // (500×500 = 250 KB upload, sub-second bake on a modern CPU).
 //
 // Lighting model: diffuse only, light from above and to the NE at 45°. Slope
@@ -51,7 +51,7 @@ func BakeUnderlay(centerX, centerZ, sizeM, scaleM float32, sample HeightSampler)
 	ly /= mag
 	lz /= mag
 
-	// Fill a raw RGBA byte buffer ourselves — one CGo call per pixel via
+	// Fill a raw RGBA byte buffer ourselves - one CGo call per pixel via
 	// ImageDrawPixel turns 500×500 into 250 k cross-language hops and takes
 	// seconds at startup. NewImage + LoadTextureFromImage uploads the buffer
 	// in one shot. Keep RGBA8 (not Grayscale) so the same code path can later
@@ -93,11 +93,11 @@ func BakeUnderlay(centerX, centerZ, sizeM, scaleM float32, sample HeightSampler)
 			buf[idx+3] = 255
 		}
 	}
-	// NewImage stores the Go-allocated `buf` pointer in the Image struct —
+	// NewImage stores the Go-allocated `buf` pointer in the Image struct -
 	// raylib's UnloadImage would C.free that pointer and crash. Skip
 	// UnloadImage; once tex is uploaded the Go GC reclaims `buf` after this
 	// function returns. (Same gotcha pattern as rl.UnloadModel on Go-allocated
-	// meshes — see CLAUDE.md "raylib-go-gotchas".)
+	// meshes - see CLAUDE.md "raylib-go-gotchas".)
 	img := rl.NewImage(buf, pxSide, pxSide, 1, rl.UncompressedR8g8b8a8)
 	tex := rl.LoadTextureFromImage(img)
 	rl.SetTextureFilter(tex, rl.FilterBilinear)

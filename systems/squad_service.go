@@ -11,7 +11,7 @@ import (
 // SquadMember. Keeps the bidirectional invariant from PHASE-9.md P2: for every
 // SquadMember{s,i} on a unit, CommandRoster(s).Members[i] == that unit.
 //
-// Pattern mirrors Stamper / NavService — pre-built handles in NewSquadService,
+// Pattern mirrors Stamper / NavService - pre-built handles in NewSquadService,
 // methods called from outside ECS queries (main.go input handlers; systems
 // after closing their filter loops). Archetype mutations (Add/Remove of
 // SquadMember) on member units may happen at any time, so callers must finish
@@ -46,7 +46,7 @@ type SquadService struct {
 	// Phase 13 standing-rule handles. CreateFromTemplate aggregates per-role
 	// defaults from the leader and template-specific overrides into these
 	// squad-level components. Idempotent: not overwritten if already set
-	// (P8 — protects player-edited values across role changes).
+	// (P8 - protects player-edited values across role changes).
 	movementProfileMap *ecs.Map[components.MovementProfile]
 	engagementRulesMap *ecs.Map[components.EngagementRules]
 	behaviorRulesMap   *ecs.Map[components.BehaviorRules]
@@ -116,7 +116,7 @@ func (s *SquadService) Clock() float32 { return s.clock }
 // Phase 13 standing-rule handles so external readers (UnitMovementSystem,
 // SquadMacroPathSystem, Inspector) can fetch components without instantiating
 // their own ecs.Map. Returned pointers must not be retained across world
-// archetype changes — caller uses them inline.
+// archetype changes - caller uses them inline.
 func (s *SquadService) MovementProfileMap() *ecs.Map[components.MovementProfile] {
 	return s.movementProfileMap
 }
@@ -133,12 +133,12 @@ func (s *SquadService) OrderMovementOverrideMap() *ecs.Map[components.OrderParam
 	return s.orderMovementOverrideMap
 }
 
-// suppressDefaultRadius — default OrderParamSuppress.Radius (metres) when
+// suppressDefaultRadius - default OrderParamSuppress.Radius (metres) when
 // the caller doesn't override. PHASE-14.md M14.4 picks 8 m to roughly cover
 // one cover-cluster (sandbag stack or 2-3 trench segments).
 const suppressDefaultRadius float32 = 8.0
 
-// suppressDuration — Phase 14 simple completion timer (seconds) for
+// suppressDuration - Phase 14 simple completion timer (seconds) for
 // OrderKindSuppressFire when no AmmoCap reader exists. PHASE-14.md M14.4:
 // 30 s engagement window.
 const suppressDuration float32 = 30.0
@@ -167,14 +167,14 @@ func FormationSpacing(k components.FormationKind) float32 {
 // The function is staged so no live pointer into the Squad archetype is held
 // across an operation that might destroy another squad entity in the same
 // archetype. Ark uses swap-on-remove storage compaction (storage.go:267),
-// which would silently invalidate such a pointer — and this was the cause of
+// which would silently invalidate such a pointer - and this was the cause of
 // the original "free(): invalid size" crash on repeated `T` presses.
 func (s *SquadService) CreateFromUnits(units []ecs.Entity, kind components.FormationKind) ecs.Entity {
 	if len(units) == 0 {
 		return ecs.Entity{}
 	}
 
-	// Stage 1 — sanitise input: skip zero / dead / duplicate entities and
+	// Stage 1 - sanitise input: skip zero / dead / duplicate entities and
 	// clamp to the roster size. Doing this up front means later stages can
 	// trust every entry without re-checking.
 	prepared := make([]ecs.Entity, 0, len(units))
@@ -199,9 +199,9 @@ func (s *SquadService) CreateFromUnits(units []ecs.Entity, kind components.Forma
 		return ecs.Entity{}
 	}
 
-	// Stage 2 — detach every prepared unit from its prior squad. May despawn
+	// Stage 2 - detach every prepared unit from its prior squad. May despawn
 	// old squads (cascading from Leave when their last member walks out), so
-	// we cannot have spawned the new squad yet — Ark's storage compaction
+	// we cannot have spawned the new squad yet - Ark's storage compaction
 	// would invalidate a held rosterMap pointer.
 	for _, u := range prepared {
 		if old := s.memberMap.Get(u); old != nil {
@@ -209,7 +209,7 @@ func (s *SquadService) CreateFromUnits(units []ecs.Entity, kind components.Forma
 		}
 	}
 
-	// Stage 3 — spawn the new squad with the roster pre-populated as a value.
+	// Stage 3 - spawn the new squad with the roster pre-populated as a value.
 	// rosterMap.Add takes a pointer-to-temporary, the ECS stores the value;
 	// no long-lived pointer escapes this scope.
 	var roster components.CommandRoster
@@ -234,7 +234,7 @@ func (s *SquadService) CreateFromUnits(units []ecs.Entity, kind components.Forma
 	s.orderQueueMap.Add(squad, &components.OrderQueueHead{})
 	s.alwaysActiveMap.Add(squad, &components.AlwaysActive{})
 
-	// Stage 4 — attach SquadMember on every member. Each Add mutates the
+	// Stage 4 - attach SquadMember on every member. Each Add mutates the
 	// unit's archetype; the Squad archetype is untouched, so no other squad
 	// row can shift underneath us here.
 	for i, u := range prepared {
@@ -262,14 +262,14 @@ func (s *SquadService) Join(squad, unit ecs.Entity) bool {
 	if !s.world.Alive(squad) || !s.world.Alive(unit) {
 		return false
 	}
-	// Stage 1 — detach from prior squad if any. May destroy that squad.
+	// Stage 1 - detach from prior squad if any. May destroy that squad.
 	if old := s.memberMap.Get(unit); old != nil {
 		if old.Squad == squad {
 			return true
 		}
 		s.leaveInternal(unit, *old)
 	}
-	// Stage 2 — squad may itself have been the one destroyed (Leave cascaded
+	// Stage 2 - squad may itself have been the one destroyed (Leave cascaded
 	// to RemoveEntity); re-check after the call.
 	if !s.world.Alive(squad) {
 		return false
@@ -383,13 +383,13 @@ func (s *SquadService) Despawn(squad ecs.Entity) {
 
 // CreateFromTemplate is the Phase 12 high-level spawn helper. It walks the
 // template's role list, calls `unitFactory(spawnPos)` to materialise each
-// unit's base archetype (Unit + Stance + Motion + ... — main.go owns the
+// unit's base archetype (Unit + Stance + Motion + ... - main.go owns the
 // component list), stamps the role + equipment via RoleService.AssignRole,
 // then bundles the result into a Squad through CreateFromUnits.
 //
 // `pos` is the squad centre; units fan out on a 2 m grid. `unitFactory` is a
 // callback (rather than a SquadService method) because main.go is the
-// canonical owner of the unit component graph — duplicating that list inside
+// canonical owner of the unit component graph - duplicating that list inside
 // SquadService would re-implement half of unit.go.
 //
 // Returns the new Squad entity, or zero if the template was empty / the
@@ -428,7 +428,7 @@ func (s *SquadService) CreateFromTemplate(
 			continue
 		}
 		roleService.AssignRole(u, role)
-		// Phase 14 M14.1: stamp Faction onto the unit. Idempotent — if the
+		// Phase 14 M14.1: stamp Faction onto the unit. Idempotent - if the
 		// factory already wrote one (unlikely but harmless), overwrite so the
 		// template's intent wins.
 		if existing := s.factionMap.Get(u); existing != nil {
@@ -448,7 +448,7 @@ func (s *SquadService) CreateFromTemplate(
 
 	// Phase 14 M14.6: stamp Faction onto the squad entity as well so the
 	// map / inspector colour-picker can tint by hostility without walking
-	// to a roster member. Idempotent — repeated template calls overwrite.
+	// to a roster member. Idempotent - repeated template calls overwrite.
 	if s.factionMap.Has(squad) {
 		*s.factionMap.Get(squad) = faction
 	} else {
@@ -458,7 +458,7 @@ func (s *SquadService) CreateFromTemplate(
 	// Phase 13 M13.2: install squad-level standing rules. Aggregation rule
 	// (PHASE-13.md P7): defaults come from the leader's role (slot 0 in the
 	// template roster), then template-specific tweaks override individual
-	// fields. Idempotent (P8) — if the player has already edited the squad's
+	// fields. Idempotent (P8) - if the player has already edited the squad's
 	// rules (gameplay reassignment, hot-reload), preserve those values.
 	s.applyTemplateStandingRules(squad, template, roster)
 	return squad
@@ -481,7 +481,7 @@ func (s *SquadService) applyTemplateStandingRules(
 	engagement := EngagementDefaultForRole(leader)
 	behavior := BehaviorDefaultForRole(leader)
 
-	// Template-specific overrides — capture squad-level character that
+	// Template-specific overrides - capture squad-level character that
 	// pure leader-role aggregation can't (e.g. Recon = stealth, AT = no-inf).
 	switch template {
 	case TmplRecon:
@@ -494,10 +494,10 @@ func (s *SquadService) applyTemplateStandingRules(
 		engagement.FireOnInf = false
 		engagement.FireOnArm = true
 	case TmplMGTeam:
-		// MG team starts crouched — they're a fire base, not assault.
+		// MG team starts crouched - they're a fire base, not assault.
 		movement.Stance = components.StanceCrouch
 	case TmplEngineering:
-		// Engineers stay cautious — building tasks are slow and exposed.
+		// Engineers stay cautious - building tasks are slow and exposed.
 		movement.Pace = components.PaceWalk
 		engagement.Mode = components.ReturnFire
 	}
@@ -575,7 +575,7 @@ func (s *SquadService) IssueOrder(
 		return ecs.Entity{}
 	}
 
-	// Cancel mode — wipe the current chain so the new order is the sole head.
+	// Cancel mode - wipe the current chain so the new order is the sole head.
 	// The wipe deletes order entities and walks the chain via OrderChain.Next.
 	if !appendToQueue {
 		s.cancelChain(head.First)
@@ -631,7 +631,7 @@ func (s *SquadService) IssueOrder(
 
 	// Wire into the chain. The squad's MacroPath also gets ReplanAt=0 so
 	// SquadMacroPathSystem replans immediately rather than waiting for the
-	// 1 s throttle — this is the "fresh order → don't dawdle" guarantee from
+	// 1 s throttle - this is the "fresh order -> don't dawdle" guarantee from
 	// PHASE-11.md notes.
 	if head.First == (ecs.Entity{}) {
 		head.First = ord
@@ -705,7 +705,7 @@ func (s *SquadService) Stop(squad ecs.Entity) {
 }
 
 // hasRadiomanInRoster walks every unit and asks "does this soldier carry a
-// Radio in Equipment.Secondary?". Phase 12 ships the real implementation —
+// Radio in Equipment.Secondary?". Phase 12 ships the real implementation -
 // previously this was a Phase 9 placeholder returning false. The result
 // goes into RadioNetwork.HasRadioman; Phase 20 (Comms) will read that to
 // gate player input on radio-less squads.

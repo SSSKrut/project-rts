@@ -8,13 +8,13 @@ import (
 	"rts-go/core"
 )
 
-// ParticleSystem — Phase 14.5 M14.5.4. Manages the ECS-entity-backed
+// ParticleSystem - Phase 14.5 M14.5.4. Manages the ECS-entity-backed
 // transient visual particles spawned by WeaponSystem (tracers, impacts,
 // muzzle flashes, smoke, dust, debris).
 //
 // Pipeline shape:
 //
-//  1. Update pass (serial — Phase 14.5 simple): walk Filter[Particle], age
+//  1. Update pass (serial - Phase 14.5 simple): walk Filter[Particle], age
 //     each particle, integrate Vel, apply per-kind gravity, collect expired
 //     into `removeBuf`. Serial because particle counts are low (<2000) and
 //     adding archetype removal to a parallel pass requires worker buffers
@@ -66,7 +66,7 @@ func (ParticleSystem) Name() string { return "particle" }
 
 func (ParticleSystem) LODPolicy() core.LODPolicy {
 	// Active only. Particles in dormant range despawn immediately via TTL
-	// (no special handling — they just age out untouched).
+	// (no special handling - they just age out untouched).
 	return core.LODPolicy{
 		ActiveEvery:   0,
 		RelevantEvery: core.LODDisabled,
@@ -76,7 +76,7 @@ func (ParticleSystem) LODPolicy() core.LODPolicy {
 
 // kindGravity gives the per-kind vertical acceleration (m/s²). Positive Y is
 // up. Smoke rises gently; debris falls; dust settles slowly. Stationary
-// kinds (Tracer, Impact, MuzzleFlash) get zero — Velocity, if non-nil, is
+// kinds (Tracer, Impact, MuzzleFlash) get zero - Velocity, if non-nil, is
 // preserved as-is.
 var kindGravity = [...]float32{
 	components.ParticleTracer:      0,
@@ -191,7 +191,7 @@ func (h *SpawnParticleHandles) SpawnImpact(pos rl.Vector3, color rl.Color, now, 
 	})
 }
 
-// SpawnMuzzleFlash — short-lived bright sphere at muzzle.
+// SpawnMuzzleFlash - short-lived bright sphere at muzzle.
 func (h *SpawnParticleHandles) SpawnMuzzleFlash(pos rl.Vector3, color rl.Color, now float32) {
 	ent := h.world.NewEntity()
 	h.particle.Add(ent, &components.Particle{})
@@ -202,7 +202,7 @@ func (h *SpawnParticleHandles) SpawnMuzzleFlash(pos rl.Vector3, color rl.Color, 
 	})
 }
 
-// SpawnSmoke — slow-rising puff. Vel is upward (drifts via kindGravity).
+// SpawnSmoke - slow-rising puff. Vel is upward (drifts via kindGravity).
 func (h *SpawnParticleHandles) SpawnSmoke(pos rl.Vector3, color rl.Color, now float32) {
 	ent := h.world.NewEntity()
 	h.particle.Add(ent, &components.Particle{})
@@ -214,7 +214,7 @@ func (h *SpawnParticleHandles) SpawnSmoke(pos rl.Vector3, color rl.Color, now fl
 	h.vel.Add(ent, &components.ParticleVel{Vel: rl.Vector3{X: 0, Y: 0.2, Z: 0}})
 }
 
-// SpawnDust — small downward-settling sphere on terrain impact.
+// SpawnDust - small downward-settling sphere on terrain impact.
 func (h *SpawnParticleHandles) SpawnDust(pos rl.Vector3, color rl.Color, vel rl.Vector3, now float32) {
 	ent := h.world.NewEntity()
 	h.particle.Add(ent, &components.Particle{})
@@ -226,7 +226,7 @@ func (h *SpawnParticleHandles) SpawnDust(pos rl.Vector3, color rl.Color, vel rl.
 	h.vel.Add(ent, &components.ParticleVel{Vel: vel})
 }
 
-// SpawnDebris — falling-shrapnel cube; gravity accelerates the velocity.
+// SpawnDebris - falling-shrapnel cube; gravity accelerates the velocity.
 func (h *SpawnParticleHandles) SpawnDebris(pos rl.Vector3, color rl.Color, vel rl.Vector3, now float32) {
 	ent := h.world.NewEntity()
 	h.particle.Add(ent, &components.Particle{})

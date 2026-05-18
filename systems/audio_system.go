@@ -80,7 +80,7 @@ func (SpatialAudioSystem) LODPolicy() core.LODPolicy {
 type audioCandidate struct {
 	id     ecs.Entity
 	pos    components.WorldPos
-	delta  rl.Vector3 // anchor → source
+	delta  rl.Vector3 // anchor -> source
 	dist   float32
 	source components.AudioSource
 }
@@ -103,7 +103,7 @@ func (sys SpatialAudioSystem) Update(ctx core.UpdateContext) {
 		return
 	}
 
-	// One bucket per chunk — voice-limit grain coupled to the world grid.
+	// One bucket per chunk - voice-limit grain coupled to the world grid.
 	chunks := make(map[[2]int32]map[string][]audioCandidate)
 
 	q2 := sys.activeFilter.Query()

@@ -67,7 +67,7 @@ func Distance(a, b WorldPos) float32 {
 
 // Normalize re-establishes the Local.X/Z ∈ [0, ChunkSize) invariant. Floor-
 // division so negative locals push the chunk in the right direction
-// (Local.X = -1, ChunkSize = 64 → chunk -1, Local.X = 63).
+// (Local.X = -1, ChunkSize = 64 -> chunk -1, Local.X = 63).
 func Normalize(p WorldPos) WorldPos {
 	if p.Local.X < 0 || p.Local.X >= ChunkSize {
 		shift := int32(math.Floor(float64(p.Local.X / ChunkSize)))

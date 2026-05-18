@@ -10,7 +10,7 @@ import (
 	"rts-go/systems"
 )
 
-// Phase 13.6 — ghost preview render pass.
+// Phase 13.6 - ghost preview render pass.
 //
 // Called from main.go inside BeginMode3D, after units / props / buildings have
 // drawn (so ghost cubes layer on top of terrain without z-fighting). The
@@ -18,7 +18,7 @@ import (
 // the cursor is not focused on Panel3D.
 
 // ghostBodyAlpha is the alpha (0..255) used for ghost body cubes. Tunable
-// in M13.6.6 playtest — 80 is ~31% opacity, low enough that real units stay
+// in M13.6.6 playtest - 80 is ~31% opacity, low enough that real units stay
 // dominant but visible enough at a glance.
 const ghostBodyAlpha uint8 = 80
 
@@ -55,7 +55,7 @@ type ghostContext struct {
 
 // primarySquadForGhost returns the first Squad entity touched by `selected`,
 // or zero if none. Phase 13.6 P9: multi-squad selection falls back to the
-// first squad — Phase 19 will spread per-squad ghost groups.
+// first squad - Phase 19 will spread per-squad ghost groups.
 func primarySquadForGhost(selected []ecs.Entity, smMap *ecs.Map[components.SquadMember]) ecs.Entity {
 	if len(selected) == 0 || smMap == nil {
 		return ecs.Entity{}
@@ -73,8 +73,8 @@ func primarySquadForGhost(selected []ecs.Entity, smMap *ecs.Map[components.Squad
 }
 
 // ghostStanceFor picks the stance the ghost cubes should adopt. Priority:
-// squad MovementProfile.Stance (the resting posture squad returns to) →
-// commander's current Stance → standing default. Lets the ghost preview
+// squad MovementProfile.Stance (the resting posture squad returns to) ->
+// commander's current Stance -> standing default. Lets the ghost preview
 // reflect "we'll arrive in Crouch / Prone" when the player has chosen a
 // stealth preset.
 func (g *ghostContext) ghostStanceFor(squad ecs.Entity, roster *components.CommandRoster) components.Stance {
@@ -95,12 +95,12 @@ func (g *ghostContext) ghostStanceFor(squad ecs.Entity, roster *components.Comma
 }
 
 // drawSelectionGhost renders the ghost-preview formation at the cursor's
-// world target. Phase 13.6 M13.6.2: terrain hover only — Garrison / Trench /
+// world target. Phase 13.6 M13.6.2: terrain hover only - Garrison / Trench /
 // DefendPosition placements land in M13.6.3 / M13.6.5. Caller must invoke
 // this between BeginMode3D and EndMode3D (after the real unit pass so ghosts
 // layer above terrain without z-fighting).
 //
-// `cursorOver3D` gates the entire pass — when the cursor leaves Panel3D the
+// `cursorOver3D` gates the entire pass - when the cursor leaves Panel3D the
 // ghost disappears, so the player can navigate Inspector chips without the
 // preview distracting them.
 //
@@ -109,7 +109,7 @@ func (g *ghostContext) ghostStanceFor(squad ecs.Entity, roster *components.Comma
 // the pass rather than draw at the world origin.
 //
 // Phase 13.6 M13.6.4: when `dragFacing` != nil, override the hover-derived
-// yaw with the player's drag-derived facing — ghost rotates with the cursor
+// yaw with the player's drag-derived facing - ghost rotates with the cursor
 // so the player sees the formation orientation before committing.
 func drawSelectionGhost(
 	g *ghostContext,
@@ -138,7 +138,7 @@ func drawSelectionGhost(
 	}
 
 	// Forward selection: drag-derived yaw wins over hover-derived. M13.6.4
-	// keeps the two paths symmetric — both end up as a unit vector consumed
+	// keeps the two paths symmetric - both end up as a unit vector consumed
 	// by FormationOffset; only the source of the angle differs.
 	var forward rl.Vector3
 	if dragFacing != nil {
@@ -185,14 +185,14 @@ func drawSelectionGhost(
 			return
 		}
 	}
-	// Terrain default — standard formation around cursor.
+	// Terrain default - standard formation around cursor.
 	drawGhostFormation(cursorTarget, fd.Type, fd.Spacing, roster.Count, forward, stance)
 }
 
 // drawDefendPositionArc draws a wedge-shaped sector indicator at the cursor
 // target, oriented along `forward`. Phase 13.6 M13.6.5: visual stub for the
 // future EngagementRules.SectorYaw / SectorHalfDot enforcement (Phase 14).
-// Width fixed at 90° (45° each side of facing), length 8 m — matches the
+// Width fixed at 90° (45° each side of facing), length 8 m - matches the
 // "sector vision" feel referenced in P8.
 //
 // Sector colour reuses the per-squad palette so multi-squad scenes can tell
@@ -200,7 +200,7 @@ func drawSelectionGhost(
 // is unmistakable without obscuring the terrain underneath.
 func drawDefendPositionArc(target components.WorldPos, forward rl.Vector3, squad ecs.Entity,
 	colorFn func(ecs.Entity) rl.Color) {
-	const halfAngle = math.Pi / 4 // 45° each side → 90° total wedge
+	const halfAngle = math.Pi / 4 // 45° each side -> 90° total wedge
 	const length float32 = 8
 	// atan2(fx, fz) recovers the yaw used by FormationOffset.
 	yaw := float32(math.Atan2(float64(forward.X), float64(forward.Z)))
@@ -215,13 +215,13 @@ func drawDefendPositionArc(target components.WorldPos, forward rl.Vector3, squad
 }
 
 // drawGhostInBuilding places ghost cubes at the first N windows of `building`
-// (P8 greedy-first-N). Returns true if at least one ghost was placed — false
+// (P8 greedy-first-N). Returns true if at least one ghost was placed - false
 // on missing index / no windows, so caller falls back to standard formation.
 //
 // Phase 13.6 simplification: no threat-aware ranking (Phase 15 SurvivalInstinct
 // will read window.CoverDirection vs threatDir for real ranking). Window order
 // is whatever `BuildingChildIndex` returns, which is insertion-order from
-// BuildingSystem.generateBuildingLayout — deterministic per building.
+// BuildingSystem.generateBuildingLayout - deterministic per building.
 func drawGhostInBuilding(g *ghostContext, building ecs.Entity, count uint8, stance components.Stance) bool {
 	if g.buildingIndex == nil || g.windowMap == nil || g.wallMap == nil {
 		return false
@@ -238,7 +238,7 @@ func drawGhostInBuilding(g *ghostContext, building ecs.Entity, count uint8, stan
 		if !g.world.Alive(ch) {
 			continue
 		}
-		// Window walls only — Door walls would dump units on the threshold.
+		// Window walls only - Door walls would dump units on the threshold.
 		if g.windowMap.Get(ch) == nil {
 			continue
 		}
@@ -264,11 +264,11 @@ func drawGhostInBuilding(g *ghostContext, building ecs.Entity, count uint8, stan
 }
 
 // drawGhostAlongTrench places ghost cubes equal-spaced along the polyline of
-// `trenchRoot`. Distribution is `total_length × (i+1) / (count+1)` — endpoints
+// `trenchRoot`. Distribution is `total_length × (i+1) / (count+1)` - endpoints
 // get an inset rather than sitting on the polyline tips (visually cleaner).
 //
 // Returns true if at least one ghost was placed. False on bad index / empty
-// polyline → caller falls back to standard formation around cursor.
+// polyline -> caller falls back to standard formation around cursor.
 func drawGhostAlongTrench(g *ghostContext, trenchRoot ecs.Entity, count uint8, stance components.Stance) bool {
 	if g.trenchRootMap == nil || g.trenches == nil {
 		return false
@@ -298,7 +298,7 @@ func drawGhostAlongTrench(g *ghostContext, trenchRoot ecs.Entity, count uint8, s
 // facingFromSquadToTarget returns the yaw the squad would face if it walked
 // from its current center to `target`. Phase 13.6 M13.6.5: used by the
 // DefendPosition pie commit to derive the arrived sector orientation from a
-// simple tap (no facing-drag) — keeps the pie-only flow useful without
+// simple tap (no facing-drag) - keeps the pie-only flow useful without
 // forcing the player to drag.
 //
 // Returns (0, false) when the selection has no squad, the roster is empty, or
@@ -338,7 +338,7 @@ func polylineTotalLen(points []components.WorldPos) float32 {
 
 // pointAlongPolyline returns the WorldPos at arc-length `dist` from points[0].
 // Walks segments accumulating distance; lerps inside the segment that contains
-// the target distance. Clamps to the polyline endpoints — callers don't need
+// the target distance. Clamps to the polyline endpoints - callers don't need
 // to bound `dist` themselves.
 func pointAlongPolyline(points []components.WorldPos, dist float32) components.WorldPos {
 	if len(points) == 0 {
@@ -379,7 +379,7 @@ func drawGhostFormation(
 		offX, offZ := systems.FormationOffset(kind, i, spacing, forward)
 		ghostWP := center.Add(rl.Vector3{X: offX, Y: 0, Z: offZ})
 		ghostRender := ghostWP.ToRenderSpace(systems.CurrentOriginChunk)
-		// Sample ground plane at the cursor's Y — terrain height under each
+		// Sample ground plane at the cursor's Y - terrain height under each
 		// ghost slot would require a heightmap lookup per slot. Phase 13.6
 		// accepts the approximation; ghosts may float / sink slightly on
 		// rolling terrain. Phase 21 polish can switch to per-slot height.

@@ -25,7 +25,7 @@ type coverSlotSpec struct {
 // propCoverSlots emits 8 cover slots radially around a prop with non-zero
 // Cover. The slots stand BBoxRadius out from the centre on the eight compass
 // points; the actual ray-cast-to-centre check from P11 is approximated by the
-// bbox geometry — placeholder primitives are convex, so any slot at the bbox
+// bbox geometry - placeholder primitives are convex, so any slot at the bbox
 // radius has the prop between it and the centre by construction.
 //
 // Stance: short props (effective height < 1.5 m) are crouch-only; the rest
@@ -43,7 +43,7 @@ func propCoverSlots(host ecs.Entity, propLocal rl.Vector3, meta components.PropM
 	}
 	stance := components.StanceMaskCrouch | components.StanceMaskStand
 
-	// Effective height heuristic — sphere primitives use 2*X (radius); the
+	// Effective height heuristic - sphere primitives use 2*X (radius); the
 	// rest use Size.Y; trees count their trunk only (canopy doesn't shield).
 	height := meta.Size.Y
 	if meta.Primitive == components.PrimitiveSphere {
@@ -77,7 +77,7 @@ func propCoverSlots(host ecs.Entity, propLocal rl.Vector3, meta components.PropM
 
 // windowCoverSlots emits one slot at the centre of a window opening. OriginDir
 // is the wall's outward normal (already computed at building-spawn time and
-// stored as CoverDirection on the wall entity). Quality fixed at 200 — windows
+// stored as CoverDirection on the wall entity). Quality fixed at 200 - windows
 // are good cover for the slot, but the shooter exposes torso-up.
 func windowCoverSlots(host ecs.Entity, wallLocal rl.Vector3, w components.WallSegment, outward rl.Vector3) []coverSlotSpec {
 	if w.OpeningKind != components.OpeningWindow || w.OpeningWidth <= 0 {
@@ -100,7 +100,7 @@ func windowCoverSlots(host ecs.Entity, wallLocal rl.Vector3, w components.WallSe
 	}}
 }
 
-// wallCornerSrc — per-wall input for the corner pairing pass. World-space
+// wallCornerSrc - per-wall input for the corner pairing pass. World-space
 // endpoints (XZ) and the wall's outward normal are pre-computed; the entity
 // id is used as the deterministic owner of any corner slot it shares.
 type wallCornerSrc struct {
@@ -114,7 +114,7 @@ type wallCornerSrc struct {
 // wallCornerCoverSlots returns one slot per pair of walls that share a
 // world-XZ endpoint within tolerance. Each corner gets one slot, owned by
 // the lower-ID wall (so ByHost lookups stay deterministic). OriginDir is the
-// normalized sum of the two outward normals — points along the bisector
+// normalized sum of the two outward normals - points along the bisector
 // where the shooter would peek around the corner.
 //
 // Walls must all belong to the same building (one host chunk). Caller groups
@@ -127,7 +127,7 @@ func wallCornerCoverSlots(walls []wallCornerSrc) []coverSlotSpec {
 		ax, az, bx, bz float32
 	}
 	var out []coverSlotSpec
-	// Dedupe by 1 cm-binned XZ key — multiple pair combos can hit the same
+	// Dedupe by 1 cm-binned XZ key - multiple pair combos can hit the same
 	// corner (a 4-wall rectangle has each corner shared by exactly two walls,
 	// but a more general layout could have three walls meeting).
 	seen := map[uint64]bool{}
@@ -189,10 +189,10 @@ func wallCornerCoverSlots(walls []wallCornerSrc) []coverSlotSpec {
 
 // coverSlotsForBuilding returns every live cover-slot entity attached to any
 // child of `root`. Walks BuildingChildIndex for the root's wall children, then
-// CoverSlotIndex.ByHost for each — exactly the destruction-time helper Phase 11
+// CoverSlotIndex.ByHost for each - exactly the destruction-time helper Phase 11
 // will call before tearing down a building.
 //
-// The two-hop walk (root → children → slots) is deliberate: the slot index is
+// The two-hop walk (root -> children -> slots) is deliberate: the slot index is
 // host-keyed (wall / window / corner anchor), not building-keyed, so this is
 // the only way to address every slot of a building in one call.
 func coverSlotsForBuilding(coverIdx *CoverSlotIndex, buildingIdx *BuildingChildIndex, root ecs.Entity) []ecs.Entity {

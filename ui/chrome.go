@@ -4,7 +4,7 @@ import (
 	rl "github.com/gen2brain/raylib-go/raylib"
 )
 
-// Phase 10 chrome — the visible frame around every panel. One pixel of border
+// Phase 10 chrome - the visible frame around every panel. One pixel of border
 // + a translucent title bar with the panel's Title. Content is drawn by the
 // caller, inside scissor if needed.
 
@@ -117,7 +117,7 @@ func ScrollbarThumbRect(p Panel, scroll *ScrollState) rl.Rectangle {
 
 // DrawScrollbar paints the vertical scrollbar track + thumb on the right
 // edge of `p`'s content rect. Skipped silently when content fits (no
-// overflow) — caller doesn't need an "if needed" check.
+// overflow) - caller doesn't need an "if needed" check.
 func DrawScrollbar(p Panel, scroll *ScrollState) {
 	if scroll == nil {
 		return

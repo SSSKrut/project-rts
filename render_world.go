@@ -34,12 +34,12 @@ func drawNavPath(path []components.WorldPos, anchorPos components.WorldPos) {
 // terrain height + 5 cm. Cell size is 1 m; plates are sized to 0.9 m so
 // neighbouring cells visibly separate. Colour LUT:
 //
-//	Cost = 0           → black (impassable)
-//	Cost = navCostRoad → light blue (OnRoad — M6.4)
-//	Cost = navCostOpen → green (open field)
-//	Cost = navCostRough → yellow-orange (rough)
-//	Cost = navCostTrench → orange (trench — M6.4)
-//	other              → magenta (unknown)
+//	Cost = 0           -> black (impassable)
+//	Cost = navCostRoad -> light blue (OnRoad - M6.4)
+//	Cost = navCostOpen -> green (open field)
+//	Cost = navCostRough -> yellow-orange (rough)
+//	Cost = navCostTrench -> orange (trench - M6.4)
+//	other              -> magenta (unknown)
 func drawNavGridOverlay(chunkPos components.WorldPos, cc components.ChunkCoord,
 	grid *components.NavGrid, hm *components.Heightmap) {
 	chunkRender := chunkPos.ToRenderSpace(systems.CurrentOriginChunk)
@@ -68,9 +68,9 @@ func drawNavGridOverlay(chunkPos components.WorldPos, cc components.ChunkCoord,
 	_ = cc
 }
 
-// drawCoverMapOverlay — same shape as drawNavGridOverlay but with a single
-// translucent blue plate per cell whose alpha tracks BaseCover. 0 cover ⇒
-// fully transparent (cell skipped); 8 covered directions ⇒ 90% blue.
+// drawCoverMapOverlay - same shape as drawNavGridOverlay but with a single
+// translucent blue plate per cell whose alpha tracks BaseCover. 0 cover =>
+// fully transparent (cell skipped); 8 covered directions => 90% blue.
 func drawCoverMapOverlay(chunkPos components.WorldPos, cc components.ChunkCoord,
 	cov *components.CoverMap, hm *components.Heightmap) {
 	chunkRender := chunkPos.ToRenderSpace(systems.CurrentOriginChunk)
@@ -146,7 +146,7 @@ func navCellColor(cell components.NavCell) rl.Color {
 	}
 }
 
-// drawRoadGraphDebug overlays the road graph in 3D — one coloured line per
+// drawRoadGraphDebug overlays the road graph in 3D - one coloured line per
 // edge, plus a small marker cube at each node. Colour by RoadKind: white
 // Highway, blue Local, brown DirtTrack, yellow Bridge.
 func drawRoadGraphDebug(g *components.RoadGraph) {
@@ -247,7 +247,7 @@ func drawProp(meta components.PropMeta, pos rl.Vector3, yaw, scale float32) {
 }
 
 // drawBuildingFloor draws a horizontal grey plate at the floor's WorldPos.
-// Floor.Y is the slab top — drop a thin slab below it.
+// Floor.Y is the slab top - drop a thin slab below it.
 func drawBuildingFloor(pos rl.Vector3, f components.Floor) {
 	const slabThickness float32 = 0.15
 	// Centre cube vertically below the floor surface.
@@ -326,9 +326,9 @@ func drawBuildingWall(pos rl.Vector3, w components.WallSegment) {
 }
 
 // drawUnitCube draws a placeholder soldier as an olive cube sitting on the
-// terrain at WorldPos. Height collapses with Stance — standing = 1.8 m,
+// terrain at WorldPos. Height collapses with Stance - standing = 1.8 m,
 // crouching = 1.1 m, prone = 0.4 m. Phase 12 adds a role cap on top of the
-// body — a small flat sub-cube tinted to the role colour. Leaders get a
+// body - a small flat sub-cube tinted to the role colour. Leaders get a
 // slightly taller cap so they read as senior at a glance. Phase 25 polish
 // replaces the cubes with proper animated meshes.
 func drawUnitCube(pos rl.Vector3, st components.Stance, role components.UnitRoleKind) {
@@ -360,7 +360,7 @@ func drawUnitCube(pos rl.Vector3, st components.Stance, role components.UnitRole
 // label sits on top of the scene without depth fighting.
 //
 // `renderPos` is the unit's render-space WorldPos (output of WorldPos.ToRenderSpace).
-// `panel3DContent` is the rectangle the 3D scene composites into — used to
+// `panel3DContent` is the rectangle the 3D scene composites into - used to
 // offset the screen-space coordinates and to cull labels for off-screen
 // units.
 func drawUnitRoleLabel(renderPos rl.Vector3, st components.Stance, role components.UnitRoleKind,
@@ -394,7 +394,7 @@ func drawUnitRoleLabel(renderPos rl.Vector3, st components.Stance, role componen
 	screenX := panel3DContent.X + sp.X - size.X*0.5
 	screenY := panel3DContent.Y + sp.Y - size.Y*0.5
 
-	// Pill background — role colour with low alpha so multiple labels can
+	// Pill background - role colour with low alpha so multiple labels can
 	// overlap without becoming an opaque smear. Border keeps the pill
 	// legible against terrain.
 	bg := components.RoleColor(role)
@@ -421,7 +421,7 @@ func drawUnitRoleLabel(renderPos rl.Vector3, st components.Stance, role componen
 // drawUnitStaminaBar projects the unit's cap-top point and draws a thin
 // horizontal Stamina bar at PHASE-13.md P12: shown only when Current/MaxLevel
 // < 0.8. Width 40 px, height 3 px; colour green / yellow / red by ratio
-// zone (≥0.5 / ≥0.2 / below). 2D screen-space pass, same render order as
+// zone (>=0.5 / >=0.2 / below). 2D screen-space pass, same render order as
 // the role label (drawn after the 3D RT composites).
 func drawUnitStaminaBar(renderPos rl.Vector3, st components.Stance, role components.UnitRoleKind,
 	current, maxLevel float32, panel3DContent rl.Rectangle) {
@@ -476,7 +476,7 @@ func drawUnitStaminaBar(renderPos rl.Vector3, st components.Stance, role compone
 		1, rl.Color{R: 10, G: 12, B: 16, A: 220})
 }
 
-// drawUnitHPBar — Phase 14 M14.6: thin red/yellow/green pill above the
+// drawUnitHPBar - Phase 14 M14.6: thin red/yellow/green pill above the
 // Stamina bar. Hidden when Current >= Max (no damage). Mirrors
 // drawUnitStaminaBar geometry but sits +0.25 m higher so they stack
 // readably.
@@ -490,7 +490,7 @@ func drawUnitHPBar(renderPos rl.Vector3, st components.Stance, role components.U
 		ratio = 0
 	}
 	if ratio >= 1 {
-		return // full HP — keep the screen quiet.
+		return // full HP - keep the screen quiet.
 	}
 
 	height := unitStanceHeight(st.Code)
@@ -498,7 +498,7 @@ func drawUnitHPBar(renderPos rl.Vector3, st components.Stance, role components.U
 	if role == components.RoleLeader {
 		capHeight = 0.30
 	}
-	// HP sits above Stamina (0.25 m above cap) at +0.50 m — clear separation
+	// HP sits above Stamina (0.25 m above cap) at +0.50 m - clear separation
 	// so the two bars don't fuse visually when both are present.
 	topPos := rl.Vector3{
 		X: renderPos.X,
@@ -545,7 +545,7 @@ type ParticleRenderCtx struct {
 // dust, debris, muzzle flash) share the same pipeline.
 //
 // Phase 14.5 M14.5.4: raylib's DrawLine3D / DrawSphere / DrawCube are not
-// instanced — each particle is its own draw call. Acceptable at the cap of
+// instanced - each particle is its own draw call. Acceptable at the cap of
 // 2000 live entries; Phase 16 may revisit if firefight density grows.
 func drawParticles(ctx ParticleRenderCtx, now float32) {
 	if ctx.Filter == nil {
@@ -602,8 +602,8 @@ func drawParticles(ctx ParticleRenderCtx, now float32) {
 
 // drawGhostUnit draws a translucent body cube (no role cap) at the given
 // position to preview where a unit would stand after a Move order completes.
-// Phase 13.6 M13.6.1: visual is intentionally subdued — neutral grey-white,
-// low alpha, no role tint — so real units stay dominant on screen. Stance
+// Phase 13.6 M13.6.1: visual is intentionally subdued - neutral grey-white,
+// low alpha, no role tint - so real units stay dominant on screen. Stance
 // drives the cube height so ghosts crouch / prone-prone with the squad's
 // effective MovementProfile.
 func drawGhostUnit(pos rl.Vector3, st components.Stance, alpha uint8) {
@@ -620,14 +620,14 @@ func drawGhostUnit(pos rl.Vector3, st components.Stance, alpha uint8) {
 	rl.DrawCubeWiresV(c, rl.Vector3{X: 0.6, Y: height, Z: 0.6}, wires)
 }
 
-// drawGhostArc draws a wedge-shaped sector indicator at ground level — two
+// drawGhostArc draws a wedge-shaped sector indicator at ground level - two
 // outline rays from `center` along `facingYaw ± halfAngleRad`, plus a fan of
 // translucent triangles filling the wedge. Used by DefendPosition ghost to
 // show the held overwatch sector. Phase 13.6 M13.6.1: visual stub; Phase 14
 // EngagementRules.SectorYaw/SectorHalfDot will be the runtime enforcement.
 //
 // `center` is render-space at ground level; `length` is the wedge radius in
-// metres. The colour's RGB drives both fill and outline; outline uses A→255
+// metres. The colour's RGB drives both fill and outline; outline uses A->255
 // for legibility, fill uses A as-given (typically 60).
 func drawGhostArc(center rl.Vector3, facingYaw, halfAngleRad, length float32, col rl.Color) {
 	if length <= 0 || halfAngleRad <= 0 {
@@ -640,7 +640,7 @@ func drawGhostArc(center rl.Vector3, facingYaw, halfAngleRad, length float32, co
 	endAng := float64(facingYaw + halfAngleRad)
 	lift := float32(0.05)
 
-	// Triangle fan fill — pivot on the center, fan to `steps` points on the
+	// Triangle fan fill - pivot on the center, fan to `steps` points on the
 	// arc. Alpha low so terrain reads through.
 	fill := rl.Color{R: col.R, G: col.G, B: col.B, A: col.A}
 	c := rl.Vector3{X: center.X, Y: center.Y + lift, Z: center.Z}
@@ -687,12 +687,12 @@ func drawGhostArc(center rl.Vector3, facingYaw, halfAngleRad, length float32, co
 }
 
 // unitStanceHeight reads body height from components.StanceSpecs. Phase 14.5
-// M14.5.1 — old hard-coded switch replaced.
+// M14.5.1 - old hard-coded switch replaced.
 func unitStanceHeight(code components.StanceCode) float32 {
 	return components.SpecForStance(code).BodyHeight
 }
 
-// Phase 14 M14.6 — faction-split palettes. Player squads pull from a
+// Phase 14 M14.6 - faction-split palettes. Player squads pull from a
 // blue/green spectrum; enemy squads from a red/orange spectrum. Same SplitMix
 // hash inside each faction so two squads of the same side stay visually
 // distinct. Slots-per-faction = 4 to keep close-hue variety without the
@@ -715,8 +715,8 @@ var squadPaletteEnemy = [...]rl.Color{
 // player vs enemy distinction is immediately visible. Inside each faction a
 // SplitMix hash on the entity ID picks a per-squad shade.
 //
-// Reads the global factionMap closure — squadColor itself is wired in main.go
-// once factionMap exists. Missing Faction component → Player palette
+// Reads the global factionMap closure - squadColor itself is wired in main.go
+// once factionMap exists. Missing Faction component -> Player palette
 // (backwards-compat for any spawn path that didn't stamp one).
 func squadColorFor(ent ecs.Entity, faction uint8) rl.Color {
 	palette := squadPalettePlayer[:]

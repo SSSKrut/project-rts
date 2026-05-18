@@ -5,8 +5,8 @@ import (
 	"github.com/mlange-42/ark/ecs"
 )
 
-// BuildingKind is the high-level category. Drives layout (Bunker is sunken,
-// House is surface-level) and gameplay attributes once Phase 11 lands.
+// BuildingKind drives layout (Bunker is sunken, House is surface) and
+// downstream gameplay attributes.
 type BuildingKind uint8
 
 const (
@@ -16,27 +16,27 @@ const (
 	BuildingFortification
 )
 
-// Building is the root component on a building entity. Holds enough geometric
-// data for layout generation; child entities (walls / floors / stairs / doors
-// / windows) are spawned per-chunk-life by BuildingSystem and indexed via
-// BuildingChildIndex. The root carries AlwaysActive — it survives chunk
-// eviction so cross-chunk queries (clearance, AI targeting) keep working.
+// Building is the root component on a building entity. Child entities (walls
+// / floors / stairs / doors / windows) are spawned per-chunk-life by
+// BuildingSystem and indexed via BuildingChildIndex. The root carries
+// AlwaysActive - it survives chunk eviction so cross-chunk queries keep
+// working.
 type Building struct {
 	Kind      BuildingKind
 	Stories   uint8
-	Yaw       float32 // radians around +Y; Phase 5 uses 0 throughout
+	Yaw       float32 // radians around +Y
 	Footprint AABB2D
 	Seed      uint64
 }
 
 // BuildingPlan is the hand-authored spec used at startup to instantiate
-// Building entities. Lives in BuildingPlanList resource. After startup nothing
-// reads the plan list — the Building component carries everything systems need.
+// Building entities. After startup nothing reads the plan list - the
+// Building component carries everything systems need.
 type BuildingPlan struct {
 	Pos     WorldPos
 	Kind    BuildingKind
 	Stories uint8
-	Size    rl.Vector2 // SizeX × SizeZ in metres
+	Size    rl.Vector2 // SizeX, SizeZ in metres
 	Yaw     float32
 	Seed    uint64
 }
@@ -47,8 +47,7 @@ type BuildingPlanList struct {
 }
 
 // BuildingMember marks a child entity (wall / floor / stairs / opening) as
-// belonging to a parent building. Currently informational; Phase 11 (combat)
-// will use it to bubble damage / destruction up to the root.
+// belonging to a parent building. Damage / destruction bubbles to the root.
 type BuildingMember struct {
 	Building ecs.Entity
 }
@@ -62,11 +61,10 @@ const (
 	OpeningWindow
 )
 
-// WallSegment is one piece of building outer wall. Geometry is parameterised:
-// WorldPos = "from" endpoint (chunk-relative), Length runs along Yaw direction
-// (around +Y), Height extends upward, Thickness is centred on the line. A wall
-// has at most one opening (Phase 5 P3); multi-opening walls are split into
-// multiple segments at layout time.
+// WallSegment is one piece of building outer wall. WorldPos = "from"
+// endpoint (chunk-relative), Length runs along Yaw, Height extends upward,
+// Thickness is centred on the line. At most one opening per segment;
+// multi-opening walls split at layout time.
 type WallSegment struct {
 	Length    float32
 	Yaw       float32
@@ -80,12 +78,11 @@ type WallSegment struct {
 	OpeningHeight  float32
 }
 
-// Door state on the wall-segment-with-door entity. Sits beside WallSegment +
-// (optionally) Occupancy / CoverDirection on the same entity.
+// Door state on the wall-segment-with-door entity. Sits beside WallSegment
+// + (optionally) Occupancy / CoverDirection on the same entity.
 type Door struct {
-	State    DoorState
-	Material DoorMaterial
-	// BlocksLOSWhenClosed is informational in Phase 5; Phase 11 raycaster reads it.
+	State               DoorState
+	Material            DoorMaterial
 	BlocksLOSWhenClosed bool
 }
 
@@ -104,8 +101,7 @@ const (
 )
 
 // Window component on a wall-segment-with-window entity. BlocksLOS is
-// intentionally absent — windows are LOS-transparent walls (DESIGN.md), the
-// attribute is implicit.
+// intentionally absent - windows are LOS-transparent walls by design.
 type Window struct {
 	Glass bool
 }
@@ -119,8 +115,7 @@ type Floor struct {
 }
 
 // Stairs connects FromFloor and ToFloor along Yaw. Length is the horizontal
-// run, Width is the tread width, Rise is the vertical climb. Placeholder
-// renderer draws a tilted slab.
+// run, Width is the tread width, Rise is the vertical climb.
 type Stairs struct {
 	FromFloor uint8
 	ToFloor   uint8
@@ -130,15 +125,15 @@ type Stairs struct {
 	Rise      float32
 }
 
-// Smart Object data — written at spawn time, not consumed in Phase 5.
-// Phase 6 (CoverEvaluation) and Phase 10 (TacticalAI) are the readers.
+// Smart Object data - written at spawn time. CoverEvaluation and TacticalAI
+// are the readers.
 type Occupancy struct {
 	Max     uint8
 	Current uint8
 }
 
 type CoverDirection struct {
-	Dir rl.Vector3 // unit vector pointing OUTward (away from building interior)
+	Dir rl.Vector3 // unit vector pointing OUTward (away from interior)
 }
 
 type ShootingArc struct {
@@ -146,12 +141,11 @@ type ShootingArc struct {
 	HalfAngleRad float32
 }
 
-// BuildingsProcessed marks a chunk whose child entities (walls/floors/...)
-// have been spawned. Independent of Modified — child entities live in entity
-// space, not on the heightmap.
+// BuildingsProcessed marks a chunk whose child entities have been spawned.
+// Independent of Modified - children live in entity space, not on the heightmap.
 type BuildingsProcessed struct{}
 
 // BuildingTerrainProcessed marks a chunk whose bunker RectCut has been
-// applied. Gated by Without[Modified] like RoadProcessed — player edits win,
-// terrain cut isn't re-applied on top.
+// applied. Gated by Without[Modified] - player edits win, the cut isn't
+// re-applied on top.
 type BuildingTerrainProcessed struct{}

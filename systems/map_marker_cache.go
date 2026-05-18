@@ -10,7 +10,7 @@ import (
 )
 
 // MapMarkerCacheSystem refreshes the per-squad marker positions consumed by
-// the 2D map renderer (Phase 11.5 P7). Run every 250 ms — much cheaper than
+// the 2D map renderer (Phase 11.5 P7). Run every 250 ms - much cheaper than
 // calling SquadCenter on every map-render frame for every squad (which would
 // scale poorly past ~100 squads). The cache also serves as the smoothing
 // anchor: the renderer lerps inter-frame from the previous on-screen position
@@ -44,7 +44,7 @@ func (sys *MapMarkerCacheSystem) Update(ctx core.UpdateContext) {
 	}
 	// Mark current entries as stale; survivors are refreshed below, the rest
 	// are dropped at the end of the pass. Cheaper than building a new map
-	// each tick — at 100 squads the survivor set is the same size 99% of the
+	// each tick - at 100 squads the survivor set is the same size 99% of the
 	// time.
 	seen := make(map[ecs.Entity]struct{}, len(cache.Position))
 	q := sys.squadFilter.Query()

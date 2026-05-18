@@ -6,7 +6,7 @@ import (
 	"github.com/mlange-42/ark/ecs"
 )
 
-// LODTier — scheduling bucket only, NOT stored in components.
+// LODTier - scheduling bucket only, NOT stored in components.
 type LODTier int
 
 const (

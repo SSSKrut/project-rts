@@ -12,7 +12,7 @@ import (
 // PieMenu is the radial RMB-hold UI from PHASE-11.md P12. The player holds
 // RMB; after `HoldThreshold` the menu activates around the press position.
 // Cursor angle from the centre selects a segment; release commits it. Tap
-// (release before threshold) bypasses the menu — caller falls back to the
+// (release before threshold) bypasses the menu - caller falls back to the
 // hit-test resolver.
 //
 // Phase 11 has 5 segments (one per OrderKindCode). The kind enum order is
@@ -33,11 +33,11 @@ type PieMenu struct {
 	// Phase 13.6 M13.6.4: facing-drag.
 	//
 	// HasSelection is set by Begin to the current selection count > 0; drives
-	// the drag-disambig branch in Tick — without a squad to face, drag still
+	// the drag-disambig branch in Tick - without a squad to face, drag still
 	// reclassifies as camera-orbit (legacy behaviour).
 	//
 	// InFacingDrag is true once the cursor has moved past DragCancelThreshold
-	// AND HasSelection — RMB-drag is committed to facing input rather than
+	// AND HasSelection - RMB-drag is committed to facing input rather than
 	// camera orbit. SourcePanel stays non-None so OrbitSystem keeps its hands
 	// off (gated by main.go through OrbitInputEnabled).
 	HasSelection bool
@@ -45,7 +45,7 @@ type PieMenu struct {
 
 	// Phase 13.6 M13.6.5: while Active, HoveringKind tracks which segment is
 	// currently under the cursor (matches the value Draw highlights). Caller
-	// reads this to swap the ghost preview to a kind-specific visualisation —
+	// reads this to swap the ghost preview to a kind-specific visualisation -
 	// e.g. DefendPosition draws a sector arc indicator. Zero / not-Active
 	// means no hover info available.
 	HoveringKind  components.OrderKindCode
@@ -62,7 +62,7 @@ const HoldThreshold = 200 * time.Millisecond
 const DragCancelThreshold float32 = 8
 
 // PieInnerRadius / PieOuterRadius are the menu's geometry in screen px. The
-// inner zone is the "cancel" region — release with the cursor inside the
+// inner zone is the "cancel" region - release with the cursor inside the
 // inner ring means no order. Outer ring is the visual cap.
 const (
 	PieInnerRadius float32 = 28
@@ -70,7 +70,7 @@ const (
 )
 
 // pieSegments is the canonical kind ordering for the menu. Phase 14.5 M14.5.0:
-// derived once at init time from `components.OrderKindSpecs` — every spec
+// derived once at init time from `components.OrderKindSpecs` - every spec
 // with `InPieMenu == true` contributes a segment, sorted by `PieSegmentOrder`.
 // Adding / removing a pie segment is now a one-line edit to the spec table.
 var pieSegments = buildPieSegments()
@@ -87,7 +87,7 @@ func buildPieSegments() []components.OrderKindCode {
 			entries = append(entries, entry{code: spec.Code, order: spec.PieSegmentOrder})
 		}
 	}
-	// Stable insertion sort by PieSegmentOrder — tiny N, no allocation.
+	// Stable insertion sort by PieSegmentOrder - tiny N, no allocation.
 	for i := 1; i < len(entries); i++ {
 		for j := i; j > 0 && entries[j-1].order > entries[j].order; j-- {
 			entries[j-1], entries[j] = entries[j], entries[j-1]
@@ -101,10 +101,10 @@ func buildPieSegments() []components.OrderKindCode {
 }
 
 // Begin records the press position and target. Caller invokes this on
-// IsMouseButtonPressed(MouseButtonRight). Doesn't open the menu yet —
+// IsMouseButtonPressed(MouseButtonRight). Doesn't open the menu yet -
 // Tick(cursor, isDown) does that once the hold threshold passes.
 //
-// Phase 13.6 M13.6.4: hasSelection flips the drag-disambig branch — when a
+// Phase 13.6 M13.6.4: hasSelection flips the drag-disambig branch - when a
 // squad is selected, a drag past DragCancelThreshold commits to facing-input
 // (InFacingDrag) instead of falling through to camera-orbit. Caller must keep
 // passing the current selection state; capturing it at press time matches
@@ -121,15 +121,15 @@ func (m *PieMenu) Begin(origin rl.Vector2, target components.WorldPos, source Pa
 
 // PieTickResult bundles the per-frame outcome. ReleasedAsTap is true when
 // RMB was released without the menu activating AND with little cursor drift
-// — caller runs the hit-test path. ReleasedAsDrag means cursor moved enough
-// to reclassify as a camera-orbit drag (caller does nothing — orbit already
+// - caller runs the hit-test path. ReleasedAsDrag means cursor moved enough
+// to reclassify as a camera-orbit drag (caller does nothing - orbit already
 // happened). ReleasedAsCommit means the player chose `Kind`. Cancelled means
 // they released over the centre cancel zone.
 //
 // Phase 13.6 M13.6.4: ReleasedAsFacingDrag means HasSelection was true and the
-// cursor moved past the drag threshold — drag committed to facing input.
+// cursor moved past the drag threshold - drag committed to facing input.
 // FacingYaw carries the screen-derived yaw at release (atan2(dx, -dy), so
-// 0 = up, increases clockwise — matches Motion.Yaw / FormationOffset
+// 0 = up, increases clockwise - matches Motion.Yaw / FormationOffset
 // rotation around +Y).
 type PieTickResult struct {
 	ReleasedAsTap        bool
@@ -143,13 +143,13 @@ type PieTickResult struct {
 
 // Tick advances the state machine. PHASE-11.md P12 + drag reclassification:
 //
-//   - Cursor moved beyond DragCancelThreshold while held → reclassify as a
+//   - Cursor moved beyond DragCancelThreshold while held -> reclassify as a
 //     camera orbit drag; reset state and let OrbitSystem take RMB back over.
-//   - Held >= HoldThreshold without dragging → activate menu.
-//   - Release with menu active → commit chosen segment (or Cancelled if in
+//   - Held >= HoldThreshold without dragging -> activate menu.
+//   - Release with menu active -> commit chosen segment (or Cancelled if in
 //     the inner zone).
-//   - Release without menu and no drag → tap; caller runs hit-test resolver.
-//   - Release after drag reclass → drop; caller does nothing.
+//   - Release without menu and no drag -> tap; caller runs hit-test resolver.
+//   - Release after drag reclass -> drop; caller does nothing.
 //
 // Called every frame while SourcePanel != PanelNone.
 func (m *PieMenu) Tick(cursor rl.Vector2, rmbDown, rmbReleased bool) PieTickResult {
@@ -164,7 +164,7 @@ func (m *PieMenu) Tick(cursor rl.Vector2, rmbDown, rmbReleased bool) PieTickResu
 		if dx*dx+dy*dy > DragCancelThreshold*DragCancelThreshold {
 			if m.HasSelection {
 				m.InFacingDrag = true
-				// Fall through to release handling below — facing-drag is the
+				// Fall through to release handling below - facing-drag is the
 				// new active mode.
 			} else {
 				m.SourcePanel = PanelNone
@@ -294,7 +294,7 @@ func (m *PieMenu) Draw(font rl.Font, cursor rl.Vector2) {
 
 		col := pieSegDim
 		if hasHover && hovered == k {
-			// Highlight wedge — approximate with a translucent ring slice
+			// Highlight wedge - approximate with a translucent ring slice
 			// drawn via DrawCircleSector (raylib has DrawCircleSector? if
 			// not, fall back to a translucent disk under the label).
 			drawPieWedge(m.Origin, PieInnerRadius+2, PieOuterRadius-2,
@@ -311,7 +311,7 @@ func (m *PieMenu) Draw(font rl.Font, cursor rl.Vector2) {
 			float32(fs), 1, col)
 	}
 
-	// Inner "cancel" affordance — small × if cursor in cancel zone.
+	// Inner "cancel" affordance - small × if cursor in cancel zone.
 	if !hasHover {
 		const fs int32 = 12
 		txt := "cancel"
@@ -348,7 +348,7 @@ func drawPieWedge(centre rl.Vector2, rIn, rOut float32, angStart, angEnd float64
 }
 
 // pieKindLabel reads the canonical short Name from the spec table. Phase
-// 14.5 M14.5.0 — switch removed.
+// 14.5 M14.5.0 - switch removed.
 func pieKindLabel(k components.OrderKindCode) string {
 	if spec := components.SpecForOrderKind(k); spec.Name != "" {
 		return spec.Name

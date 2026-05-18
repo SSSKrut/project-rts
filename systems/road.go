@@ -24,12 +24,12 @@ const junctionYOffset float32 = 0.06
 
 // RoadSystem runs two passes per tick over chunks that need road work:
 //
-//  1. Flatten pass — for chunks with Heightmap, no Modified, no RoadProcessed:
+//  1. Flatten pass - for chunks with Heightmap, no Modified, no RoadProcessed:
 //     blend heightmap toward the road profile for every non-bridge edge that
 //     intersects the chunk. Marks RoadProcessed.
 //
-//  2. Spawn pass — for chunks with Heightmap, no RoadPropsSpawned: spawn
-//     road-surface, bridge and junction props. Independent of Modified —
+//  2. Spawn pass - for chunks with Heightmap, no RoadPropsSpawned: spawn
+//     road-surface, bridge and junction props. Independent of Modified -
 //     player-edited chunks keep their road visual even though the heightmap
 //     flatten was skipped (M4.5).
 //
@@ -56,7 +56,7 @@ func (sys *RoadSystem) InitUI(w *ecs.World) {
 			ecs.C[components.Modified](),
 			ecs.C[components.RoadProcessed](),
 		)
-	// Spawn gate: only RoadPropsSpawned. Modified is irrelevant — props live
+	// Spawn gate: only RoadPropsSpawned. Modified is irrelevant - props live
 	// in entity-space, not on the heightmap.
 	sys.spawnFilter = ecs.NewFilter3[components.ChunkCoord, components.Heightmap, components.WorldPos](w).
 		Without(ecs.C[components.RoadPropsSpawned]())
@@ -140,7 +140,7 @@ func (sys RoadSystem) Update(ctx core.UpdateContext) {
 		}
 	}
 
-	// Per-node, find max width of incident edges — used to size junction props.
+	// Per-node, find max width of incident edges - used to size junction props.
 	nodeMaxW := make([]float32, len(graph.Nodes))
 	for i := range graph.Edges {
 		e := &graph.Edges[i]
@@ -252,7 +252,7 @@ func (sys RoadSystem) Update(ctx core.UpdateContext) {
 
 		// Junction props: one per node whose Pos.Chunk == ccVal. Avoids
 		// duplication when a node sits on a chunk boundary (Pos.Chunk is the
-		// floor-rounded owner — exactly one chunk wins).
+		// floor-rounded owner - exactly one chunk wins).
 		for ni := range graph.Nodes {
 			n := &graph.Nodes[ni]
 			if n.Pos.Chunk != ccVal {
@@ -308,7 +308,7 @@ func propTypeForKind(k components.RoadKind) components.PropType {
 	return components.PropRoadLocal
 }
 
-// segmentBBoxClipXZ — Liang-Barsky clip of segment (ax,az)→(bx,bz) against
+// segmentBBoxClipXZ - Liang-Barsky clip of segment (ax,az)->(bx,bz) against
 // axis-aligned XZ rectangle [minX, maxX] × [minZ, maxZ]. Returns the t-range
 // of the segment portion inside the rectangle, or ok=false if disjoint.
 func segmentBBoxClipXZ(ax, az, bx, bz, minX, minZ, maxX, maxZ float32) (float32, float32, bool) {

@@ -14,7 +14,7 @@ type AudioSource struct {
 	Volume      float32
 }
 
-// LOD marker components — adding/removing them changes archetype, enabling
+// LOD marker components - adding/removing them changes archetype, enabling
 // cache-friendly per-tier iteration.
 type LODActive struct{}
 type LODRelevant struct{}

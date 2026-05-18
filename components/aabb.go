@@ -3,7 +3,7 @@ package components
 import "math"
 
 // AABB2D is an axis-aligned XZ rectangle in world coords. Used for building
-// footprints and any other "this region of the surface" mask. Y is ignored —
+// footprints and any other "this region of the surface" mask. Y is ignored -
 // terrain height is sampled separately.
 type AABB2D struct {
 	MinX, MinZ, MaxX, MaxZ float32

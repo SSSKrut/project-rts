@@ -13,7 +13,7 @@ import (
 //
 // Kept as its own System (rather than inlined into WeaponSystem) so the
 // Phase 15 reader gets a clean contract: "ThreatSource entities are live
-// for up to threatTTL seconds after their spawn — query the cluster, weight
+// for up to threatTTL seconds after their spawn - query the cluster, weight
 // by Severity, ignore the rest." The writer / reader / cleaner split
 // matches the same pattern Phase 14 follows for the Suppression field
 // (writer = WeaponSystem.propagateSuppression; reader = Phase 15;
@@ -37,7 +37,7 @@ func (sys *ThreatDecaySystem) InitUI(w *ecs.World) {
 
 func (ThreatDecaySystem) Name() string { return "threat_decay" }
 
-// Every tick — the work is O(live-threats) which peaks at ~120 entries
+// Every tick - the work is O(live-threats) which peaks at ~120 entries
 // during a heavy firefight (Phase 14 estimate). Tiny budget.
 func (ThreatDecaySystem) LODPolicy() core.LODPolicy {
 	return core.LODPolicy{
@@ -59,7 +59,7 @@ func (sys *ThreatDecaySystem) Update(ctx core.UpdateContext) {
 			sys.despawned = append(sys.despawned, q.Entity())
 		}
 	}
-	// Apply removals after closing the query — Ark forbids archetype
+	// Apply removals after closing the query - Ark forbids archetype
 	// mutation inside a live filter walk.
 	for _, e := range sys.despawned {
 		if ctx.World.Alive(e) {

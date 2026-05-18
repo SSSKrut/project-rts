@@ -2,7 +2,7 @@ package ui
 
 import rl "github.com/gen2brain/raylib-go/raylib"
 
-// L1 layout — fixed grid driven by screen size. Two presets:
+// L1 layout - fixed grid driven by screen size. Two presets:
 //
 //   Field:                          Command:
 //   +-------------+--------+        +-------------+--------+
@@ -15,7 +15,7 @@ import rl "github.com/gen2brain/raylib-go/raylib"
 //   +---------------------+        +---------------------+
 //
 // Field puts the 3D scene in the big slot (Sun Tzu's "the general on the
-// hill" — see your own troops up close). Command swaps to map-primary
+// hill" - see your own troops up close). Command swaps to map-primary
 // (operations-room view). Inspector and Time controls don't move.
 //
 // Column split (sideCol vs 3D/map): 75% / 25%. Side column splits vertically

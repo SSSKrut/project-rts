@@ -11,15 +11,15 @@ import (
 )
 
 // rlVec3XZ packs an XZ pair into a Vector3 with Y = 0. Kept private because
-// it's only useful where world-coord → WorldPos requires Vector3 inputs.
+// it's only useful where world-coord -> WorldPos requires Vector3 inputs.
 func rlVec3XZ(x, z float32) rl.Vector3 { return rl.Vector3{X: x, Y: 0, Z: z} }
 
 // OrderResolverSystem owns the Order lifecycle (PHASE-11.md P3 + P4):
 //
-//   - Issued → InProgress (after the first pass; tells SquadMacroPathSystem to
+//   - Issued -> InProgress (after the first pass; tells SquadMacroPathSystem to
 //     do an immediate replan via MacroPath.ReplanAt = 0)
-//   - InProgress → Completed when per-kind completion fires
-//   - Cleanup of finished orders (Completed/Cancelled/Failed) — entity removed,
+//   - InProgress -> Completed when per-kind completion fires
+//   - Cleanup of finished orders (Completed/Cancelled/Failed) - entity removed,
 //     OrderQueueHead.First advances to OrderChain.Next
 //
 // Per-kind completion (P4.5):
@@ -27,12 +27,12 @@ func rlVec3XZ(x, z float32) rl.Vector3 { return rl.Vector3{X: x, Y: 0, Z: z} }
 //   - MoveTo / Garrison / OccupyTrench: squad center within an arrival radius
 //     of the resolved target Pos
 //   - DefendPosition: never auto-completes (only via CancelAllOrders)
-//   - Patrol: reached final waypoint → Completed; Loop=true re-issues the
+//   - Patrol: reached final waypoint -> Completed; Loop=true re-issues the
 //     order at the same Pos (handled at advancement, simpler than cycling
 //     OrderChain.Next pointers per PHASE-11.md notes)
 //
 // Order-aware target resolution (Garrison footprint center, OccupyTrench
-// nearest polyline point) is *also* this system's job — runs once per tick to
+// nearest polyline point) is *also* this system's job - runs once per tick to
 // refresh OrderTarget.Pos when the entity target moved. Cheap; 5 orders
 // max active in Phase 11 scenes.
 type OrderResolverSystem struct {
@@ -53,11 +53,11 @@ type OrderResolverSystem struct {
 	orderIssuedAtMap *ecs.Map[components.OrderIssuedAt]
 	orderOwnerMap    *ecs.Map[components.OrderOwner]
 	orderFacingMap   *ecs.Map[components.OrderParamFacing]
-	// Phase 14 M14.4 — SuppressFire timer reader.
+	// Phase 14 M14.4 - SuppressFire timer reader.
 	orderSuppressMap *ecs.Map[components.OrderParamSuppress]
-	// Phase 14.5 M14.5.0 — Issue #10 fix: per-order out-of-range timer.
+	// Phase 14.5 M14.5.0 - Issue #10 fix: per-order out-of-range timer.
 	orderOutOfRangeMap *ecs.Map[components.OrderOutOfRangeTracker]
-	// Equipment / Weapon — read to compute the squad's effective weapon range
+	// Equipment / Weapon - read to compute the squad's effective weapon range
 	// for the out-of-range check. Use the maximum range across roster members.
 	equipmentMap *ecs.Map[components.Equipment]
 	weaponMap    *ecs.Map[components.Weapon]
@@ -72,15 +72,15 @@ type OrderResolverSystem struct {
 	trenchRootMap  *ecs.Map[components.TrenchRoot]
 	trenchResource ecs.Resource[components.TrenchNetwork]
 
-	// Phase 14.6 M14.6.2 — Garrison CompletionEveryMemberOnFloor reads Floor
+	// Phase 14.6 M14.6.2 - Garrison CompletionEveryMemberOnFloor reads Floor
 	// plates to confirm each roster member is on a floor cell (not just
 	// inside the footprint AABB).
 	floorFilter *ecs.Filter2[components.WorldPos, components.Floor]
 
-	// Phase 14.6 followup — Garrison target.Pos points at a Floor entity's
+	// Phase 14.6 followup - Garrison target.Pos points at a Floor entity's
 	// WorldPos (NodeFloor in the multi-graph A*) so NavService.FindPath can
 	// route through a Door TransitionEdge. Surface-inside-footprint cells
-	// are NavInBuilding (M14.6.1) and refuse expansion — without a floor
+	// are NavInBuilding (M14.6.1) and refuse expansion - without a floor
 	// goal the resolver path would terminate at the wall.
 	buildingChildIndex ecs.Resource[BuildingChildIndex]
 	floorComponentMap  *ecs.Map[components.Floor]
@@ -89,7 +89,7 @@ type OrderResolverSystem struct {
 }
 
 // NewOrderResolverSystem wires the system. SquadService is the dependency
-// that mutates orders (re-issue Patrol) — keeps mutation logic in one place.
+// that mutates orders (re-issue Patrol) - keeps mutation logic in one place.
 func NewOrderResolverSystem(svc *SquadService) *OrderResolverSystem {
 	return &OrderResolverSystem{squadService: svc}
 }
@@ -127,9 +127,9 @@ func (sys *OrderResolverSystem) InitUI(w *ecs.World) {
 func (OrderResolverSystem) Name() string { return "order_resolver" }
 
 // OrderResolverSystem runs every tick. Phase 11.5 M11.5.3: tier-gating
-// dropped — units / commanders no longer carry LOD markers, so all squads get
+// dropped - units / commanders no longer carry LOD markers, so all squads get
 // completion checks each frame regardless of where the player is looking.
-// Serial; archetype mutations (Completed → cleanup, head advance) don't
+// Serial; archetype mutations (Completed -> cleanup, head advance) don't
 // parallelise cleanly.
 func (OrderResolverSystem) LODPolicy() core.LODPolicy {
 	return core.LODPolicy{
@@ -139,7 +139,7 @@ func (OrderResolverSystem) LODPolicy() core.LODPolicy {
 	}
 }
 
-// Order-arrival radii — Phase 14.5 M14.5.0: now driven by OrderKindSpec.
+// Order-arrival radii - Phase 14.5 M14.5.0: now driven by OrderKindSpec.
 // arrivalRadiusFor reads Spec.ArrivalRadius; falls back to MoveTo default for
 // kinds whose spec didn't fill the field (none in Phase 14.5, but defensive).
 func arrivalRadiusFor(kind components.OrderKindCode) float32 {
@@ -195,7 +195,7 @@ func (sys *OrderResolverSystem) Update(ctx core.UpdateContext) {
 		// Lifecycle.
 		switch state.Code {
 		case components.OrderStateIssued:
-			// First pass — transition + tell macro path to replan now.
+			// First pass - transition + tell macro path to replan now.
 			state.Code = components.OrderStateInProgress
 			if mp := sys.macroPathMap.Get(squad); mp != nil {
 				mp.ReplanAt = 0
@@ -210,16 +210,16 @@ func (sys *OrderResolverSystem) Update(ctx core.UpdateContext) {
 				if pr := sys.orderProgressMap.Get(ord); pr != nil {
 					pr.Value = 1
 				}
-				// Phase 13.6 M13.6.4: arrived-facing — if the order carries an
+				// Phase 13.6 M13.6.4: arrived-facing - if the order carries an
 				// OrderParamFacing param, snap every roster member's Motion.Yaw
 				// to the target yaw. MoveTo and DefendPosition both benefit
-				// (Defend never reaches Completed via the InProgress→done path,
+				// (Defend never reaches Completed via the InProgress->done path,
 				// but the snapshot here is harmless for any other kind that
 				// gets a facing param).
 				sys.applyArrivedFacing(squad, ord)
 			case completionFailed:
 				// Phase 14.5 Issue #10: AttackTarget on out-of-range alive
-				// target after MaxOutOfRangeSeconds → Failed (so Inspector
+				// target after MaxOutOfRangeSeconds -> Failed (so Inspector
 				// stops claiming the squad is engaging).
 				state.Code = components.OrderStateFailed
 			case completionPending:
@@ -235,7 +235,7 @@ func (sys *OrderResolverSystem) Update(ctx core.UpdateContext) {
 				adv.newHead = ch.Next
 			}
 			// Patrol Loop re-issue: completed Patrol with Loop=true and no
-			// Next → spawn a fresh Patrol at the same target. The chain
+			// Next -> spawn a fresh Patrol at the same target. The chain
 			// advancement then points to the new order rather than zero.
 			if state.Code == components.OrderStateCompleted &&
 				kind.Code == components.OrderKindPatrol &&
@@ -285,7 +285,7 @@ func (sys *OrderResolverSystem) Update(ctx core.UpdateContext) {
 
 // getOrderHead exposes the head pointer through SquadService's typed map. We
 // don't store the map handle on OrderResolverSystem to avoid duplicating
-// ownership — SquadService is the canonical mutator of the queue head.
+// ownership - SquadService is the canonical mutator of the queue head.
 func getOrderHead(svc *SquadService, squad ecs.Entity) *components.OrderQueueHead {
 	if svc == nil || squad == (ecs.Entity{}) || !svc.world.Alive(squad) {
 		return nil
@@ -294,7 +294,7 @@ func getOrderHead(svc *SquadService, squad ecs.Entity) *components.OrderQueueHea
 }
 
 // resolveTargetPos refreshes OrderTarget.Pos when the target is an entity
-// (Garrison → Building, OccupyTrench → TrenchRoot). For Pos-only kinds it's a
+// (Garrison -> Building, OccupyTrench -> TrenchRoot). For Pos-only kinds it's a
 // no-op.
 func (sys *OrderResolverSystem) resolveTargetPos(kind components.OrderKindCode, target *components.OrderTarget) {
 	if target.Entity == (ecs.Entity{}) {
@@ -310,7 +310,7 @@ func (sys *OrderResolverSystem) resolveTargetPos(kind components.OrderKindCode, 
 	switch kind {
 	case components.OrderKindGarrison:
 		if b := sys.buildingMap.Get(target.Entity); b != nil {
-			// Phase 14.6 followup — prefer the ground-floor (lowest Level)
+			// Phase 14.6 followup - prefer the ground-floor (lowest Level)
 			// child's WorldPos. NavService.resolveNode matches it as a
 			// NodeFloor, so A* routes through a Door TransitionEdge instead
 			// of dead-ending at a NavInBuilding surface cell.
@@ -337,7 +337,7 @@ func (sys *OrderResolverSystem) resolveTargetPos(kind components.OrderKindCode, 
 
 // completionOutcome carries the per-tick decision for an in-progress order:
 // pending (keep going), done (transition to Completed), or failed (transition
-// to Failed — Issue #10 for AttackTarget out-of-range).
+// to Failed - Issue #10 for AttackTarget out-of-range).
 type completionOutcome uint8
 
 const (
@@ -370,7 +370,7 @@ func (sys *OrderResolverSystem) evaluateCompletion(
 
 	switch spec.Completion {
 	case components.CompletionNever:
-		// DefendPosition — only Cancelled by the player.
+		// DefendPosition - only Cancelled by the player.
 		return completionPending
 
 	case components.CompletionTargetDeath:
@@ -403,9 +403,9 @@ func (sys *OrderResolverSystem) evaluateCompletion(
 		return completionPending
 
 	case components.CompletionEveryMemberOnFloor:
-		// Phase 14.6 M14.6.2 — Garrison. Completes when every live roster
+		// Phase 14.6 M14.6.2 - Garrison. Completes when every live roster
 		// member sits inside the building's Footprint AABB AND stands on a
-		// Floor entity (any storey). Wipeout (no live members) → Failed.
+		// Floor entity (any storey). Wipeout (no live members) -> Failed.
 		// OrderProgress.Value carries inside/alive so Inspector's progress
 		// bar reflects partial entry without a dedicated component.
 		if target.Entity == (ecs.Entity{}) || !sys.squadService.world.Alive(target.Entity) {
@@ -413,7 +413,7 @@ func (sys *OrderResolverSystem) evaluateCompletion(
 		}
 		bld := sys.buildingMap.Get(target.Entity)
 		if bld == nil {
-			// Defensive — Garrison target wasn't a Building entity. Fall back
+			// Defensive - Garrison target wasn't a Building entity. Fall back
 			// to the arrival-radius gate the old Phase 11 logic used.
 			r := spec.ArrivalRadius
 			if r <= 0 {
@@ -481,7 +481,7 @@ func (sys *OrderResolverSystem) advanceOutOfRange(
 ) float32 {
 	tracker := sys.orderOutOfRangeMap.Get(ord)
 	if tracker == nil {
-		// Defensive — IssueOrder installs the tracker for any kind whose
+		// Defensive - IssueOrder installs the tracker for any kind whose
 		// spec has MaxOutOfRangeSeconds > 0. If we somehow got here without
 		// one, install lazily so the next tick has a place to write.
 		sys.orderOutOfRangeMap.Add(ord, &components.OrderOutOfRangeTracker{})
@@ -492,7 +492,7 @@ func (sys *OrderResolverSystem) advanceOutOfRange(
 	}
 	// Phase 14.6 M14.6.0 (Issue #11): if target died this tick, reset the
 	// tracker and let the parent CompletionTargetDeath arm transition to
-	// Done — keep us off any Map.Get against the dead id.
+	// Done - keep us off any Map.Get against the dead id.
 	if target.Entity != (ecs.Entity{}) && !sys.squadService.world.Alive(target.Entity) {
 		tracker.Elapsed = 0
 		return 0
@@ -500,7 +500,7 @@ func (sys *OrderResolverSystem) advanceOutOfRange(
 	// Compute max weapon range across roster.
 	maxRange := sys.maxSquadWeaponRange(squad)
 	if maxRange <= 0 {
-		// No weapons or all dead — treat as in-range so we don't insta-fail.
+		// No weapons or all dead - treat as in-range so we don't insta-fail.
 		// (Squad with no working weapons can't complete AttackTarget anyway;
 		// Phase 15 SurvivalInstinct will surface this differently.)
 		tracker.Elapsed = 0
@@ -566,7 +566,7 @@ func (sys *OrderResolverSystem) maxSquadWeaponRange(squad ecs.Entity) float32 {
 // Currently 1 - dist/initialDist, computed against OrderIssuedAt as anchor
 // (no extra component needed for "initial" position; we use squad center at
 // issuance via the issued-at clock + a per-tick recompute would drift).
-// Approximation: clamp(1 - cur/100m, 0, 1) — coarse but enough for Inspector
+// Approximation: clamp(1 - cur/100m, 0, 1) - coarse but enough for Inspector
 // progress bars. Real progress accounting comes with Phase 13's Pace param.
 func (sys *OrderResolverSystem) updateProgress(squad, ord ecs.Entity, target *components.OrderTarget) {
 	pr := sys.orderProgressMap.Get(ord)
@@ -602,12 +602,12 @@ func (sys *OrderResolverSystem) updateProgress(squad, ord ecs.Entity, target *co
 
 // applyArrivedFacing reads the optional OrderParamFacing on a freshly-
 // completed order and snaps every roster member's Motion.Yaw to the requested
-// yaw. Phase 13.6 M13.6.4: instant rotation — no easing. Phase 25 polish may
+// yaw. Phase 13.6 M13.6.4: instant rotation - no easing. Phase 25 polish may
 // interpolate; the writer side is the same, just the reader (UnitMovement)
 // becomes lerp-aware.
 //
 // No-op when the order has no facing param, the squad has no roster, or a
-// member lacks a Motion component (defensive — Phase 7 spawns guarantee it).
+// member lacks a Motion component (defensive - Phase 7 spawns guarantee it).
 func (sys *OrderResolverSystem) applyArrivedFacing(squad, ord ecs.Entity) {
 	if sys.orderFacingMap == nil || sys.motionMap == nil {
 		return
@@ -668,7 +668,7 @@ func (sys *OrderResolverSystem) firstFloorPos(building ecs.Entity) (components.W
 
 // countInsideBuilding tallies how many of `roster`'s live members sit inside
 // the building's Footprint AABB AND on a Floor entity (any storey). Returns
-// (alive, inside). Phase 14.6 M14.6.2 — the Garrison CompletionEveryMemberOnFloor
+// (alive, inside). Phase 14.6 M14.6.2 - the Garrison CompletionEveryMemberOnFloor
 // arm uses this to gate Done / Failed transitions and to write a per-member
 // progress fraction into OrderProgress.Value.
 func (sys *OrderResolverSystem) countInsideBuilding(

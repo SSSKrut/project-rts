@@ -16,7 +16,7 @@ import (
 var traceFlag = flag.String("trace", "", "write per-frame JSONL trace to path")
 
 // traceEntityMap is reused across frames. WriteFrame iterates it inside the
-// json.Encoder, then we clear and refill — no per-frame allocations.
+// json.Encoder, then we clear and refill - no per-frame allocations.
 var traceEntityMap = make(map[string]int, 16)
 
 // initTrace parses CLI flags and opens the JSONL writer if -trace was given.
@@ -31,7 +31,7 @@ func initTrace(app *core.App) {
 	}
 }
 
-// handleTraceHotkeys checks every frame for the M key — a one-shot marker
+// handleTraceHotkeys checks every frame for the M key - a one-shot marker
 // written into the JSONL stream. Useful for `jq 'select(.event=="mark")'`
 // when diffing optimization runs.
 func handleTraceHotkeys(app *core.App) {

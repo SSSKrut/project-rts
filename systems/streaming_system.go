@@ -11,7 +11,7 @@ import (
 // StreamingSystem updates node states based on the player's current node.
 type StreamingSystem struct {
 	// anchor filter requests WorldPos (canonical position type) even though
-	// we don't read fields — we reach the anchor via NodeEntity.
+	// we don't read fields - we reach the anchor via NodeEntity.
 	anchorNodeFilter   *ecs.Filter3[components.LODAnchor, components.NodeEntity, components.WorldPos]
 	streamingMapRes    ecs.Resource[components.StreamingMap]
 	nodeEntityFilter   *ecs.Filter2[components.NodeEntity, components.LODActive]

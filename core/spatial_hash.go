@@ -2,7 +2,7 @@ package core
 
 import "github.com/mlange-42/ark/ecs"
 
-// Phase 14.5 P4 — SpatialHash is a generic 2D uniform-grid spatial index for
+// Phase 14.5 P4 - SpatialHash is a generic 2D uniform-grid spatial index for
 // radius/AABB queries on entities. Lives in `core/` so callers from any
 // package can register one as a resource without taking an import on
 // `systems/`.
@@ -38,7 +38,7 @@ import "github.com/mlange-42/ark/ecs"
 // coordinates derive from worldX / cellSize, worldZ / cellSize using
 // `floorDiv` to keep negative coordinates well-behaved.
 
-// SpatialEntry — one entity in the hash. Position is inlined so callers
+// SpatialEntry - one entity in the hash. Position is inlined so callers
 // don't need a posMap.Get inside the radius callback.
 type SpatialEntry struct {
 	Ent  ecs.Entity
@@ -50,7 +50,7 @@ type SpatialEntry struct {
 type SpatialHash struct {
 	cellSize float32
 	invCell  float32
-	// cells: packed-key → indices into `entries`. Reuse cell slices across
+	// cells: packed-key -> indices into `entries`. Reuse cell slices across
 	// rebuilds by truncating to len 0 (capacity preserved). Map keys live
 	// forever once seen; map.Clear walks all keys but doesn't free buckets.
 	cells map[int64][]int32
@@ -59,10 +59,10 @@ type SpatialHash struct {
 }
 
 // NewSpatialHash returns an empty hash with the given cellSize (metres).
-// cellSize should roughly match the worst-case query radius — too small
+// cellSize should roughly match the worst-case query radius - too small
 // forces queries to scan many cells; too large blurs the index toward O(N).
 // PHASE-14.5.md P4 picks 32 m for Units (separation query radius ~1.5 m,
-// vision range ~64 m → 2×2 cells; weapon range ~300 m → ~10×10 cells, still
+// vision range ~64 m -> 2×2 cells; weapon range ~300 m -> ~10×10 cells, still
 // far below O(N) for 200 units).
 func NewSpatialHash(cellSize float32) *SpatialHash {
 	if cellSize <= 0 {
@@ -128,13 +128,13 @@ func (h *SpatialHash) Rebuild(snapshot []SpatialEntry) {
 
 // ForEachInRadius invokes `fn(ent, distSq)` for every indexed entity whose
 // XZ position is within `r` metres of (x, z). Walks every cell whose AABB
-// could contain a point in the radius (a conservative cell footprint —
+// could contain a point in the radius (a conservative cell footprint -
 // some cells may have zero hits).
 //
 // `distSq` is the squared XZ distance from the query point to the entity.
 // Callback responsibilities:
 //   - skip self (`ent == queryingEntity`).
-//   - verify `world.Alive(ent)` — between rebuild and this query the entity
+//   - verify `world.Alive(ent)` - between rebuild and this query the entity
 //     may have been removed.
 //   - avoid mutating the hash inside the callback.
 //
@@ -171,7 +171,7 @@ func (h *SpatialHash) ForEachInRadius(x, z, r float32, fn func(ent ecs.Entity, d
 // a slice rather than a callback. Caller passes a reusable scratch buffer
 // (typically a struct field reset with `buf = buf[:0]`).
 //
-// Same alive-check rule applies — the returned slice may contain stale
+// Same alive-check rule applies - the returned slice may contain stale
 // entries if Rebuild ran before death/despawn.
 func (h *SpatialHash) QueryInto(x, z, r float32, buf []ecs.Entity) []ecs.Entity {
 	h.ForEachInRadius(x, z, r, func(ent ecs.Entity, _ float32) {

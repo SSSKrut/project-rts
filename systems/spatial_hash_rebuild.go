@@ -12,11 +12,11 @@ import (
 //
 // Position is required by separation steering (UnitMovement) so this system
 // runs BEFORE unit_movement in the pipeline. WeaponSystem / VisionSystem /
-// SuppressionPropagation also read the same hash — they tolerate a 1-tick
-// stale frame because units move ≤ ~8 cm/tick at top speed and query radii
+// SuppressionPropagation also read the same hash - they tolerate a 1-tick
+// stale frame because units move <= ~8 cm/tick at top speed and query radii
 // are 1.5 m+.
 //
-// Serial — building the hash from parallel workers is possible but
+// Serial - building the hash from parallel workers is possible but
 // coordination with UnitMovement (which writes positions in parallel) makes
 // the win marginal for ~200 units. Phase 16 may revisit if vehicles balloon
 // the entry count.

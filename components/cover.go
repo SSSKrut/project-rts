@@ -16,7 +16,7 @@ const (
 	CoverHostWallCorner
 )
 
-// StanceMask is a bit set of the stances a slot supports — e.g. a low bush
+// StanceMask is a bit set of the stances a slot supports - e.g. a low bush
 // only allows prone/crouch; a tall wall corner allows all three.
 type StanceMask uint8
 
@@ -28,7 +28,7 @@ const (
 
 // CoverSlot is the per-slot data on its own entity. WorldPos lives separately
 // (slot is a real spatial entity, addressable by AI radius queries). Host is
-// the prop / wall / corner-anchor that emitted the slot — Phase 11 destruction
+// the prop / wall / corner-anchor that emitted the slot - Phase 11 destruction
 // uses CoverSlotIndex.ByHost[host] to wipe slots when the host dies.
 //
 // OriginDir is a unit vector pointing OUTWARD from cover, i.e. the direction a

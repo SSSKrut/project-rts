@@ -39,7 +39,7 @@ func (t *Tracer) Open(path string) error {
 func (t *Tracer) IsOpen() bool { return t != nil && t.open }
 
 // frameRecord is the on-disk shape of one frame. JSON field names match the
-// PHASE-7.5 plan (`fps`, `frame_ms`, `tick_ms`, …) so jq filters from one run
+// PHASE-7.5 plan (`fps`, `frame_ms`, `tick_ms`, ...) so jq filters from one run
 // keep working across runs.
 type frameRecord struct {
 	Frame    int64              `json:"frame"`
@@ -63,7 +63,7 @@ type markRecord struct {
 // path so it has access to FPS / frame_ms from raylib and the per-archetype
 // census already computed for the HUD.
 //
-// We re-allocate the Systems map every call (~17 keys) — cheap enough given
+// We re-allocate the Systems map every call (~17 keys) - cheap enough given
 // the file-IO bound, and avoids stale entries if a system is removed mid-run.
 // json.Encoder appends a newline automatically, giving us JSONL.
 func (t *Tracer) WriteFrame(m FrameMetrics, p *Profiler) {
@@ -125,7 +125,7 @@ func (t *Tracer) Close() error {
 func TraceEnabled() bool { return true }
 
 // startWallNs is captured at process start for Mark elapsed-ms timestamps.
-// Frame records use the FrameMetrics.Elapsed field instead — measured against
-// the simulation clock, not wall clock — so they stay aligned with the
+// Frame records use the FrameMetrics.Elapsed field instead - measured against
+// the simulation clock, not wall clock - so they stay aligned with the
 // Profiler. Marks happen on rare hotkey input so wall-clock is fine.
 var startWallNs = time.Now().UnixNano()

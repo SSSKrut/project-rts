@@ -2,11 +2,11 @@ package systems
 
 import "github.com/mlange-42/ark/ecs"
 
-// CoverSlotIndex is a singleton: host entity (prop / wall / corner anchor) →
+// CoverSlotIndex is a singleton: host entity (prop / wall / corner anchor) ->
 // the cover-slot entities that grew from it. Lets Phase 11 destruction wipe
 // every slot of one host in O(slots-on-host) without a scene scan, and gives
 // SpatialBakeSystem an O(1) "does this host already have slots?" check on
-// chunk-respawn (slot generators are not idempotent — calling them twice
+// chunk-respawn (slot generators are not idempotent - calling them twice
 // would double-spawn).
 //
 // Slot lifecycle is also pinned to PropChunkIndex / BuildingChildIndex so an

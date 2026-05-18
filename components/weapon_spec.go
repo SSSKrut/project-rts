@@ -2,17 +2,15 @@ package components
 
 import rl "github.com/gen2brain/raylib-go/raylib"
 
-// Phase 14.5 P3 — WeaponSpec collapses the per-WeaponKind tables that
-// previously lived in:
-//   - systems/role_service.go::primaryStats
-//   - systems/weapon.go::tracerColorFor
-// And adds the Phase 14.5 splash damage knobs (SplashRadius / SplashFalloff).
+// WeaponSpec collapses the per-WeaponKind tables that previously lived in
+// role_service.primaryStats and weapon.tracerColorFor, plus splash-damage
+// knobs (SplashRadius / SplashFalloff).
 //
-// Readers index this table by WeaponKind. `RoleService.spawnPrimary` reads
-// the row to construct a `Weapon` component; `WeaponSystem.resolveShot`
-// reads tracer color + splash flags directly.
+// Readers index by WeaponKind. RoleService.spawnPrimary reads the row to
+// construct a Weapon component; WeaponSystem.resolveShot reads tracer color
+// + splash flags directly.
 
-// WeaponSpec — per-weapon stats + visual + AoE parameters.
+// WeaponSpec - per-weapon stats + visual + AoE parameters.
 type WeaponSpec struct {
 	Kind        WeaponKind
 	Name        string  // "AK47" / "PKM" / ...
@@ -22,23 +20,18 @@ type WeaponSpec struct {
 	Damage      uint16  // per-shot damage HP
 	Dispersion  float32 // small-angle radians (lateral spread at target)
 	TracerColor rl.Color
-	// SplashRadius — Phase 14.5 M14.5.5. > 0 turns the shot into an AoE
-	// damage event with linear/quadratic falloff. RPG7 / GP25 set this.
+	// SplashRadius > 0 turns the shot into an AoE damage event with linear
+	// or quadratic falloff. RPG7 / GP25 set this.
 	SplashRadius float32
-	// SplashFalloff — exponent on the (1 - dSq/radiusSq) term. 1.0 = linear,
+	// SplashFalloff - exponent on the (1 - dSq/radiusSq) term. 1.0 = linear,
 	// 2.0 = quadratic. Only meaningful when SplashRadius > 0.
 	SplashFalloff float32
 }
 
-// WeaponKindCount — number of weapon kinds. Update if WeaponKind grows.
 const WeaponKindCount WeaponKind = WeaponMakarov + 1
 
-// WeaponSpecs — canonical table. Index by WeaponKind.
-//
-// Numbers come from Phase 14 M14.7 P10 lock-in (rough placeholders intended
-// to give 4-vs-8 firefights a 30-45 s wipe time at ~50 m range).
-// SplashRadius/Falloff for RPG7/GP25 are Phase 14.5 M14.5.5 additions; both
-// zero for direct-fire weapons.
+// WeaponSpecs - canonical table indexed by WeaponKind. Numbers are rough
+// placeholders sized for 4-vs-8 firefights ending in 30-45 s at ~50 m.
 var WeaponSpecs = [WeaponKindCount]WeaponSpec{
 	WeaponAK47: {
 		Kind: WeaponAK47, Name: "AK47",

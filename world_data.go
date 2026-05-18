@@ -7,9 +7,9 @@ import (
 )
 
 // makeStartingRoadGraph builds the Phase-4 test graph: a four-node chain
-// (n0 → n1 → n2 → n3) where n1→n2 is intentionally aimed across the first
+// (n0 -> n1 -> n2 -> n3) where n1->n2 is intentionally aimed across the first
 // river so the preprocessor can split it and tag the middle sub-edge
-// RoadBridge. n0→n1 is highway, n2→n3 is dirt track — visual proof that
+// RoadBridge. n0->n1 is highway, n2->n3 is dirt track - visual proof that
 // kinds survive preprocessing.
 func makeStartingRoadGraph() components.RoadGraph {
 	wp := func(wx, wz float32) components.WorldPos {
@@ -17,10 +17,10 @@ func makeStartingRoadGraph() components.RoadGraph {
 	}
 	return components.RoadGraph{
 		Nodes: []components.RoadNode{
-			{Pos: wp(0, -50)},  // n0 — start, south of river 1
-			{Pos: wp(15, -15)}, // n1 — south bank
-			{Pos: wp(15, 50)},  // n2 — north bank (n1→n2 crosses river 1)
-			{Pos: wp(-50, 80)}, // n3 — far NW
+			{Pos: wp(0, -50)},  // n0 - start, south of river 1
+			{Pos: wp(15, -15)}, // n1 - south bank
+			{Pos: wp(15, 50)},  // n2 - north bank (n1->n2 crosses river 1)
+			{Pos: wp(-50, 80)}, // n3 - far NW
 		},
 		Edges: []components.RoadEdge{
 			{From: 0, To: 1, Kind: components.RoadHighway, Width: 4.0},
@@ -30,7 +30,7 @@ func makeStartingRoadGraph() components.RoadGraph {
 	}
 }
 
-// makeStartingBuildings — Phase 5 hardcoded test scene: a single-storey house,
+// makeStartingBuildings - Phase 5 hardcoded test scene: a single-storey house,
 // a two-storey house (verifies stairs), and a sunken bunker (verifies
 // RectCut). Footprints are sized to fit cleanly inside their host chunks (P5).
 func makeStartingBuildings() []components.BuildingPlan {
@@ -65,7 +65,7 @@ func makeStartingBuildings() []components.BuildingPlan {
 	}
 }
 
-// makeStartingTrenches — one ~30 m defensive earthwork running between the
+// makeStartingTrenches - one ~30 m defensive earthwork running between the
 // bunker and the road, so persistence + clearance are exercised in one place.
 func makeStartingTrenches() []components.Trench {
 	wp := func(wx, wz float32) components.WorldPos {
@@ -92,7 +92,7 @@ func makeStartingRivers() []components.RiverPolyline {
 	// 	return components.WorldPos{}.Add(rl.Vector3{X: wx, Y: 0, Z: wz})
 	// }
 	// return []components.RiverPolyline{
-	// 	// Diagonal river NW → SE through chunk (0,0).
+	// 	// Diagonal river NW -> SE through chunk (0,0).
 	// 	{
 	// 		Points: []components.WorldPos{
 	// 			wp(-100, -80),

@@ -10,34 +10,34 @@ import (
 	"rts-go/core"
 )
 
-// WeaponSystem — Phase 14 M14.2 combat loop. Per-tick, for every unit with a
+// WeaponSystem - Phase 14 M14.2 combat loop. Per-tick, for every unit with a
 // primary weapon and a valid hostile awareness target, it fires one shot if
 // the RoF cooldown is ready. The shot resolves through walls (LOS) and
-// against any unit body crossing the ray (friendly fire allowed by design —
+// against any unit body crossing the ray (friendly fire allowed by design -
 // PHASE-14.md notes §Friendly fire).
 //
 // Pipeline shape mirrors VisionSystem / UnitMovementSystem (Phase 11.6
 // pattern):
 //
-//  1. Serial snapshot — walk the seer filter, resolve each unit's chosen
+//  1. Serial snapshot - walk the seer filter, resolve each unit's chosen
 //     target via Awareness + Faction gate, decrement Ammo + bump
 //     LastFiredAt. Snapshot of all live units (candidates for raycast hits)
 //     stays read-only.
-//  2. Parallel raycast — per shot apply dispersion, test wall LOS, test
+//  2. Parallel raycast - per shot apply dispersion, test wall LOS, test
 //     unit-vs-ray distance against every candidate in the 3×3 chunk window.
 //     Workers write into their own scratch buffers (damage / tracer /
 //     impact); never into shared maps.
-//  3. Serial post-pass — merge worker buffers. Damage events run through
+//  3. Serial post-pass - merge worker buffers. Damage events run through
 //     DamageService.Apply (which despawns the unit if HP <= 0). Tracer +
 //     impact specs land in the VisualEvents resource.
 //
 // EngagementRules + AttackMove gating (PHASE-14.md M14.3) are layered onto
-// the snapshot pass in the next milestone — M14.2 ships with the minimum
+// the snapshot pass in the next milestone - M14.2 ships with the minimum
 // gate: "target is alive, faction differs, in range, RoF ready, has ammo".
 type WeaponSystem struct {
 	pool   *core.WorkerPool
 	damage *DamageService
-	// Phase 14.5 M14.5.4 — particles spawned via SpawnHandles in serial
+	// Phase 14.5 M14.5.4 - particles spawned via SpawnHandles in serial
 	// post-pass. Replaces the old VisualEvents resource.
 	particles *SpawnParticleHandles
 
@@ -55,8 +55,8 @@ type WeaponSystem struct {
 	suppressionMap *ecs.Map[components.Suppression]
 	doorMap        *ecs.Map[components.Door]
 	colliderMap    *ecs.Map[components.Collider]
-	// Phase 14 M14.3 — RoE + AttackMove gating. shouldFire walks the seer's
-	// SquadMember → Squad → EngagementRules + OrderQueueHead.First to check
+	// Phase 14 M14.3 - RoE + AttackMove gating. shouldFire walks the seer's
+	// SquadMember -> Squad -> EngagementRules + OrderQueueHead.First to check
 	// the standing fire mode and whether the active order carries the
 	// AttackMove flag.
 	squadMemberMap     *ecs.Map[components.SquadMember]
@@ -72,7 +72,7 @@ type WeaponSystem struct {
 	targetsByChunk map[components.ChunkCoord][]int32
 
 	// Per-worker scratch. TracerSpec / ImpactSpec are job-description
-	// structs (Phase 14.5 M14.5.4 — previously lived in components.VisualEvents
+	// structs (Phase 14.5 M14.5.4 - previously lived in components.VisualEvents
 	// before that resource was retired in favour of ECS-entity particles).
 	workerDamage      [][]damageEvent
 	workerTracer      [][]tracerSpec
@@ -81,7 +81,7 @@ type WeaponSystem struct {
 	workerSuppression [][]suppressionEvent // M14.5: per-impact propagation
 	workerSplash      [][]splashEvent      // M14.5.5: AoE damage events
 
-	// M14.5 — handles used by the serial post-pass for ThreatSource spawn
+	// M14.5 - handles used by the serial post-pass for ThreatSource spawn
 	// and Suppression.Level decay. ecs.Map[ThreatSource] for archetype
 	// mutation in the post-pass; the decay walk uses the registered
 	// SuppressionFilter so the system stays serial.
@@ -89,14 +89,14 @@ type WeaponSystem struct {
 	suppressionFilter *ecs.Filter2[components.Unit, components.Suppression]
 	worldRef          *ecs.World
 
-	// Phase 14.5 M14.5.3 — shared spatial hash for unit-vs-ray, propagateSuppression.
+	// Phase 14.5 M14.5.3 - shared spatial hash for unit-vs-ray, propagateSuppression.
 	spatialHash ecs.Resource[core.SpatialHash]
 
 	elapsed  float32
 	lastTick float32 // session-time of the previous Update (for Suppression decay dt)
 }
 
-// targetSnap — read-only snapshot of one candidate target. WorldPos is by
+// targetSnap - read-only snapshot of one candidate target. WorldPos is by
 // value (small struct, cache-friendly); Stance + Faction inlined so the
 // parallel pass doesn't have to dereference component pointers.
 type targetSnap struct {
@@ -108,23 +108,23 @@ type targetSnap struct {
 	faction uint8
 }
 
-// shotWork — one queued shot resolved from the serial snapshot pass. The
+// shotWork - one queued shot resolved from the serial snapshot pass. The
 // parallel raycast pass reads this read-only and writes results to its
 // per-worker buffers indexed by shot.
 type shotWork struct {
 	shooter      ecs.Entity
 	muzzle       rl.Vector3 // world XYZ (chunk-base resolved)
-	aim          rl.Vector3 // world XYZ (target torso) — pre-dispersion
+	aim          rl.Vector3 // world XYZ (target torso) - pre-dispersion
 	dispersion   float32    // effective angle in radians
 	rangeMax     float32    // weapon range cap
 	damage       float32
-	targetEntity ecs.Entity // intended target — used for "best-effort" hit when geom check fails
+	targetEntity ecs.Entity // intended target - used for "best-effort" hit when geom check fails
 	targetStance components.StanceCode
 	tracerColor  rl.Color
 	shooterChunk components.ChunkCoord
 	muzzlePos    components.WorldPos // chunk-aware copy for ThreatSource spawn
 	rngSeed      uint64              // deterministic per-shot RNG seed
-	// Phase 14.5 M14.5.5 — AoE knobs. SplashRadius > 0 turns the shot into
+	// Phase 14.5 M14.5.5 - AoE knobs. SplashRadius > 0 turns the shot into
 	// a splash event: serial post-pass applies damage via the spatial hash
 	// + spawns debris/smoke particles. Falloff exponents the
 	// (1 - dSq/radiusSq) term.
@@ -145,7 +145,7 @@ const (
 	hitKindUnitFlag                // unit body
 )
 
-// splashEvent — Phase 14.5 M14.5.5 per-shot splash request handed from the
+// splashEvent - Phase 14.5 M14.5.5 per-shot splash request handed from the
 // parallel pass to the serial post-pass. Damage application iterates the
 // spatial hash, so we need the impact position + radius + falloff + the
 // shot's nominal damage to compute per-target attenuation.
@@ -157,13 +157,13 @@ type splashEvent struct {
 	excluded ecs.Entity // direct-hit target already damaged via dmgBuf; skip in splash to avoid double-count.
 }
 
-// damageEvent — per-worker damage write request, merged in serial post-pass.
+// damageEvent - per-worker damage write request, merged in serial post-pass.
 type damageEvent struct {
 	target ecs.Entity
 	amount float32
 }
 
-// tracerSpec / impactSpec — job-description structs handed from parallel
+// tracerSpec / impactSpec - job-description structs handed from parallel
 // resolveShot workers to the serial post-pass that materialises ECS
 // particle entities via SpawnParticleHandles. Phase 14.5 M14.5.4.
 type tracerSpec struct {
@@ -183,15 +183,15 @@ type impactSpec struct {
 	Hit hitKind
 }
 
-// threatEvent — per-shot ThreatSource spawn request, applied in serial
+// threatEvent - per-shot ThreatSource spawn request, applied in serial
 // post-pass. Phase 14 M14.5: one ThreatSource per shot; Phase 14.5 may
-// dedupe (multiple shots from same muzzle → single merged entry).
+// dedupe (multiple shots from same muzzle -> single merged entry).
 type threatEvent struct {
 	origin   components.WorldPos
 	severity float32
 }
 
-// suppressionEvent — per-impact propagation. Each shot generates one event;
+// suppressionEvent - per-impact propagation. Each shot generates one event;
 // the serial post-pass walks units within suppressionRadius of impact and
 // adjusts Suppression.Level / ThreatDir. hitMul switches between direct-hit
 // (0.5) and miss-radius (0.2) coefficients per PHASE-14.md P5.
@@ -201,47 +201,47 @@ type suppressionEvent struct {
 }
 
 const (
-	// weaponEyeHeight — muzzle Y offset above the unit foot. Standing rifle
+	// weaponEyeHeight - muzzle Y offset above the unit foot. Standing rifle
 	// fire roughly at chest height (1.35 m). Below visionEyeHeight (1.5 m)
 	// so muzzle flash sits below the role label.
 	weaponEyeHeight float32 = 1.35
-	// weaponMaxRange — system-wide range cap. Phase 14 P10: SVD/PKM go to
+	// weaponMaxRange - system-wide range cap. Phase 14 P10: SVD/PKM go to
 	// 600..800 m but the 9-chunk LOS window is 64 m × 3 = 192 m max, so
 	// honest range stays bounded by that. Hard-cap here so a misconfigured
 	// Weapon.RangeM can't accidentally raycast across the whole map.
 	weaponMaxRange float32 = 192.0
-	// weaponAwarenessMaxAge — drop awareness entries older than this when
+	// weaponAwarenessMaxAge - drop awareness entries older than this when
 	// picking a firing target. PHASE-14.md notes "prefers most recent
 	// target"; 3 s matches roughly the Phase 15 SurvivalInstinct contract.
 	weaponAwarenessMaxAge float32 = 3.0
-	// weaponTracerTTL / weaponImpactTTL — visual fade durations (seconds).
+	// weaponTracerTTL / weaponImpactTTL - visual fade durations (seconds).
 	weaponTracerTTL float32 = 0.15
 	weaponImpactTTL float32 = 0.25
-	// weaponDefaultRadius — fallback hit cylinder when a unit has no
+	// weaponDefaultRadius - fallback hit cylinder when a unit has no
 	// Collider component (legacy spawns).
 	weaponDefaultRadius float32 = 0.4
-	// suppressionRadius — Phase 14 M14.5 propagation. Hits / misses raise
+	// suppressionRadius - Phase 14 M14.5 propagation. Hits / misses raise
 	// Suppression.Level on every unit inside this XZ radius of the impact.
 	suppressionRadius float32 = 5.0
-	// suppressionHitMul / suppressionMissMul — per-PHASE-14.md P5 weights.
+	// suppressionHitMul / suppressionMissMul - per-PHASE-14.md P5 weights.
 	// Direct hit: 0.5 added to target's level. Near miss: 0.2 scaled down
 	// linearly with distance.
 	suppressionHitMul  float32 = 0.5
 	suppressionMissMul float32 = 0.2
-	// suppressionDecayRate — per-second decay applied each tick. 0.1 means
+	// suppressionDecayRate - per-second decay applied each tick. 0.1 means
 	// full suppression (Level=1.0) clears in 10 s without new pressure.
 	suppressionDecayRate float32 = 0.1
-	// threatTTL — ThreatSource entity lifetime in seconds. Phase 15
+	// threatTTL - ThreatSource entity lifetime in seconds. Phase 15
 	// SurvivalInstinct reads the cluster; longer TTL = stickier "I know
 	// where the danger came from" memory.
 	threatTTL float32 = 3.0
 )
 
-// Phase 14.5 M14.5.1 — weaponTargetY + stanceDamageMul folded into
+// Phase 14.5 M14.5.1 - weaponTargetY + stanceDamageMul folded into
 // components.StanceSpecs (TargetCenterY / DamageMultiplier fields).
 // Readers use components.SpecForStance(code).
 
-// NewWeaponSystem wires the system. `damage` must be non-nil — the death
+// NewWeaponSystem wires the system. `damage` must be non-nil - the death
 // path runs through it during the serial post-pass. `particles` is the
 // shared spawn-handles object owned by main.go; must be non-nil after
 // Phase 14.5 M14.5.4.
@@ -292,7 +292,7 @@ func (sys *WeaponSystem) InitUI(w *ecs.World) {
 	sys.spatialHash = ecs.NewResource[core.SpatialHash](w)
 }
 
-// weaponMovingSpeedThreshold — Motion.Speed above this (m/s) counts as
+// weaponMovingSpeedThreshold - Motion.Speed above this (m/s) counts as
 // "moving" for the firing-while-moving gate. PHASE-14.md notes: matches the
 // dispersion movingFactor threshold (1.0 m/s) so the two flags toggle on
 // the same boundary instead of needing two separate empirical fits.
@@ -307,13 +307,13 @@ const weaponMovingSpeedThreshold float32 = 1.0
 // order's duration. AttackTarget and SuppressFire carry this flag; AttackMove
 // does NOT (HoldFire still wins per Q2 lock).
 //
-//   - No squad (soloist) → default FreeFire-on-Inf. Fires.
-//   - Mode=HoldFire → never, UNLESS the active order has OverridesHoldFire.
-//   - Mode=ReturnFire → always (the only way we got here is via an
-//     awareness hostile — that *is* "threat in awareness" per P9). The
+//   - No squad (soloist) -> default FreeFire-on-Inf. Fires.
+//   - Mode=HoldFire -> never, UNLESS the active order has OverridesHoldFire.
+//   - Mode=ReturnFire -> always (the only way we got here is via an
+//     awareness hostile - that *is* "threat in awareness" per P9). The
 //     stricter "only after being shot at" model is deferred to Phase 15.
-//   - Mode=FreeFire → always.
-//   - FireOnInf gate — Phase 14 has only Inf targets, so this acts on
+//   - Mode=FreeFire -> always.
+//   - FireOnInf gate - Phase 14 has only Inf targets, so this acts on
 //     AT-team-style rules that have FireOnInf=false. Bypassed by the same
 //     OverridesHoldFire override (explicit AttackTarget on infantry must
 //     work even for an AT team that normally suppresses infantry firing).
@@ -347,8 +347,8 @@ func (sys *WeaponSystem) shouldFire(shooter ecs.Entity, motionSpeed float32) boo
 
 	switch rules.Mode {
 	case components.HoldFire:
-		// Phase 14.5 M14.5.0 (Issue #9): AttackTarget / SuppressFire — the
-		// player's explicit fire orders — win over the standing HoldFire.
+		// Phase 14.5 M14.5.0 (Issue #9): AttackTarget / SuppressFire - the
+		// player's explicit fire orders - win over the standing HoldFire.
 		if !overridesHoldFire {
 			return false
 		}
@@ -357,7 +357,7 @@ func (sys *WeaponSystem) shouldFire(shooter ecs.Entity, motionSpeed float32) boo
 	}
 
 	// Phase 14 target-type gate: every target is Inf for now (vehicles in
-	// Phase 16). FireOnInf=false (AT team default) silences the squad —
+	// Phase 16). FireOnInf=false (AT team default) silences the squad -
 	// unless an explicit AttackTarget/SuppressFire is overriding.
 	if !rules.FireOnInf && !overridesHoldFire {
 		return false
@@ -375,7 +375,7 @@ func (sys *WeaponSystem) shouldFire(shooter ecs.Entity, motionSpeed float32) boo
 func (WeaponSystem) Name() string { return "weapon" }
 
 func (WeaponSystem) LODPolicy() core.LODPolicy {
-	// Universal sim, every tick — matches Vision / UnitMovement cadence.
+	// Universal sim, every tick - matches Vision / UnitMovement cadence.
 	// RoF gates the actual shot density per-weapon so the per-tick walk is
 	// cheap when nothing is firing.
 	return core.LODPolicy{
@@ -390,7 +390,7 @@ func (sys *WeaponSystem) Update(ctx core.UpdateContext) {
 	now := sys.elapsed
 	dt := now - sys.lastTick
 	if dt < 0 || dt > 1.0 {
-		// First tick or large gap (paused) — bound the decay so we don't
+		// First tick or large gap (paused) - bound the decay so we don't
 		// instantly clear Suppression on resume.
 		dt = float32(ctx.Delta.Seconds())
 	}
@@ -412,7 +412,7 @@ func (sys *WeaponSystem) Update(ctx core.UpdateContext) {
 
 	// ── Phase 14 M14.5: Suppression decay pass. Walks every Unit's
 	// Suppression component before the firing pass so this tick's new
-	// pressure isn't immediately decayed away. Serial — each unit writes
+	// pressure isn't immediately decayed away. Serial - each unit writes
 	// its own component, but the walk is cheap (one filter pass).
 	sys.decaySuppression(dt)
 
@@ -468,7 +468,7 @@ func (sys *WeaponSystem) Update(ctx core.UpdateContext) {
 		if !ok {
 			continue
 		}
-		// Phase 14 M14.3 — RoE + AttackMove gate. Skip silently (no ammo
+		// Phase 14 M14.3 - RoE + AttackMove gate. Skip silently (no ammo
 		// decrement, no cooldown bump) so a HoldFire squad can resume fire
 		// the instant the player flips the rule.
 		if !sys.shouldFire(shooter, motion.Speed) {
@@ -501,7 +501,7 @@ func (sys *WeaponSystem) Update(ctx core.UpdateContext) {
 		weapon.LastFiredAt = now
 		weapon.Ammo--
 
-		// Phase 14.5 M14.5.5 — pull splash params from WeaponSpec.
+		// Phase 14.5 M14.5.5 - pull splash params from WeaponSpec.
 		wspec := components.SpecForWeapon(weapon.Kind)
 		sys.shotsBuf = append(sys.shotsBuf, shotWork{
 			shooter:       shooter,
@@ -551,7 +551,7 @@ func (sys *WeaponSystem) Update(ctx core.UpdateContext) {
 		for w := range sys.workerTracer {
 			for _, t := range sys.workerTracer[w] {
 				sys.particles.SpawnTracer(t.From, t.To, t.Color, t.SpawnTime, t.TTL)
-				// Muzzle flash at the From end of each tracer — short-
+				// Muzzle flash at the From end of each tracer - short-
 				// lived bright sphere, colour matches tracer hue.
 				sys.particles.SpawnMuzzleFlash(t.From, t.Color, t.SpawnTime)
 			}
@@ -577,7 +577,7 @@ func (sys *WeaponSystem) Update(ctx core.UpdateContext) {
 		}
 	}
 	// Phase 14.5 M14.5.5: apply splash damage. Single serial pass per
-	// splash event — each event walks the spatial hash inside its radius,
+	// splash event - each event walks the spatial hash inside its radius,
 	// distance-falls damage off, and submits a damage write through
 	// DamageService. Direct-hit target (excluded) is skipped so it doesn't
 	// double-dip on the AoE.
@@ -615,7 +615,7 @@ func (sys *WeaponSystem) Update(ctx core.UpdateContext) {
 }
 
 // spawnDustBurst emits N small dust spheres around `pos` with downward +
-// slight outward velocity. Phase 14.5 M14.5.5 — terrain hit visual cue.
+// slight outward velocity. Phase 14.5 M14.5.5 - terrain hit visual cue.
 // Deterministic-per-shot RNG would be ideal but the visual jitter is
 // purely cosmetic; we use the hash address as a cheap seed.
 func (sys *WeaponSystem) spawnDustBurst(pos rl.Vector3, now float32, n int, baseColor rl.Color) {
@@ -679,7 +679,7 @@ func (sys *WeaponSystem) applySplashDamage(ev splashEvent, hash *core.SpatialHas
 		}
 		// Falloff exponent: 1 = linear, 2 = quadratic. Phase 14.5 ships with
 		// these two only; math.Pow only kicks in for arbitrary exponents
-		// (none currently configured) — most splash weapons match exactly.
+		// (none currently configured) - most splash weapons match exactly.
 		mul := t
 		switch {
 		case ev.falloff >= 2:
@@ -687,7 +687,7 @@ func (sys *WeaponSystem) applySplashDamage(ev splashEvent, hash *core.SpatialHas
 		case ev.falloff <= 1:
 			// linear fallthrough
 		default:
-			// 1 < falloff < 2 — lerp between linear and quadratic.
+			// 1 < falloff < 2 - lerp between linear and quadratic.
 			mul = t*t*(ev.falloff-1) + t*(2-ev.falloff)
 		}
 		amt := ev.damage * mul
@@ -698,7 +698,7 @@ func (sys *WeaponSystem) applySplashDamage(ev splashEvent, hash *core.SpatialHas
 }
 
 // decaySuppression walks every Unit's Suppression and decays Level toward
-// zero by `suppressionDecayRate * dt`. Cheap serial pass — no archetype
+// zero by `suppressionDecayRate * dt`. Cheap serial pass - no archetype
 // changes, just float writes.
 func (sys *WeaponSystem) decaySuppression(dt float32) {
 	if dt <= 0 {
@@ -720,19 +720,19 @@ func (sys *WeaponSystem) decaySuppression(dt float32) {
 
 // propagateSuppression raises Suppression.Level on every unit within
 // suppressionRadius of `impact` and points the per-unit ThreatDir vector
-// from the impact toward the unit (i.e. "away from the danger" — Phase 15
+// from the impact toward the unit (i.e. "away from the danger" - Phase 15
 // SurvivalInstinct will use it to pick cover slots on the opposite side).
 //
 // hitMul switches the per-impact intensity:
-//   - suppressionHitMul (0.5) — direct hit on a unit (target gets the full
+//   - suppressionHitMul (0.5) - direct hit on a unit (target gets the full
 //     amount regardless of radius).
-//   - suppressionMissMul (0.2) — near miss, scaled linearly by distance.
+//   - suppressionMissMul (0.2) - near miss, scaled linearly by distance.
 //
 // Bounded by 0..1.
 //
 // Phase 14.5 M14.5.3: switched from O(N) Suppression filter walk to a
 // SpatialHash ForEachInRadius query. Each shot now touches only the dozen-ish
-// units near its impact instead of every unit in the world — big win for
+// units near its impact instead of every unit in the world - big win for
 // crowd firefights where O(N×shots) blew up quickly.
 func (sys *WeaponSystem) propagateSuppression(impact rl.Vector3, hitMul float32) {
 	hash := sys.spatialHash.Get()
@@ -740,7 +740,7 @@ func (sys *WeaponSystem) propagateSuppression(impact rl.Vector3, hitMul float32)
 		return
 	}
 	hash.ForEachInRadius(impact.X, impact.Z, suppressionRadius, func(ent ecs.Entity, dSq float32) {
-		// Stale-entity guard — see core/spatial_hash.go invariants.
+		// Stale-entity guard - see core/spatial_hash.go invariants.
 		if !sys.worldRef.Alive(ent) {
 			return
 		}
@@ -749,7 +749,7 @@ func (sys *WeaponSystem) propagateSuppression(impact rl.Vector3, hitMul float32)
 			return // not a Unit (no Suppression component).
 		}
 		// We need ThreatDir from live pos (the hash entry's X/Z is the
-		// rebuild-time snapshot — close enough for ThreatDir but the
+		// rebuild-time snapshot - close enough for ThreatDir but the
 		// direction is more meaningful from current pos).
 		pos := sys.posMap.Get(ent)
 		if pos == nil {
@@ -811,7 +811,7 @@ func (sys *WeaponSystem) pickTarget(
 		if live := sys.posMap.Get(e.Target); live != nil {
 			pos = *live
 		} else {
-			// Entity vanished (despawn) — skip.
+			// Entity vanished (despawn) - skip.
 			continue
 		}
 		dSq := worldDistSq(*selfPos, pos)
@@ -870,11 +870,11 @@ func resolveShot(
 	aim.Z += perpZ * lateral * rx
 	aim.Y += lateral * ry * 0.5
 
-	// Wall LOS — collect walls in the 3×3 chunk window around the shooter.
+	// Wall LOS - collect walls in the 3×3 chunk window around the shooter.
 	walls := localWalls(wallsByChunk, s.shooterChunk)
 	wallT, wallBlocks := segmentToWallsT(walls, s.muzzle.X, s.muzzle.Z, aim.X, aim.Z)
 
-	// Unit-vs-ray — walk targets in the 3×3 chunk window. Pick the unit
+	// Unit-vs-ray - walk targets in the 3×3 chunk window. Pick the unit
 	// closest to the shooter (along ray) that's within its hit cylinder.
 	bestHitT := float32(1.5) // > 1 means no hit yet
 	var bestHit ecs.Entity
@@ -954,7 +954,7 @@ func resolveShot(
 	}
 
 	if hitUnit {
-		// Stance multiplier — smaller silhouette → less damage transferred.
+		// Stance multiplier - smaller silhouette -> less damage transferred.
 		// Re-read stance from snapshot (best-effort; stance change between
 		// snapshot and apply is rare and acceptable).
 		mul := float32(1)
@@ -972,7 +972,7 @@ func resolveShot(
 
 	// Phase 14 M14.5: every shot spawns one ThreatSource at the muzzle.
 	// Severity grows with weapon damage so MG bursts press harder than
-	// single-shot rifle fire — clamped to 1.0.
+	// single-shot rifle fire - clamped to 1.0.
 	severity := s.damage / 100
 	if severity > 1 {
 		severity = 1
@@ -983,9 +983,9 @@ func resolveShot(
 	})
 
 	// Suppression propagation: every shot (hit or miss) writes one event
-	// at the terminal impact point. Hit → bigger nominal weight; miss →
+	// at the terminal impact point. Hit -> bigger nominal weight; miss ->
 	// smaller distance-scaled push. resolveShot can't walk units (workers
-	// don't share state) — the serial post-pass does the radius query.
+	// don't share state) - the serial post-pass does the radius query.
 	hitMul := suppressionMissMul
 	if hitUnit {
 		hitMul = suppressionHitMul
@@ -997,7 +997,7 @@ func resolveShot(
 }
 
 // localWalls returns the concatenated wall slice for the 3×3 chunk window
-// around `home`. Returns a fresh slice each call (worker-local — no shared
+// around `home`. Returns a fresh slice each call (worker-local - no shared
 // mutation), so the parallel pass is race-safe.
 func localWalls(wallsByChunk map[components.ChunkCoord][]losWall, home components.ChunkCoord) []losWall {
 	var total int
@@ -1018,7 +1018,7 @@ func localWalls(wallsByChunk map[components.ChunkCoord][]losWall, home component
 	return out
 }
 
-// segmentToWallsT returns the smallest t ∈ [0,1] along (ax,az)→(bx,bz) at
+// segmentToWallsT returns the smallest t ∈ [0,1] along (ax,az)->(bx,bz) at
 // which a non-transparent wall is hit, plus a "blocked" flag. Mirrors
 // anyLosWallBlocks but reports the parametric distance so we can render
 // the tracer up to the wall.
@@ -1049,8 +1049,8 @@ func segmentToWallsT(walls []losWall, ax, az, bx, bz float32) (float32, bool) {
 	return bestT, blocked
 }
 
-// segmentPointHit returns (t, miss) — t is the parametric position on the
-// (ax,az)→(bx,bz) segment closest to (px,pz). miss=true if that closest
+// segmentPointHit returns (t, miss) - t is the parametric position on the
+// (ax,az)->(bx,bz) segment closest to (px,pz). miss=true if that closest
 // approach distance exceeds `radius` (no hit) or if the closest point lies
 // outside [0,1] (beyond the segment endpoints).
 func segmentPointHit(ax, az, bx, bz, px, pz, radius float32) (float32, bool) {
@@ -1084,7 +1084,7 @@ func worldXYZ(p components.WorldPos, yOff float32) rl.Vector3 {
 }
 
 // worldDistSq returns squared world XZ distance between two WorldPos values.
-// Y is ignored — combat range is read on the horizontal plane.
+// Y is ignored - combat range is read on the horizontal plane.
 func worldDistSq(a, b components.WorldPos) float32 {
 	ax := float32(a.Chunk.X)*components.ChunkSize + a.Local.X
 	az := float32(a.Chunk.Z)*components.ChunkSize + a.Local.Z
@@ -1117,7 +1117,7 @@ func clampWeaponRange(r float32) float32 {
 }
 
 // tracerColorFor reads tracer hue from components.WeaponSpecs. Phase 14.5
-// M14.5.1 — palette switch replaced with spec table.
+// M14.5.1 - palette switch replaced with spec table.
 func tracerColorFor(k components.WeaponKind) rl.Color {
 	return components.SpecForWeapon(k).TracerColor
 }

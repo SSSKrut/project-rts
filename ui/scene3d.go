@@ -43,7 +43,7 @@ func (s *Scene3DRT) EnsureSize(panel Panel) {
 	s.Height = h
 }
 
-// Unload frees the GPU resources. Always invoke via defer in main.go — the
+// Unload frees the GPU resources. Always invoke via defer in main.go - the
 // fbo + colour-texture pair leaks otherwise on shutdown.
 func (s *Scene3DRT) Unload() {
 	rl.UnloadRenderTexture(s.RT)
@@ -59,7 +59,7 @@ func (s *Scene3DRT) Composite(panel Panel) {
 	rl.DrawTexturePro(s.RT.Texture, src, dst, rl.Vector2{}, 0, rl.White)
 }
 
-// contentSize clamps to a safe min — raylib's LoadRenderTexture rejects zero/
+// contentSize clamps to a safe min - raylib's LoadRenderTexture rejects zero/
 // negative dimensions. 1×1 fallback is enough for the brief moment when a
 // panel collapses during preset toggle (shouldn't happen in L1 but cheap
 // insurance).

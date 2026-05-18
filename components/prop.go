@@ -21,7 +21,7 @@ const (
 
 // Prop is the runtime component on every static-world-object entity. All
 // gameplay attributes live in PropTypeRegistry.Metas[Type] so per-entity data
-// stays small and placeholder mesh → loaded model is a registry-only swap.
+// stays small and placeholder mesh -> loaded model is a registry-only swap.
 type Prop struct {
 	Type  PropType
 	Yaw   float32 // radians, [0, 2π)

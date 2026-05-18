@@ -16,8 +16,8 @@ const AnchorEyeHeight float32 = 1.5
 // so they sit exactly on the meshed surface.
 //
 // Two filters: anchor (eye-height offset, AnchorEyeHeight) and unit (foot at
-// surface, no offset — the unit cube draws upward from its WorldPos). A unit
-// whose WorldPos lies on a building Floor is left alone — Floor-Y is set by
+// surface, no offset - the unit cube draws upward from its WorldPos). A unit
+// whose WorldPos lies on a building Floor is left alone - Floor-Y is set by
 // UnitMovementSystem when traversing transition edges (Phase 7 M7.3).
 type GroundStickSystem struct {
 	anchorFilter *ecs.Filter2[components.LODAnchor, components.WorldPos]
@@ -45,7 +45,7 @@ func (sys GroundStickSystem) Update(ctx core.UpdateContext) {
 	if ctx.Tier != core.LODTierActive {
 		return
 	}
-	// Snapshot floor footprints once — Phase 7 has at most a handful of floors
+	// Snapshot floor footprints once - Phase 7 has at most a handful of floors
 	// loaded at any time; the per-entity lookup stays trivial.
 	type floorRec struct {
 		minX, maxX, minZ, maxZ float32
@@ -69,7 +69,7 @@ func (sys GroundStickSystem) Update(ctx core.UpdateContext) {
 	// Anchor: floor-aware Y resolution. The anchor uses AnchorEyeHeight (1.5
 	// m above the surface), so when it stands on a floor its Y is floor.Y +
 	// AnchorEyeHeight; on bare ground it's GroundHeight + AnchorEyeHeight.
-	// Whichever target is closer to the current pos.Y wins — that lets a path
+	// Whichever target is closer to the current pos.Y wins - that lets a path
 	// walker drive Y up the stairs and have GS keep the anchor on the new
 	// floor next tick.
 	qa := sys.anchorFilter.Query()

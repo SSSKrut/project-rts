@@ -2,10 +2,9 @@ package components
 
 import rl "github.com/gen2brain/raylib-go/raylib"
 
-// UnitRoleKind enumerates the 10 base infantry roles available in Phase 12.
-// Order matters: RoleRifleman = 0 is the default so a unit missing the
-// UnitRole component falls back to plain rifleman behaviour instead of
-// crashing on a zero-value lookup.
+// UnitRoleKind enumerates the base infantry roles. RoleRifleman = 0 is the
+// zero-value fallback so a unit missing UnitRole defaults to plain rifleman
+// behaviour.
 type UnitRoleKind uint8
 
 const (
@@ -21,15 +20,12 @@ const (
 	RoleDemoMan
 )
 
-// UnitRole is the per-unit component that stamps a soldier with their role.
-// Sits next to Unit / Stance / Motion in the unit archetype. The role is
-// resolved at spawn time by RoleService.AssignRole and persists across
-// squad merges / splits — leaving a squad does not drop the role.
+// UnitRole stamps a soldier with their role. Resolved at spawn by
+// RoleService.AssignRole and persists across squad merges / splits.
 type UnitRole struct {
 	Kind UnitRoleKind
 }
 
-// String returns the human-readable role name (Inspector + log output).
 func (k UnitRoleKind) String() string {
 	switch k {
 	case RoleLeader:
@@ -55,9 +51,9 @@ func (k UnitRoleKind) String() string {
 	}
 }
 
-// ShortLabel returns the 1-2 character role abbreviation used by the 3D
-// billboard label, the Inspector roster, and the map commander icon. NATO
-// style: L / R / MG / GL / SN / AT / MD / RO / EN / DM.
+// ShortLabel is the 1-2 character abbreviation used by the 3D billboard
+// label, the Inspector roster, and the map commander icon (NATO style:
+// L / R / MG / GL / SN / AT / MD / RO / EN / DM).
 func (k UnitRoleKind) ShortLabel() string {
 	switch k {
 	case RoleLeader:
@@ -83,12 +79,8 @@ func (k UnitRoleKind) ShortLabel() string {
 	}
 }
 
-// RoleColor returns the cap / tint colour for the role. Used by:
-//   - render_world.go: cap-cube on top of the unit body
-//   - ui/inspector.go: roster-row background tint
-//   - ui/map_render.go: commander label foreground (in future, contrast pick)
-//
-// Rifleman keeps the body-olive so vanilla infantry doesn't visually shout.
+// RoleColor returns the cap / tint colour. Read by render_world (cap cube),
+// Inspector (roster-row tint), map_render (commander label).
 func RoleColor(k UnitRoleKind) rl.Color {
 	switch k {
 	case RoleLeader:

@@ -33,12 +33,12 @@ type MapRenderCtx struct {
 	// SquadCenter.
 	MapMarkerCache *components.MapMarkerCache
 	// Phase 12: commander role drives the ShortLabel rendered inside the
-	// squad marker. Nil → marker stays a plain coloured dot.
+	// squad marker. Nil -> marker stays a plain coloured dot.
 	RoleMap *ecs.Map[components.UnitRole]
 	Font    rl.Font
 	// SquadColor mirrors InspectorCtx.SquadColor.
 	SquadColor func(ent ecs.Entity) rl.Color
-	// Optional debug layers — checked by drawDebugLayers.
+	// Optional debug layers - checked by drawDebugLayers.
 	RoadGraph *components.RoadGraph
 	Rivers    *components.Rivers
 	Buildings *components.BuildingPlanList
@@ -53,7 +53,7 @@ type MapRenderCtx struct {
 	// SmoothedSquadPos is the inter-frame lerp store for squad-marker
 	// positions on the map (ISSUES #1 fix). Owned by main.go so its lifetime
 	// matches the camera; DrawMap reads + writes per frame. Nil disables
-	// smoothing — markers snap to the raw squad center.
+	// smoothing - markers snap to the raw squad center.
 	SmoothedSquadPos map[ecs.Entity]components.WorldPos
 }
 
@@ -70,8 +70,8 @@ var (
 	mapBuildingColor    = rl.Color{R: 160, G: 150, B: 140, A: 220}
 )
 
-// DrawMap paints the map panel: underlay → debug layers → squad markers →
-// anchor → selection / hover overlays. Everything inside scissor so out-of-
+// DrawMap paints the map panel: underlay -> debug layers -> squad markers ->
+// anchor -> selection / hover overlays. Everything inside scissor so out-of-
 // panel pixels stay clean.
 func DrawMap(panel Panel, ctx MapRenderCtx) {
 	content := ContentRect(panel)
@@ -123,7 +123,7 @@ func drawOrderMarkers(content rl.Rectangle, ctx MapRenderCtx) {
 		rl.DrawLineEx(from, to, 1.5, col)
 		drawOrderIcon(to, kind.Code, col)
 
-		// Walk chain — paint queued orders' targets dimmed.
+		// Walk chain - paint queued orders' targets dimmed.
 		cur := head.First
 		dim := rl.Color{R: col.R, G: col.G, B: col.B, A: 120}
 		prev := to
@@ -164,7 +164,7 @@ func drawOrderIcon(at rl.Vector2, k components.OrderKindCode, col rl.Color) {
 		rl.DrawTriangle(v2, v1, v3, col)
 		rl.DrawTriangleLines(v2, v1, v3, rl.Black)
 	case components.OrderKindDefendPosition:
-		// Diamond — top / right / bottom / left.
+		// Diamond - top / right / bottom / left.
 		v1 := rl.Vector2{X: at.X, Y: at.Y - r*0.7}
 		v2 := rl.Vector2{X: at.X + r*0.7, Y: at.Y}
 		v3 := rl.Vector2{X: at.X, Y: at.Y + r*0.7}
@@ -178,7 +178,7 @@ func drawOrderIcon(at rl.Vector2, k components.OrderKindCode, col rl.Color) {
 	case components.OrderKindPatrol:
 		rl.DrawCircleLines(int32(at.X), int32(at.Y), r*0.7, col)
 		rl.DrawCircleLines(int32(at.X), int32(at.Y), r*0.7+1, rl.Black)
-		// Arrow head — small triangle to the right.
+		// Arrow head - small triangle to the right.
 		v1 := rl.Vector2{X: at.X + r, Y: at.Y - r*0.4}
 		v2 := rl.Vector2{X: at.X + r, Y: at.Y + r*0.4}
 		v3 := rl.Vector2{X: at.X + r*1.6, Y: at.Y}
@@ -192,7 +192,7 @@ func drawUnderlay(content rl.Rectangle, ctx MapRenderCtx) {
 	}
 	u := ctx.Underlay
 	cam := ctx.Cam
-	// World-space corners of the underlay → screen-space rectangle.
+	// World-space corners of the underlay -> screen-space rectangle.
 	tl := components.WorldPos{}.Add(rl.Vector3{X: u.WorldOriginX, Z: u.WorldOriginZ})
 	br := components.WorldPos{}.Add(rl.Vector3{X: u.WorldOriginX + u.SizeM, Z: u.WorldOriginZ + u.SizeM})
 	tlS := MapWorldToPanel(tl, cam, content)
@@ -205,7 +205,7 @@ func drawUnderlay(content rl.Rectangle, ctx MapRenderCtx) {
 
 func drawDebugLayers(content rl.Rectangle, ctx MapRenderCtx) {
 	cam := ctx.Cam
-	// Rivers — polylines in blue.
+	// Rivers - polylines in blue.
 	if ctx.Rivers != nil {
 		for _, riv := range ctx.Rivers.Polylines {
 			thick := float32(math.Max(1.5, float64(riv.Width)*float64(cam.Zoom)*0.5))
@@ -216,7 +216,7 @@ func drawDebugLayers(content rl.Rectangle, ctx MapRenderCtx) {
 			}
 		}
 	}
-	// Roads — polylines colour-coded by kind.
+	// Roads - polylines colour-coded by kind.
 	if ctx.RoadGraph != nil {
 		for i := range ctx.RoadGraph.Edges {
 			e := &ctx.RoadGraph.Edges[i]
@@ -227,7 +227,7 @@ func drawDebugLayers(content rl.Rectangle, ctx MapRenderCtx) {
 			rl.DrawLineEx(a, b, thick, col)
 		}
 	}
-	// Buildings — small filled rectangles at footprint extent.
+	// Buildings - small filled rectangles at footprint extent.
 	if ctx.Buildings != nil {
 		for i := range ctx.Buildings.Plans {
 			p := &ctx.Buildings.Plans[i]
@@ -276,7 +276,7 @@ func drawSquadMarkers(content rl.Rectangle, ctx MapRenderCtx) {
 		if ctx.SquadColor != nil {
 			col = ctx.SquadColor(ent)
 		}
-		// Phase 12 P6 / Note: marker radius bumped 7 → 9 so 1-2 char commander
+		// Phase 12 P6 / Note: marker radius bumped 7 -> 9 so 1-2 char commander
 		// ShortLabel ("L", "MG", "AT") fits inside the disc legibly.
 		const radius float32 = 9
 		rl.DrawCircleV(screen, radius, col)

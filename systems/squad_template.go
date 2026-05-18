@@ -3,26 +3,26 @@ package systems
 import "rts-go/components"
 
 // SquadTemplate enumerates the 7 starter rosters available to
-// SquadService.CreateFromTemplate. The template is convenience only — it
+// SquadService.CreateFromTemplate. The template is convenience only - it
 // shapes the spawn-time role distribution, then disappears (no SquadTemplate
 // component lives on the resulting Squad). Phase 13 / 15 may add a separate
 // Doctrine concept on top.
 type SquadTemplate uint8
 
 const (
-	// TmplLightInfantry — Leader + 3 Rifleman (4).
+	// TmplLightInfantry - Leader + 3 Rifleman (4).
 	TmplLightInfantry SquadTemplate = iota
-	// TmplMotorRifle — Leader + 4 Rifleman + MG + Grenadier + Medic (8).
+	// TmplMotorRifle - Leader + 4 Rifleman + MG + Grenadier + Medic (8).
 	TmplMotorRifle
-	// TmplNATOInfantry — Leader + 4 Rifleman + MG + Grenadier + RadioOp (8).
+	// TmplNATOInfantry - Leader + 4 Rifleman + MG + Grenadier + RadioOp (8).
 	TmplNATOInfantry
-	// TmplRecon — Leader + Sniper + 2 Rifleman + RadioOp (5).
+	// TmplRecon - Leader + Sniper + 2 Rifleman + RadioOp (5).
 	TmplRecon
-	// TmplEngineering — Leader + 2 Engineer + DemoMan + 2 Rifleman (6).
+	// TmplEngineering - Leader + 2 Engineer + DemoMan + 2 Rifleman (6).
 	TmplEngineering
-	// TmplATTeam — Leader + ATGunner + 2 Rifleman (4).
+	// TmplATTeam - Leader + ATGunner + 2 Rifleman (4).
 	TmplATTeam
-	// TmplMGTeam — Leader + MG + 2 Rifleman (4).
+	// TmplMGTeam - Leader + MG + 2 Rifleman (4).
 	TmplMGTeam
 )
 
@@ -93,7 +93,7 @@ func TemplateRoster(t SquadTemplate) []components.UnitRoleKind {
 			components.RoleRifleman,
 		}
 	}
-	// Unknown template — fall back to a 4-rifleman squad so we never return
+	// Unknown template - fall back to a 4-rifleman squad so we never return
 	// an empty roster (callers would crash trying to size unit spawn).
 	return []components.UnitRoleKind{
 		components.RoleRifleman,

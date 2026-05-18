@@ -10,7 +10,7 @@ import (
 	"rts-go/core"
 )
 
-// 8×8 = 64 candidate cells per chunk. At ChunkSize 64 m that's an 8 m cell —
+// 8×8 = 64 candidate cells per chunk. At ChunkSize 64 m that's an 8 m cell -
 // roughly the canopy radius of a mature oak, so neighbouring cells almost
 // never collide visually.
 const propCellsPerSide int32 = 8
@@ -43,19 +43,19 @@ const (
 const minPropRiverDistance float32 = 3.0
 
 // roadClearanceMargin is added to (edge.Width / 2) for the road-vs-prop
-// rejection — a 1 m buffer between the road shoulder and the closest tree.
+// rejection - a 1 m buffer between the road shoulder and the closest tree.
 const roadClearanceMargin float32 = 1.0
 
 // minPropBuildingClearance keeps trees / rocks / bushes off building
 // footprints (and well away from walls).
 const minPropBuildingClearance float32 = 1.5
 
-// minPropTrenchClearance — same idea as river/road clearance but for
+// minPropTrenchClearance - same idea as river/road clearance but for
 // earthworks. Trees standing on the lip of a trench look broken; a small
 // buffer keeps the silhouette readable.
 const minPropTrenchClearance float32 = 1.0
 
-// Salts for hashFloat — distinct values keep parallel rolls de-correlated
+// Salts for hashFloat - distinct values keep parallel rolls de-correlated
 // (otherwise rollTree and rollBush in the same cell would always be equal,
 // visibly striping the world).
 const (
@@ -132,7 +132,7 @@ func (sys PropSpawnSystem) Update(ctx core.UpdateContext) {
 	graph := sys.roadGraphRes.Get()
 	trenches := sys.trenchRes.Get()
 
-	// Snapshot building footprints for clearance — usually a handful, fits
+	// Snapshot building footprints for clearance - usually a handful, fits
 	// happily in a small slice.
 	var buildings []components.AABB2D
 	qb := sys.buildingFilter.Query()
@@ -158,7 +158,7 @@ func (sys PropSpawnSystem) Update(ctx core.UpdateContext) {
 				cellCenterWX := baseWX + (float32(gx)+0.5)*propCellSize
 				cellCenterWZ := baseWZ + (float32(gz)+0.5)*propCellSize
 
-				// Density at cell centre (not per-candidate) — soft cluster
+				// Density at cell centre (not per-candidate) - soft cluster
 				// boundaries with negligible aliasing at 8 m cell width.
 				forestD := BiomeDensity(terrainSeed, cellCenterWX, cellCenterWZ, BiomeForest)
 				bushlandD := BiomeDensity(terrainSeed, cellCenterWX, cellCenterWZ, BiomeBushland)
@@ -184,7 +184,7 @@ func (sys PropSpawnSystem) Update(ctx core.UpdateContext) {
 					continue
 				}
 
-				// Priority: trees → bushes → rocks. At most one prop per cell.
+				// Priority: trees -> bushes -> rocks. At most one prop per cell.
 				propType := components.PropNone
 
 				if propType == components.PropNone && forestD > forestDensityThreshold {
@@ -215,7 +215,7 @@ func (sys PropSpawnSystem) Update(ctx core.UpdateContext) {
 
 				// Y from procgen GroundHeight (same source as the anchor's
 				// ground-stick). Player-edited (Modified) chunks may have a
-				// different mesh height — that's the documented "tree on a
+				// different mesh height - that's the documented "tree on a
 				// plinth" caveat.
 				groundY := GroundHeight(wx, wz)
 
@@ -272,7 +272,7 @@ func tooCloseToTrench(lines []components.Trench, wx, wz float32) bool {
 
 // tooCloseToRoad rejects candidate (wx, wz) if any edge's centre line passes
 // within (Width/2 + margin) of it. O(edges) per candidate; fine at hand-
-// authored graph sizes — switch to a chunk-bucketed spatial index when the
+// authored graph sizes - switch to a chunk-bucketed spatial index when the
 // graph grows past a few thousand edges.
 func tooCloseToRoad(g *components.RoadGraph, wx, wz float32) bool {
 	for i := range g.Edges {

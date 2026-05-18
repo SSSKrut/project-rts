@@ -40,7 +40,7 @@ type InspectorCtx struct {
 	TrenchRootMap    *ecs.Map[components.TrenchRoot]
 	// Phase 12 role map. When non-nil drawInspectorUnit / drawInspectorSquad
 	// show role-tinted roster rows and a Role: header on the single-unit
-	// view. Nil falls back to "Rifleman placeholder" — keeps backwards-compat
+	// view. Nil falls back to "Rifleman placeholder" - keeps backwards-compat
 	// for any caller that hasn't wired the map yet.
 	RoleMap *ecs.Map[components.UnitRole]
 	// Phase 13 maps for the quick-bar sections + Stamina display. When all
@@ -67,12 +67,12 @@ type InspectorCtx struct {
 	PanelFocused bool
 	// Phase 13.5 M13.5.3: scroll handle. DrawInspector subtracts Scroll.OffsetY
 	// from initial y and writes total content height into Scroll.ContentHeight
-	// at the end of the draw — caller's DrawScrollbar reads it next frame.
-	// Nil → behave as if scroll==0 with no measurement (legacy callers).
+	// at the end of the draw - caller's DrawScrollbar reads it next frame.
+	// Nil -> behave as if scroll==0 with no measurement (legacy callers).
 	Scroll *ScrollState
 	// SquadColor picks a stable palette colour from a squad entity so the
 	// inspector and the map render use the same shade. Injected as a func to
-	// avoid a UI → render-package cycle. Phase 14 M14.6: signature takes
+	// avoid a UI -> render-package cycle. Phase 14 M14.6: signature takes
 	// ecs.Entity (not just ID) so the colour function can read Faction off
 	// the squad entity directly.
 	SquadColor func(ent ecs.Entity) rl.Color
@@ -108,10 +108,10 @@ var (
 // DrawInspector paints the inspector panel content (background + text rows).
 // Phase 10 M10.4 content tree:
 //
-//   - Empty selection → "No selection" + list every Squad on the scene.
-//   - Single Unit     → stance / motion / suppression / squad ref / equip.
-//   - Single Squad    → name / members / formation / macro state / roster.
-//   - Multi-select    → counts (units, squads).
+//   - Empty selection -> "No selection" + list every Squad on the scene.
+//   - Single Unit     -> stance / motion / suppression / squad ref / equip.
+//   - Single Squad    -> name / members / formation / macro state / roster.
+//   - Multi-select    -> counts (units, squads).
 //
 // Hovered entity (a unit or squad) is highlighted by a tinted row background.
 //
@@ -195,7 +195,7 @@ func describeSelection(ctx InspectorCtx) selectionKind {
 }
 
 // groupSelectedHelper mirrors main.groupSelected to keep this package
-// self-contained (no UI → main import).
+// self-contained (no UI -> main import).
 func groupSelectedHelper(selected []ecs.Entity,
 	squadMemberMap *ecs.Map[components.SquadMember]) (ecs.Entity, bool) {
 	var common ecs.Entity
@@ -474,7 +474,7 @@ func isSelected(selected []ecs.Entity, e ecs.Entity) bool {
 }
 
 // stanceLabel reads the canonical name from components.StanceSpecs. Phase
-// 14.5 M14.5.1 — switch replaced.
+// 14.5 M14.5.1 - switch replaced.
 func stanceLabel(s components.StanceCode) string {
 	return components.SpecForStance(s).Name
 }
@@ -594,7 +594,7 @@ func drawOrderRow(ctx InspectorCtx, ord ecs.Entity, prefix string, x, y, width i
 	return y + inspectorRowH
 }
 
-// orderKindLabel reads the spec table's Name. Phase 14.5 M14.5.0 — old
+// orderKindLabel reads the spec table's Name. Phase 14.5 M14.5.0 - old
 // hand-maintained switch replaced.
 func orderKindLabel(k components.OrderKindCode) string {
 	if spec := components.SpecForOrderKind(k); spec.Name != "" {
@@ -621,7 +621,7 @@ func orderStateLabel(s components.OrderStateCode) string {
 	return "?"
 }
 
-// orderTargetLabel produces a short string identifying the order's target —
+// orderTargetLabel produces a short string identifying the order's target -
 // "@ (x, z)" for Pos targets, "@ Building #X" / "@ Trench #N" for entity
 // targets. Avoids floats with sub-metre noise.
 func orderTargetLabel(ctx InspectorCtx, kind components.OrderKindCode, t *components.OrderTarget) string {
@@ -648,5 +648,5 @@ func orderTargetLabel(ctx InspectorCtx, kind components.OrderKindCode, t *compon
 }
 
 // suppress the unused-math warning if math is no longer referenced after
-// edits. Currently used in drawInspectorUnit for yaw → degrees.
+// edits. Currently used in drawInspectorUnit for yaw -> degrees.
 var _ = math.Pi

@@ -9,7 +9,7 @@ import (
 	"rts-go/components"
 )
 
-// Phase 13 M13.6 — Inspector quick-bars for Squad standing rules
+// Phase 13 M13.6 - Inspector quick-bars for Squad standing rules
 // (MovementProfile / EngagementRules / BehaviorRules) + Stamina avg.
 //
 // Layout (single-squad view, drawn under the Roster section):
@@ -24,10 +24,10 @@ import (
 //   │ Mode:     [Hold ][Return][Free ]      │
 //   │ Targets:  [Inf ][Arm ][Air ][Struct]  │
 //   ├─ Behavior ────────────────────────────┤
-//   │ [✓] Auto-reposition under fire        │
-//   │ [✓] Auto-stance change                │
+//   │ [done] Auto-reposition under fire        │
+//   │ [done] Auto-stance change                │
 //   │ [ ] Hold until ordered                │
-//   │ [✓] Allow return fire                 │
+//   │ [done] Allow return fire                 │
 //   │ Suppression threshold: [-][+] 0.30    │
 //   └───────────────────────────────────────┘
 //
@@ -65,7 +65,7 @@ func drawStandingRulesSections(ctx InspectorCtx, squad ecs.Entity, x, y, width i
 		return y
 	}
 
-	// All three sections operate on this squad — bulk-mutate for multi-select
+	// All three sections operate on this squad - bulk-mutate for multi-select
 	// is deferred (open question 4). Phase 13 single-squad scope.
 	mp := ctx.MovementProfileMap.Get(squad)
 	er := ctx.EngagementRulesMap.Get(squad)
@@ -135,7 +135,7 @@ func drawMovementSection(ctx InspectorCtx, squad ecs.Entity, mp *components.Move
 	y += srChipH + srRowGap
 
 	// Stamina avg bar. Averaged across roster members; if no members or no
-	// Stamina components, draw "—".
+	// Stamina components, draw "-".
 	avg := squadStaminaAverage(ctx, squad)
 	drawStaminaBar(ctx, x, y, width, srChipH, avg)
 	y += srChipH
@@ -181,7 +181,7 @@ func drawBehaviorSection(ctx InspectorCtx, br *components.BehaviorRules, x, y, w
 	drawText(ctx.Font, "Behavior", x, y, inspectorFontSize, srSectionHdr)
 	y += inspectorRowH
 
-	// Boolean toggles as rows: [✓] / [ ] + label.
+	// Boolean toggles as rows: [done] / [ ] + label.
 	type toggleSpec struct {
 		label string
 		field *bool
@@ -247,13 +247,13 @@ func drawChip(ctx InspectorCtx, x, y, w, h int32, label string, active bool) boo
 	return hover && ctx.LMBPressed
 }
 
-// drawCyclicField — same visual as drawChip but never "active"; click cycles
+// drawCyclicField - same visual as drawChip but never "active"; click cycles
 // the underlying value (caller handles the wrap-around).
 func drawCyclicField(ctx InspectorCtx, x, y, w, h int32, label string) bool {
 	return drawChip(ctx, x, y, w, h, label, false)
 }
 
-// drawToggleRow — left-aligned label with a leading [✓]/[ ] indicator. Click
+// drawToggleRow - left-aligned label with a leading [done]/[ ] indicator. Click
 // anywhere in the row flips the boolean.
 func drawToggleRow(ctx InspectorCtx, x, y, w, h int32, label string, on bool) bool {
 	r := rl.Rectangle{X: float32(x), Y: float32(y), Width: float32(w), Height: float32(h)}
@@ -272,20 +272,20 @@ func drawToggleRow(ctx InspectorCtx, x, y, w, h int32, label string, on bool) bo
 	}
 	drawText(ctx.Font, mark+" "+label, x+4, y+1, inspectorFontSize, markColor)
 	if !on {
-		// Override after the dim mark — keep the label readable.
+		// Override after the dim mark - keep the label readable.
 		drawText(ctx.Font, mark+" "+label, x+4, y+1, inspectorFontSize, inspectorText)
 	}
 	return hover && ctx.LMBPressed
 }
 
-// drawStaminaBar — fill ratio 0..1, colour by zone. Renders inline in the
-// Movement section. `ratio < 0` indicates "no Stamina readings" — draws as a
-// flat dim track with "—" label.
+// drawStaminaBar - fill ratio 0..1, colour by zone. Renders inline in the
+// Movement section. `ratio < 0` indicates "no Stamina readings" - draws as a
+// flat dim track with "-" label.
 func drawStaminaBar(ctx InspectorCtx, x, y, w, h int32, ratio float32) {
 	track := rl.Rectangle{X: float32(x), Y: float32(y), Width: float32(w), Height: float32(h)}
 	rl.DrawRectangleRec(track, srBarTrack)
 	rl.DrawRectangleLinesEx(track, 1, srChipBorder)
-	label := "Stamina: —"
+	label := "Stamina: -"
 	if ratio >= 0 {
 		fillW := float32(w-2) * ratio
 		colour := srStaminaHigh
@@ -330,7 +330,7 @@ func squadStaminaAverage(ctx InspectorCtx, squad ecs.Entity) float32 {
 	return sum / float32(n)
 }
 
-// profileMatchesPreset — chip is "active" when every field of the live profile
+// profileMatchesPreset - chip is "active" when every field of the live profile
 // matches the preset. Strict match avoids "partially active" highlights when
 // the player has hand-edited one field after applying a preset.
 func profileMatchesPreset(p components.MovementProfile, preset components.MovementPreset) bool {

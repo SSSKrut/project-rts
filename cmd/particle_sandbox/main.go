@@ -1,4 +1,4 @@
-// Particle sandbox — standalone visual harness for ParticleSystem.
+// Particle sandbox - standalone visual harness for ParticleSystem.
 //
 // Build & run:
 //
@@ -8,12 +8,12 @@
 //
 // Controls:
 //
-//	1..6      — spawn N particles of kind {Tracer, Impact, MuzzleFlash, Smoke, Dust, Debris}
-//	Space     — fire all six kinds at once (firefight-style burst)
-//	A         — toggle auto-emit (continuous burst every 0.15 s)
-//	R         — reset (despawn every live particle)
-//	Mouse RMB — orbit camera; wheel — zoom
-//	Esc       — quit
+//	1..6      - spawn N particles of kind {Tracer, Impact, MuzzleFlash, Smoke, Dust, Debris}
+//	Space     - fire all six kinds at once (firefight-style burst)
+//	A         - toggle auto-emit (continuous burst every 0.15 s)
+//	R         - reset (despawn every live particle)
+//	Mouse RMB - orbit camera; wheel - zoom
+//	Esc       - quit
 //
 // Purpose. The full game scene needs terrain / units / squads / orders to
 // even start; that's three minutes of compile-then-load every time you
@@ -57,7 +57,7 @@ const (
 )
 
 func main() {
-	rl.InitWindow(screenW, screenH, "RTS — Particle Sandbox")
+	rl.InitWindow(screenW, screenH, "RTS - Particle Sandbox")
 	defer rl.CloseWindow()
 	rl.SetTargetFPS(60)
 
@@ -81,7 +81,7 @@ func main() {
 		Fovy:       60,
 		Projection: rl.CameraPerspective,
 	}
-	// Spherical orbit state — RMB drag + wheel zoom mimic the main game's
+	// Spherical orbit state - RMB drag + wheel zoom mimic the main game's
 	// OrbitSystem so the sandbox feels like the real product.
 	yaw := float32(math.Pi / 4)
 	pitch := float32(math.Pi / 6)
@@ -250,7 +250,7 @@ func emitDebris(h *systems.SpawnParticleHandles, now float32, count int) {
 	}
 }
 
-// emitFullBurst fires one of each kind — visual sanity check for cohabiting
+// emitFullBurst fires one of each kind - visual sanity check for cohabiting
 // kinds (do debris fall through smoke? do tracers occlude impacts?).
 func emitFullBurst(h *systems.SpawnParticleHandles, now float32) {
 	emitTracers(h, now, 1)
@@ -336,11 +336,11 @@ func drawHUD(f *ecs.Filter3[components.Particle, components.WorldPos, components
 		live++
 	}
 	rl.DrawRectangle(8, 8, 360, 178, rl.Color{R: 0, G: 0, B: 0, A: 180})
-	rl.DrawText(fmt.Sprintf("Particle Sandbox — live: %d / cap %d",
+	rl.DrawText(fmt.Sprintf("Particle Sandbox - live: %d / cap %d",
 		live, components.ParticleSoftCap), 16, 16, 18, rl.White)
 	rl.DrawText("1 Tracer  2 Impact  3 Muzzle  4 Smoke  5 Dust  6 Debris",
 		16, 44, 14, rl.LightGray)
-	rl.DrawText("Space — full burst   A — auto (every 0.15s)   R — reset",
+	rl.DrawText("Space - full burst   A - auto (every 0.15s)   R - reset",
 		16, 64, 14, rl.LightGray)
 	autoText := "auto: OFF"
 	autoCol := rl.Gray
@@ -349,7 +349,7 @@ func drawHUD(f *ecs.Filter3[components.Particle, components.WorldPos, components
 		autoCol = rl.Color{R: 100, G: 220, B: 100, A: 255}
 	}
 	rl.DrawText(autoText, 16, 90, 16, autoCol)
-	rl.DrawText("RMB — orbit   Wheel — zoom   Esc — quit", 16, 114, 14, rl.LightGray)
+	rl.DrawText("RMB - orbit   Wheel - zoom   Esc - quit", 16, 114, 14, rl.LightGray)
 	rl.DrawText("Y-axis = green ; Z = blue ; X = red", 16, 134, 12, rl.LightGray)
 	rl.DrawText("Smoke rises ; debris falls ; dust settles slow ; tracer/impact/flash static.",
 		16, 154, 12, rl.LightGray)

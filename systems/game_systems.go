@@ -100,7 +100,7 @@ func (system LODSystem) Update(ctx core.UpdateContext) {
 	relevantIn2 := relevantIn * relevantIn
 	relevantOut2 := relevantOut * relevantOut
 
-	// Buffer changes — Ark forbids archetype mutation during iteration.
+	// Buffer changes - Ark forbids archetype mutation during iteration.
 	type lodChange struct {
 		id     ecs.Entity
 		remove core.LODTier

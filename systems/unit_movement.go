@@ -10,7 +10,7 @@ import (
 	"rts-go/core"
 )
 
-// Phase 14.5 M14.5.1 — unitMaxSpeed table folded into components.StanceSpecs.
+// Phase 14.5 M14.5.1 - unitMaxSpeed table folded into components.StanceSpecs.
 // Readers use components.SpecForStance(code).MaxSpeed.
 
 // Separation parameters. Phase 7 P4: only separation force, no alignment /
@@ -20,19 +20,19 @@ const (
 	separationWeight float32 = 4.0
 )
 
-// arrivalRadius — how close the unit needs to be to its current MoveTo target
+// arrivalRadius - how close the unit needs to be to its current MoveTo target
 // before the action pops from the queue. Slightly bigger than the cell-centre
 // dance to avoid jittering at the goal.
 const arrivalRadius float32 = 0.6
 
-// stopDuration — how long an ActionStop holds the unit in place before it
+// stopDuration - how long an ActionStop holds the unit in place before it
 // pops off the queue. Phase 7 P7.
 const stopDuration float32 = 0.1
 
 // UnitMovementSystem advances units along their ActionQueue.
 //
 // Phase 11.5 M11.5.3 / M11.5.5: tier-gating removed and the per-unit step
-// is dispatched through WorkerPool.ParallelFor. snapshot → parallel step →
+// is dispatched through WorkerPool.ParallelFor. snapshot -> parallel step ->
 // no post-pass (each worker writes only to its own unit's component pointers,
 // no shared map mutation, no archetype changes).
 //
@@ -67,7 +67,7 @@ type UnitMovementSystem struct {
 	movementProfileMap       *ecs.Map[components.MovementProfile]
 	posMap                   *ecs.Map[components.WorldPos]
 
-	// Phase 14.6 M14.6.1 — wall reflection. Walls snapshot bucketed by chunk
+	// Phase 14.6 M14.6.1 - wall reflection. Walls snapshot bucketed by chunk
 	// once per tick in the serial pre-pass; step() reads the 3x3 chunk window
 	// around the unit to reflect velocity that would cross a wall this frame.
 	wallFilter      *ecs.Filter2[components.WorldPos, components.WallSegment]
@@ -75,7 +75,7 @@ type UnitMovementSystem struct {
 	collisionWalls  map[components.ChunkCoord][]colWall
 
 	// Reusable snapshot buffer. Filled in the serial pre-pass, read-only by
-	// workers during ParallelFor — safe because writes are indexed and never
+	// workers during ParallelFor - safe because writes are indexed and never
 	// concurrent.
 	workBuf []unitWork
 
@@ -88,7 +88,7 @@ type UnitMovementSystem struct {
 	elapsed float32
 }
 
-// staminaRegenThreshold — Current/MaxLevel ratio at which the StaminaExhausted
+// staminaRegenThreshold - Current/MaxLevel ratio at which the StaminaExhausted
 // marker is cleared. PHASE-13.md P3 sets this at 0.30 so the unit must
 // actually rest, not just touch zero.
 const staminaRegenThreshold float32 = 0.30
@@ -127,7 +127,7 @@ func (sys *UnitMovementSystem) InitUI(w *ecs.World) {
 func (UnitMovementSystem) Name() string { return "unit_movement" }
 
 func (UnitMovementSystem) LODPolicy() core.LODPolicy {
-	// Phase 11.5 P1: universal simulation — every tick, no LOD gating.
+	// Phase 11.5 P1: universal simulation - every tick, no LOD gating.
 	return core.LODPolicy{
 		ActiveEvery:   0,
 		RelevantEvery: core.LODDisabled,
@@ -135,7 +135,7 @@ func (UnitMovementSystem) LODPolicy() core.LODPolicy {
 	}
 }
 
-// unitWork — snapshot row for the parallel step pass. Pointers stay valid
+// unitWork - snapshot row for the parallel step pass. Pointers stay valid
 // between snapshot and ParallelFor because nothing in this system changes
 // archetype for snapshotted entities. Phase 13: profile/stamina cached in
 // the snapshot so the hot loop never hits a map.
@@ -159,10 +159,10 @@ func (sys *UnitMovementSystem) Update(ctx core.UpdateContext) {
 
 	// Phase 14.5 M14.5.2: neighbour data comes from the shared SpatialHash
 	// rebuilt this tick by SpatialHashRebuildSystem. The separation pass
-	// queries it directly inside step() — no per-tick O(N²) snapshot.
+	// queries it directly inside step() - no per-tick O(N²) snapshot.
 	hash := sys.spatialHash.Get()
 
-	// Phase 14.6 M14.6.1 — wall snapshot for the per-tick reflection pass.
+	// Phase 14.6 M14.6.1 - wall snapshot for the per-tick reflection pass.
 	// Cleared and refilled each tick; workers read read-only inside step().
 	for k := range sys.collisionWalls {
 		sys.collisionWalls[k] = sys.collisionWalls[k][:0]
@@ -214,7 +214,7 @@ func (sys *UnitMovementSystem) Update(ctx core.UpdateContext) {
 
 	sys.pool.ParallelForIndexed(len(work), func(chunkIdx, start, end int) {
 		// Defensive: if chunkIdx exceeds the buffer allocation (shouldn't
-		// happen — NewUnitMovementSystem sizes against pool.Workers()), fall
+		// happen - NewUnitMovementSystem sizes against pool.Workers()), fall
 		// back to slot 0 to avoid an out-of-range panic.
 		if chunkIdx >= len(sys.workerExhaustedAdds) {
 			chunkIdx = 0
@@ -259,14 +259,14 @@ const (
 	staminaMarkerRemove
 )
 
-// resolveProfile walks unit → squad → active order to determine the effective
+// resolveProfile walks unit -> squad -> active order to determine the effective
 // MovementProfile. Resolution order matches PHASE-13.md P5:
 //
-//  1. Active Order has OrderParamMovementProfile → use that profile.
-//  2. Squad has MovementProfile → use that profile.
+//  1. Active Order has OrderParamMovementProfile -> use that profile.
+//  2. Squad has MovementProfile -> use that profile.
 //  3. Fallback: system default (Walk / Stand / Standard / Direct).
 //
-// Called once per unit in the serial snapshot pass — keeps the parallel step
+// Called once per unit in the serial snapshot pass - keeps the parallel step
 // hot-path free of map lookups + handle indirections.
 func (sys *UnitMovementSystem) resolveProfile(unit ecs.Entity) components.MovementProfile {
 	member := sys.memberMap.Get(unit)
@@ -321,7 +321,7 @@ func (sys *UnitMovementSystem) step(
 	}
 
 	// Drain / regen Stamina each tick. Recovery only when Pace=Walk AND
-	// Stance ∈ {Stand, Crouch} (Prone doesn't recover — P3). Open question 5
+	// Stance ∈ {Stand, Crouch} (Prone doesn't recover - P3). Open question 5
 	// answered: crouch allows regen.
 	markerOp := staminaMarkerNone
 	if w.stamina != nil && w.stamina.MaxLevel > 0 {
@@ -373,7 +373,7 @@ func (sys *UnitMovementSystem) step(
 		desiredZ := diff.Z * invDist
 
 		// Phase 14.5 M14.5.2: separation force pulled from the SpatialHash.
-		// Callback receives nearby entries inline — no intermediate slice
+		// Callback receives nearby entries inline - no intermediate slice
 		// allocation. Self is filtered via ent check; alive-check is cheap
 		// here (the hash may carry indices for entities removed since rebuild,
 		// but the world.Alive guard skips dead reads).
@@ -385,14 +385,14 @@ func (sys *UnitMovementSystem) step(
 				if ent == w.ent || dSq <= 1e-4 {
 					return
 				}
-				// Stale-entity guard: SpatialHash invariant — readers MUST
+				// Stale-entity guard: SpatialHash invariant - readers MUST
 				// alive-check every callback target before further work.
 				if !sys.world.Alive(ent) {
 					return
 				}
 				// Recompute dx/dz so the falloff direction is from the live
 				// position (SpatialEntry is a 1-tick stale snapshot, but the
-				// resolution mismatch is ≤ a few cm at top speed — irrelevant
+				// resolution mismatch is <= a few cm at top speed - irrelevant
 				// for separation force direction).
 				np := sys.posMap.Get(ent)
 				if np == nil {
@@ -422,11 +422,11 @@ func (sys *UnitMovementSystem) step(
 			speed = maxSpeed
 		}
 
-		// Phase 14.6 M14.6.1 — wall reflection. If the predicted XZ step
+		// Phase 14.6 M14.6.1 - wall reflection. If the predicted XZ step
 		// would cross a wall (non-open-door segment) in the unit's 3x3 chunk
 		// window, reflect velocity around the wall normal so the unit slides
 		// off rather than tunnelling through. Reflection-only, no parallel
-		// sliding — Phase 15.B will add the polished glide.
+		// sliding - Phase 15.B will add the polished glide.
 		if walls != nil {
 			vx, vz = reflectAgainstWalls(selfX, selfZ, vx, vz, dt, walls, w.pos.Chunk)
 		}
@@ -502,7 +502,7 @@ func ClearActions(q *components.ActionQueue) {
 }
 
 // colWall is the movement-collision view of a WallSegment. Windows block
-// movement (separate from LOS — losWall flips openingTransparent for windows
+// movement (separate from LOS - losWall flips openingTransparent for windows
 // too), open doors allow passage through the opening range, closed doors and
 // plain walls fully block. World coords; trig pre-computed.
 type colWall struct {
@@ -544,7 +544,7 @@ func makeColWall(pos components.WorldPos, w components.WallSegment, doorState co
 // next wall is tested against the new direction. Bound the loop at 4
 // reflections to avoid pathological corners.
 //
-// Used by UnitMovementSystem.step. Reflection-only — Phase 15.B will swap to
+// Used by UnitMovementSystem.step. Reflection-only - Phase 15.B will swap to
 // glide-along-wall for smoother movement.
 func reflectAgainstWalls(curX, curZ, velX, velZ, dt float32,
 	walls map[components.ChunkCoord][]colWall, home components.ChunkCoord,

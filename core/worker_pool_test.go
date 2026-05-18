@@ -60,7 +60,7 @@ func TestParallelForRaceSafe(t *testing.T) {
 	defer pool.Stop()
 
 	// Total chosen above SerialThresholdHint so the workers actually run in
-	// parallel — otherwise the test degenerates to serial inline.
+	// parallel - otherwise the test degenerates to serial inline.
 	const total = SerialThresholdHint * 4
 	out := make([]int32, total)
 	pool.ParallelFor(total, func(start, end int) {
@@ -106,7 +106,7 @@ func TestParallelForIndexedPerWorkerBuf(t *testing.T) {
 	}
 }
 
-// TestParallelForSerialFallback verifies that small workloads (≤
+// TestParallelForSerialFallback verifies that small workloads (<=
 // SerialThresholdHint) skip the dispatcher and run inline. We detect this by
 // checking that fn is invoked exactly once with the full range.
 func TestParallelForSerialFallback(t *testing.T) {

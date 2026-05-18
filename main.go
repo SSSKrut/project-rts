@@ -22,7 +22,7 @@ const (
 	initialScreenHeight int32 = 450 * 2
 )
 
-// workersFlag picks the worker-pool size. 0 (default) → runtime.NumCPU().
+// workersFlag picks the worker-pool size. 0 (default) -> runtime.NumCPU().
 // Phase 11.5 M11.5.1; pool feeds the parallel hot-path systems below.
 var workersFlag = flag.Int("workers", 0, "worker pool size (default = NumCPU)")
 
@@ -44,7 +44,7 @@ func main() {
 	// SpatialAudioSystem) removed from main; the engine-tone test sound
 	// and voice limiter served as a Phase 7 placeholder for vehicle/unit
 	// sound. Real audio (footsteps, gunfire, voices) lands in Phase 25
-	// polish — reintroduce wiring here when the audio asset pipeline
+	// polish - reintroduce wiring here when the audio asset pipeline
 	// exists.
 
 	app := core.NewApp()
@@ -97,7 +97,7 @@ func main() {
 	ecs.AddResource(app.World, &transitionRegistry)
 	mapMarkerCache := components.NewMapMarkerCache()
 	ecs.AddResource(app.World, &mapMarkerCache)
-	// Phase 14.5 M14.5.4 — VisualEvents resource replaced by ECS-entity
+	// Phase 14.5 M14.5.4 - VisualEvents resource replaced by ECS-entity
 	// particles. Spawn handles + ParticleSystem registered below.
 	// Phase 14.5 M14.5.2: SpatialHash for Unit XZ positions. Rebuilt every
 	// tick (serial pass) before UnitMovement so this frame's separation
@@ -172,7 +172,7 @@ func main() {
 	weaponSys := systems.NewWeaponSystem(workerPool, damageService, particleHandles)
 	weaponSys.InitUI(app.World)
 
-	// Phase 14 M14.5: cleanup of expired ThreatSource entities — Phase 15
+	// Phase 14 M14.5: cleanup of expired ThreatSource entities - Phase 15
 	// SurvivalInstinct will read live ones to pick cover slots.
 	threatDecaySys := systems.NewThreatDecaySystem()
 	threatDecaySys.InitUI(app.World)
@@ -292,7 +292,7 @@ func main() {
 
 	// Phase 11: one TrenchRoot entity per polyline so the hit-test resolver
 	// can return an ecs.Entity in OrderTarget.Entity for OccupyTrench. The
-	// Trench polyline data stays in the TrenchNetwork resource — TrenchRoot
+	// Trench polyline data stays in the TrenchNetwork resource - TrenchRoot
 	// is a thin reverse-index. Pos is the polyline midpoint, used for any
 	// "where is this trench" preview before order resolution.
 	trenchRootMap := ecs.NewMap[components.TrenchRoot](app.World)
@@ -374,7 +374,7 @@ func main() {
 	// (Primary weapon, Secondary gear: Radio / Medkit / Spade / sidearm).
 	roleService := systems.NewRoleService(app.World)
 
-	// unitFactory creates a "naked" soldier — every component the simulation
+	// unitFactory creates a "naked" soldier - every component the simulation
 	// needs (Unit / Stance / Motion / Vision / etc.) but no UnitRole and no
 	// Equipment entities. CreateFromTemplate calls this once per slot, then
 	// RoleService.AssignRole stamps the role + spawns the weapon/gear.
@@ -417,7 +417,7 @@ func main() {
 
 	// Phase 14 M14.1: hostile MotorRifle squad ~60 m from the player base on
 	// the opposite side. DefendPosition order parks them in place (Phase 14
-	// simple: enemies don't patrol — Phase 15 reactive movement). Once
+	// simple: enemies don't patrol - Phase 15 reactive movement). Once
 	// WeaponSystem lands in M14.2 the player can engage by hand.
 	enemySpawn := components.WorldPos{}.Add(rl.Vector3{X: 5, Z: -90})
 	enemySquad := squadService.CreateFromTemplate(
@@ -475,13 +475,13 @@ func main() {
 		UnitHitRadius:   1.5,
 	}
 
-	// Phase 13.6 ghost preview context — bundles the maps drawSelectionGhost
+	// Phase 13.6 ghost preview context - bundles the maps drawSelectionGhost
 	// needs (squad roster + formation + stance + movement profile). One
 	// allocation up-front so the render loop just passes &ghostCtx.
 	//
 	// M13.6.3 fields (hitTester / buildingIndex / wallMap / windowMap /
 	// trenches / trenchRootMap) drive per-kind placement: cursor over a
-	// building → ghosts in N first windows; over a trench → ghosts equal-
+	// building -> ghosts in N first windows; over a trench -> ghosts equal-
 	// spaced along the polyline.
 	ghostWallMap := ecs.NewMap[components.WallSegment](app.World)
 	ghostWindowMap := ecs.NewMap[components.Window](app.World)
@@ -502,7 +502,7 @@ func main() {
 		squadColor:       squadColor,
 	}
 
-	// Phase 14.5 M14.5.4: ParticleRenderCtx — handles for drawParticles.
+	// Phase 14.5 M14.5.4: ParticleRenderCtx - handles for drawParticles.
 	// Built once; reused every frame in the 3D pass.
 	particleRenderCtx := ParticleRenderCtx{
 		Filter: ecs.NewFilter3[components.Particle, components.WorldPos, components.ParticleVisual](app.World),
@@ -549,7 +549,7 @@ func main() {
 		lastRMBPressAt float32 // session-time of the previous press
 	)
 	// Window for treating consecutive RMB presses as a double-click. PHASE-13.md
-	// заметка про Double-RMB: 300 ms is empirical — wide enough for relaxed
+	// заметка про Double-RMB: 300 ms is empirical - wide enough for relaxed
 	// chains, narrow enough that two deliberate sequential clicks don't fuse.
 	const rmbDoubleWindow float32 = 0.30
 	// Phase 13.5 M13.5.4: scrollbar thumb drag state. scrollDragging = true
@@ -604,7 +604,7 @@ func main() {
 	}
 
 	for !rl.WindowShouldClose() {
-		// Window resize → re-layout + re-alloc the 3D RT to the new bounds.
+		// Window resize -> re-layout + re-alloc the 3D RT to the new bounds.
 		if rl.IsWindowResized() {
 			screenW = int32(rl.GetScreenWidth())
 			screenH = int32(rl.GetScreenHeight())
@@ -628,10 +628,10 @@ func main() {
 		panel3D := panelMgr.Get(ui.Panel3D)
 		panelMap := panelMgr.Get(ui.PanelMap)
 
-		// ── Tab → toggle layout preset ──
+		// ── Tab -> toggle layout preset ──
 		if rl.IsKeyPressed(rl.KeyTab) {
 			// Phase 13.5: Tab during a splitter drag aborts the drag (revert
-			// to pre-drag ratio) before flipping the preset — avoids weird
+			// to pre-drag ratio) before flipping the preset - avoids weird
 			// half-applied resize state on preset swap.
 			if panelMgr.IsDragging() {
 				panelMgr.AbortDrag()
@@ -643,7 +643,7 @@ func main() {
 			panelMap = panelMgr.Get(ui.PanelMap)
 		}
 
-		// ── Phase 13.5 M13.5.2 — splitter hover / drag ──
+		// ── Phase 13.5 M13.5.2 - splitter hover / drag ──
 		// Splitter takes priority over panel-content input: hover sets the
 		// resize cursor; LMB-press on a splitter starts a drag that consumes
 		// LMB until release. Drag updates RightColRatio / InspectorRatio live
@@ -669,13 +669,13 @@ func main() {
 		default:
 			rl.SetMouseCursor(rl.MouseCursorDefault)
 		}
-		// LMB on splitter → BeginDrag. Consumes the press so the rest of the
+		// LMB on splitter -> BeginDrag. Consumes the press so the rest of the
 		// frame's LMB handlers (selection / marquee) skip.
 		if !panelMgr.IsDragging() && splitterHover != ui.SplitterNone &&
 			rl.IsMouseButtonPressed(rl.MouseButtonLeft) {
 			panelMgr.BeginDrag(splitterHover)
 		}
-		// Active drag — apply cursor pos to ratio. On release, persist if
+		// Active drag - apply cursor pos to ratio. On release, persist if
 		// changed (M13.5.5 will wire actual saveLayout call; for now the
 		// release just ends the drag).
 		if panelMgr.IsDragging() {
@@ -688,7 +688,7 @@ func main() {
 			} else {
 				if panelMgr.EndDrag() {
 					// Phase 13.5 M13.5.5: persist on EndDrag returning
-					// changed=true. Atomic write — failure logged, not fatal.
+					// changed=true. Atomic write - failure logged, not fatal.
 					saveLayout(panelMgr)
 				}
 				panel3D = panelMgr.Get(ui.Panel3D)
@@ -697,7 +697,7 @@ func main() {
 			}
 		}
 
-		// ── Space → toggle pause; +/− → cycle speed 1→2→4→8→1 ──
+		// ── Space -> toggle pause; +/− -> cycle speed 1->2->4->8->1 ──
 		if rl.IsKeyPressed(rl.KeySpace) {
 			if app.TimeScale > 0 {
 				app.LastNonZeroScale = app.TimeScale
@@ -758,7 +758,7 @@ func main() {
 			navPath = nil
 		}
 
-		// Map's content rect — the actual drawing surface, minus chrome. Cursor
+		// Map's content rect - the actual drawing surface, minus chrome. Cursor
 		// conversions go through this rather than panelMap.Bounds so clicks /
 		// zoom pivots align with what the player sees.
 		panelMapContent := ui.ContentRect(panelMap)
@@ -786,7 +786,7 @@ func main() {
 			mapPanning = false
 		}
 
-		// ── Phase 13.5 M13.5.4 — Inspector wheel scroll + thumb drag ──
+		// ── Phase 13.5 M13.5.4 - Inspector wheel scroll + thumb drag ──
 		// Wheel only fires when the cursor is over the Inspector panel and
 		// no splitter drag is active. MapCamera's wheel block above is gated
 		// on focused == ui.PanelMap, so the two paths are mutually exclusive.
@@ -798,9 +798,9 @@ func main() {
 				}
 			}
 		}
-		// Thumb drag — LMB-press on thumb rect starts the drag, regardless of
+		// Thumb drag - LMB-press on thumb rect starts the drag, regardless of
 		// focused panel (the thumb itself is always inside Inspector bounds).
-		// Splitter drag has priority — it uses LMB too, so guard against both.
+		// Splitter drag has priority - it uses LMB too, so guard against both.
 		inspScrollPanel := panelMgr.Get(ui.PanelInspect)
 		inspScroll := panelMgr.ScrollByID(ui.PanelInspect)
 		if !panelMgr.IsDragging() && inspScroll != nil {
@@ -833,7 +833,7 @@ func main() {
 		// ── 3D panel cursor (content-rect-local) ──
 		// Cursor coords used for raycast / marquee / picking are relative to
 		// the 3D content rect (panel minus chrome), and viewW/H match the
-		// content rect — same as the RT — so GetScreenToWorldRayEx /
+		// content rect - same as the RT - so GetScreenToWorldRayEx /
 		// GetWorldToScreenEx project consistently with what the player sees.
 		panel3DContent := ui.ContentRect(panel3D)
 		panel3DLocal := rl.Vector2{
@@ -885,7 +885,7 @@ func main() {
 			}
 		}
 
-		// ── LMB release → commit marquee or treat as a 3D click ──
+		// ── LMB release -> commit marquee or treat as a 3D click ──
 		if rl.IsMouseButtonReleased(rl.MouseButtonLeft) && marqueeActive {
 			end := cursor
 			dx := end.X - marqueeStart.X
@@ -930,11 +930,11 @@ func main() {
 		}
 
 		// ── RMB orders (3D or map). Two paths:
-		//   • Tap: PieMenu stays inactive, hit-test resolver runs at release.
-		//   • Hold > 200 ms: PieMenu activates, sweep cursor for kind, commit
+		//   - Tap: PieMenu stays inactive, hit-test resolver runs at release.
+		//   - Hold > 200 ms: PieMenu activates, sweep cursor for kind, commit
 		//     on release. Kind override overrides hit-test mapping.
 		// Note: PieMenu suppresses OrbitSystem's RMB-orbit because it captures
-		// the press inside Panel3D too — fine, the camera doesn't spin during
+		// the press inside Panel3D too - fine, the camera doesn't spin during
 		// the menu interaction. After menu release, RMB is no longer held and
 		// the orbit doesn't catch the trailing frame either.
 		if rl.IsMouseButtonPressed(rl.MouseButtonRight) {
@@ -980,9 +980,9 @@ func main() {
 				mods := rmbModifiersFromPress(rmbPressCtrl, rmbPressAlt, rmbPressDouble)
 				params := applyModifiersToParams(systems.OrderParams{}, mods)
 				// Phase 13.6 M13.6.5: DefendPosition pie commit attaches the
-				// hover-derived facing (squad center → press target) so the
+				// hover-derived facing (squad center -> press target) so the
 				// arrived sector matches the ghost-arc the player just saw.
-				// Other kinds keep no facing — Phase 14 may add Garrison/
+				// Other kinds keep no facing - Phase 14 may add Garrison/
 				// OccupyTrench facing once cover-slot orientation is wired.
 				if k == components.OrderKindDefendPosition {
 					if yaw, ok := facingFromSquadToTarget(ghostCtx, selected, pieMenu.Target); ok {
@@ -1017,7 +1017,7 @@ func main() {
 			}
 		}
 
-		// ── H → Stop order (global hotkey) ──
+		// ── H -> Stop order (global hotkey) ──
 		// Phase 11: iterates SquadsToOrder for distributed cancel, plus the
 		// per-unit Stop for soloists. Mirrors resolveRMBOrder's split.
 		if rl.IsKeyPressed(rl.KeyH) && len(selected) > 0 {
@@ -1033,7 +1033,7 @@ func main() {
 			}
 		}
 
-		// ── T → form Squad ──
+		// ── T -> form Squad ──
 		if rl.IsKeyPressed(rl.KeyT) && len(selected) >= 2 {
 			newSquad := squadService.CreateFromUnits(selected, components.FormationLine)
 			if newSquad != (ecs.Entity{}) && app.World.Alive(newSquad) {
@@ -1043,14 +1043,14 @@ func main() {
 			}
 		}
 
-		// ── U → ungroup ──
+		// ── U -> ungroup ──
 		if rl.IsKeyPressed(rl.KeyU) && len(selected) > 0 {
 			for _, e := range selected {
 				squadService.Leave(e)
 			}
 		}
 
-		// ── F1-F4 → change formation ──
+		// ── F1-F4 -> change formation ──
 		if len(selected) > 0 {
 			if commonSquad, homo := groupSelected(selected, squadMemberMap); homo && commonSquad != (ecs.Entity{}) {
 				var newKind components.FormationKind
@@ -1078,13 +1078,13 @@ func main() {
 			}
 		}
 
-		// ── Phase 13 M13.7 — MovementProfile hotkeys ──
+		// ── Phase 13 M13.7 - MovementProfile hotkeys ──
 		// `[` / `]` cycle MovementProfile presets prev/next. `'` toggles
 		// Posture Standard ↔ Quiet. Stance hotkeys (Z/X/C) are deferred to
 		// Phase 21 because Z/X are already taken (crater, cover overlay) and
 		// the Inspector quick-bar covers the case meanwhile.
 		//
-		// Hotkeys apply when a homogeneous squad is selected — same gate as
+		// Hotkeys apply when a homogeneous squad is selected - same gate as
 		// formation hotkeys above.
 		if len(selected) > 0 {
 			if commonSquad, homo := groupSelected(selected, squadMemberMap); homo && commonSquad != (ecs.Entity{}) {
@@ -1144,7 +1144,7 @@ func main() {
 			navPath = stepAlongPath(anchorPos, navPath, anchorSpeed*float32(dtReal.Seconds()))
 		}
 
-		// ── X → crater (Panel3D only) ──
+		// ── X -> crater (Panel3D only) ──
 		if focused == ui.Panel3D && rl.IsKeyPressed(rl.KeyX) {
 			stamper.StampHeightmap(*anchorPos, systems.Crater(2.0, 4.0), 4.0)
 		}
@@ -1203,7 +1203,7 @@ func main() {
 		anchorPos = posMap.Get(anchor)
 		anchorRender := anchorPos.ToRenderSpace(systems.CurrentOriginChunk)
 
-		// Phase 14.5 M14.5.4: particles are ECS entities now — lifecycle
+		// Phase 14.5 M14.5.4: particles are ECS entities now - lifecycle
 		// (age + despawn) lives in ParticleSystem.Update. No per-frame
 		// decay needed here.
 
@@ -1246,7 +1246,7 @@ func main() {
 			renderPos := pos.ToRenderSpace(systems.CurrentOriginChunk)
 			ent := qu.Entity()
 			// Phase 12: role drives cap colour + ShortLabel. Fall back to
-			// Rifleman if a unit somehow lacks UnitRole — keeps render
+			// Rifleman if a unit somehow lacks UnitRole - keeps render
 			// resilient if a future spawn path forgets AssignRole.
 			role := components.RoleRifleman
 			if r := roleMap.Get(ent); r != nil {
@@ -1306,7 +1306,7 @@ func main() {
 			drawBuildingStairs(renderPos, *st)
 		}
 
-		// Debug overlays — all gated by hold-key. The hold-G road overlay also
+		// Debug overlays - all gated by hold-key. The hold-G road overlay also
 		// toggles the map's road / river / building debug layer for consistency.
 		if rl.IsKeyDown(rl.KeyG) {
 			drawRoadGraphDebug(&roadGraph)
@@ -1435,7 +1435,7 @@ func main() {
 		// release will commit to.
 		var ghostDragFacing *float32
 		if pieMenu.InFacingDrag {
-			// Recompute the current yaw — pieMenu.Tick only writes FacingYaw
+			// Recompute the current yaw - pieMenu.Tick only writes FacingYaw
 			// on release. We mirror the same screen-space formula here so the
 			// preview matches the eventual commit value exactly.
 			dx := cursor.X - pieMenu.Origin.X
@@ -1456,7 +1456,7 @@ func main() {
 			k := pieMenu.HoveringKind
 			ghostPieHover = &k
 			// Anchor the ghost at the press-time target while the menu is open
-			// — the player is choosing a kind for that point, not for whatever
+			// - the player is choosing a kind for that point, not for whatever
 			// is under the cursor now (cursor lives on the segment ring).
 			ghostTarget = pieMenu.Target
 			ghostTargetOK = true
@@ -1471,7 +1471,7 @@ func main() {
 		rl.EndMode3D()
 		rl.EndTextureMode()
 
-		// ── 2D pass — clear bg, paint each panel ──
+		// ── 2D pass - clear bg, paint each panel ──
 		rl.BeginDrawing()
 		rl.ClearBackground(rl.Color{R: 8, G: 10, B: 14, A: 255})
 
@@ -1572,7 +1572,7 @@ func main() {
 		// 3D RT composite into Panel3D bounds.
 		scene3DRT.Composite(panel3D)
 
-		// Phase 12 role labels — 2D screen-projected ShortLabel pills above
+		// Phase 12 role labels - 2D screen-projected ShortLabel pills above
 		// every unit. Done after RT composite so the labels overlay the
 		// scene; scissored to Panel3D content rect so they don't bleed onto
 		// neighbouring panels.
@@ -1637,7 +1637,7 @@ func main() {
 		// Phase 10: drawing them over the panel chrome on every frame conflicts
 		// with each panel's title bar; they're discoverable on demand instead.
 
-		// Profiler HUD — collapsed always, expanded behind P toggle.
+		// Profiler HUD - collapsed always, expanded behind P toggle.
 		const heapInterval = time.Second
 		if app.Prof.HeapStale(app.Elapsed(), heapInterval) {
 			var ms runtime.MemStats
@@ -1694,7 +1694,7 @@ func main() {
 	}
 }
 
-// nextTimeScale advances the speed multiplier through 1 → 2 → 4 → 8 → 1
+// nextTimeScale advances the speed multiplier through 1 -> 2 -> 4 -> 8 -> 1
 // (step=+1) or backwards (step=-1). When currently paused, advancing forward
 // jumps to 1×; advancing back jumps to 8×. Used by the +/- hotkey.
 func nextTimeScale(cur float32, step int) float32 {

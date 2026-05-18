@@ -13,15 +13,15 @@ import (
 
 // SquadMacroPathSystem builds and refreshes the MacroPath of each Squad
 // entity. A* runs through NavService for the *center* of the squad (PHASE-9.md
-// P4 — center is computed on the fly, not stored). Replan triggers (P5):
+// P4 - center is computed on the fly, not stored). Replan triggers (P5):
 //
-//  1. ReplanAt = 0 (set by SquadService.OrderMoveTo) — immediate.
-//  2. sys.elapsed >= mp.ReplanAt — throttle of 1 s.
+//  1. ReplanAt = 0 (set by SquadService.OrderMoveTo) - immediate.
+//  2. sys.elapsed >= mp.ReplanAt - throttle of 1 s.
 //  3. Center drifted further than SquadReplanCenterDrift from the next
-//     waypoint — bunch reorganised around an obstacle, replan to the goal.
+//     waypoint - bunch reorganised around an obstacle, replan to the goal.
 //
 // Phase 11.5 M11.5.3 / M11.5.5: tier-gating dropped, per-squad pass runs
-// through WorkerPool.ParallelFor. Each squad's A* call is independent —
+// through WorkerPool.ParallelFor. Each squad's A* call is independent -
 // NavService.FindPath builds local A* state per call (states / closed / open
 // maps are stack-local), and the read-only resources it queries
 // (TerrainChunkIndex, TransitionRegistry, etc.) are immutable across the
@@ -69,7 +69,7 @@ func (sys *SquadMacroPathSystem) InitUI(w *ecs.World) {
 func (SquadMacroPathSystem) Name() string { return "squad_macro_path" }
 
 func (SquadMacroPathSystem) LODPolicy() core.LODPolicy {
-	// Phase 11.5 P1: universal sim — single 1 s replan interval for every
+	// Phase 11.5 P1: universal sim - single 1 s replan interval for every
 	// active squad. The old Relevant (3 s) / Dormant (5 s) fallbacks are gone
 	// since LOD markers no longer apply to units / commanders.
 	return core.LODPolicy{
@@ -80,21 +80,21 @@ func (SquadMacroPathSystem) LODPolicy() core.LODPolicy {
 }
 
 const (
-	// SquadReplanInterval — throttle (seconds) between unforced A* calls for
+	// SquadReplanInterval - throttle (seconds) between unforced A* calls for
 	// the same squad. PHASE-9.md P5 default.
 	SquadReplanInterval float32 = 1.0
-	// SquadReplanCenterDrift — if center is further than this from the next
+	// SquadReplanCenterDrift - if center is further than this from the next
 	// waypoint, force a replan. Models bunch-around-obstacle drift.
 	SquadReplanCenterDrift float32 = 5.0
-	// SquadArrivalCoeff × Spacing = "close enough to the goal — squad idle".
+	// SquadArrivalCoeff × Spacing = "close enough to the goal - squad idle".
 	SquadArrivalCoeff float32 = 1.5
-	// SquadWaypointReached — center within this distance pops the head
+	// SquadWaypointReached - center within this distance pops the head
 	// waypoint. Slightly larger than unit arrivalRadius so the macro path
 	// doesn't outpace its members.
 	SquadWaypointReached float32 = 2.0
 )
 
-// macroPathWork — snapshot row for the parallel per-squad pass.
+// macroPathWork - snapshot row for the parallel per-squad pass.
 type macroPathWork struct {
 	roster    *components.CommandRoster
 	mp        *components.MacroPath
@@ -154,8 +154,8 @@ func (sys *SquadMacroPathSystem) processSquad(world *ecs.World, w macroPathWork,
 
 	// Phase 11: MacroPath is derived from the current Order. Read kind +
 	// target Pos from head; only "moving" kinds (MoveTo / Garrison /
-	// OccupyTrench / DefendPosition / Patrol — all current kinds) feed a
-	// macro path. Idle squad → mp.HasGoal stays false; FormationSystem
+	// OccupyTrench / DefendPosition / Patrol - all current kinds) feed a
+	// macro path. Idle squad -> mp.HasGoal stays false; FormationSystem
 	// sits this one out.
 	var orderKind components.OrderKindCode
 	var orderTargetPos components.WorldPos
@@ -170,7 +170,7 @@ func (sys *SquadMacroPathSystem) processSquad(world *ecs.World, w macroPathWork,
 		}
 	}
 	if !hasOrder {
-		// Order finished or queue empty — make sure derived state matches.
+		// Order finished or queue empty - make sure derived state matches.
 		mp.HasGoal = false
 		mp.Head = 0
 		mp.Count = 0
@@ -237,7 +237,7 @@ func (sys *SquadMacroPathSystem) processSquad(world *ecs.World, w macroPathWork,
 	mp.Head = 0
 	mp.Count = 0
 	if len(path) == 0 {
-		// No path — push the raw goal as a single fallback waypoint so
+		// No path - push the raw goal as a single fallback waypoint so
 		// FormationSystem still drags the squad in the right direction.
 		mp.Waypoints[0] = mp.Goal
 		mp.Count = 1
@@ -250,7 +250,7 @@ func (sys *SquadMacroPathSystem) processSquad(world *ecs.World, w macroPathWork,
 			mp.Waypoints[mp.Count] = path[i]
 			mp.Count++
 		}
-		// Always end on Goal — otherwise the squad parks at the last
+		// Always end on Goal - otherwise the squad parks at the last
 		// decimated waypoint instead of pulling up at the target.
 		if mp.Count == 0 || centerXZDistSq(mp.Waypoints[mp.Count-1], mp.Goal) > 1 {
 			if int(mp.Count) < components.SquadMacroPathSize {
@@ -281,7 +281,7 @@ func (sys *SquadMacroPathSystem) processSquad(world *ecs.World, w macroPathWork,
 }
 
 // SquadCenter returns the XZ-averaged WorldPos of every live member in the
-// roster. Y is averaged too — it falls out naturally as the squad ascends
+// roster. Y is averaged too - it falls out naturally as the squad ascends
 // stairs or descends into a bunker, no special floor logic needed. (false)
 // when the roster has no resolvable positions.
 //
@@ -333,8 +333,8 @@ func centerXZDistSq(a, b components.WorldPos) float32 {
 	return d.X*d.X + d.Z*d.Z
 }
 
-// decimationStep — how many fine-grained NavService waypoints to skip between
-// macro waypoints. Spacing 2 → step 4, Spacing 4 → step 6 etc.
+// decimationStep - how many fine-grained NavService waypoints to skip between
+// macro waypoints. Spacing 2 -> step 4, Spacing 4 -> step 6 etc.
 func decimationStep(spacing float32) int {
 	step := int(spacing) + 2
 	if step < 4 {

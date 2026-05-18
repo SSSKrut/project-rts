@@ -7,7 +7,7 @@
 //
 // L1 layout = fixed grid. Two presets (Field / Command) swap which slot the
 // 3D scene and the map occupy. L3 (splitters) / L4 (movable + dock zones) is
-// Phase 22 — this file's exported surface (PanelManager.{Recompute, FocusedAt,
+// Phase 22 - this file's exported surface (PanelManager.{Recompute, FocusedAt,
 // Get}) is what stays stable across that migration.
 package ui
 
@@ -21,13 +21,13 @@ import (
 type SplitterID uint8
 
 const (
-	// SplitterNone — cursor isn't on any splitter.
+	// SplitterNone - cursor isn't on any splitter.
 	SplitterNone SplitterID = iota
-	// SplitterMain — vertical line between the big slot (3D in Field preset /
+	// SplitterMain - vertical line between the big slot (3D in Field preset /
 	// Map in Command) and the right column (Inspector + side view stacked).
 	// Drag horizontally to redistribute width via RightColRatio.
 	SplitterMain
-	// SplitterRight — horizontal line inside the right column between
+	// SplitterRight - horizontal line inside the right column between
 	// Inspector (top) and the side view (bottom). Drag vertically to
 	// redistribute height via InspectorRatio.
 	SplitterRight
@@ -38,7 +38,7 @@ const (
 // cursor can grab without pixel-precision (Fitts).
 const splitterGrabRadius float32 = 6
 
-// panelMinW / panelMinH — min sizes used when clamping splitter drags so a
+// panelMinW / panelMinH - min sizes used when clamping splitter drags so a
 // panel can't be shrunk to invisibility. Inspector quick-bar chips become
 // unusable below ~180 px wide; panelMinH=100 prevents zero-height drag.
 const (
@@ -67,7 +67,7 @@ const (
 	PresetCommand                     // Map is the big slot, 3D is the side slot.
 )
 
-// Panel — one screen-space rectangle. Bounds recomputed by LayoutManager on
+// Panel - one screen-space rectangle. Bounds recomputed by LayoutManager on
 // resize / preset swap. Title is shown in the panel's top-left corner.
 type Panel struct {
 	ID     PanelID
@@ -75,7 +75,7 @@ type Panel struct {
 	Title  string
 }
 
-// ScrollState — per-panel vertical scroll position + measured content height.
+// ScrollState - per-panel vertical scroll position + measured content height.
 //
 // Phase 13.5 M13.5.3: Inspector renders with `y -= OffsetY` so contents shift
 // up under the scissor; at the end of the draw it writes the total used
@@ -87,7 +87,7 @@ type ScrollState struct {
 }
 
 // PanelManager owns the fixed list of panels and the active LayoutPreset.
-// Panels slice order doubles as Z-order — first = bottom, last = top. In L1
+// Panels slice order doubles as Z-order - first = bottom, last = top. In L1
 // nothing overlaps so this only matters for the FocusedAt fallback when two
 // rects share a border pixel.
 //
@@ -101,12 +101,12 @@ type PanelManager struct {
 	Layout  LayoutPreset
 	focused PanelID
 
-	// Phase 13.5 — mutable layout ratios.
+	// Phase 13.5 - mutable layout ratios.
 	RightColRatio  float32 // 0..1, side column's share of width
 	InspectorRatio float32 // 0..1, inspector's share of side column height
 
 	// Cached screen dimensions from the latest Recompute. UpdateDrag uses
-	// these to convert cursor delta → ratio delta without re-querying raylib
+	// these to convert cursor delta -> ratio delta without re-querying raylib
 	// inside ui/.
 	screenW, screenH int32
 
@@ -117,13 +117,13 @@ type PanelManager struct {
 	dragInitialDirt bool    // tracks whether the drag actually mutated ratio
 
 	// Per-panel scroll state (Phase 13.5 M13.5.3). Indexed parallel to
-	// Panels — Scroll[i] belongs to Panels[i].
+	// Panels - Scroll[i] belongs to Panels[i].
 	Scroll [4]ScrollState
 }
 
 // NewPanelManager constructs the manager with four empty-bounds panels in
 // canonical order. Caller must call Recompute(screenW, screenH) before the
-// first draw — bounds are zero until then.
+// first draw - bounds are zero until then.
 func NewPanelManager() *PanelManager {
 	return &PanelManager{
 		Panels: []Panel{
@@ -140,7 +140,7 @@ func NewPanelManager() *PanelManager {
 }
 
 // Recompute rebuilds every panel's Bounds from the current screen size and
-// active LayoutPreset. Idempotent — call after resize, preset toggle, or any
+// active LayoutPreset. Idempotent - call after resize, preset toggle, or any
 // time the cached rects might be stale.
 func (m *PanelManager) Recompute(screenW, screenH int32) {
 	m.screenW = screenW
@@ -160,7 +160,7 @@ func (m *PanelManager) Recompute(screenW, screenH int32) {
 }
 
 // TogglePreset flips Field ↔ Command. Caller is responsible for Recompute()
-// after — keeping the calls separate lets main.go also realloc the 3D RT in
+// after - keeping the calls separate lets main.go also realloc the 3D RT in
 // the same place.
 func (m *PanelManager) TogglePreset() {
 	if m.Layout == PresetField {
@@ -186,7 +186,7 @@ func (m *PanelManager) FocusedAt(cursor rl.Vector2) PanelID {
 	return PanelNone
 }
 
-// Get returns the Panel by ID. Returns a zero Panel{} when the ID is unknown —
+// Get returns the Panel by ID. Returns a zero Panel{} when the ID is unknown -
 // callers that hand out a fixed compile-time ID can assume Get always
 // succeeds.
 func (m *PanelManager) Get(id PanelID) Panel {
@@ -206,7 +206,7 @@ func (m *PanelManager) IsFocused(id PanelID) bool {
 }
 
 // Focused returns the cached focused panel ID. Useful when the same ID is
-// needed in multiple input blocks — call FocusedAt once and re-read via this.
+// needed in multiple input blocks - call FocusedAt once and re-read via this.
 func (m *PanelManager) Focused() PanelID { return m.focused }
 
 // CursorLocal converts a screen-space cursor to a panel-local Vector2 (cursor
@@ -217,7 +217,7 @@ func CursorLocal(cursor rl.Vector2, p Panel) rl.Vector2 {
 }
 
 // ScrollByID returns a pointer to the per-panel scroll state. Returns nil
-// if the ID is unknown — callers handing out a fixed compile-time ID can
+// if the ID is unknown - callers handing out a fixed compile-time ID can
 // assume non-nil.
 func (m *PanelManager) ScrollByID(id PanelID) *ScrollState {
 	for i := range m.Panels {
@@ -234,7 +234,7 @@ func pointInRect(p rl.Vector2, r rl.Rectangle) bool {
 
 // splitterMainX returns the X coord of the vertical Main splitter line. It
 // sits at the boundary between the big slot (left column) and the right
-// column. In both Field and Command presets this is the same — only the
+// column. In both Field and Command presets this is the same - only the
 // content of the big slot changes (3D vs Map).
 func (m *PanelManager) splitterMainX() float32 {
 	return float32(m.screenW) - float32(m.screenW)*m.RightColRatio
@@ -256,14 +256,14 @@ func (m *PanelManager) SplitterAt(cursor rl.Vector2) SplitterID {
 		return SplitterNone
 	}
 	contentH := float32(m.screenH - timeBarHeight)
-	// Time-bar area — splitters don't extend below contentH.
+	// Time-bar area - splitters don't extend below contentH.
 	if cursor.Y >= contentH {
 		return SplitterNone
 	}
 	mainX := m.splitterMainX()
 	rightY := m.splitterRightY()
 
-	// Right splitter check first — its Y-band overlaps with Main's X-band at
+	// Right splitter check first - its Y-band overlaps with Main's X-band at
 	// the corner, but a horizontal cursor sweep inside the right column should
 	// land on Right, not Main. So Right wins when cursor is inside the right
 	// column AND within Y-grab of the right splitter.
@@ -315,12 +315,12 @@ func (m *PanelManager) UpdateDrag(cursor rl.Vector2) {
 	switch m.dragging {
 	case SplitterMain:
 		// Splitter follows cursor.X. RightW = screenW - cursor.X.
-		// Clamp so both leftW and rightW ≥ panelMinW.
+		// Clamp so both leftW and rightW >= panelMinW.
 		x := cursor.X
 		minX := panelMinW
 		maxX := float32(m.screenW) - panelMinW
 		if minX > maxX {
-			// Window too narrow for both mins — meet in the middle.
+			// Window too narrow for both mins - meet in the middle.
 			minX = float32(m.screenW) * 0.5
 			maxX = minX
 		}
@@ -362,7 +362,7 @@ func (m *PanelManager) UpdateDrag(cursor rl.Vector2) {
 }
 
 // EndDrag finalises a splitter drag. Returns true if the ratio actually
-// changed during the drag — callers use this to gate layout persistence
+// changed during the drag - callers use this to gate layout persistence
 // writes so we don't re-save on no-op clicks.
 func (m *PanelManager) EndDrag() bool {
 	if m.dragging == SplitterNone {

@@ -7,26 +7,24 @@ import (
 	"time"
 )
 
-// ProfileWindow is the rolling sample count. 60 frames = ~1 s at 60 fps —
-// short enough for the HUD to react to "I just changed code, is it faster?",
-// long enough to smooth out GC pauses and one-off mesh uploads.
+// ProfileWindow is the rolling sample count. 60 frames at 60 fps is short
+// enough for the HUD to react to a code change and long enough to smooth out
+// GC pauses and one-off mesh uploads.
 const ProfileWindow = 60
 
-// MaxSystems caps how many systems the Profiler can track. ~17 systems are
-// registered today; ×2 headroom. AddSystem panics if exceeded so the panic
-// fires once at startup, not silently in the middle of a session.
+// MaxSystems caps how many systems the Profiler can track. AddSystem panics
+// if exceeded so the panic fires once at startup, not silently mid-session.
 const MaxSystems = 32
 
 // profileFrame is one tick's worth of per-system timings plus the tick total.
-// Fixed-size array — no per-frame allocations.
+// Fixed-size array - no per-frame allocations.
 type profileFrame struct {
 	tickTotalNs int64
 	perSystemNs [MaxSystems]int64
 }
 
-// Profiler is a fixed-window rolling collector of per-tick timings. Value
-// stored by pointer on App. Reads (medians) are O(ProfileWindow × log) which
-// is ~µs per HUD draw — negligible.
+// Profiler is a fixed-window rolling collector of per-tick timings. Reads
+// (medians) are O(ProfileWindow * log) - microseconds per HUD draw.
 type Profiler struct {
 	samples [ProfileWindow]profileFrame
 	head    int  // index to write the NEXT frame
@@ -42,14 +40,13 @@ type Profiler struct {
 	lastHeapBytes  uint64
 	lastHeapUpdate time.Duration
 
-	// Last entity count, refreshed by ReadEntityCountEvery. Used by HUD/trace.
+	// Last entity count, refreshed by ReadEntityCountEvery.
 	lastEntityUsed   int
 	lastEntityUpdate time.Duration
 }
 
 // RegisterSystem assigns a stable index to a system name. Called once per
-// system by App.AddSystem. Panics on overflow so the build fails loud, not
-// silently truncates timings.
+// system by App.AddSystem. Panics on overflow so the build fails loud.
 func (p *Profiler) RegisterSystem(name string) int {
 	if p.systemCount >= MaxSystems {
 		panic(fmt.Sprintf("profiler: more than %d systems registered (raise MaxSystems)", MaxSystems))
@@ -60,10 +57,8 @@ func (p *Profiler) RegisterSystem(name string) int {
 	return idx
 }
 
-// SystemCount returns how many slots are in use.
 func (p *Profiler) SystemCount() int { return p.systemCount }
 
-// SystemName returns the registered name for a system index.
 func (p *Profiler) SystemName(idx int) string {
 	if idx < 0 || idx >= p.systemCount {
 		return ""
@@ -72,7 +67,6 @@ func (p *Profiler) SystemName(idx int) string {
 }
 
 // BeginTick zeroes the slot the next RecordSystem calls will accumulate into.
-// Called by App.Tick at the top of the tick.
 func (p *Profiler) BeginTick() {
 	f := &p.samples[p.head]
 	f.tickTotalNs = 0
@@ -81,9 +75,9 @@ func (p *Profiler) BeginTick() {
 	}
 }
 
-// RecordSystem accumulates a duration into the current frame's slot for sysIdx.
-// A system may be called up to three times per tick (one per LOD tier) — they
-// all sum into the same slot, matching P3 (per-system aggregated across tiers).
+// RecordSystem accumulates a duration into the current frame's slot for
+// sysIdx. A system may be called up to three times per tick (one per LOD
+// tier); they all sum into the same slot.
 func (p *Profiler) RecordSystem(sysIdx int, d time.Duration) {
 	if sysIdx < 0 || sysIdx >= MaxSystems {
 		return
@@ -101,7 +95,6 @@ func (p *Profiler) EndTick(tickTotal time.Duration) {
 	}
 }
 
-// sampleCount returns how many filled slots are in the ring.
 func (p *Profiler) sampleCount() int {
 	if p.full {
 		return ProfileWindow
@@ -110,7 +103,6 @@ func (p *Profiler) sampleCount() int {
 }
 
 // MedianTick returns the median total-tick duration over the current window.
-// Returns 0 before the first tick.
 func (p *Profiler) MedianTick() time.Duration {
 	n := p.sampleCount()
 	if n == 0 {
@@ -143,31 +135,26 @@ func medianInPlace(buf []int64) int64 {
 	return buf[len(buf)/2]
 }
 
-// SetHeap records a heap-size sample. Caller decides cadence (1 Hz typically).
 func (p *Profiler) SetHeap(heapBytes uint64, now time.Duration) {
 	p.lastHeapBytes = heapBytes
 	p.lastHeapUpdate = now
 }
 
-// HeapBytes returns the last sampled heap usage. Zero if no SetHeap yet.
 func (p *Profiler) HeapBytes() uint64 { return p.lastHeapBytes }
 
-// HeapStale reports whether enough time has passed since the last SetHeap that
-// the caller should refresh. Used by main.go to throttle ReadMemStats.
+// HeapStale reports whether enough time has passed since the last SetHeap
+// that the caller should refresh.
 func (p *Profiler) HeapStale(now, interval time.Duration) bool {
 	return now-p.lastHeapUpdate >= interval
 }
 
-// SetEntityCount records a world-entity count sample.
 func (p *Profiler) SetEntityCount(used int, now time.Duration) {
 	p.lastEntityUsed = used
 	p.lastEntityUpdate = now
 }
 
-// EntityCount returns the last sampled total entity count.
 func (p *Profiler) EntityCount() int { return p.lastEntityUsed }
 
-// EntityCountStale reports whether the cached count should be refreshed.
 func (p *Profiler) EntityCountStale(now, interval time.Duration) bool {
 	return now-p.lastEntityUpdate >= interval
 }
@@ -179,9 +166,7 @@ type SystemMedian struct {
 }
 
 // SystemMediansSorted returns every registered system's median, sorted
-// descending by Median. The returned slice is freshly allocated — HUD calls
-// it once per frame and the slice is small (~17 entries), so the cost is in
-// the noise.
+// descending by Median.
 func (p *Profiler) SystemMediansSorted() []SystemMedian {
 	out := make([]SystemMedian, p.systemCount)
 	for i := 0; i < p.systemCount; i++ {
@@ -191,9 +176,7 @@ func (p *Profiler) SystemMediansSorted() []SystemMedian {
 	return out
 }
 
-// PrintSnapshot writes a copy-pasteable two-column report to stdout. Tick total
-// first, then every system sorted desc by median. Fixed width so the output
-// stays diffable between snapshots.
+// PrintSnapshot writes a copy-pasteable two-column report to stdout.
 func (p *Profiler) PrintSnapshot() {
 	var sb strings.Builder
 	sb.WriteString("\n─── Profiler snapshot ───\n")

@@ -20,7 +20,7 @@ const waterPropSpacing float32 = 4.0
 // exclusion via nearestRiverDistance), and before terrain_mesh (cut is in
 // the mesh on first build).
 //
-// Filter excludes Modified — player edits aren't re-stamped. RiverProcessed
+// Filter excludes Modified - player edits aren't re-stamped. RiverProcessed
 // gates against re-running on the same chunk.
 type RiverSystem struct {
 	chunkFilter       *ecs.Filter3[components.ChunkCoord, components.Heightmap, components.WorldPos]
@@ -131,7 +131,7 @@ func (sys RiverSystem) Update(ctx core.UpdateContext) {
 			}
 		}
 
-		// Mark even non-intersecting chunks — keeps the filter cheap on later
+		// Mark even non-intersecting chunks - keeps the filter cheap on later
 		// ticks. Without this we'd re-test every pristine chunk vs every river.
 		processed = append(processed, processedEnt{id: ent, cc: ccVal})
 	}
@@ -181,7 +181,7 @@ func addWaterPropsForSegment(
 	if segLen <= 0 {
 		return
 	}
-	// Atan2(dx, dz) — yaw around +Y so yaw=0 points along +Z (matches the
+	// Atan2(dx, dz) - yaw around +Y so yaw=0 points along +Z (matches the
 	// prop renderer's Rotatef-around-Y convention).
 	yaw := float32(math.Atan2(float64(dx), float64(dz)))
 

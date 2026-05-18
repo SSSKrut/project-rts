@@ -3,7 +3,7 @@
 package core
 
 // Tracer is a no-op on builds without the `trace` build tag. Every method is
-// empty and inlines away — `app.Trace.WriteFrame(...)` in main.go has zero
+// empty and inlines away - `app.Trace.WriteFrame(...)` in main.go has zero
 // runtime cost. The real implementation lives in trace_on.go with identical
 // signatures so the rest of the codebase doesn't care which build it's in.
 type Tracer struct{}

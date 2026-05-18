@@ -7,13 +7,13 @@ import (
 )
 
 // MapCamera is the 2D view state for the map panel (PHASE-10.md P5). No 3D
-// projection — just a centre point and pixels-per-metre zoom. Pan and zoom
+// projection - just a centre point and pixels-per-metre zoom. Pan and zoom
 // are driven by main.go input handlers and stay independent of the 3D
 // camera.
 type MapCamera struct {
 	// Center is the WorldPos pinned to the panel center. Pan moves this.
 	Center components.WorldPos
-	// Zoom is pixels-per-metre. Default 1.0 → 1 m of world = 1 px on screen.
+	// Zoom is pixels-per-metre. Default 1.0 -> 1 m of world = 1 px on screen.
 	Zoom    float32
 	MinZoom float32
 	MaxZoom float32
@@ -31,7 +31,7 @@ func NewMapCamera() MapCamera {
 }
 
 // MapWorldToPanel projects a WorldPos onto the panel's screen-space rect.
-// The result is in screen coordinates (not panel-local) — callers pass it
+// The result is in screen coordinates (not panel-local) - callers pass it
 // directly to raylib draw calls.
 func MapWorldToPanel(wp components.WorldPos, cam MapCamera, panelBounds rl.Rectangle) rl.Vector2 {
 	delta := wp.Sub(cam.Center) // metres
@@ -41,7 +41,7 @@ func MapWorldToPanel(wp components.WorldPos, cam MapCamera, panelBounds rl.Recta
 	}
 }
 
-// MapPanelToWorld is the inverse — panel-screen-space pixel position back to
+// MapPanelToWorld is the inverse - panel-screen-space pixel position back to
 // a WorldPos. Used by map RMB / LMB to resolve the cursor target.
 func MapPanelToWorld(screenPos rl.Vector2, cam MapCamera, panelBounds rl.Rectangle) components.WorldPos {
 	dx := screenPos.X - (panelBounds.X + panelBounds.Width*0.5)

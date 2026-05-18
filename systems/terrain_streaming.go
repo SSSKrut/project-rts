@@ -13,7 +13,7 @@ import (
 
 // Streaming radii in chunks. Active = full-detail mesh, Relevant = decimated.
 // Chebyshev distance (max of |dx|, |dz|) so the loaded region is a square
-// ring rather than a circle — matches a grid streaming pattern and keeps
+// ring rather than a circle - matches a grid streaming pattern and keeps
 // neighbour lookup trivially correct.
 //
 // 7×7 active + 11×11 relevant (was 5×5 + 9×9). At 64 m chunks the far-LOD
@@ -24,9 +24,9 @@ const (
 	terrainHysteresis     = 1
 )
 
-// TerrainChunkIndex is a singleton: ChunkCoord → entity. O(1) "is this chunk
+// TerrainChunkIndex is a singleton: ChunkCoord -> entity. O(1) "is this chunk
 // already loaded?" and eviction set without a full scan. Held by reference
-// (added via ecs.AddResource) and mutated in place — no per-tick allocation.
+// (added via ecs.AddResource) and mutated in place - no per-tick allocation.
 type TerrainChunkIndex struct {
 	Loaded map[components.ChunkCoord]ecs.Entity
 }
@@ -40,7 +40,7 @@ func NewTerrainChunkIndex() TerrainChunkIndex {
 // TerrainStreamingSystem owns the lifecycle of terrain chunk entities: spawns
 // them when the anchor moves into range, evicts them (releasing GPU
 // resources) when the anchor moves away, and toggles the LOD marker on tier
-// boundary crossings. Does NOT generate heights or build meshes — just sets
+// boundary crossings. Does NOT generate heights or build meshes - just sets
 // HeightmapDirty / MeshDirty for downstream systems. Runs at 4 Hz; the anchor
 // can't outrun a chunk in less than that even at high speed.
 type TerrainStreamingSystem struct {
@@ -149,7 +149,7 @@ func tierForDistance(dist int32, current core.LODTier) core.LODTier {
 	}
 }
 
-// initialTier — tier a brand-new chunk is born into; no hysteresis to consult.
+// initialTier - tier a brand-new chunk is born into; no hysteresis to consult.
 func initialTier(dist int32) core.LODTier {
 	if dist <= int32(terrainActiveRadius) {
 		return core.LODTierActive
@@ -218,7 +218,7 @@ func (sys TerrainStreamingSystem) Update(ctx core.UpdateContext) {
 		}
 		next := tierForDistance(dist, current)
 		if next == core.LODTierDormant {
-			// No Dormant tier for terrain — out-of-band counts as eviction.
+			// No Dormant tier for terrain - out-of-band counts as eviction.
 			evictions = append(evictions, evictRec{id, *cc})
 			continue
 		}
@@ -255,15 +255,15 @@ func (sys TerrainStreamingSystem) Update(ctx core.UpdateContext) {
 	//
 	// Persistence: Modified chunks get their heights flushed before
 	// destruction; pristine chunks skip the write entirely. Errors are
-	// logged, not fatal — a missed flush degrades to "this edit was lost"
+	// logged, not fatal - a missed flush degrades to "this edit was lost"
 	// rather than crashing the streaming loop.
 	propIdx := sys.propIndexRes.Get()
 	bIdx := sys.buildingIndexRes.Get()
 	coverIdx := sys.coverSlotIndexRes.Get()
 	transitionReg := sys.transitionRes.Get()
 
-	// Build a chunk → buildings-rooted-here map only if any buildings exist
-	// and we're actually evicting something — keeps the common path cheap.
+	// Build a chunk -> buildings-rooted-here map only if any buildings exist
+	// and we're actually evicting something - keeps the common path cheap.
 	var buildingsByChunk map[components.ChunkCoord][]ecs.Entity
 	if bIdx != nil && len(evictions) > 0 {
 		qb := sys.buildingFilter.Query()
@@ -300,7 +300,7 @@ func (sys TerrainStreamingSystem) Update(ctx core.UpdateContext) {
 		}
 		// Tear down every building child (walls / floors / etc.) for any
 		// Building rooted in this chunk. The Building root is AlwaysActive
-		// and survives — children respawn on chunk return.
+		// and survives - children respawn on chunk return.
 		if bIdx != nil {
 			for _, root := range buildingsByChunk[ev.cc] {
 				if children, ok := bIdx.Loaded[root]; ok {
@@ -312,7 +312,7 @@ func (sys TerrainStreamingSystem) Update(ctx core.UpdateContext) {
 						evictedChildren[c] = true
 						ctx.World.RemoveEntity(c)
 					}
-					// Drop every TransitionEdge whose owner just despawned —
+					// Drop every TransitionEdge whose owner just despawned -
 					// otherwise A* could route through a stale doorway / stair
 					// edge. Per Phase 7 P3 (transition cleanup on eviction).
 					if transitionReg != nil {
@@ -361,7 +361,7 @@ func (sys TerrainStreamingSystem) Update(ctx core.UpdateContext) {
 		}
 	}
 
-	// Spawn new chunks. WorldPos is at the chunk's origin corner — render
+	// Spawn new chunks. WorldPos is at the chunk's origin corner - render
 	// adds renderPos = pos.ToRenderSpace and the mesh's local vertices span
 	// [0, ChunkSize].
 	for _, sp := range spawns {

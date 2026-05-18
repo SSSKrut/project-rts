@@ -10,7 +10,7 @@ import (
 	"rts-go/ui"
 )
 
-// Phase 13.5 M13.5.5 — minimal layout persistence.
+// Phase 13.5 M13.5.5 - minimal layout persistence.
 //
 // Schema is a single JSON object with version + the two split ratios we
 // can mutate from the UI today. Phase 22 will extend this into a proper
@@ -65,7 +65,7 @@ func loadLayout(panelMgr *ui.PanelManager) {
 }
 
 // saveLayout marshals the current PanelManager ratios into layout.json. Atomic
-// via .tmp + os.Rename — partial writes from a crash mid-Marshal can't leave
+// via .tmp + os.Rename - partial writes from a crash mid-Marshal can't leave
 // a corrupt file in place. Errors are logged but not returned: layout
 // persistence failure shouldn't crash the game.
 func saveLayout(panelMgr *ui.PanelManager) {

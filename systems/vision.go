@@ -71,14 +71,14 @@ func (VisionSystem) LODPolicy() core.LODPolicy {
 	}
 }
 
-// visionUnit — per-tick snapshot of a candidate target.
+// visionUnit - per-tick snapshot of a candidate target.
 type visionUnit struct {
 	ent   ecs.Entity
 	pos   components.WorldPos
 	chunk components.ChunkCoord
 }
 
-// seerWork — per-seer snapshot row for the parallel pass.
+// seerWork - per-seer snapshot row for the parallel pass.
 type seerWork struct {
 	ent    ecs.Entity
 	pos    components.WorldPos
@@ -163,7 +163,7 @@ func processVisionSeer(
 		if cand.ent == s.ent {
 			continue
 		}
-		// 3×3 chunk window — anything outside is automatic miss.
+		// 3×3 chunk window - anything outside is automatic miss.
 		dcx := cand.chunk.X - s.pos.Chunk.X
 		if dcx < -1 || dcx > 1 {
 			continue

@@ -13,7 +13,7 @@ import (
 const floorHeight float32 = 3.0
 const wallThickness float32 = 0.3
 
-// bunkerDepth — how far below surface a Bunker building floor sits. Matches
+// bunkerDepth - how far below surface a Bunker building floor sits. Matches
 // Stamper.RectCut depth applied by the BuildingSystem terrain pass.
 const bunkerDepth float32 = 3.0
 const bunkerFalloffWidth float32 = 4.0
@@ -31,7 +31,7 @@ const (
 )
 
 // childSpec is the discriminated-union output of the layout generator. Caller
-// reads Kind, then the matching sub-struct. Pure data — no ECS handles — so
+// reads Kind, then the matching sub-struct. Pure data - no ECS handles - so
 // the generator stays a pure function (deterministic from Building.Seed).
 type childSpec struct {
 	Kind childKind
@@ -43,12 +43,12 @@ type childSpec struct {
 	Floor  components.Floor
 	Stairs components.Stairs
 
-	// Outward normal for walls — written into CoverDirection on the entity.
+	// Outward normal for walls - written into CoverDirection on the entity.
 	OutwardNormal rl.Vector3
 }
 
 // generateBuildingLayout returns the spec list for one Building. Pure
-// function: same Building → same children, every spawn cycle. Children are
+// function: same Building -> same children, every spawn cycle. Children are
 // expressed in chunk-local coordinates of the host chunk so the caller can
 // drop them straight into WorldPos.Local.
 func generateBuildingLayout(b components.Building, hostChunkBaseX, hostChunkBaseZ, surfaceY float32) []childSpec {
@@ -70,7 +70,7 @@ func generateBuildingLayout(b components.Building, hostChunkBaseX, hostChunkBase
 		floorY = surfaceY - bunkerDepth
 	}
 
-	// Floors — one per storey. Bunkers also count from sunken Y up.
+	// Floors - one per storey. Bunkers also count from sunken Y up.
 	for s := uint8(0); s < b.Stories; s++ {
 		out = append(out, childSpec{
 			Kind: childFloor,
@@ -83,7 +83,7 @@ func generateBuildingLayout(b components.Building, hostChunkBaseX, hostChunkBase
 		})
 	}
 
-	// Walls — for each storey, four sides. Layout-seed picks which side gets
+	// Walls - for each storey, four sides. Layout-seed picks which side gets
 	// the door (storey 0 only) and which non-door sides get a window.
 	doorSide := uint8(b.Seed % 4) // 0=south, 1=east, 2=north, 3=west
 
@@ -104,7 +104,7 @@ func generateBuildingLayout(b components.Building, hostChunkBaseX, hostChunkBase
 				openingBottom = 0
 				openingH = 2.2
 			} else {
-				// 50/50 chance per side per storey for a window — deterministic.
+				// 50/50 chance per side per storey for a window - deterministic.
 				roll := splitMix64(b.Seed ^ (uint64(side)*0x9E37 + uint64(s)*0x12B9))
 				if roll&1 == 0 && length >= 3.0 {
 					opening = components.OpeningWindow
@@ -140,7 +140,7 @@ func generateBuildingLayout(b components.Building, hostChunkBaseX, hostChunkBase
 		}
 	}
 
-	// Stairs — placed in one corner per gap between adjacent storeys.
+	// Stairs - placed in one corner per gap between adjacent storeys.
 	for s := uint8(0); s+1 < b.Stories; s++ {
 		baseY := floorY + float32(s)*floorHeight
 		// Anchor at the (minX, minZ) corner with a small inset so the slab
@@ -205,7 +205,7 @@ func wallEndpoints(minX, minZ, maxX, maxZ float32, side uint8) (float32, float32
 	}
 }
 
-// splitMix64 — same constants as the existing mix64 in biome.go; duplicated
+// splitMix64 - same constants as the existing mix64 in biome.go; duplicated
 // here so the layout generator stays self-contained on uint64 inputs (the
 // other helpers run on int32 args).
 func splitMix64(z uint64) uint64 {
