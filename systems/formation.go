@@ -28,6 +28,12 @@ type FormationSystem struct {
 	pool           *core.WorkerPool
 	squadService   *SquadService
 
+	// Phase 14.6 M14.6.1 — slot clamping reads the surface NavGrid to avoid
+	// pushing members onto NavInBuilding / blocked cells (units would walk
+	// straight into walls otherwise).
+	navGridMap    *ecs.Map[components.NavGrid]
+	chunkIndexRes ecs.Resource[TerrainChunkIndex]
+
 	// Phase 11.6 M11.6.2: reusable snapshot buffer.
 	workBuf []formationWork
 
@@ -62,6 +68,8 @@ func (sys *FormationSystem) InitUI(w *ecs.World) {
 	sys.filter = ecs.NewFilter4[components.Squad, components.CommandRoster, components.MacroPath, components.FormationData](w)
 	sys.posMap = ecs.NewMap[components.WorldPos](w)
 	sys.actionQueueMap = ecs.NewMap[components.ActionQueue](w)
+	sys.navGridMap = ecs.NewMap[components.NavGrid](w)
+	sys.chunkIndexRes = ecs.NewResource[TerrainChunkIndex](w)
 }
 
 func (FormationSystem) Name() string { return "formation" }
@@ -242,6 +250,11 @@ func (sys *FormationSystem) processSquad(world *ecs.World, w formationWork, leav
 		}
 		offX, offZ := FormationOffset(fd.Type, i, fd.Spacing, fd.Forward)
 		target := centerTarget.Add(rl.Vector3{X: offX, Y: 0, Z: offZ})
+		// Phase 14.6 M14.6.1 — keep slot targets out of building interiors and
+		// blocked cells; the unit's ActionQueue is a straight-line MoveTo, so
+		// pushing the slot inside a wall makes the unit walk through it. A
+		// short spiral search picks the nearest walkable surface cell.
+		target = sys.clampSlotXZ(target)
 
 		// Re-push only if the new target meaningfully differs from the
 		// last queued MoveTo. Cuts the per-tick pop-push cycle at the
@@ -323,6 +336,83 @@ func FormationOffset(kind components.FormationKind, slot uint8, spacing float32,
 		return rad * cos, rad * sin
 	}
 	return 0, 0
+}
+
+// clampSlotXZ moves `target` to the nearest walkable surface cell when it
+// lands inside a building footprint or on a blocked cell. Phase 14.6 M14.6.1:
+// commander macro path already routes through doors via NavService, but each
+// member's individual slot is a raw offset from the squad center — without
+// this clamp a side-slot whose XZ falls inside the building would make the
+// member walk straight at the wall.
+//
+// Algorithm: a small 8-direction spiral, max radius 3 m at 1 m steps. Cheap
+// (24 cell lookups worst-case) and runs at most once per member per
+// FormationSystem tick (100 ms cadence). When no walkable cell exists in the
+// radius (e.g. the slot fell into an unloaded chunk), return the original
+// target — the member will walk toward it and either UnitMovement's
+// wall-reflection (M14.6.1 step 4) catches the wall, or the next tick's
+// recompute moves the slot.
+func (sys *FormationSystem) clampSlotXZ(target components.WorldPos) components.WorldPos {
+	if sys.cellWalkableAt(target) {
+		return target
+	}
+	// 8 compass directions, evaluated at radius 1 / 2 / 3 metres.
+	dirs := [8][2]float32{
+		{1, 0}, {0, 1}, {-1, 0}, {0, -1},
+		{1, 1}, {-1, 1}, {-1, -1}, {1, -1},
+	}
+	for r := float32(1); r <= 3; r++ {
+		for i := range dirs {
+			dx, dz := dirs[i][0]*r, dirs[i][1]*r
+			candidate := target.Add(rl.Vector3{X: dx, Y: 0, Z: dz})
+			if sys.cellWalkableAt(candidate) {
+				return candidate
+			}
+		}
+	}
+	return target
+}
+
+// cellWalkableAt returns true when the surface NavGrid cell covering `pos`
+// is loaded, has Cost > 0, and is not flagged NavInBuilding. False otherwise
+// (unloaded chunk, blocked cell, or interior-of-building cell).
+func (sys *FormationSystem) cellWalkableAt(pos components.WorldPos) bool {
+	if sys.navGridMap == nil {
+		return true // pre-init, can't validate — assume walkable.
+	}
+	idx := sys.chunkIndexRes.Get()
+	if idx == nil {
+		return true
+	}
+	worldX := float32(pos.Chunk.X)*components.ChunkSize + pos.Local.X
+	worldZ := float32(pos.Chunk.Z)*components.ChunkSize + pos.Local.Z
+	cc := components.ChunkCoord{
+		X: int32(math.Floor(float64(worldX / components.ChunkSize))),
+		Z: int32(math.Floor(float64(worldZ / components.ChunkSize))),
+	}
+	ent, ok := idx.Loaded[cc]
+	if !ok {
+		return true
+	}
+	grid := sys.navGridMap.Get(ent)
+	if grid == nil {
+		return true
+	}
+	lx := worldX - float32(cc.X)*components.ChunkSize
+	lz := worldZ - float32(cc.Z)*components.ChunkSize
+	ci := int(math.Floor(float64(lx)))
+	cj := int(math.Floor(float64(lz)))
+	if ci < 0 || ci >= components.NavGridSide || cj < 0 || cj >= components.NavGridSide {
+		return true
+	}
+	cell := grid.Cells[cj*components.NavGridSide+ci]
+	if cell.Cost == 0 {
+		return false
+	}
+	if cell.Flags&components.NavInBuilding != 0 {
+		return false
+	}
+	return true
 }
 
 // slotHash32 — SplitMix-style 32-bit finalizer used by FormationLoose.

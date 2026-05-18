@@ -72,6 +72,11 @@ type OrderResolverSystem struct {
 	trenchRootMap  *ecs.Map[components.TrenchRoot]
 	trenchResource ecs.Resource[components.TrenchNetwork]
 
+	// Phase 14.6 M14.6.2 — Garrison CompletionEveryMemberOnFloor reads Floor
+	// plates to confirm each roster member is on a floor cell (not just
+	// inside the footprint AABB).
+	floorFilter *ecs.Filter2[components.WorldPos, components.Floor]
+
 	squadService *SquadService
 }
 
@@ -106,6 +111,7 @@ func (sys *OrderResolverSystem) InitUI(w *ecs.World) {
 	sys.buildingMap = ecs.NewMap[components.Building](w)
 	sys.trenchRootMap = ecs.NewMap[components.TrenchRoot](w)
 	sys.trenchResource = ecs.NewResource[components.TrenchNetwork](w)
+	sys.floorFilter = ecs.NewFilter2[components.WorldPos, components.Floor](w)
 }
 
 func (OrderResolverSystem) Name() string { return "order_resolver" }
@@ -284,6 +290,13 @@ func (sys *OrderResolverSystem) resolveTargetPos(kind components.OrderKindCode, 
 	if target.Entity == (ecs.Entity{}) {
 		return
 	}
+	// Phase 14.6 M14.6.0 (Issue #11): refuse Map.Get on a dead entity id.
+	// Building / TrenchRoot don't die in Phase 14.6 (root entities carry
+	// AlwaysActive), but the guard is cheap and protects against future
+	// targets that do.
+	if !sys.squadService.world.Alive(target.Entity) {
+		return
+	}
 	switch kind {
 	case components.OrderKindGarrison:
 		if b := sys.buildingMap.Get(target.Entity); b != nil {
@@ -372,25 +385,50 @@ func (sys *OrderResolverSystem) evaluateCompletion(
 		return completionPending
 
 	case components.CompletionEveryMemberOnFloor:
-		// M14.5.6 will wire — for Phase 14.5.0 nothing maps onto this rule yet
-		// (Garrison still rides CompletionArrivalRadius). Returning pending
-		// keeps any test entity using this rule alive until M14.5.6 lands.
+		// Phase 14.6 M14.6.2 — Garrison. Completes when every live roster
+		// member sits inside the building's Footprint AABB AND stands on a
+		// Floor entity (any storey). Wipeout (no live members) → Failed.
+		// OrderProgress.Value carries inside/alive so Inspector's progress
+		// bar reflects partial entry without a dedicated component.
+		if target.Entity == (ecs.Entity{}) || !sys.squadService.world.Alive(target.Entity) {
+			return completionPending
+		}
+		bld := sys.buildingMap.Get(target.Entity)
+		if bld == nil {
+			// Defensive — Garrison target wasn't a Building entity. Fall back
+			// to the arrival-radius gate the old Phase 11 logic used.
+			r := spec.ArrivalRadius
+			if r <= 0 {
+				r = 2.5
+			}
+			if centerXZDistSq(center, target.Pos) < r*r {
+				return completionDone
+			}
+			return completionPending
+		}
+		alive, inside := sys.countInsideBuilding(roster, bld.Footprint)
+		if pr := sys.orderProgressMap.Get(ord); pr != nil {
+			if alive == 0 {
+				pr.Value = 0
+			} else {
+				pr.Value = float32(inside) / float32(alive)
+			}
+		}
+		if alive == 0 {
+			return completionFailed
+		}
+		if inside == alive {
+			return completionDone
+		}
 		return completionPending
 
 	case components.CompletionArrivalRadius:
-		// MoveTo / Patrol / OccupyTrench / Garrison fallback. Per-kind
-		// shape-aware short-circuits (Garrison footprint AABB, OccupyTrench
-		// polyline) run first; the radius is the universal fallback.
+		// MoveTo / Patrol / OccupyTrench. Garrison moved to a dedicated arm
+		// (CompletionEveryMemberOnFloor); the AABB short-circuit there is the
+		// authoritative gate. Per-kind shape-aware short-circuits
+		// (OccupyTrench polyline) run first; the radius is the universal
+		// fallback.
 		switch spec.Code {
-		case components.OrderKindGarrison:
-			if b := sys.buildingMap.Get(target.Entity); b != nil {
-				cx := float32(center.Chunk.X)*components.ChunkSize + center.Local.X
-				cz := float32(center.Chunk.Z)*components.ChunkSize + center.Local.Z
-				fp := b.Footprint
-				if cx >= fp.MinX && cx <= fp.MaxX && cz >= fp.MinZ && cz <= fp.MaxZ {
-					return completionDone
-				}
-			}
 		case components.OrderKindOccupyTrench:
 			if root := sys.trenchRootMap.Get(target.Entity); root != nil {
 				tn := sys.trenchResource.Get()
@@ -433,6 +471,13 @@ func (sys *OrderResolverSystem) advanceOutOfRange(
 		if tracker == nil {
 			return 0
 		}
+	}
+	// Phase 14.6 M14.6.0 (Issue #11): if target died this tick, reset the
+	// tracker and let the parent CompletionTargetDeath arm transition to
+	// Done — keep us off any Map.Get against the dead id.
+	if target.Entity != (ecs.Entity{}) && !sys.squadService.world.Alive(target.Entity) {
+		tracker.Elapsed = 0
+		return 0
 	}
 	// Compute max weapon range across roster.
 	maxRange := sys.maxSquadWeaponRange(squad)
@@ -510,6 +555,13 @@ func (sys *OrderResolverSystem) updateProgress(squad, ord ecs.Entity, target *co
 	if pr == nil {
 		return
 	}
+	// Phase 14.6 M14.6.2: Garrison writes inside/alive into Progress.Value
+	// directly from evaluateCompletion. Don't clobber it with a
+	// distance-from-center fraction here.
+	if kind := sys.orderKindMap.Get(ord); kind != nil &&
+		components.SpecForOrderKind(kind.Code).Completion == components.CompletionEveryMemberOnFloor {
+		return
+	}
 	roster := sys.rosterMap.Get(squad)
 	if roster == nil {
 		return
@@ -559,6 +611,64 @@ func (sys *OrderResolverSystem) applyArrivedFacing(squad, ord ecs.Entity) {
 			m.Yaw = facing.YawRad
 		}
 	}
+}
+
+// countInsideBuilding tallies how many of `roster`'s live members sit inside
+// the building's Footprint AABB AND on a Floor entity (any storey). Returns
+// (alive, inside). Phase 14.6 M14.6.2 — the Garrison CompletionEveryMemberOnFloor
+// arm uses this to gate Done / Failed transitions and to write a per-member
+// progress fraction into OrderProgress.Value.
+func (sys *OrderResolverSystem) countInsideBuilding(
+	roster *components.CommandRoster, footprint components.AABB2D,
+) (alive, inside uint8) {
+	if roster == nil {
+		return 0, 0
+	}
+	for i := uint8(0); i < roster.Count; i++ {
+		mem := roster.Members[i]
+		if mem == (ecs.Entity{}) || !sys.squadService.world.Alive(mem) {
+			continue
+		}
+		pos := sys.posMap.Get(mem)
+		if pos == nil {
+			continue
+		}
+		alive++
+		mx := float32(pos.Chunk.X)*components.ChunkSize + pos.Local.X
+		mz := float32(pos.Chunk.Z)*components.ChunkSize + pos.Local.Z
+		if mx < footprint.MinX || mx > footprint.MaxX || mz < footprint.MinZ || mz > footprint.MaxZ {
+			continue
+		}
+		if sys.memberOnFloor(pos) {
+			inside++
+		}
+	}
+	return alive, inside
+}
+
+// memberOnFloor returns true when `pos` sits over the horizontal extent of any
+// live Floor plate AND its Y is within ±1.5 m of the floor surface. The Y
+// proximity catches both surface stories (member Y ≈ floor Y) and bunkers
+// (member Y dropped into the sunken floor). Cheap: 1-3 buildings × 1-3 floors
+// per scene = handful of plate checks per call.
+func (sys *OrderResolverSystem) memberOnFloor(pos *components.WorldPos) bool {
+	mx := float32(pos.Chunk.X)*components.ChunkSize + pos.Local.X
+	mz := float32(pos.Chunk.Z)*components.ChunkSize + pos.Local.Z
+	q := sys.floorFilter.Query()
+	for q.Next() {
+		fpos, floor := q.Get()
+		fx := float32(fpos.Chunk.X)*components.ChunkSize + fpos.Local.X
+		fz := float32(fpos.Chunk.Z)*components.ChunkSize + fpos.Local.Z
+		if mx < fx || mx > fx+floor.SizeX || mz < fz || mz > fz+floor.SizeZ {
+			continue
+		}
+		dy := pos.Local.Y - fpos.Local.Y
+		if dy > -1.5 && dy < 1.5 {
+			q.Close()
+			return true
+		}
+	}
+	return false
 }
 
 // pointNearPolyline returns true when p is within `radius` of any segment of

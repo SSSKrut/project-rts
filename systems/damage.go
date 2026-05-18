@@ -26,24 +26,30 @@ import (
 // when its last member dies, so callers don't have to special-case empty
 // squads.
 type DamageService struct {
-	world         *ecs.World
-	hpMap         *ecs.Map[components.HP]
-	equipmentMap  *ecs.Map[components.Equipment]
-	factionMap    *ecs.Map[components.Faction]
+	world          *ecs.World
+	hpMap          *ecs.Map[components.HP]
+	equipmentMap   *ecs.Map[components.Equipment]
+	factionMap     *ecs.Map[components.Faction]
 	squadMemberMap *ecs.Map[components.SquadMember]
-	squadService  *SquadService
+	// Phase 14.6 M14.6.0 — awareness sweep on death wipes any LastSeen entry
+	// pointing at the just-killed unit, so readers (WeaponSystem.pickTarget,
+	// future tactical AI) can't dereference a recycled slot through stale
+	// Awareness data.
+	awarenessFilter *ecs.Filter1[components.Awareness]
+	squadService    *SquadService
 }
 
 // NewDamageService wires the map handles. Must be called after the world
 // exists and after SquadService is constructed.
 func NewDamageService(w *ecs.World, squads *SquadService) *DamageService {
 	return &DamageService{
-		world:          w,
-		hpMap:          ecs.NewMap[components.HP](w),
-		equipmentMap:   ecs.NewMap[components.Equipment](w),
-		factionMap:     ecs.NewMap[components.Faction](w),
-		squadMemberMap: ecs.NewMap[components.SquadMember](w),
-		squadService:   squads,
+		world:           w,
+		hpMap:           ecs.NewMap[components.HP](w),
+		equipmentMap:    ecs.NewMap[components.Equipment](w),
+		factionMap:      ecs.NewMap[components.Faction](w),
+		squadMemberMap:  ecs.NewMap[components.SquadMember](w),
+		awarenessFilter: ecs.NewFilter1[components.Awareness](w),
+		squadService:    squads,
 	}
 }
 
@@ -78,11 +84,13 @@ func (d *DamageService) Apply(target ecs.Entity, dmg float32) bool {
 }
 
 // ApplyDeath despawns a unit cleanly:
-//  1. Detach from squad (SquadService.Leave compacts the roster and
+//  1. Sweep every live unit's Awareness FIFO to clear LastSeen slots that
+//     point at this entity (Phase 14.6 M14.6.0 — closes Issue #11 class).
+//  2. Detach from squad (SquadService.Leave compacts the roster and
 //     auto-despawns the squad when emptied).
-//  2. Destroy Primary / Secondary equipment sub-entities (mirrors the
+//  3. Destroy Primary / Secondary equipment sub-entities (mirrors the
 //     RoleService.AssignRole teardown logic — no leaked weapon entities).
-//  3. world.RemoveEntity(unit).
+//  4. world.RemoveEntity(unit).
 //
 // Idempotent: a dead / zero entity short-circuits to no-op.
 func (d *DamageService) ApplyDeath(unit ecs.Entity) {
@@ -97,6 +105,7 @@ func (d *DamageService) ApplyDeath(unit ecs.Entity) {
 		primary = eq.Primary
 		secondary = eq.Secondary
 	}
+	d.sweepAwareness(unit)
 	if d.squadService != nil && d.squadMemberMap.Has(unit) {
 		d.squadService.Leave(unit)
 	}
@@ -108,6 +117,26 @@ func (d *DamageService) ApplyDeath(unit ecs.Entity) {
 	}
 	if d.world.Alive(unit) {
 		d.world.RemoveEntity(unit)
+	}
+}
+
+// sweepAwareness walks every live unit's Awareness FIFO and clears every
+// LastSeen slot whose Target is `dying`. Cheap one-pass O(units * 8). Runs
+// before RemoveEntity so readers iterating after death can't recover the
+// stale id through Awareness; defensive readers (pickTarget alive-check)
+// catch the rest.
+func (d *DamageService) sweepAwareness(dying ecs.Entity) {
+	if d.awarenessFilter == nil || dying == (ecs.Entity{}) {
+		return
+	}
+	q := d.awarenessFilter.Query()
+	for q.Next() {
+		aware := q.Get()
+		for i := range aware.LastSeen {
+			if aware.LastSeen[i].Target == dying {
+				aware.LastSeen[i] = components.AwarenessEntry{}
+			}
+		}
 	}
 }
 

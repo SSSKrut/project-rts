@@ -791,6 +791,13 @@ func (sys *WeaponSystem) pickTarget(
 		if e.Time == 0 || e.Target == (ecs.Entity{}) || e.Target == self {
 			continue
 		}
+		// Phase 14.6 M14.6.0 (Issue #11): alive-check BEFORE any Map.Get on
+		// e.Target. Vision tick can lag Death by up to one cadence, so the
+		// FIFO may hold a recycled slot; touching factionMap on a dead id
+		// crashes via Ark's slot reuse path.
+		if !sys.worldRef.Alive(e.Target) {
+			continue
+		}
 		if now-e.Time > weaponAwarenessMaxAge {
 			continue
 		}

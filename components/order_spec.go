@@ -121,11 +121,11 @@ var OrderKindSpecs = [OrderKindCount]OrderKindSpec{
 		InPieMenu: true, PieSegmentOrder: 1,
 		NeedsEntity:     true,
 		DrivesMacroPath: true,
-		// M14.5.6 will swap to CompletionEveryMemberOnFloor. Phase 14.5.0
-		// leaves the arrival-radius fallback active (matches Phase 11
-		// behaviour); the resolver handles the AABB-inside short-circuit
-		// inside that arm.
-		Completion: CompletionArrivalRadius, ArrivalRadius: 4.0,
+		// Phase 14.6 M14.6.2 wires the dedicated rule: order Completes only
+		// when every live roster member is inside the building's footprint
+		// AABB AND standing on a Floor entity (any storey). ArrivalRadius
+		// remains as a defensive fallback when Building lookup misses.
+		Completion: CompletionEveryMemberOnFloor, ArrivalRadius: 4.0,
 	},
 	OrderKindOccupyTrench: {
 		Code: OrderKindOccupyTrench, Name: "Trench", MapIconGlyph: 'T',

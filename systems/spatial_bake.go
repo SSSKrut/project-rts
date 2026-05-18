@@ -49,6 +49,10 @@ type SpatialBakeSystem struct {
 	coverFilter       *ecs.Filter3[components.ChunkCoord, components.Heightmap, components.WorldPos]
 	wallFilter        *ecs.Filter2[components.WorldPos, components.WallSegment]
 	floorFilter       *ecs.Filter2[components.WorldPos, components.Floor]
+	// Phase 14.6 M14.6.1 — NavInBuilding bake reads Building roots (any
+	// chunk, AlwaysActive) and stamps the flag onto surface cells whose XZ
+	// falls inside the footprint.
+	buildingFilter *ecs.Filter1[components.Building]
 	heightmapMap      *ecs.Map[components.Heightmap]
 	navGridMap        *ecs.Map[components.NavGrid]
 	coverMapMap       *ecs.Map[components.CoverMap]
@@ -114,6 +118,7 @@ func (sys *SpatialBakeSystem) InitUI(w *ecs.World) {
 	sys.coverDirMap = ecs.NewMap[components.CoverDirection](w)
 	sys.coverSlotMap = ecs.NewMap[components.CoverSlot](w)
 	sys.lodRelevantMap = ecs.NewMap[components.LODRelevant](w)
+	sys.buildingFilter = ecs.NewFilter1[components.Building](w)
 }
 
 func (SpatialBakeSystem) Name() string { return "spatial_bake" }
@@ -178,6 +183,16 @@ func (sys SpatialBakeSystem) Update(ctx core.UpdateContext) {
 		trenches := sys.trenchRes.Get()
 		rivers := sys.riversRes.Get()
 
+		// Phase 14.6 M14.6.1 — snapshot every Building's Footprint once for
+		// the NavInBuilding stamp pass. Building roots carry AlwaysActive,
+		// so a single filter sweep covers the whole world.
+		var footprints []components.AABB2D
+		qB := sys.buildingFilter.Query()
+		for qB.Next() {
+			b := qB.Get()
+			footprints = append(footprints, b.Footprint)
+		}
+
 		// Bake order is calibrated for the cost-priority hierarchy in P5:
 		//
 		//   slope  <  OnRoad  <  InTrench  <  NearWater  <  Walls/Props
@@ -221,6 +236,12 @@ func (sys SpatialBakeSystem) Update(ctx core.UpdateContext) {
 						meta.BBoxRadius*prop.Scale)
 				}
 			}
+
+			// Phase 14.6 M14.6.1 — flag every cell whose centre falls inside
+			// any Building.Footprint. NavService.cellAt then refuses surface
+			// expansion into them; access remains only through TransitionEdges
+			// (Door/Stairs) that route into Floor NavNodes.
+			applyNavBuildings(&grid, rec.cc, footprints)
 
 			if existing := sys.navGridMap.Get(rec.id); existing != nil {
 				existing.Cells = grid.Cells
@@ -1011,6 +1032,49 @@ func applyNavRiverBlock(grid *components.NavGrid, cc components.ChunkCoord, rive
 						grid.Cells[idx].Cost = 0
 					}
 				})
+		}
+	}
+}
+
+// applyNavBuildings stamps NavInBuilding onto every surface cell whose centre
+// (XZ world coord) lies inside any building Footprint that intersects the
+// chunk. Cost is left alone so wall-rasterised Cost=0 cells stay impassable
+// and open cells keep their slope-derived Cost — the flag is the bit that
+// NavService.cellAt reads to refuse surface expansion through the interior.
+// Access to the inside is reserved for TransitionEdges (Door / Stairs) that
+// route into Floor NavNodes; pure surface paths must skirt the footprint.
+func applyNavBuildings(grid *components.NavGrid, cc components.ChunkCoord, footprints []components.AABB2D) {
+	if len(footprints) == 0 {
+		return
+	}
+	chunkMinX := float32(cc.X) * components.ChunkSize
+	chunkMinZ := float32(cc.Z) * components.ChunkSize
+	chunkMaxX := chunkMinX + components.ChunkSize
+	chunkMaxZ := chunkMinZ + components.ChunkSize
+
+	for fi := range footprints {
+		fp := footprints[fi]
+		if fp.MaxX <= chunkMinX || fp.MinX >= chunkMaxX ||
+			fp.MaxZ <= chunkMinZ || fp.MinZ >= chunkMaxZ {
+			continue
+		}
+		cellMinX, cellMaxX := clampCellRange(fp.MinX-chunkMinX, fp.MaxX-chunkMinX)
+		cellMinZ, cellMaxZ := clampCellRange(fp.MinZ-chunkMinZ, fp.MaxZ-chunkMinZ)
+		if cellMinX >= cellMaxX || cellMinZ >= cellMaxZ {
+			continue
+		}
+		for cj := cellMinZ; cj < cellMaxZ; cj++ {
+			cz := chunkMinZ + float32(cj) + 0.5
+			if cz < fp.MinZ || cz > fp.MaxZ {
+				continue
+			}
+			for ci := cellMinX; ci < cellMaxX; ci++ {
+				cx := chunkMinX + float32(ci) + 0.5
+				if cx < fp.MinX || cx > fp.MaxX {
+					continue
+				}
+				grid.Cells[cj*components.NavGridSide+ci].Flags |= components.NavInBuilding
+			}
 		}
 	}
 }

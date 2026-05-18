@@ -285,6 +285,11 @@ func (s *NavService) resolveNode(wp components.WorldPos, idx *TerrainChunkIndex,
 
 // cellAt returns the NavCell for a NavNode. (false) if the host grid is not
 // loaded.
+//
+// Phase 14.6 M14.6.1: surface cells flagged NavInBuilding are reported
+// inaccessible. The interior of a building can only be reached through a
+// TransitionEdge (Door / Stairs) that lands the path on a Floor NavNode;
+// pure surface expansion must go around the footprint.
 func (s *NavService) cellAt(n components.NavNode, idx *TerrainChunkIndex, floors []floorRec) (components.NavCell, bool) {
 	switch n.Kind {
 	case components.NodeSurface:
@@ -299,7 +304,11 @@ func (s *NavService) cellAt(n components.NavNode, idx *TerrainChunkIndex, floors
 		if n.I < 0 || n.I >= components.NavGridSide || n.J < 0 || n.J >= components.NavGridSide {
 			return components.NavCell{}, false
 		}
-		return grid.Cells[int(n.J)*components.NavGridSide+int(n.I)], true
+		cell := grid.Cells[int(n.J)*components.NavGridSide+int(n.I)]
+		if cell.Flags&components.NavInBuilding != 0 {
+			return cell, false
+		}
+		return cell, true
 	case components.NodeFloor:
 		for i := range floors {
 			if floors[i].ent != n.Floor {

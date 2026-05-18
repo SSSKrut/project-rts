@@ -67,6 +67,13 @@ type UnitMovementSystem struct {
 	movementProfileMap       *ecs.Map[components.MovementProfile]
 	posMap                   *ecs.Map[components.WorldPos]
 
+	// Phase 14.6 M14.6.1 — wall reflection. Walls snapshot bucketed by chunk
+	// once per tick in the serial pre-pass; step() reads the 3x3 chunk window
+	// around the unit to reflect velocity that would cross a wall this frame.
+	wallFilter      *ecs.Filter2[components.WorldPos, components.WallSegment]
+	doorMap         *ecs.Map[components.Door]
+	collisionWalls  map[components.ChunkCoord][]colWall
+
 	// Reusable snapshot buffer. Filled in the serial pre-pass, read-only by
 	// workers during ParallelFor — safe because writes are indexed and never
 	// concurrent.
@@ -98,6 +105,7 @@ func NewUnitMovementSystem(pool *core.WorkerPool) *UnitMovementSystem {
 		workBuf:                make([]unitWork, 0, 64),
 		workerExhaustedAdds:    make([][]ecs.Entity, workers),
 		workerExhaustedRemoves: make([][]ecs.Entity, workers),
+		collisionWalls:         make(map[components.ChunkCoord][]colWall, 32),
 	}
 }
 
@@ -112,6 +120,8 @@ func (sys *UnitMovementSystem) InitUI(w *ecs.World) {
 	sys.posMap = ecs.NewMap[components.WorldPos](w)
 	sys.spatialHash = ecs.NewResource[core.SpatialHash](w)
 	sys.world = w
+	sys.wallFilter = ecs.NewFilter2[components.WorldPos, components.WallSegment](w)
+	sys.doorMap = ecs.NewMap[components.Door](w)
 }
 
 func (UnitMovementSystem) Name() string { return "unit_movement" }
@@ -151,6 +161,25 @@ func (sys *UnitMovementSystem) Update(ctx core.UpdateContext) {
 	// rebuilt this tick by SpatialHashRebuildSystem. The separation pass
 	// queries it directly inside step() — no per-tick O(N²) snapshot.
 	hash := sys.spatialHash.Get()
+
+	// Phase 14.6 M14.6.1 — wall snapshot for the per-tick reflection pass.
+	// Cleared and refilled each tick; workers read read-only inside step().
+	for k := range sys.collisionWalls {
+		sys.collisionWalls[k] = sys.collisionWalls[k][:0]
+	}
+	if sys.wallFilter != nil {
+		qW := sys.wallFilter.Query()
+		for qW.Next() {
+			pos, w := qW.Get()
+			doorState := components.DoorClosed
+			if d := sys.doorMap.Get(qW.Entity()); d != nil {
+				doorState = d.State
+			}
+			sys.collisionWalls[pos.Chunk] = append(sys.collisionWalls[pos.Chunk],
+				makeColWall(*pos, *w, doorState))
+		}
+	}
+	walls := sys.collisionWalls
 
 	// Snapshot units (component pointers) so the parallel pass can index into
 	// a slice without holding the live ECS query. Phase 13: also snapshot the
@@ -192,7 +221,7 @@ func (sys *UnitMovementSystem) Update(ctx core.UpdateContext) {
 		}
 		for i := start; i < end; i++ {
 			w := work[i]
-			markerOp := sys.step(w, dt, hash)
+			markerOp := sys.step(w, dt, hash, walls)
 			switch markerOp {
 			case staminaMarkerAdd:
 				sys.workerExhaustedAdds[chunkIdx] = append(sys.workerExhaustedAdds[chunkIdx], w.ent)
@@ -274,6 +303,7 @@ func (sys *UnitMovementSystem) step(
 	w unitWork,
 	dt float32,
 	hash *core.SpatialHash,
+	walls map[components.ChunkCoord][]colWall,
 ) staminaMarkerOp {
 	// Pace selection: StaminaExhausted forces Walk (P3). Otherwise use the
 	// effective profile's Pace.
@@ -392,6 +422,15 @@ func (sys *UnitMovementSystem) step(
 			speed = maxSpeed
 		}
 
+		// Phase 14.6 M14.6.1 — wall reflection. If the predicted XZ step
+		// would cross a wall (non-open-door segment) in the unit's 3x3 chunk
+		// window, reflect velocity around the wall normal so the unit slides
+		// off rather than tunnelling through. Reflection-only, no parallel
+		// sliding — Phase 15.B will add the polished glide.
+		if walls != nil {
+			vx, vz = reflectAgainstWalls(selfX, selfZ, vx, vz, dt, walls, w.pos.Chunk)
+		}
+
 		// Y lerp toward target. Lets units climb stairs / drop into
 		// bunkers without teleporting; GroundStick then picks the
 		// floor whose Y is closest on the next tick.
@@ -460,4 +499,106 @@ func ClearActions(q *components.ActionQueue) {
 	q.Tail = 0
 	q.Count = 0
 	q.StopUntil = 0
+}
+
+// colWall is the movement-collision view of a WallSegment. Windows block
+// movement (separate from LOS — losWall flips openingTransparent for windows
+// too), open doors allow passage through the opening range, closed doors and
+// plain walls fully block. World coords; trig pre-computed.
+type colWall struct {
+	fromX, fromZ       float32
+	sa, ca             float32
+	length             float32
+	hasOpening         bool
+	openPassable       bool // true ⇔ open door (window opening still blocks movement)
+	openStart, openEnd float32
+}
+
+func makeColWall(pos components.WorldPos, w components.WallSegment, doorState components.DoorState) colWall {
+	baseX := float32(pos.Chunk.X) * components.ChunkSize
+	baseZ := float32(pos.Chunk.Z) * components.ChunkSize
+	sa := float32(math.Sin(float64(w.Yaw)))
+	ca := float32(math.Cos(float64(w.Yaw)))
+	cw := colWall{
+		fromX:      baseX + pos.Local.X,
+		fromZ:      baseZ + pos.Local.Z,
+		sa:         sa,
+		ca:         ca,
+		length:     w.Length,
+		hasOpening: w.OpeningKind != components.OpeningNone,
+		openStart:  w.OpeningCenterT*w.Length - w.OpeningWidth*0.5,
+		openEnd:    w.OpeningCenterT*w.Length + w.OpeningWidth*0.5,
+	}
+	if w.OpeningKind == components.OpeningDoor && doorState == components.DoorOpen {
+		cw.openPassable = true
+	}
+	return cw
+}
+
+// reflectAgainstWalls runs an XZ ray cast from `(curX, curZ)` along velocity
+// `(velX, velZ) * dt` and reflects the velocity vector around the normal of
+// every wall the predicted segment would cross this tick. Walls in the 3x3
+// chunk window around `home` are considered; open-door openings pass through.
+//
+// Multiple wall hits chain: the first reflection updates the prediction, the
+// next wall is tested against the new direction. Bound the loop at 4
+// reflections to avoid pathological corners.
+//
+// Used by UnitMovementSystem.step. Reflection-only — Phase 15.B will swap to
+// glide-along-wall for smoother movement.
+func reflectAgainstWalls(curX, curZ, velX, velZ, dt float32,
+	walls map[components.ChunkCoord][]colWall, home components.ChunkCoord,
+) (float32, float32) {
+	if velX*velX+velZ*velZ < 1e-6 {
+		return velX, velZ
+	}
+	rvx, rvz := velX, velZ
+	for pass := 0; pass < 4; pass++ {
+		predX := curX + rvx*dt
+		predZ := curZ + rvz*dt
+		hit := false
+		for dcZ := int32(-1); dcZ <= 1; dcZ++ {
+			for dcX := int32(-1); dcX <= 1; dcX++ {
+				cc := components.ChunkCoord{X: home.X + dcX, Z: home.Z + dcZ}
+				bucket := walls[cc]
+				for i := range bucket {
+					w := &bucket[i]
+					toX := w.fromX + w.sa*w.length
+					toZ := w.fromZ + w.ca*w.length
+					t1, t2, ok := segmentSegmentIntersect2D(curX, curZ, predX, predZ,
+						w.fromX, w.fromZ, toX, toZ)
+					if !ok || t1 < 0 || t1 > 1 || t2 < 0 || t2 > 1 {
+						continue
+					}
+					if w.hasOpening && w.openPassable {
+						wallT := t2 * w.length
+						if wallT >= w.openStart && wallT <= w.openEnd {
+							continue // pass through open door
+						}
+					}
+					// Wall direction (sa, ca); normal perpendicular = (ca, -sa)
+					// or its negation, whichever points toward the moving unit.
+					nx, nz := w.ca, -w.sa
+					if rvx*nx+rvz*nz > 0 {
+						nx, nz = -nx, -nz
+					}
+					dot := rvx*nx + rvz*nz
+					rvx -= 2 * dot * nx
+					rvz -= 2 * dot * nz
+					hit = true
+					break
+				}
+				if hit {
+					break
+				}
+			}
+			if hit {
+				break
+			}
+		}
+		if !hit {
+			return rvx, rvz
+		}
+	}
+	return rvx, rvz
 }
