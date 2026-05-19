@@ -63,6 +63,19 @@ type SquadService struct {
 	// Phase 14 M14.1: Faction handle. CreateFromTemplate stamps each spawned
 	// unit so WeaponSystem can gate firing on hostility.
 	factionMap *ecs.Map[components.Faction]
+	// Phase 15 M15.A.0: TacticalOverride handle. IssueOrder / CancelAllOrders
+	// clear any AI-driven cover assignment on the squad's members so an
+	// explicit player order regains control.
+	tacticalOverrideMap *ecs.Map[components.TacticalOverride]
+	// Phase 15 M15.A.1: SquadState handle. Player intent also resets a
+	// Scrambling squad back to Engaged so the next tick doesn't immediately
+	// re-acquire overrides via scramble's zero-threshold path.
+	squadStateMap *ecs.Map[components.SquadState]
+	// Phase 15 M15.B.2: IndividualPosition handle. Alt+RMB orders carry the
+	// AttackMove flag; when the flag is set, IssueOrder also wipes every
+	// member's IndividualPosition so the squad falls back into formation
+	// before charging.
+	individualPosMap *ecs.Map[components.IndividualPosition]
 	// Session-time clock for OrderIssuedAt. Advanced by SetClock (called
 	// from main.go each frame before input handlers run).
 	clock float32
@@ -99,6 +112,9 @@ func NewSquadService(w *ecs.World) *SquadService {
 		orderSuppressMap:         ecs.NewMap[components.OrderParamSuppress](w),
 		orderOutOfRangeMap:       ecs.NewMap[components.OrderOutOfRangeTracker](w),
 		factionMap:               ecs.NewMap[components.Faction](w),
+		tacticalOverrideMap:      ecs.NewMap[components.TacticalOverride](w),
+		squadStateMap:            ecs.NewMap[components.SquadState](w),
+		individualPosMap:         ecs.NewMap[components.IndividualPosition](w),
 	}
 }
 
@@ -582,6 +598,11 @@ func (s *SquadService) IssueOrder(
 		head.First = ecs.Entity{}
 	}
 
+	// Phase 15 M15.A.0 - any explicit player order is "I have control again",
+	// so AI-driven cover assignments on squad members are cleared. Members
+	// fall back to formation slot on the next FormationSystem tick.
+	s.clearTacticalOverrides(squad)
+
 	// Spawn the new order entity.
 	ord := s.world.NewEntity()
 	s.orderMap.Add(ord, &components.Order{})
@@ -606,6 +627,10 @@ func (s *SquadService) IssueOrder(
 	}
 	if params.AttackMove {
 		s.orderAttackMoveMap.Add(ord, &components.OrderParamAttackMove{})
+		// Phase 15 M15.B.2 - AttackMove is "go aggressive, fall back into
+		// formation". Wipe any hand-placed positions so the squad's macro
+		// path doesn't drag stragglers parked behind cover.
+		s.clearIndividualPositions(squad)
 	}
 	// Phase 14.5 M14.5.0 (Issue #10): orders whose spec carries a max
 	// out-of-range window get the tracker installed up-front. Resolver
@@ -671,6 +696,60 @@ func (s *SquadService) CancelAllOrders(squad ecs.Entity) {
 		mp.HasGoal = false
 		mp.Head = 0
 		mp.Count = 0
+	}
+	s.clearTacticalOverrides(squad)
+}
+
+// clearTacticalOverrides removes the TacticalOverride marker (if any) from
+// every live member of `squad` and drops a Scrambling squad back to Engaged.
+// Called by IssueOrder / CancelAllOrders so any explicit player intent regains
+// control from SurvivalInstinct's AI-driven cover assignment. Without the
+// squad-state reset a player order during scramble would clear overrides only
+// to have them re-acquired on the next ScatterProtocol tick (effective
+// threshold is 0 while scrambling).
+func (s *SquadService) clearTacticalOverrides(squad ecs.Entity) {
+	if s.tacticalOverrideMap == nil {
+		return
+	}
+	if state := s.squadStateMap.Get(squad); state != nil && state.Code == components.SquadStateScrambling {
+		state.Code = components.SquadStateEngaged
+		state.LowDeltaSince = 0
+	}
+	roster := s.rosterMap.Get(squad)
+	if roster == nil {
+		return
+	}
+	for i := uint8(0); i < roster.Count; i++ {
+		mem := roster.Members[i]
+		if mem == (ecs.Entity{}) || !s.world.Alive(mem) {
+			continue
+		}
+		if s.tacticalOverrideMap.Has(mem) {
+			s.tacticalOverrideMap.Remove(mem)
+		}
+	}
+}
+
+// clearIndividualPositions removes the IndividualPosition marker (if any)
+// from every live member of `squad`. Called by IssueOrder when the player
+// taps Alt+RMB (AttackMove flag) - aggressive intent resets hand-placed
+// positions so the squad re-forms behind the commander.
+func (s *SquadService) clearIndividualPositions(squad ecs.Entity) {
+	if s.individualPosMap == nil {
+		return
+	}
+	roster := s.rosterMap.Get(squad)
+	if roster == nil {
+		return
+	}
+	for i := uint8(0); i < roster.Count; i++ {
+		mem := roster.Members[i]
+		if mem == (ecs.Entity{}) || !s.world.Alive(mem) {
+			continue
+		}
+		if s.individualPosMap.Has(mem) {
+			s.individualPosMap.Remove(mem)
+		}
 	}
 }
 

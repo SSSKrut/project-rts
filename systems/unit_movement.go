@@ -20,6 +20,27 @@ const (
 	separationWeight float32 = 4.0
 )
 
+// Phase 15 M15.B.5 - living-movement polish constants.
+//
+// stanceAccel - per-stance acceleration cap (m/s^2). Stand 4, Crouch 2,
+// Prone 1: same shape as MaxSpeed table, prone units take longer to spin up.
+// Applied symmetrically to speed-up and brake.
+//
+// maxYawRate - turn cap (rad/s) ~ 170 deg/s, realistic for infantry. Cap
+// applies to the wrapped delta between current and desired yaw.
+var stanceAccel = [...]float32{
+	components.StanceStand:  4.0,
+	components.StanceCrouch: 2.0,
+	components.StanceProne:  1.0,
+}
+
+const maxYawRate float32 = 3.0
+
+// perUnitSpeedSpread - half-width of the per-unit personality SpeedMul. With
+// 0.05 the multiplier sits in [0.95, 1.05] - members run at slightly different
+// paces so a squad doesn't lock-step.
+const perUnitSpeedSpread float32 = 0.05
+
 // arrivalRadius - how close the unit needs to be to its current MoveTo target
 // before the action pops from the queue. Slightly bigger than the cell-centre
 // dance to avoid jittering at the goal.
@@ -52,7 +73,7 @@ type UnitMovementSystem struct {
 	pool       *core.WorkerPool
 	// Phase 14.5 M14.5.2: separation pass reads from the shared SpatialHash
 	// resource (rebuilt by SpatialHashRebuildSystem each tick before this
-	// system runs). Replaces the per-tick O(N²) neighbour walk.
+	// system runs). Replaces the per-tick O(N^2) neighbour walk.
 	spatialHash ecs.Resource[core.SpatialHash]
 	// Phase 14.5: world handle for stale-entity alive-check in the
 	// separation callback.
@@ -159,7 +180,7 @@ func (sys *UnitMovementSystem) Update(ctx core.UpdateContext) {
 
 	// Phase 14.5 M14.5.2: neighbour data comes from the shared SpatialHash
 	// rebuilt this tick by SpatialHashRebuildSystem. The separation pass
-	// queries it directly inside step() - no per-tick O(N²) snapshot.
+	// queries it directly inside step() - no per-tick O(N^2) snapshot.
 	hash := sys.spatialHash.Get()
 
 	// Phase 14.6 M14.6.1 - wall snapshot for the per-tick reflection pass.
@@ -321,7 +342,7 @@ func (sys *UnitMovementSystem) step(
 	}
 
 	// Drain / regen Stamina each tick. Recovery only when Pace=Walk AND
-	// Stance ∈ {Stand, Crouch} (Prone doesn't recover - P3). Open question 5
+	// Stance in {Stand, Crouch} (Prone doesn't recover - P3). Open question 5
 	// answered: crouch allows regen.
 	markerOp := staminaMarkerNone
 	if w.stamina != nil && w.stamina.MaxLevel > 0 {
@@ -351,11 +372,23 @@ func (sys *UnitMovementSystem) step(
 		}
 	}
 
-	// Speed lookup uses the unit's current Stance × effective Pace.
+	// Speed lookup uses the unit's current Stance x effective Pace. Phase 15
+	// M15.B.5 - per-unit SpeedMul derived from a SplitMix hash of the entity
+	// ID; ~ +/- 5 % so squad members visibly drift instead of lock-stepping.
 	maxSpeed := components.SpecForStance(w.stance.Code).MaxSpeed * components.PaceSpeedMul[effectivePace]
+	personalityHash := slotHash32(uint32(w.ent.ID()))
+	speedJitter := perUnitSpeedSpread * (2*float32(personalityHash&0xFFFF)/0xFFFF - 1)
+	maxSpeed *= 1 + speedJitter
 
 	if w.queue.Count == 0 {
-		w.mot.Speed = 0
+		// Phase 15 M15.B.5 - brake instead of instant zero so the unit decelerates
+		// visibly when the queue drains.
+		brake := stanceAccel[w.stance.Code] * dt
+		if w.mot.Speed > brake {
+			w.mot.Speed -= brake
+		} else {
+			w.mot.Speed = 0
+		}
 		return markerOp
 	}
 	action := &w.queue.Actions[w.queue.Head]
@@ -414,19 +447,38 @@ func (sys *UnitMovementSystem) step(
 
 		vx := desiredX*maxSpeed + sepX*separationWeight
 		vz := desiredZ*maxSpeed + sepZ*separationWeight
-		speed := float32(math.Sqrt(float64(vx*vx + vz*vz)))
-		if speed > maxSpeed {
-			inv := maxSpeed / speed
+		desiredSpeed := float32(math.Sqrt(float64(vx*vx + vz*vz)))
+		if desiredSpeed > maxSpeed {
+			inv := maxSpeed / desiredSpeed
 			vx *= inv
 			vz *= inv
-			speed = maxSpeed
+			desiredSpeed = maxSpeed
 		}
 
-		// Phase 14.6 M14.6.1 - wall reflection. If the predicted XZ step
-		// would cross a wall (non-open-door segment) in the unit's 3x3 chunk
-		// window, reflect velocity around the wall normal so the unit slides
-		// off rather than tunnelling through. Reflection-only, no parallel
-		// sliding - Phase 15.B will add the polished glide.
+		// Phase 15 M15.B.5 - acceleration ramp. Speed approaches the desired
+		// magnitude at most stanceAccel[Stance] m/s^2 per tick instead of
+		// snapping; units visibly spin up out of stop and brake on arrival.
+		accel := stanceAccel[w.stance.Code]
+		maxDelta := accel * dt
+		speed := w.mot.Speed
+		switch {
+		case desiredSpeed > speed+maxDelta:
+			speed += maxDelta
+		case desiredSpeed < speed-maxDelta:
+			speed -= maxDelta
+		default:
+			speed = desiredSpeed
+		}
+		if desiredSpeed > 1e-3 {
+			vx *= speed / desiredSpeed
+			vz *= speed / desiredSpeed
+		} else {
+			vx, vz = 0, 0
+		}
+
+		// Wall sliding (M15.B.3). Velocity slides along the wall tangent when
+		// the predicted XZ step would cross a wall in the unit's 3x3 chunk
+		// window.
 		if walls != nil {
 			vx, vz = reflectAgainstWalls(selfX, selfZ, vx, vz, dt, walls, w.pos.Chunk)
 		}
@@ -446,7 +498,24 @@ func (sys *UnitMovementSystem) step(
 		*w.pos = w.pos.Add(move)
 		w.mot.Speed = speed
 		if speed > 0.01 {
-			w.mot.Yaw = float32(math.Atan2(float64(vx), float64(vz)))
+			// Phase 15 M15.B.5 - cap yaw rate so units don't snap-spin. Wrap
+			// the delta into [-pi, pi] before clamping so a 350 deg desired
+			// turn folds into -10 deg the short way around.
+			desiredYaw := float32(math.Atan2(float64(vx), float64(vz)))
+			delta := desiredYaw - w.mot.Yaw
+			for delta > math.Pi {
+				delta -= 2 * math.Pi
+			}
+			for delta < -math.Pi {
+				delta += 2 * math.Pi
+			}
+			maxYawDelta := maxYawRate * dt
+			if delta > maxYawDelta {
+				delta = maxYawDelta
+			} else if delta < -maxYawDelta {
+				delta = -maxYawDelta
+			}
+			w.mot.Yaw += delta
 		}
 
 	case components.ActionStop:
@@ -510,7 +579,7 @@ type colWall struct {
 	sa, ca             float32
 	length             float32
 	hasOpening         bool
-	openPassable       bool // true ⇔ open door (window opening still blocks movement)
+	openPassable       bool // true <-> open door (window opening still blocks movement)
 	openStart, openEnd float32
 }
 
@@ -536,16 +605,19 @@ func makeColWall(pos components.WorldPos, w components.WallSegment, doorState co
 }
 
 // reflectAgainstWalls runs an XZ ray cast from `(curX, curZ)` along velocity
-// `(velX, velZ) * dt` and reflects the velocity vector around the normal of
-// every wall the predicted segment would cross this tick. Walls in the 3x3
-// chunk window around `home` are considered; open-door openings pass through.
+// `(velX, velZ) * dt` and adjusts the velocity vector to glide along the
+// normal of every wall the predicted segment would cross this tick. Walls in
+// the 3x3 chunk window around `home` are considered; open-door openings pass
+// through.
 //
-// Multiple wall hits chain: the first reflection updates the prediction, the
-// next wall is tested against the new direction. Bound the loop at 4
-// reflections to avoid pathological corners.
-//
-// Used by UnitMovementSystem.step. Reflection-only - Phase 15.B will swap to
-// glide-along-wall for smoother movement.
+// Phase 15 M15.B.3 - velocity adjustment switched from full reflection
+// (v - 2*(v.n)*n, bouncy) to projection along the wall (v - (v.n)*n, slide).
+// Steep impacts now stop perpendicular to the wall while keeping any tangent
+// component, so units brush past corners and glide along corridor walls
+// instead of zig-zagging. Multiple wall hits chain: the first slide updates
+// the prediction, the next wall is tested against the new direction. Bound
+// the loop at 4 passes to avoid pathological corners (two walls meeting at
+// an acute angle).
 func reflectAgainstWalls(curX, curZ, velX, velZ, dt float32,
 	walls map[components.ChunkCoord][]colWall, home components.ChunkCoord,
 ) (float32, float32) {
@@ -582,9 +654,12 @@ func reflectAgainstWalls(curX, curZ, velX, velZ, dt float32,
 					if rvx*nx+rvz*nz > 0 {
 						nx, nz = -nx, -nz
 					}
+					// Sliding: remove only the component of velocity that
+					// points into the wall. Tangent component survives so the
+					// unit keeps moving along the wall.
 					dot := rvx*nx + rvz*nz
-					rvx -= 2 * dot * nx
-					rvz -= 2 * dot * nz
+					rvx -= dot * nx
+					rvz -= dot * nz
 					hit = true
 					break
 				}

@@ -55,6 +55,10 @@ type MapRenderCtx struct {
 	// matches the camera; DrawMap reads + writes per frame. Nil disables
 	// smoothing - markers snap to the raw squad center.
 	SmoothedSquadPos map[ecs.Entity]components.WorldPos
+	// Phase 15 M15.C.3 - MapPing rendering. Filter + clock are nil-safe;
+	// nil filter just skips the pulsing-ring pass.
+	MapPingFilter *ecs.Filter2[components.WorldPos, components.MapPing]
+	Clock         float32
 }
 
 var (
@@ -84,8 +88,42 @@ func DrawMap(panel Panel, ctx MapRenderCtx) {
 		drawDebugLayers(content, ctx)
 	}
 	drawOrderMarkers(content, ctx)
+	drawMapPings(content, ctx)
 	drawSquadMarkers(content, ctx)
 	drawAnchorMarker(content, ctx)
+}
+
+// drawMapPings paints every live MapPing as a pulsing ring + small dot at the
+// ping's world position. Radius = BaseRadM * (1 + 0.5*sin(t * 4)); alpha
+// fades linearly to zero across TTL so the ring softly dies.
+func drawMapPings(content rl.Rectangle, ctx MapRenderCtx) {
+	if ctx.MapPingFilter == nil {
+		return
+	}
+	q := ctx.MapPingFilter.Query()
+	for q.Next() {
+		pos, ping := q.Get()
+		age := ctx.Clock - ping.SpawnAt
+		if age < 0 || age > ping.TTL {
+			continue
+		}
+		life := 1 - age/ping.TTL
+		if life < 0 {
+			life = 0
+		}
+		pulse := 1 + 0.5*float32(math.Sin(float64(age*4)))
+		radM := ping.BaseRadM * pulse
+		screen := MapWorldToPanel(*pos, ctx.Cam, content)
+		// Convert metres to pixels via current camera zoom (pixels-per-metre).
+		radPx := radM * ctx.Cam.Zoom
+		alpha := uint8(life * 220)
+		col := ping.Color
+		col.A = alpha
+		rl.DrawCircleLines(int32(screen.X), int32(screen.Y), radPx, col)
+		dot := ping.Color
+		dot.A = uint8(life * 255)
+		rl.DrawCircle(int32(screen.X), int32(screen.Y), 2, dot)
+	}
 }
 
 // drawOrderMarkers draws, for every squad with an active head order, a thin

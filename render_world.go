@@ -621,7 +621,7 @@ func drawGhostUnit(pos rl.Vector3, st components.Stance, alpha uint8) {
 }
 
 // drawGhostArc draws a wedge-shaped sector indicator at ground level - two
-// outline rays from `center` along `facingYaw ± halfAngleRad`, plus a fan of
+// outline rays from `center` along `facingYaw +/- halfAngleRad`, plus a fan of
 // translucent triangles filling the wedge. Used by DefendPosition ghost to
 // show the held overwatch sector. Phase 13.6 M13.6.1: visual stub; Phase 14
 // EngagementRules.SectorYaw/SectorHalfDot will be the runtime enforcement.

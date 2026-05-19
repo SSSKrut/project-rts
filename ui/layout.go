@@ -26,7 +26,7 @@ import rl "github.com/gen2brain/raylib-go/raylib"
 const timeBarHeight int32 = 64
 
 // DefaultRightColRatio is the side column's default share of screen width.
-// Wide enough that inspector text rows aren't clipped at 1600×900; narrow
+// Wide enough that inspector text rows aren't clipped at 1600x900; narrow
 // enough that the big slot stays usable for marquee selects.
 //
 // Phase 13.5 M13.5.1: ratios moved from package consts to PanelManager fields

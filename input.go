@@ -12,7 +12,7 @@ import (
 )
 
 // pickUnitFromMouse - single-click selection. Cast a ray through the panel-
-// local cursor (in viewW×viewH viewport space, NOT screen space), intersect
+// local cursor (in viewWxviewH viewport space, NOT screen space), intersect
 // with the horizontal plane at the anchor's surface height, then snap to the
 // nearest unit within 1 m XZ. Returns the entity ID when something is hit, or
 // (0, false) otherwise. Phase 10 (M10.3): callers must pass panel-local
@@ -134,6 +134,73 @@ func groupSelectionByOwner(selected []ecs.Entity,
 		groups.SquadsToOrder = append(groups.SquadsToOrder, sm.Squad)
 	}
 	return groups
+}
+
+// detectSubsetOfSquad returns (squad, true) when every entity in `selected`
+// belongs to the same squad AND the selection is a *proper* subset of that
+// squad's roster (the player marqueed some - not all - members). Used by the
+// Shift+RMB handler to switch from "append squad waypoint" to "place
+// IndividualPosition on each selected unit" (M15.B.1).
+//
+// Empty selection, soloists, multi-squad selections, and whole-squad
+// selections all return ecs.Entity{}, false - those flow through the existing
+// resolveRMBOrder path.
+func detectSubsetOfSquad(
+	selected []ecs.Entity,
+	squadMemberMap *ecs.Map[components.SquadMember],
+	rosterMap *ecs.Map[components.CommandRoster],
+) (ecs.Entity, bool) {
+	if len(selected) == 0 {
+		return ecs.Entity{}, false
+	}
+	var commonSquad ecs.Entity
+	for i, e := range selected {
+		sm := squadMemberMap.Get(e)
+		if sm == nil || sm.Squad == (ecs.Entity{}) {
+			return ecs.Entity{}, false
+		}
+		if i == 0 {
+			commonSquad = sm.Squad
+			continue
+		}
+		if commonSquad != sm.Squad {
+			return ecs.Entity{}, false
+		}
+	}
+	roster := rosterMap.Get(commonSquad)
+	if roster == nil || uint8(len(selected)) >= roster.Count {
+		return ecs.Entity{}, false
+	}
+	return commonSquad, true
+}
+
+// placeIndividualPositions stamps IndividualPosition{Absolute, target} on
+// every live unit in `selected`. Existing markers are overwritten so a second
+// Shift+RMB moves the unit's parked position. Phase 15 M15.B.1 skeleton: all
+// selected units share the same target; per-click distribution across units
+// is deferred to a polish pass.
+func placeIndividualPositions(
+	world *ecs.World,
+	selected []ecs.Entity,
+	target components.WorldPos,
+	individualPosMap *ecs.Map[components.IndividualPosition],
+	now float32,
+) {
+	for _, e := range selected {
+		if e == (ecs.Entity{}) || !world.Alive(e) {
+			continue
+		}
+		ip := components.IndividualPosition{
+			Mode:        components.IndividualPosAbsolute,
+			AbsolutePos: target,
+			AcquiredAt:  now,
+		}
+		if individualPosMap.Has(e) {
+			*individualPosMap.Get(e) = ip
+		} else {
+			individualPosMap.Add(e, &ip)
+		}
+	}
 }
 
 // groupSelected inspects the SquadMember of every entity in `selected` and

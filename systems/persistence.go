@@ -25,7 +25,7 @@ const SaveDir = "./save/world-default"
 //	     6     2   flags   uint16 LE  (reserved, 0)
 //	     8     4   ChunkCoord.X int32 LE
 //	    12     4   ChunkCoord.Z int32 LE
-//	    16 16900   heights - ChunkResolution^2 × float32 LE, row-major by +Z
+//	    16 16900   heights - ChunkResolution^2 x float32 LE, row-major by +Z
 //
 // Total = 16 916 bytes at ChunkResolution = 65. Bumping the format bumps the
 // version: ReadChunk treats version mismatch as "not loadable" and callers

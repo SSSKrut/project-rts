@@ -194,13 +194,13 @@ func generateBuildingLayout(b components.Building, hostChunkBaseX, hostChunkBase
 // 0=south (+X dir), 1=east (+Z dir), 2=north (-X dir), 3=west (-Z dir).
 func wallEndpoints(minX, minZ, maxX, maxZ float32, side uint8) (float32, float32, float32, float32, float32, float32) {
 	switch side {
-	case 0: // south wall: from (minX, minZ) to (maxX, minZ); along +X (yaw=π/2)
+	case 0: // south wall: from (minX, minZ) to (maxX, minZ); along +X (yaw=pi/2)
 		return minX, minZ, maxX - minX, float32(math.Pi / 2), 0, -1
 	case 1: // east wall: from (maxX, minZ) to (maxX, maxZ); along +Z (yaw=0)
 		return maxX, minZ, maxZ - minZ, 0, 1, 0
-	case 2: // north wall: from (maxX, maxZ) to (minX, maxZ); along -X (yaw=-π/2)
+	case 2: // north wall: from (maxX, maxZ) to (minX, maxZ); along -X (yaw=-pi/2)
 		return maxX, maxZ, maxX - minX, float32(-math.Pi / 2), 0, 1
-	default: // west wall: from (minX, maxZ) to (minX, minZ); along -Z (yaw=π)
+	default: // west wall: from (minX, maxZ) to (minX, minZ); along -Z (yaw=pi)
 		return minX, maxZ, maxZ - minZ, float32(math.Pi), -1, 0
 	}
 }

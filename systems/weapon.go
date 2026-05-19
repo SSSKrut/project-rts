@@ -14,7 +14,7 @@ import (
 // primary weapon and a valid hostile awareness target, it fires one shot if
 // the RoF cooldown is ready. The shot resolves through walls (LOS) and
 // against any unit body crossing the ray (friendly fire allowed by design -
-// PHASE-14.md notes §Friendly fire).
+// PHASE-14.md notes sec Friendly fire).
 //
 // Pipeline shape mirrors VisionSystem / UnitMovementSystem (Phase 11.6
 // pattern):
@@ -24,7 +24,7 @@ import (
 //     LastFiredAt. Snapshot of all live units (candidates for raycast hits)
 //     stays read-only.
 //  2. Parallel raycast - per shot apply dispersion, test wall LOS, test
-//     unit-vs-ray distance against every candidate in the 3×3 chunk window.
+//     unit-vs-ray distance against every candidate in the 3x3 chunk window.
 //     Workers write into their own scratch buffers (damage / tracer /
 //     impact); never into shared maps.
 //  3. Serial post-pass - merge worker buffers. Damage events run through
@@ -206,7 +206,7 @@ const (
 	// so muzzle flash sits below the role label.
 	weaponEyeHeight float32 = 1.35
 	// weaponMaxRange - system-wide range cap. Phase 14 P10: SVD/PKM go to
-	// 600..800 m but the 9-chunk LOS window is 64 m × 3 = 192 m max, so
+	// 600..800 m but the 9-chunk LOS window is 64 m x 3 = 192 m max, so
 	// honest range stays bounded by that. Hard-cap here so a misconfigured
 	// Weapon.RangeM can't accidentally raycast across the whole map.
 	weaponMaxRange float32 = 192.0
@@ -298,8 +298,8 @@ func (sys *WeaponSystem) InitUI(w *ecs.World) {
 // the same boundary instead of needing two separate empirical fits.
 const weaponMovingSpeedThreshold float32 = 1.0
 
-// shouldFire is the M14.3 RoE + AttackMove gate. Returns true when the unit
-// is permitted to take the resolved shot.
+// shouldFire is the RoE + AttackMove + Sector gate. Returns true when the
+// unit is permitted to take the resolved shot.
 //
 // Decision tree (PHASE-14.md M14.3 + Q2 lock-in: HoldFire wins over
 // AttackMove). Phase 14.5 M14.5.0 (Issue #9 fix): if the active order's spec
@@ -309,20 +309,23 @@ const weaponMovingSpeedThreshold float32 = 1.0
 //
 //   - No squad (soloist) -> default FreeFire-on-Inf. Fires.
 //   - Mode=HoldFire -> never, UNLESS the active order has OverridesHoldFire.
-//   - Mode=ReturnFire -> always (the only way we got here is via an
-//     awareness hostile - that *is* "threat in awareness" per P9). The
-//     stricter "only after being shot at" model is deferred to Phase 15.
+//   - Mode=ReturnFire -> always (any awareness hostile counts as "threat in
+//     awareness" per P9). Stricter "only after being shot at" deferred.
 //   - Mode=FreeFire -> always.
 //   - FireOnInf gate - Phase 14 has only Inf targets, so this acts on
 //     AT-team-style rules that have FireOnInf=false. Bypassed by the same
-//     OverridesHoldFire override (explicit AttackTarget on infantry must
-//     work even for an AT team that normally suppresses infantry firing).
+//     OverridesHoldFire override.
 //   - Fire-while-moving (Motion.Speed > threshold) requires the squad's
 //     active order to carry the AttackMove flag.
+//   - Phase 15 M15.A.4: Sector cone. When SectorHalfDot > 0 the squad
+//     defends only a cone centred on SectorYaw; targets outside silently
+//     fail the gate. SectorHalfDot is interpreted as cos(half-angle), so
+//     1.0 = zero cone (disabled when 0).
 //
-// `motionSpeed` is passed in by the caller so the seer-loop snapshot avoids
-// re-resolving the Motion pointer.
-func (sys *WeaponSystem) shouldFire(shooter ecs.Entity, motionSpeed float32) bool {
+// `motionSpeed` + `shooterPos` + `targetPos` are passed in by the caller so
+// the seer-loop snapshot avoids re-resolving pointers.
+func (sys *WeaponSystem) shouldFire(shooter ecs.Entity, motionSpeed float32,
+	shooterPos *components.WorldPos, targetPos components.WorldPos) bool {
 	rules := components.EngagementRules{
 		Mode: components.FreeFire, FireOnInf: true, FireOnArm: true,
 	}
@@ -369,6 +372,27 @@ func (sys *WeaponSystem) shouldFire(shooter ecs.Entity, motionSpeed float32) boo
 	if motionSpeed > weaponMovingSpeedThreshold && !attackMoveOn && !overridesHoldFire {
 		return false
 	}
+
+	// Phase 15 M15.A.4 - Sector gate. SectorHalfDot is cos(half-angle); when
+	// positive (i.e. the squad has set a cone) any target outside the cone
+	// is filtered out. OverridesHoldFire bypasses the gate so an explicit
+	// AttackTarget on an out-of-sector enemy still fires.
+	if rules.SectorHalfDot > 0 && !overridesHoldFire {
+		dx := targetPos.Local.X - shooterPos.Local.X +
+			float32(targetPos.Chunk.X-shooterPos.Chunk.X)*components.ChunkSize
+		dz := targetPos.Local.Z - shooterPos.Local.Z +
+			float32(targetPos.Chunk.Z-shooterPos.Chunk.Z)*components.ChunkSize
+		mag := float32(math.Sqrt(float64(dx*dx + dz*dz)))
+		if mag > 0 {
+			dx /= mag
+			dz /= mag
+			fx := float32(math.Sin(float64(rules.SectorYaw)))
+			fz := float32(math.Cos(float64(rules.SectorYaw)))
+			if dx*fx+dz*fz < rules.SectorHalfDot {
+				return false
+			}
+		}
+	}
 	return true
 }
 
@@ -410,13 +434,13 @@ func (sys *WeaponSystem) Update(ctx core.UpdateContext) {
 		sys.workerSplash[i] = sys.workerSplash[i][:0]
 	}
 
-	// ── Phase 14 M14.5: Suppression decay pass. Walks every Unit's
+	// -- Phase 14 M14.5: Suppression decay pass. Walks every Unit's
 	// Suppression component before the firing pass so this tick's new
 	// pressure isn't immediately decayed away. Serial - each unit writes
 	// its own component, but the walk is cheap (one filter pass).
 	sys.decaySuppression(dt)
 
-	// ── 1a. Snapshot every live unit as a candidate target ──
+	// -- 1a. Snapshot every live unit as a candidate target --
 	qT := sys.targetFilter.Query()
 	for qT.Next() {
 		_, pos, stance, fac := qT.Get()
@@ -433,7 +457,7 @@ func (sys *WeaponSystem) Update(ctx core.UpdateContext) {
 		sys.targetsByChunk[pos.Chunk] = append(sys.targetsByChunk[pos.Chunk], idx)
 	}
 
-	// ── 1b. Snapshot walls by chunk for LOS raycast ──
+	// -- 1b. Snapshot walls by chunk for LOS raycast --
 	qW := sys.wallFilter.Query()
 	for qW.Next() {
 		pos, w := qW.Get()
@@ -445,7 +469,7 @@ func (sys *WeaponSystem) Update(ctx core.UpdateContext) {
 			makeLosWall(*pos, *w, doorState))
 	}
 
-	// ── 1c. Walk seers, decide shots, write Ammo + LastFiredAt in serial ──
+	// -- 1c. Walk seers, decide shots, write Ammo + LastFiredAt in serial --
 	qS := sys.seerFilter.Query()
 	for qS.Next() {
 		_, pos, motion, eq, aware, fac := qS.Get()
@@ -471,7 +495,7 @@ func (sys *WeaponSystem) Update(ctx core.UpdateContext) {
 		// Phase 14 M14.3 - RoE + AttackMove gate. Skip silently (no ammo
 		// decrement, no cooldown bump) so a HoldFire squad can resume fire
 		// the instant the player flips the rule.
-		if !sys.shouldFire(shooter, motion.Speed) {
+		if !sys.shouldFire(shooter, motion.Speed, pos, targetPos) {
 			continue
 		}
 		targetStance := components.StanceStand
@@ -521,7 +545,7 @@ func (sys *WeaponSystem) Update(ctx core.UpdateContext) {
 		})
 	}
 
-	// ── 2. Parallel raycast per shot ──
+	// -- 2. Parallel raycast per shot --
 	if len(sys.shotsBuf) > 0 {
 		shots := sys.shotsBuf
 		targets := sys.targetsBuf
@@ -544,7 +568,7 @@ func (sys *WeaponSystem) Update(ctx core.UpdateContext) {
 		})
 	}
 
-	// ── 3. Serial post-pass: spawn particle entities from worker buffers ──
+	// -- 3. Serial post-pass: spawn particle entities from worker buffers --
 	// Phase 14.5 M14.5.4/M14.5.5: tracers / impacts / muzzle flashes are
 	// ECS entities. Per-impact-kind dust/debris/smoke spawns layer on top.
 	if sys.particles != nil {
@@ -733,7 +757,7 @@ func (sys *WeaponSystem) decaySuppression(dt float32) {
 // Phase 14.5 M14.5.3: switched from O(N) Suppression filter walk to a
 // SpatialHash ForEachInRadius query. Each shot now touches only the dozen-ish
 // units near its impact instead of every unit in the world - big win for
-// crowd firefights where O(N×shots) blew up quickly.
+// crowd firefights where O(Nxshots) blew up quickly.
 func (sys *WeaponSystem) propagateSuppression(impact rl.Vector3, hitMul float32) {
 	hash := sys.spatialHash.Get()
 	if hash == nil {
@@ -840,7 +864,7 @@ func resolveShot(
 	threatBuf *[]threatEvent, suppBuf *[]suppressionEvent, splashBuf *[]splashEvent,
 ) {
 	// Apply lateral dispersion to the aim point. dispersion is small-angle
-	// radians; lateral deflection ≈ dispersion * range. Sample one uniform
+	// radians; lateral deflection ~ dispersion * range. Sample one uniform
 	// per axis from the seeded RNG so the same shot always lands the same
 	// way (debuggable replay).
 	dx := s.aim.X - s.muzzle.X
@@ -856,7 +880,7 @@ func resolveShot(
 	rx := float32(splitmix(&rng))/float32(0x40000000) - 1 // [-1, 1)
 	ry := float32(splitmix(&rng))/float32(0x40000000) - 1
 	lateral := s.dispersion * dist
-	// Perpendicular-to-LOS XZ basis (rotate (dx,dz) by 90°). Adds horizontal
+	// Perpendicular-to-LOS XZ basis (rotate (dx,dz) by 90 deg). Adds horizontal
 	// scatter; ry adds a small vertical jitter so the impact sphere doesn't
 	// always sit on the ground plane.
 	invD := float32(1)
@@ -870,11 +894,11 @@ func resolveShot(
 	aim.Z += perpZ * lateral * rx
 	aim.Y += lateral * ry * 0.5
 
-	// Wall LOS - collect walls in the 3×3 chunk window around the shooter.
+	// Wall LOS - collect walls in the 3x3 chunk window around the shooter.
 	walls := localWalls(wallsByChunk, s.shooterChunk)
 	wallT, wallBlocks := segmentToWallsT(walls, s.muzzle.X, s.muzzle.Z, aim.X, aim.Z)
 
-	// Unit-vs-ray - walk targets in the 3×3 chunk window. Pick the unit
+	// Unit-vs-ray - walk targets in the 3x3 chunk window. Pick the unit
 	// closest to the shooter (along ray) that's within its hit cylinder.
 	bestHitT := float32(1.5) // > 1 means no hit yet
 	var bestHit ecs.Entity
@@ -996,7 +1020,7 @@ func resolveShot(
 	})
 }
 
-// localWalls returns the concatenated wall slice for the 3×3 chunk window
+// localWalls returns the concatenated wall slice for the 3x3 chunk window
 // around `home`. Returns a fresh slice each call (worker-local - no shared
 // mutation), so the parallel pass is race-safe.
 func localWalls(wallsByChunk map[components.ChunkCoord][]losWall, home components.ChunkCoord) []losWall {
@@ -1018,7 +1042,7 @@ func localWalls(wallsByChunk map[components.ChunkCoord][]losWall, home component
 	return out
 }
 
-// segmentToWallsT returns the smallest t ∈ [0,1] along (ax,az)->(bx,bz) at
+// segmentToWallsT returns the smallest t in [0,1] along (ax,az)->(bx,bz) at
 // which a non-transparent wall is hit, plus a "blocked" flag. Mirrors
 // anyLosWallBlocks but reports the parametric distance so we can render
 // the tracer up to the wall.

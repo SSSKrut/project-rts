@@ -224,7 +224,7 @@ func detectPreset(p components.MovementProfile) components.MovementPreset {
 	return components.PresetDefault
 }
 
-// cyclePreset advances the preset index by `step` (typically ±1) with wrap.
+// cyclePreset advances the preset index by `step` (typically +/-1) with wrap.
 // Hotkeys `[` (step=-1) and `]` (step=+1) drive this.
 func cyclePreset(cur components.MovementPreset, step int) components.MovementPreset {
 	const count = 6

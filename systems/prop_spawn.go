@@ -10,7 +10,7 @@ import (
 	"rts-go/core"
 )
 
-// 8×8 = 64 candidate cells per chunk. At ChunkSize 64 m that's an 8 m cell -
+// 8x8 = 64 candidate cells per chunk. At ChunkSize 64 m that's an 8 m cell -
 // roughly the canopy radius of a mature oak, so neighbouring cells almost
 // never collide visually.
 const propCellsPerSide int32 = 8

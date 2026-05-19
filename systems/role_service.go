@@ -187,7 +187,7 @@ func (s *RoleService) spawnSecondary(unit ecs.Entity, role components.UnitRoleKi
 	return ent
 }
 
-// staminaRecoverRate is the per-second Stamina regen at Pace=Walk + Stance ∈
+// staminaRecoverRate is the per-second Stamina regen at Pace=Walk + Stance in
 // {Stand, Crouch}. PHASE-13.md P2 sets this as a fixed value across all roles;
 // Phase 15 doctrines may introduce per-doctrine scaling later.
 const staminaRecoverRate float32 = 0.05
@@ -229,7 +229,7 @@ func StaminaMaxForRole(role components.UnitRoleKind) float32 {
 // MovementDefaultForRole returns the per-role default MovementProfile applied
 // at squad creation. Squad-level aggregation pulls from the leader's role
 // (see SquadService.CreateFromTemplate), then template-specific tweaks may
-// override individual fields. PHASE-13.md P7 + COMMAND-MODEL.md §4 table.
+// override individual fields. PHASE-13.md P7 + COMMAND-MODEL.md sec 4 table.
 func MovementDefaultForRole(role components.UnitRoleKind) components.MovementProfile {
 	switch role {
 	case components.RoleMachineGunner:
@@ -263,7 +263,7 @@ func MovementDefaultForRole(role components.UnitRoleKind) components.MovementPro
 }
 
 // EngagementDefaultForRole returns the per-role default EngagementRules.
-// Same per-role table as COMMAND-MODEL.md §4. Phase 14 WeaponSystem is the
+// Same per-role table as COMMAND-MODEL.md sec 4. Phase 14 WeaponSystem is the
 // real reader; Phase 13 only surfaces these in the Inspector quick-bar.
 func EngagementDefaultForRole(role components.UnitRoleKind) components.EngagementRules {
 	switch role {

@@ -53,14 +53,22 @@ const SquadMacroPathSize = 8
 // the next target. HasGoal=false => idle (FormationSystem stops writing
 // ActionQueue). Setting ReplanAt to 0 forces a replan on the next
 // SquadMacroPathSystem pass - the way new orders trigger immediate planning.
+//
+// Phase 15 M15.A.5 - WaitingForStragglers / StragglerCaughtUp / StragglerTotal
+// track the wait-for-stragglers gate: when the roster spread > 2*Spacing,
+// FormationSystem freezes Head advance and SquadMacroPath honours the flag.
+// Caught / Total feed the Inspector "Waiting for stragglers (3/4)" line.
 type MacroPath struct {
-	Waypoints   [SquadMacroPathSize]WorldPos
-	Head        uint8
-	Count       uint8
-	Goal        WorldPos
-	HasGoal     bool
-	ReplanAt    float32
-	LastPlanned float32
+	Waypoints            [SquadMacroPathSize]WorldPos
+	Head                 uint8
+	Count                uint8
+	Goal                 WorldPos
+	HasGoal              bool
+	ReplanAt             float32
+	LastPlanned          float32
+	WaitingForStragglers bool
+	StragglerCaughtUp    uint8
+	StragglerTotal       uint8
 }
 
 // RadioNetwork - structural scaffold. Real readers land in the Comms phase;

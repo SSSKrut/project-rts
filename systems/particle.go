@@ -74,7 +74,7 @@ func (ParticleSystem) LODPolicy() core.LODPolicy {
 	}
 }
 
-// kindGravity gives the per-kind vertical acceleration (m/s²). Positive Y is
+// kindGravity gives the per-kind vertical acceleration (m/s^2). Positive Y is
 // up. Smoke rises gently; debris falls; dust settles slowly. Stationary
 // kinds (Tracer, Impact, MuzzleFlash) get zero - Velocity, if non-nil, is
 // preserved as-is.
@@ -123,9 +123,9 @@ func (sys *ParticleSystem) Update(ctx core.UpdateContext) {
 
 	// Soft cap: if alive count beyond cap, evict the oldest first.
 	if overflow := len(sys.sortBuf) - components.ParticleSoftCap; overflow > 0 {
-		// Insertion sort is overkill for ~50 evictions when count ≈ 2050,
+		// Insertion sort is overkill for ~50 evictions when count ~ 2050,
 		// but the buffer is small enough that the cost is negligible.
-		// Use stable bubble for simplicity (n × overflow comparisons).
+		// Use stable bubble for simplicity (n x overflow comparisons).
 		for i := 1; i < len(sys.sortBuf); i++ {
 			for j := i; j > 0 && sys.sortBuf[j-1].spawnTime > sys.sortBuf[j].spawnTime; j-- {
 				sys.sortBuf[j-1], sys.sortBuf[j] = sys.sortBuf[j], sys.sortBuf[j-1]

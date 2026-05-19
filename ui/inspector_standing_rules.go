@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"math"
 
 	rl "github.com/gen2brain/raylib-go/raylib"
 	"github.com/mlange-42/ark/ecs"
@@ -14,22 +15,22 @@ import (
 //
 // Layout (single-squad view, drawn under the Roster section):
 //
-//   ┌─ Movement ────────────────────────────┐
-//   │ Presets:  [Default][Cautious][Rush]   │
-//   │           [Sprint ][Stealth ][Crawl ] │
-//   │ Pace:    [Walk    ]  Stance:  [Stand] │
-//   │ Posture: [Standard]  Path:    [Direct]│
-//   │ Stamina avg: ████████░░ 85%           │
-//   ├─ Engagement ──────────────────────────┤
-//   │ Mode:     [Hold ][Return][Free ]      │
-//   │ Targets:  [Inf ][Arm ][Air ][Struct]  │
-//   ├─ Behavior ────────────────────────────┤
-//   │ [done] Auto-reposition under fire        │
-//   │ [done] Auto-stance change                │
-//   │ [ ] Hold until ordered                │
-//   │ [done] Allow return fire                 │
-//   │ Suppression threshold: [-][+] 0.30    │
-//   └───────────────────────────────────────┘
+//   +- Movement ----------------------------+
+//   | Presets:  [Default][Cautious][Rush]   |
+//   |           [Sprint ][Stealth ][Crawl ] |
+//   | Pace:    [Walk    ]  Stance:  [Stand] |
+//   | Posture: [Standard]  Path:    [Direct]|
+//   | Stamina avg: ########.. 85%           |
+//   +- Engagement --------------------------+
+//   | Mode:     [Hold ][Return][Free ]      |
+//   | Targets:  [Inf ][Arm ][Air ][Struct]  |
+//   +- Behavior ----------------------------+
+//   | [done] Auto-reposition under fire        |
+//   | [done] Auto-stance change                |
+//   | [ ] Hold until ordered                |
+//   | [done] Allow return fire                 |
+//   | Suppression threshold: [-][+] 0.30    |
+//   +---------------------------------------+
 //
 // Interaction model: immediate-mode. Each "button" is an inline rect + click
 // test against (ctx.Cursor, ctx.LMBPressed). PanelFocused gates clicks so a
@@ -71,6 +72,14 @@ func drawStandingRulesSections(ctx InspectorCtx, squad ecs.Entity, x, y, width i
 	er := ctx.EngagementRulesMap.Get(squad)
 	br := ctx.BehaviorRulesMap.Get(squad)
 
+	// Phase 15 M15.A.2 - Doctrine chips sit above the three sections. Applying
+	// a doctrine writes through all three components, so it has to run first
+	// so the section chips below highlight the freshly-applied fields.
+	if mp != nil && er != nil && br != nil && ctx.ActiveDoctrineMap != nil {
+		y = drawDoctrineSection(ctx, squad, mp, er, br, x, y, width)
+		y += srSectionGap
+	}
+
 	if mp != nil {
 		y = drawMovementSection(ctx, squad, mp, x, y, width)
 		y += srSectionGap
@@ -80,9 +89,93 @@ func drawStandingRulesSections(ctx InspectorCtx, squad ecs.Entity, x, y, width i
 		y += srSectionGap
 	}
 	if br != nil {
-		y = drawBehaviorSection(ctx, br, x, y, width)
+		// Phase 15 M15.C.0 - Autonomy chip row precedes Behavior section.
+		// AutonomySpec writes through into BehaviorRules skipping dirty bits.
+		if ctx.ActiveAutonomyMap != nil {
+			y = drawAutonomySection(ctx, squad, br, x, y, width)
+			y += srSectionGap
+		}
+		y = drawBehaviorSection(ctx, squad, br, x, y, width)
 		y += srSectionGap
 	}
+	return y
+}
+
+// drawAutonomySection renders the 4-chip Strict / Cautious / Adaptive /
+// Survival row. Click applies AutonomySpec to br (skipping dirty fields) and
+// stamps ActiveAutonomy.Code for highlight.
+func drawAutonomySection(
+	ctx InspectorCtx,
+	squad ecs.Entity,
+	br *components.BehaviorRules,
+	x, y, width int32,
+) int32 {
+	drawText(ctx.Font, "Autonomy", x, y, inspectorFontSize, srSectionHdr)
+	y += inspectorRowH
+
+	dirty := components.BehaviorRulesField(0)
+	if ctx.BehaviorRulesEditMap != nil {
+		if ed := ctx.BehaviorRulesEditMap.Get(squad); ed != nil {
+			dirty = ed.DirtyMask
+		}
+	}
+
+	autonomies := [4]components.AutonomyCode{
+		components.AutonomyStrict, components.AutonomyCautious,
+		components.AutonomyAdaptive, components.AutonomySurvival,
+	}
+	chipW := (width - 3*srChipGap) / 4
+	for i, a := range autonomies {
+		cx := x + int32(i)*(chipW+srChipGap)
+		active := components.AutonomyMatches(a, *br, dirty)
+		if drawChip(ctx, cx, y, chipW, srChipH, components.AutonomyName(a), active) {
+			components.ApplyAutonomy(a, br, dirty)
+			if ctx.ActiveAutonomyMap.Has(squad) {
+				*ctx.ActiveAutonomyMap.Get(squad) = components.ActiveAutonomy{Code: a}
+			} else {
+				ctx.ActiveAutonomyMap.Add(squad, &components.ActiveAutonomy{Code: a})
+			}
+		}
+	}
+	y += srChipH
+	return y
+}
+
+// drawDoctrineSection renders the 4-chip Doctrine row + Patrol / Assault /
+// Stealth / Defense. Click writes through DoctrineSpec into the squad's three
+// components and stamps ActiveDoctrine.Code.
+func drawDoctrineSection(
+	ctx InspectorCtx,
+	squad ecs.Entity,
+	mp *components.MovementProfile,
+	er *components.EngagementRules,
+	br *components.BehaviorRules,
+	x, y, width int32,
+) int32 {
+	drawText(ctx.Font, "Doctrine", x, y, inspectorFontSize, srSectionHdr)
+	y += inspectorRowH
+
+	doctrines := [4]components.DoctrineCode{
+		components.DoctrinePatrol, components.DoctrineAssault,
+		components.DoctrineStealth, components.DoctrineDefense,
+	}
+	chipW := (width - 3*srChipGap) / 4
+	for i, d := range doctrines {
+		cx := x + int32(i)*(chipW+srChipGap)
+		active := components.DoctrineMatches(d, *mp, *er, *br)
+		if drawChip(ctx, cx, y, chipW, srChipH, components.DoctrineName(d), active) {
+			spec := components.DoctrineSpecs[d]
+			*mp = spec.Movement
+			*er = spec.Engage
+			*br = spec.Behavior
+			if ctx.ActiveDoctrineMap.Has(squad) {
+				*ctx.ActiveDoctrineMap.Get(squad) = components.ActiveDoctrine{Code: d}
+			} else {
+				ctx.ActiveDoctrineMap.Add(squad, &components.ActiveDoctrine{Code: d})
+			}
+		}
+	}
+	y += srChipH
 	return y
 }
 
@@ -90,7 +183,7 @@ func drawMovementSection(ctx InspectorCtx, squad ecs.Entity, mp *components.Move
 	drawText(ctx.Font, "Movement", x, y, inspectorFontSize, srSectionHdr)
 	y += inspectorRowH
 
-	// Six preset chips in 2 rows × 3.
+	// Six preset chips in 2 rows x 3.
 	chipW := (width - 2*srChipGap) / 3
 	presets := [6]components.MovementPreset{
 		components.PresetDefault, components.PresetCautious, components.PresetRush,
@@ -108,7 +201,7 @@ func drawMovementSection(ctx InspectorCtx, squad ecs.Entity, mp *components.Move
 	}
 	y += 2*(srChipH+srChipGap) - srChipGap + srRowGap
 
-	// 4 cyclic field buttons in a 2×2 grid.
+	// 4 cyclic field buttons in a 2x2 grid.
 	colW := (width - srChipGap) / 2
 	// Pace.
 	if drawCyclicField(ctx, x, y, colW, srChipH, "Pace: "+components.PaceName(mp.Pace)) {
@@ -173,28 +266,61 @@ func drawEngagementSection(ctx InspectorCtx, er *components.EngagementRules, x, 
 			*t.field = !*t.field
 		}
 	}
-	y += srChipH
+	y += srChipH + srRowGap
+
+	// Phase 15 M15.A.4 - Standoff cycle button + Sector advisory line. Click
+	// the chip to cycle Any -> Close -> Medium -> Long -> Any. SectorHalfDot
+	// is read-only here; the dedicated edit UI lands when DefendPosition
+	// ghost arc commits ship in a later phase.
+	standoffLabel := "Standoff: " + components.StandoffName(er.Standoff)
+	if drawCyclicField(ctx, x, y, width, srChipH, standoffLabel) {
+		er.Standoff = (er.Standoff + 1) % 4
+	}
+	y += srChipH + srRowGap
+	sectorLabel := "Sector: free"
+	if er.SectorHalfDot > 0 {
+		halfDeg := math.Acos(float64(er.SectorHalfDot)) * 180.0 / math.Pi
+		yawDeg := float64(er.SectorYaw) * 180.0 / math.Pi
+		sectorLabel = fmt.Sprintf("Sector: yaw %.0f deg, half %.0f deg", yawDeg, halfDeg)
+	}
+	drawText(ctx.Font, sectorLabel, x, y, inspectorFontSize, inspectorTextDim)
+	y += inspectorRowH
 	return y
 }
 
-func drawBehaviorSection(ctx InspectorCtx, br *components.BehaviorRules, x, y, width int32) int32 {
+func drawBehaviorSection(ctx InspectorCtx, squad ecs.Entity, br *components.BehaviorRules, x, y, width int32) int32 {
 	drawText(ctx.Font, "Behavior", x, y, inspectorFontSize, srSectionHdr)
 	y += inspectorRowH
+
+	// Phase 15 M15.C.0 - individual field edits flip the DirtyMask bit so
+	// the next Autonomy chip click skips them.
+	markDirty := func(bit components.BehaviorRulesField) {
+		if ctx.BehaviorRulesEditMap == nil {
+			return
+		}
+		if ed := ctx.BehaviorRulesEditMap.Get(squad); ed != nil {
+			ed.DirtyMask |= bit
+			return
+		}
+		ctx.BehaviorRulesEditMap.Add(squad, &components.BehaviorRulesEdit{DirtyMask: bit})
+	}
 
 	// Boolean toggles as rows: [done] / [ ] + label.
 	type toggleSpec struct {
 		label string
 		field *bool
+		bit   components.BehaviorRulesField
 	}
 	toggles := [4]toggleSpec{
-		{"Auto-reposition", &br.AllowAutoReposition},
-		{"Auto-stance", &br.AllowAutoStance},
-		{"Hold until ordered", &br.HoldUntilOrdered},
-		{"Allow return fire", &br.AllowReturnFire},
+		{"Auto-reposition", &br.AllowAutoReposition, components.DirtyAutoReposition},
+		{"Auto-stance", &br.AllowAutoStance, components.DirtyAutoStance},
+		{"Hold until ordered", &br.HoldUntilOrdered, components.DirtyHoldUntilOrdered},
+		{"Allow return fire", &br.AllowReturnFire, components.DirtyAllowReturnFire},
 	}
 	for _, t := range toggles {
 		if drawToggleRow(ctx, x, y, width, srChipH, t.label, *t.field) {
 			*t.field = !*t.field
+			markDirty(t.bit)
 		}
 		y += srChipH + 2
 	}
@@ -208,6 +334,7 @@ func drawBehaviorSection(ctx InspectorCtx, br *components.BehaviorRules, x, y, w
 		if br.SuppressionThreshold < 0 {
 			br.SuppressionThreshold = 0
 		}
+		markDirty(components.DirtySuppressionThreshold)
 	}
 	label := fmt.Sprintf("%.2f", br.SuppressionThreshold)
 	drawText(ctx.Font, "Supp: "+label,
@@ -217,6 +344,7 @@ func drawBehaviorSection(ctx InspectorCtx, br *components.BehaviorRules, x, y, w
 		if br.SuppressionThreshold > 1 {
 			br.SuppressionThreshold = 1
 		}
+		markDirty(components.DirtySuppressionThreshold)
 	}
 	y += srChipH
 	return y

@@ -1,6 +1,7 @@
 package systems
 
 import (
+	rl "github.com/gen2brain/raylib-go/raylib"
 	"github.com/mlange-42/ark/ecs"
 
 	"rts-go/components"
@@ -31,12 +32,20 @@ type DamageService struct {
 	equipmentMap   *ecs.Map[components.Equipment]
 	factionMap     *ecs.Map[components.Faction]
 	squadMemberMap *ecs.Map[components.SquadMember]
+	posMap         *ecs.Map[components.WorldPos]
 	// Phase 14.6 M14.6.0 - awareness sweep on death wipes any LastSeen entry
 	// pointing at the just-killed unit, so readers (WeaponSystem.pickTarget,
 	// future tactical AI) can't dereference a recycled slot through stale
 	// Awareness data.
 	awarenessFilter *ecs.Filter1[components.Awareness]
 	squadService    *SquadService
+	// Phase 15 M15.C.2 - KIA events. Resource handle so ApplyDeath can push
+	// without taking EventLog as a constructor arg.
+	eventLogRes ecs.Resource[components.EventLog]
+	clock       func() float32
+	// Phase 15 M15.C.3 - MapPing spawn handle. Optional - nil falls back to
+	// "no ping on KIA".
+	mapPings *MapPingService
 }
 
 // NewDamageService wires the map handles. Must be called after the world
@@ -48,10 +57,20 @@ func NewDamageService(w *ecs.World, squads *SquadService) *DamageService {
 		equipmentMap:    ecs.NewMap[components.Equipment](w),
 		factionMap:      ecs.NewMap[components.Faction](w),
 		squadMemberMap:  ecs.NewMap[components.SquadMember](w),
+		posMap:          ecs.NewMap[components.WorldPos](w),
 		awarenessFilter: ecs.NewFilter1[components.Awareness](w),
 		squadService:    squads,
+		eventLogRes:     ecs.NewResource[components.EventLog](w),
 	}
 }
+
+// SetClock injects the session-time getter that ApplyDeath stamps onto KIA
+// events. Wired from main.go after construction.
+func (d *DamageService) SetClock(clock func() float32) { d.clock = clock }
+
+// SetMapPings injects the MapPingService used by ApplyDeath to drop a red
+// ping at the unit's last position. Nil-safe.
+func (d *DamageService) SetMapPings(svc *MapPingService) { d.mapPings = svc }
 
 // Apply decrements `target`'s HP by `dmg`. Returns true if this hit killed
 // the unit (HP transitioned past 0); false on glancing damage or no-op (dead
@@ -97,6 +116,10 @@ func (d *DamageService) ApplyDeath(unit ecs.Entity) {
 	if unit == (ecs.Entity{}) || !d.world.Alive(unit) {
 		return
 	}
+	// Phase 15 M15.C.2 - push a KIA event before tearing the unit down.
+	// SquadMember + WorldPos must be sampled now; SquadService.Leave below
+	// removes the membership.
+	d.pushKIAEvent(unit)
 	// Capture equipment IDs by value before SquadService.Leave touches the
 	// archetype - Ark's swap-on-remove compaction would invalidate a held
 	// pointer otherwise.
@@ -117,6 +140,43 @@ func (d *DamageService) ApplyDeath(unit ecs.Entity) {
 	}
 	if d.world.Alive(unit) {
 		d.world.RemoveEntity(unit)
+	}
+}
+
+// pushKIAEvent records a KIA into the global EventLog and drops a red
+// MapPing at the unit's last position. Squad is the unit's SquadMember.Squad
+// at the moment of death (may be zero for soloists).
+func (d *DamageService) pushKIAEvent(unit ecs.Entity) {
+	log := d.eventLogRes.Get()
+	var squad ecs.Entity
+	if sm := d.squadMemberMap.Get(unit); sm != nil {
+		squad = sm.Squad
+	}
+	var pos components.WorldPos
+	if p := d.posMap.Get(unit); p != nil {
+		pos = *p
+	}
+	now := float32(0)
+	if d.clock != nil {
+		now = d.clock()
+	}
+	if log != nil {
+		log.Push(components.EventEntry{
+			Kind:  components.EventKIA,
+			At:    now,
+			Pos:   pos,
+			Squad: squad,
+			Text:  "Unit KIA",
+		})
+	}
+	if d.mapPings != nil {
+		d.mapPings.Spawn(pos, components.MapPing{
+			Kind:     components.MapPingKIA,
+			SpawnAt:  now,
+			TTL:      6.0,
+			Color:    rl.Color{R: 230, G: 70, B: 70, A: 255},
+			BaseRadM: 6.0,
+		})
 	}
 }
 

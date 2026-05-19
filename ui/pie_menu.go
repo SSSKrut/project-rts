@@ -248,7 +248,7 @@ func (m *PieMenu) segmentAt(cursor rl.Vector2) (components.OrderKindCode, bool) 
 		return 0, false
 	}
 	// atan2(dx, -dy) gives angle from "up" (negative Y) going clockwise. Map
-	// the [-π, π) range to [0, 2π).
+	// the [-pi, pi) range to [0, 2pi).
 	ang := math.Atan2(float64(dx), float64(-dy))
 	if ang < 0 {
 		ang += 2 * math.Pi
@@ -311,7 +311,7 @@ func (m *PieMenu) Draw(font rl.Font, cursor rl.Vector2) {
 			float32(fs), 1, col)
 	}
 
-	// Inner "cancel" affordance - small × if cursor in cancel zone.
+	// Inner "cancel" affordance - small x if cursor in cancel zone.
 	if !hasHover {
 		const fs int32 = 12
 		txt := "cancel"

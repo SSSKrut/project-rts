@@ -26,7 +26,7 @@ const (
 //   Cone     - Size.X = base radius, Size.Y = height.
 //   Plane    - Size.X/Z are full extents on XZ.
 //   Tree     - Size.X = trunk radius, Size.Y = trunk height,
-//              Size.Z = canopy radius. Canopy height = 1.5 × trunk height.
+//              Size.Z = canopy radius. Canopy height = 1.5 x trunk height.
 type PropMeta struct {
 	Primitive   PrimitiveKind
 	Size        rl.Vector3

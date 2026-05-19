@@ -13,7 +13,7 @@ import (
 // pre-built handles via NewNavService and reused across calls.
 //
 // Phase 7 widens the planner past per-chunk surface NavGrids: each Floor
-// entity also carries a FloorNavGrid, and surface↔floor / floor↔floor
+// entity also carries a FloorNavGrid, and surface<->floor / floor<->floor
 // transitions live in a TransitionRegistry resource. WorldPos->NavNode
 // resolution checks floor footprint membership first; in-grid neighbours +
 // registry edges are unified in one A* expansion.
@@ -46,7 +46,7 @@ type NavOpts struct {
 	AvoidOpenedDoors bool
 	// PathStyle is the per-squad routing preference (PHASE-13.md P4). The
 	// modifier table is applied as a float multiplier on NavCell.Cost
-	// during A* expansion. Default Direct = ×1.0 (no change).
+	// during A* expansion. Default Direct = x1.0 (no change).
 	PathStyle components.PathStyle
 }
 
@@ -59,7 +59,7 @@ const navArrivalRadius float32 = 0.5
 
 // FindPath returns waypoints (cell centres) along a least-cost path from
 // `from` to `to`. Empty result = no path; nil = both endpoints fall in the
-// same cell. The multi-graph A* expansion picks up surface↔floor transitions
+// same cell. The multi-graph A* expansion picks up surface<->floor transitions
 // from the TransitionRegistry resource so a path through a doorway or up a
 // staircase just works.
 //
@@ -350,7 +350,7 @@ func (s *NavService) nodeWorldPos(n components.NavNode, floors []floorRec) compo
 }
 
 // gridNeighbour - output of gridNeighbours, packs target NavNode + a flag
-// telling A* whether the move is diagonal (√2 step) or cardinal (1 m).
+// telling A* whether the move is diagonal (sqrt2 step) or cardinal (1 m).
 type gridNeighbour struct {
 	node components.NavNode
 	diag bool
@@ -358,7 +358,7 @@ type gridNeighbour struct {
 
 // gridNeighbours enumerates the 8 cells around a node *inside the same grid*.
 // Surface nodes overflow into neighbouring chunks via the global-cell math;
-// floor nodes are clamped to the grid's SizeX × SizeZ block.
+// floor nodes are clamped to the grid's SizeX x SizeZ block.
 func (s *NavService) gridNeighbours(n components.NavNode) []gridNeighbour {
 	var out [8]gridNeighbour
 	offsets := [8][3]int{
@@ -483,13 +483,13 @@ func (h *nodeHeap) siftDown(i int) {
 // styleCellCost applies the PathStyle modifier to NavCell.Cost. PHASE-13.md
 // P4 table:
 //
-//	Direct      ×1.0
-//	RoadPrefer  road×0.5,  off-road×1.5
-//	RoadAvoid   road×2.0,  off-road×1.0 (cover-rich cells get an extra ×0.8)
-//	CoverSeek   CoverDistance<threshold ×0.7, else ×1.0
+//	Direct      x1.0
+//	RoadPrefer  roadx0.5,  off-roadx1.5
+//	RoadAvoid   roadx2.0,  off-roadx1.0 (cover-rich cells get an extra x0.8)
+//	CoverSeek   CoverDistance<threshold x0.7, else x1.0
 //
 // Multipliers stay strictly positive so A* admissibility holds. Result is a
-// float that the planner multiplies by step length (1 m NSEW, √2 m diagonal).
+// float that the planner multiplies by step length (1 m NSEW, sqrt2 m diagonal).
 func styleCellCost(cell components.NavCell, style components.PathStyle) float32 {
 	base := float32(cell.Cost)
 	onRoad := cell.Flags&components.NavOnRoad != 0

@@ -20,7 +20,7 @@ var skirtColor = [4]uint8{55, 45, 35, 255}
 const skirtDrop float32 = 2.0
 
 // reliefStops are the height/colour control points used by reliefColor.
-// Heights tuned for terrainAmplitude = 8 (vertex Y typically ±8 m); adjust
+// Heights tuned for terrainAmplitude = 8 (vertex Y typically +/-8 m); adjust
 // together if amplitude changes meaningfully. Order ascending in H.
 var reliefStops = [...]struct {
 	H       float32
@@ -71,7 +71,7 @@ func reliefColor(y, ny float32) (uint8, uint8, uint8) {
 }
 
 // TerrainMeshSystem rebuilds GPU mesh for any chunk marked MeshDirty. Two
-// passes: Active (full 65×65) and Relevant (decimated 33×33). LOD-tier
+// passes: Active (full 65x65) and Relevant (decimated 33x33). LOD-tier
 // transitions hit this because TerrainStreamingSystem stamps MeshDirty on
 // every transition. On rebuild, the existing mesh is unloaded BEFORE the new
 // one is assigned.
@@ -262,7 +262,7 @@ func assembleGrid(heightAt func(i, j int) float32, srcRes, dstRes int) builtMesh
 				hu = y
 			}
 			// dx along +X = (2*srcStep, hr-hl, 0); dz along +Z =
-			// (0, hu-hd, 2*srcStep). Normal = dz × dx (points +Y on flat).
+			// (0, hu-hd, 2*srcStep). Normal = dz x dx (points +Y on flat).
 			nx := -(hr - hl) * (2 * srcStep)
 			ny := (2 * srcStep) * (2 * srcStep)
 			nz := -(hu - hd) * (2 * srcStep)

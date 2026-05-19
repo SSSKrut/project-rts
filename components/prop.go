@@ -24,7 +24,7 @@ const (
 // stays small and placeholder mesh -> loaded model is a registry-only swap.
 type Prop struct {
 	Type  PropType
-	Yaw   float32 // radians, [0, 2π)
+	Yaw   float32 // radians, [0, 2pi)
 	Scale float32 // uniform; 1.0 = registry default size
 }
 

@@ -107,6 +107,12 @@ func main() {
 	unitSpatialHash := core.NewSpatialHash(32.0)
 	ecs.AddResource(app.World, unitSpatialHash)
 
+	// Phase 15 M15.C.2 - global event log. Push targets are SurvivalInstinct
+	// (SuppressionStart), DamageService (KIA), OrderResolverSystem
+	// (OrderCompleted / OrderFailed). Readers: Inspector squad view.
+	eventLog := components.NewEventLog()
+	ecs.AddResource(app.World, eventLog)
+
 	defer systems.FlushModifiedChunks(app.World, systems.SaveDir)
 
 	stamper := systems.NewStamper(app.World)
@@ -116,6 +122,9 @@ func main() {
 	// death-despawn path; WeaponSystem hands every applied hit through it.
 	// Constructed before WeaponSystem.InitUI so the handle is live by then.
 	damageService := systems.NewDamageService(app.World, squadService)
+	damageService.SetClock(func() float32 { return squadService.Clock() })
+	mapPingService := systems.NewMapPingService(app.World, func() float32 { return squadService.Clock() })
+	damageService.SetMapPings(mapPingService)
 
 	terrainStreamingSys := &systems.TerrainStreamingSystem{}
 	terrainStreamingSys.InitUI(app.World)
@@ -172,10 +181,21 @@ func main() {
 	weaponSys := systems.NewWeaponSystem(workerPool, damageService, particleHandles)
 	weaponSys.InitUI(app.World)
 
-	// Phase 14 M14.5: cleanup of expired ThreatSource entities - Phase 15
-	// SurvivalInstinct will read live ones to pick cover slots.
+	// Cleanup of expired ThreatSource entities. SurvivalInstinct reads
+	// Suppression (a faster signal); ThreatSource entities will become the
+	// primary input once M15.A.1 ScatterProtocol consumes the cluster.
 	threatDecaySys := systems.NewThreatDecaySystem()
 	threatDecaySys.InitUI(app.World)
+
+	// Phase 15 M15.C.3 - despawn expired MapPing entities (KIA rings, etc.).
+	mapPingDecaySys := systems.NewMapPingDecaySystem()
+	mapPingDecaySys.InitUI(app.World)
+
+	// Phase 15 M15.A.0 - reactive cover seek. Runs after WeaponSystem (fresh
+	// Suppression) and before FormationSystem (so override-driven ActionQueue
+	// writes survive the formation pass).
+	survivalSys := systems.NewSurvivalInstinctSystem()
+	survivalSys.InitUI(app.World)
 
 	orderResolverSys := systems.NewOrderResolverSystem(squadService)
 	orderResolverSys.InitUI(app.World)
@@ -225,7 +245,9 @@ func main() {
 	app.AddSystem(weaponSys)
 	app.AddSystem(particleSys)
 	app.AddSystem(threatDecaySys)
+	app.AddSystem(mapPingDecaySys)
 	app.AddSystem(orderResolverSys)
+	app.AddSystem(survivalSys)
 	app.AddSystem(squadMacroPathSys)
 	app.AddSystem(formationSys)
 	app.AddSystem(mapMarkerCacheSys)
@@ -356,6 +378,24 @@ func main() {
 	// CreateFromTemplate (Faction).
 	hpMap := ecs.NewMap[components.HP](app.World)
 	factionMap := ecs.NewMap[components.Faction](app.World)
+	// Phase 15 M15.C.1: TacticalOverride + SquadState read handles for the
+	// Inspector. Writes flow through SurvivalInstinctSystem (and
+	// SquadService.clearTacticalOverrides on player input).
+	tacticalOverrideMap := ecs.NewMap[components.TacticalOverride](app.World)
+	squadStateMap := ecs.NewMap[components.SquadState](app.World)
+	// Phase 15 M15.B.1: IndividualPosition handle. Shift+RMB on a squad subset
+	// stamps Absolute placements; Inspector "Return to formation" chip removes
+	// the marker. FormationSystem reads it per member.
+	individualPosMap := ecs.NewMap[components.IndividualPosition](app.World)
+	// Phase 15 M15.A.2: ActiveDoctrine handle. Inspector doctrine chip row
+	// writes through the squad's three standing-rule components and stamps
+	// the active code for the highlight.
+	activeDoctrineMap := ecs.NewMap[components.ActiveDoctrine](app.World)
+	// Phase 15 M15.C.0: Autonomy + dirty-mask handles. Autonomy chip row
+	// applies AutonomySpec to BehaviorRules skipping any field whose dirty
+	// bit was flipped by a hand-edit.
+	activeAutonomyMap := ecs.NewMap[components.ActiveAutonomy](app.World)
+	behaviorRulesEditMap := ecs.NewMap[components.BehaviorRulesEdit](app.World)
 
 	// Phase 14 M14.6: faction-aware squad colour. Lookups the entity's
 	// Faction and picks the player or enemy palette accordingly. Missing
@@ -443,6 +483,8 @@ func main() {
 	coverOverlayFilter := ecs.NewFilter4[components.WorldPos, components.ChunkCoord, components.CoverMap, components.Heightmap](app.World).
 		With(ecs.C[components.LODActive]())
 	coverSlotFilter := ecs.NewFilter2[components.WorldPos, components.CoverSlot](app.World)
+	// Phase 15 M15.C.3 - MapPing filter for the pulsing-ring render pass.
+	mapPingFilter := ecs.NewFilter2[components.WorldPos, components.MapPing](app.World)
 	navGridChunkFilter := ecs.NewFilter1[components.NavGrid](app.World)
 	floorNavFilter := ecs.NewFilter3[components.WorldPos, components.Floor, components.FloorNavGrid](app.World)
 	visionAwareFilter := ecs.NewFilter2[components.WorldPos, components.Awareness](app.World).
@@ -526,8 +568,8 @@ func main() {
 	scene3DRT := ui.NewScene3DRT(panelMgr.Get(ui.Panel3D))
 	defer scene3DRT.Unload()
 
-	// Pre-bake the map underlay. 2 km × 2 km centred at origin, 4 m / pixel
-	// (500×500 = 250 KB upload). Blocking; runs once at startup before the
+	// Pre-bake the map underlay. 2 km x 2 km centred at origin, 4 m / pixel
+	// (500x500 = 250 KB upload). Blocking; runs once at startup before the
 	// main loop kicks off.
 	underlay := ui.BakeUnderlay(0, 0, 2000, 4, func(wx, wz float32) float32 {
 		return systems.GroundHeight(wx, wz)
@@ -628,7 +670,7 @@ func main() {
 		panel3D := panelMgr.Get(ui.Panel3D)
 		panelMap := panelMgr.Get(ui.PanelMap)
 
-		// ── Tab -> toggle layout preset ──
+		// -- Tab -> toggle layout preset --
 		if rl.IsKeyPressed(rl.KeyTab) {
 			// Phase 13.5: Tab during a splitter drag aborts the drag (revert
 			// to pre-drag ratio) before flipping the preset - avoids weird
@@ -643,7 +685,7 @@ func main() {
 			panelMap = panelMgr.Get(ui.PanelMap)
 		}
 
-		// ── Phase 13.5 M13.5.2 - splitter hover / drag ──
+		// -- Phase 13.5 M13.5.2 - splitter hover / drag --
 		// Splitter takes priority over panel-content input: hover sets the
 		// resize cursor; LMB-press on a splitter starts a drag that consumes
 		// LMB until release. Drag updates RightColRatio / InspectorRatio live
@@ -697,7 +739,7 @@ func main() {
 			}
 		}
 
-		// ── Space -> toggle pause; +/− -> cycle speed 1->2->4->8->1 ──
+		// -- Space -> toggle pause; +/- -> cycle speed 1->2->4->8->1 --
 		if rl.IsKeyPressed(rl.KeySpace) {
 			if app.TimeScale > 0 {
 				app.LastNonZeroScale = app.TimeScale
@@ -718,7 +760,7 @@ func main() {
 			app.LastNonZeroScale = app.TimeScale
 		}
 
-		// ── WASD anchor (Panel3D-or-none focus) ──
+		// -- WASD anchor (Panel3D-or-none focus) --
 		anchorPos := posMap.Get(anchor)
 		anchorSpeed := float32(20.0)
 		if shiftHeld {
@@ -763,7 +805,7 @@ func main() {
 		// zoom pivots align with what the player sees.
 		panelMapContent := ui.ContentRect(panelMap)
 
-		// ── Map pan / zoom (only when map focused) ──
+		// -- Map pan / zoom (only when map focused) --
 		if focused == ui.PanelMap {
 			if rl.IsMouseButtonPressed(rl.MouseButtonMiddle) {
 				mapPanning = true
@@ -786,7 +828,7 @@ func main() {
 			mapPanning = false
 		}
 
-		// ── Phase 13.5 M13.5.4 - Inspector wheel scroll + thumb drag ──
+		// -- Phase 13.5 M13.5.4 - Inspector wheel scroll + thumb drag --
 		// Wheel only fires when the cursor is over the Inspector panel and
 		// no splitter drag is active. MapCamera's wheel block above is gated
 		// on focused == ui.PanelMap, so the two paths are mutually exclusive.
@@ -830,7 +872,7 @@ func main() {
 			}
 		}
 
-		// ── 3D panel cursor (content-rect-local) ──
+		// -- 3D panel cursor (content-rect-local) --
 		// Cursor coords used for raycast / marquee / picking are relative to
 		// the 3D content rect (panel minus chrome), and viewW/H match the
 		// content rect - same as the RT - so GetScreenToWorldRayEx /
@@ -849,7 +891,7 @@ func main() {
 			panel3DH = 1
 		}
 
-		// ── LMB press ──
+		// -- LMB press --
 		// Phase 13.5 guard: a splitter drag claims LMB exclusively. Skip
 		// selection / marquee / map-pick on the press that started the drag
 		// AND every frame the drag is active.
@@ -885,7 +927,7 @@ func main() {
 			}
 		}
 
-		// ── LMB release -> commit marquee or treat as a 3D click ──
+		// -- LMB release -> commit marquee or treat as a 3D click --
 		if rl.IsMouseButtonReleased(rl.MouseButtonLeft) && marqueeActive {
 			end := cursor
 			dx := end.X - marqueeStart.X
@@ -929,7 +971,7 @@ func main() {
 			marqueeActive = false
 		}
 
-		// ── RMB orders (3D or map). Two paths:
+		// -- RMB orders (3D or map). Two paths:
 		//   - Tap: PieMenu stays inactive, hit-test resolver runs at release.
 		//   - Hold > 200 ms: PieMenu activates, sweep cursor for kind, commit
 		//     on release. Kind override overrides hit-test mapping.
@@ -994,9 +1036,23 @@ func main() {
 					squadService, navService, squadMemberMap, posMap, actionQueueMap)
 				pieMenu.SourcePanel = ui.PanelNone
 			case res.ReleasedAsTap:
-				mods := rmbModifiersFromPress(rmbPressCtrl, rmbPressAlt, rmbPressDouble)
-				resolveRMBOrder(selected, pieMenu.Target, shiftHeld, nil, mods, hitTester,
-					squadService, navService, squadMemberMap, posMap, actionQueueMap)
+				// Phase 15 M15.B.1 - Shift+RMB on a subset of a squad places
+				// IndividualPosition on each selected member instead of
+				// appending a squad-wide waypoint. Whole-squad / multi-squad /
+				// soloist selections keep the existing append path.
+				placed := false
+				if shiftHeld {
+					if _, ok := detectSubsetOfSquad(selected, squadMemberMap, rosterMap); ok {
+						placeIndividualPositions(app.World, selected, pieMenu.Target,
+							individualPosMap, float32(app.Elapsed().Seconds()))
+						placed = true
+					}
+				}
+				if !placed {
+					mods := rmbModifiersFromPress(rmbPressCtrl, rmbPressAlt, rmbPressDouble)
+					resolveRMBOrder(selected, pieMenu.Target, shiftHeld, nil, mods, hitTester,
+						squadService, navService, squadMemberMap, posMap, actionQueueMap)
+				}
 				pieMenu.SourcePanel = ui.PanelNone
 			case res.ReleasedAsFacingDrag:
 				// Phase 13.6 M13.6.4: facing-drag commit. Default order kind
@@ -1017,7 +1073,7 @@ func main() {
 			}
 		}
 
-		// ── H -> Stop order (global hotkey) ──
+		// -- H -> Stop order (global hotkey) --
 		// Phase 11: iterates SquadsToOrder for distributed cancel, plus the
 		// per-unit Stop for soloists. Mirrors resolveRMBOrder's split.
 		if rl.IsKeyPressed(rl.KeyH) && len(selected) > 0 {
@@ -1033,7 +1089,7 @@ func main() {
 			}
 		}
 
-		// ── T -> form Squad ──
+		// -- T -> form Squad --
 		if rl.IsKeyPressed(rl.KeyT) && len(selected) >= 2 {
 			newSquad := squadService.CreateFromUnits(selected, components.FormationLine)
 			if newSquad != (ecs.Entity{}) && app.World.Alive(newSquad) {
@@ -1043,14 +1099,14 @@ func main() {
 			}
 		}
 
-		// ── U -> ungroup ──
+		// -- U -> ungroup --
 		if rl.IsKeyPressed(rl.KeyU) && len(selected) > 0 {
 			for _, e := range selected {
 				squadService.Leave(e)
 			}
 		}
 
-		// ── F1-F4 -> change formation ──
+		// -- F1-F4 -> change formation --
 		if len(selected) > 0 {
 			if commonSquad, homo := groupSelected(selected, squadMemberMap); homo && commonSquad != (ecs.Entity{}) {
 				var newKind components.FormationKind
@@ -1078,9 +1134,9 @@ func main() {
 			}
 		}
 
-		// ── Phase 13 M13.7 - MovementProfile hotkeys ──
+		// -- Phase 13 M13.7 - MovementProfile hotkeys --
 		// `[` / `]` cycle MovementProfile presets prev/next. `'` toggles
-		// Posture Standard ↔ Quiet. Stance hotkeys (Z/X/C) are deferred to
+		// Posture Standard <-> Quiet. Stance hotkeys (Z/X/C) are deferred to
 		// Phase 21 because Z/X are already taken (crater, cover overlay) and
 		// the Inspector quick-bar covers the case meanwhile.
 		//
@@ -1108,7 +1164,7 @@ func main() {
 			}
 		}
 
-		// ── Ctrl+1..5 bind / 1..5 recall ──
+		// -- Ctrl+1..5 bind / 1..5 recall --
 		digitKeys := [5]int32{rl.KeyOne, rl.KeyTwo, rl.KeyThree, rl.KeyFour, rl.KeyFive}
 		for i, k := range digitKeys {
 			if !rl.IsKeyPressed(k) {
@@ -1144,7 +1200,7 @@ func main() {
 			navPath = stepAlongPath(anchorPos, navPath, anchorSpeed*float32(dtReal.Seconds()))
 		}
 
-		// ── X -> crater (Panel3D only) ──
+		// -- X -> crater (Panel3D only) --
 		if focused == ui.Panel3D && rl.IsKeyPressed(rl.KeyX) {
 			stamper.StampHeightmap(*anchorPos, systems.Crater(2.0, 4.0), 4.0)
 		}
@@ -1158,7 +1214,7 @@ func main() {
 			}
 		}
 
-		// ── Hover update ──
+		// -- Hover update --
 		// Hover in Panel3D: closest unit under cursor (silent pick).
 		// Hover in PanelMap: closest squad marker within 12 px.
 		hovered = ecs.Entity{}
@@ -1207,7 +1263,7 @@ func main() {
 		// (age + despawn) lives in ParticleSystem.Update. No per-frame
 		// decay needed here.
 
-		// ── Render 3D scene into RT ──
+		// -- Render 3D scene into RT --
 		rl.BeginTextureMode(scene3DRT.RT)
 		rl.ClearBackground(rl.RayWhite)
 		rl.BeginMode3D(systems.CurrentCamera)
@@ -1471,7 +1527,7 @@ func main() {
 		rl.EndMode3D()
 		rl.EndTextureMode()
 
-		// ── 2D pass - clear bg, paint each panel ──
+		// -- 2D pass - clear bg, paint each panel --
 		rl.BeginDrawing()
 		rl.ClearBackground(rl.Color{R: 8, G: 10, B: 14, A: 255})
 
@@ -1503,6 +1559,8 @@ func main() {
 			MapMarkerCache:   &mapMarkerCache,
 			RoleMap:          roleMap,
 			Font:             hudFont,
+			MapPingFilter:    mapPingFilter,
+			Clock:            squadService.Clock(),
 		}
 		ui.DrawMap(panelMap, mapCtx)
 
@@ -1548,6 +1606,13 @@ func main() {
 			OrderMovementOverrideMap: orderMovementOverrideMap,
 			HPMap:                    hpMap,
 			FactionMap:               factionMap,
+			TacticalOverrideMap:      tacticalOverrideMap,
+			SquadStateMap:            squadStateMap,
+			IndividualPositionMap:    individualPosMap,
+			ActiveDoctrineMap:        activeDoctrineMap,
+			ActiveAutonomyMap:        activeAutonomyMap,
+			BehaviorRulesEditMap:     behaviorRulesEditMap,
+			EventLog:                 eventLog,
 			Cursor:                   cursor,
 			LMBPressed:               !panelMgr.IsDragging() && !scrollDragging && rl.IsMouseButtonPressed(rl.MouseButtonLeft),
 			PanelFocused:             inspectorFocused,
@@ -1696,7 +1761,7 @@ func main() {
 
 // nextTimeScale advances the speed multiplier through 1 -> 2 -> 4 -> 8 -> 1
 // (step=+1) or backwards (step=-1). When currently paused, advancing forward
-// jumps to 1×; advancing back jumps to 8×. Used by the +/- hotkey.
+// jumps to 1x; advancing back jumps to 8x. Used by the +/- hotkey.
 func nextTimeScale(cur float32, step int) float32 {
 	stops := [...]float32{1, 2, 4, 8}
 	if cur <= 0 {

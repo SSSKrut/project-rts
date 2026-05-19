@@ -11,7 +11,7 @@ import (
 )
 
 // Phase 7 P9: Vision system caps trace length at one chunk (64 m) and walks
-// only the 3×3-chunk window around the seer.
+// only the 3x3-chunk window around the seer.
 //
 // Phase 11.5 M11.5.3 / M11.5.5: tier-gating removed and the per-seer pass is
 // dispatched through WorkerPool.ParallelFor. Each seer writes its own
@@ -23,14 +23,36 @@ const (
 	visionTargetHeight float32 = 0.9 // approx torso centre at standing height
 )
 
+// Phase 15 M15.A.3 - audio detection constants. Per-candidate emission radius
+// is base * pace * posture (clamped at visionMaxRange so it shares the chunk-
+// window cap with the visual cone). Walls do not attenuate audio in the
+// skeleton; full propagation polish is deferred.
+const (
+	audioBaseRadius   float32 = 25.0
+	audioPostureQuiet float32 = 0.4
+)
+
+// audioPaceMul indexes pace -> emission multiplier. Walk is the silent
+// reference, Sprint roughly doubles the bubble.
+var audioPaceMul = [...]float32{
+	components.PaceWalk:   1.0,
+	components.PaceRun:    1.5,
+	components.PaceSprint: 2.0,
+}
+
 // VisionSystem updates each unit's Awareness.LastSeen ring with every other
-// unit it can see (range + cone + LOS). Phase 7 leaves the buffer as pure
-// data; consumers arrive in Phase 10 (TacticalAI) and Phase 11 (combat).
+// unit it can see (range + cone + LOS). Phase 15 M15.A.3 adds an audio
+// channel: candidates within their own emission bubble (Pace * Posture)
+// register on the seer's Awareness even outside the FOV cone or behind a
+// wall, modelling "I hear running boots near me".
 type VisionSystem struct {
-	unitFilter *ecs.Filter5[components.Unit, components.WorldPos, components.Motion, components.Vision, components.Awareness]
-	wallFilter *ecs.Filter2[components.WorldPos, components.WallSegment]
-	doorMap    *ecs.Map[components.Door]
-	pool       *core.WorkerPool
+	unitFilter         *ecs.Filter5[components.Unit, components.WorldPos, components.Motion, components.Vision, components.Awareness]
+	wallFilter         *ecs.Filter2[components.WorldPos, components.WallSegment]
+	doorMap            *ecs.Map[components.Door]
+	pool               *core.WorkerPool
+	squadMemberMap     *ecs.Map[components.SquadMember]
+	movementProfileMap *ecs.Map[components.MovementProfile]
+	motionMap          *ecs.Map[components.Motion]
 
 	// Phase 11.6 M11.6.2: reusable snapshot buffers + wall map. unitsBuf and
 	// seersBuf are reset to len=0 each Update; wallsByChunk is reused via
@@ -57,6 +79,9 @@ func (sys *VisionSystem) InitUI(w *ecs.World) {
 	sys.unitFilter = ecs.NewFilter5[components.Unit, components.WorldPos, components.Motion, components.Vision, components.Awareness](w)
 	sys.wallFilter = ecs.NewFilter2[components.WorldPos, components.WallSegment](w)
 	sys.doorMap = ecs.NewMap[components.Door](w)
+	sys.squadMemberMap = ecs.NewMap[components.SquadMember](w)
+	sys.movementProfileMap = ecs.NewMap[components.MovementProfile](w)
+	sys.motionMap = ecs.NewMap[components.Motion](w)
 }
 
 func (VisionSystem) Name() string { return "vision" }
@@ -73,9 +98,10 @@ func (VisionSystem) LODPolicy() core.LODPolicy {
 
 // visionUnit - per-tick snapshot of a candidate target.
 type visionUnit struct {
-	ent   ecs.Entity
-	pos   components.WorldPos
-	chunk components.ChunkCoord
+	ent          ecs.Entity
+	pos          components.WorldPos
+	chunk        components.ChunkCoord
+	audioRadius  float32 // Phase 15 M15.A.3 - emission bubble (m). 0 = silent.
 }
 
 // seerWork - per-seer snapshot row for the parallel pass.
@@ -97,10 +123,14 @@ func (sys *VisionSystem) Update(ctx core.UpdateContext) {
 	sys.seersBuf = sys.seersBuf[:0]
 	q := sys.unitFilter.Query()
 	for q.Next() {
+		ent := q.Entity()
 		_, pos, mot, vision, aware := q.Get()
-		sys.unitsBuf = append(sys.unitsBuf, visionUnit{ent: q.Entity(), pos: *pos, chunk: pos.Chunk})
+		audio := sys.audioEmissionRadius(ent, mot.Speed)
+		sys.unitsBuf = append(sys.unitsBuf, visionUnit{
+			ent: ent, pos: *pos, chunk: pos.Chunk, audioRadius: audio,
+		})
 		sys.seersBuf = append(sys.seersBuf, seerWork{
-			ent: q.Entity(), pos: *pos, yaw: mot.Yaw,
+			ent: ent, pos: *pos, yaw: mot.Yaw,
 			vision: vision, aware: aware,
 		})
 	}
@@ -151,7 +181,7 @@ func processVisionSeer(
 	seerZ := float32(s.pos.Chunk.Z)*components.ChunkSize + s.pos.Local.Z
 	fwdX := float32(math.Sin(float64(s.yaw)))
 	fwdZ := float32(math.Cos(float64(s.yaw)))
-	// AngleDot = cos(half-FOV). 0 = full 180° cone; -1 = full 360°.
+	// AngleDot = cos(half-FOV). 0 = full 180 deg cone; -1 = full 360 deg.
 
 	rng := s.vision.RangeM
 	if rng > visionMaxRange {
@@ -163,7 +193,7 @@ func processVisionSeer(
 		if cand.ent == s.ent {
 			continue
 		}
-		// 3×3 chunk window - anything outside is automatic miss.
+		// 3x3 chunk window - anything outside is automatic miss.
 		dcx := cand.chunk.X - s.pos.Chunk.X
 		if dcx < -1 || dcx > 1 {
 			continue
@@ -177,7 +207,18 @@ func processVisionSeer(
 		dx := candX - seerX
 		dz := candZ - seerZ
 		dSq := dx*dx + dz*dz
-		if dSq > rngSq || dSq < 1e-4 {
+		if dSq < 1e-4 {
+			continue
+		}
+		// Phase 15 M15.A.3 - audio gate. A loud candidate's emission bubble
+		// reaches the seer regardless of FOV cone or LOS. Quiet movement +
+		// crouch keeps the bubble small so stealth doctrine actually pays off.
+		audibleSq := cand.audioRadius * cand.audioRadius
+		if cand.audioRadius > 0 && dSq <= audibleSq {
+			recordSighting(s.aware, cand.ent, cand.pos, elapsed)
+			continue
+		}
+		if dSq > rngSq {
 			continue
 		}
 		// Angle gate.
@@ -193,6 +234,34 @@ func processVisionSeer(
 		}
 		recordSighting(s.aware, cand.ent, cand.pos, elapsed)
 	}
+}
+
+// audioEmissionRadius returns the noise-bubble radius (m) for `unit`. Reads
+// the squad's MovementProfile if present (Posture + Pace), otherwise treats
+// the unit as moving at Walk + Standard. Stationary units (Motion.Speed
+// below threshold) emit zero so a parked unit doesn't unconditionally
+// register on every nearby seer's Awareness.
+func (sys *VisionSystem) audioEmissionRadius(unit ecs.Entity, motionSpeed float32) float32 {
+	if motionSpeed < 0.2 {
+		return 0
+	}
+	pace := components.PaceWalk
+	posture := components.PostureStandard
+	if sm := sys.squadMemberMap.Get(unit); sm != nil && sm.Squad != (ecs.Entity{}) {
+		if mp := sys.movementProfileMap.Get(sm.Squad); mp != nil {
+			pace = mp.Pace
+			posture = mp.Posture
+		}
+	}
+	mul := audioPaceMul[pace]
+	if posture == components.PostureQuiet {
+		mul *= audioPostureQuiet
+	}
+	r := audioBaseRadius * mul
+	if r > visionMaxRange {
+		r = visionMaxRange
+	}
+	return r
 }
 
 // recordSighting pushes (or refreshes) a target entry in the FIFO. Existing

@@ -102,7 +102,7 @@ func (sys BuildingSystem) Update(ctx core.UpdateContext) {
 		byChunk[pos.Chunk] = append(byChunk[pos.Chunk], buildingRec{root: qb.Entity(), b: *b})
 	}
 
-	// ── Pass 1: bunker RectCut ──
+	// -- Pass 1: bunker RectCut --
 	type processedEnt struct{ id ecs.Entity }
 	var terrainDone []processedEnt
 	qT := sys.terrainFilter.Query()
@@ -125,7 +125,7 @@ func (sys BuildingSystem) Update(ctx core.UpdateContext) {
 		}
 	}
 
-	// ── Pass 2: child entity spawn ──
+	// -- Pass 2: child entity spawn --
 	type pendingChild struct {
 		root ecs.Entity
 		spec childSpec

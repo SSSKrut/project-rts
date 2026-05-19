@@ -60,7 +60,7 @@ func (s *Scene3DRT) Composite(panel Panel) {
 }
 
 // contentSize clamps to a safe min - raylib's LoadRenderTexture rejects zero/
-// negative dimensions. 1×1 fallback is enough for the brief moment when a
+// negative dimensions. 1x1 fallback is enough for the brief moment when a
 // panel collapses during preset toggle (shouldn't happen in L1 but cheap
 // insurance).
 func contentSize(r rl.Rectangle) (int32, int32) {

@@ -16,7 +16,7 @@ import (
 // ring rather than a circle - matches a grid streaming pattern and keeps
 // neighbour lookup trivially correct.
 //
-// 7×7 active + 11×11 relevant (was 5×5 + 9×9). At 64 m chunks the far-LOD
+// 7x7 active + 11x11 relevant (was 5x5 + 9x9). At 64 m chunks the far-LOD
 // ring reaches 320 m from the anchor.
 const (
 	terrainActiveRadius   = 3

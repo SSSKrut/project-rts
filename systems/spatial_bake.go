@@ -13,12 +13,12 @@ import (
 
 // Slope thresholds for NavCell.Cost (foot locomotion, Phase 6 P5):
 //
-//	slope < 0.30  (~17°)  ->  Cost = navCostOpen
+//	slope < 0.30  (~17 deg)  ->  Cost = navCostOpen
 //	0.30 <= slope < 0.60   ->  Cost = navCostRough
-//	slope >= 0.60  (~31°)  ->  Cost = 0    (impassable)
+//	slope >= 0.60  (~31 deg)  ->  Cost = 0    (impassable)
 //
 // Slope = max pairwise corner-height difference per 1 m cell (ChunkResolution
-// step is exactly 1 m). Diagonals are not divided by √2 - the bake takes the
+// step is exactly 1 m). Diagonals are not divided by sqrt2 - the bake takes the
 // raw max so a sharp ridge-on-diagonal still flags as steep.
 const (
 	navSlopeOpen  float32 = 0.30
@@ -142,7 +142,7 @@ type spatialBakeChunkRec struct {
 type wallEntry struct {
 	local            rl.Vector3
 	w                components.WallSegment
-	openingPassable  bool // true ⇔ open door; false otherwise (windows, closed doors, plain walls)
+	openingPassable  bool // true <-> open door; false otherwise (windows, closed doors, plain walls)
 }
 
 func (sys SpatialBakeSystem) Update(ctx core.UpdateContext) {
@@ -150,7 +150,7 @@ func (sys SpatialBakeSystem) Update(ctx core.UpdateContext) {
 		return
 	}
 
-	// ── Pass 1: NavGrid bake ──
+	// -- Pass 1: NavGrid bake --
 	var navTodo []spatialBakeChunkRec
 	qN := sys.navFilter.Query()
 	for qN.Next() {
@@ -254,7 +254,7 @@ func (sys SpatialBakeSystem) Update(ctx core.UpdateContext) {
 		}
 	}
 
-	// ── Pass 2: CoverMap + cover slots bake ──
+	// -- Pass 2: CoverMap + cover slots bake --
 	var coverTodo []spatialBakeChunkRec
 	qC := sys.coverFilter.Query()
 	for qC.Next() {
@@ -343,10 +343,10 @@ func (sys SpatialBakeSystem) Update(ctx core.UpdateContext) {
 		sys.bakeCoverDistance(coverTodo)
 	}
 
-	// ── Pass 3: FloorNavGrid bake ──
+	// -- Pass 3: FloorNavGrid bake --
 	//
 	// Per Phase 7 P2: one grid per Floor entity. Walls of the same storey
-	// (matched by WorldPos.Y ≈ floor.Y) become Cost=0; open-door openings are
+	// (matched by WorldPos.Y ~ floor.Y) become Cost=0; open-door openings are
 	// punched through; windows and closed doors stay blocked. Floor footprint
 	// must fit MaxFloorSide (<=32 m); Phase 5's placeholder buildings all do.
 	type floorRec struct {
@@ -440,9 +440,9 @@ func (sys SpatialBakeSystem) Update(ctx core.UpdateContext) {
 		}
 	}
 
-	// ── Pass 4: TransitionRegistry edges ──
+	// -- Pass 4: TransitionRegistry edges --
 	//
-	// Doors / Stairs / bunker entrances connect surface↔floor and floor↔floor
+	// Doors / Stairs / bunker entrances connect surface<->floor and floor<->floor
 	// NavNodes. We rebuild every floor's outgoing edges whenever a Floor is
 	// (re-)baked above; existing edges for the same owner are replaced. Phase 7
 	// scope: every Floor in the world is touched whenever ANY chunk bakes,
@@ -581,7 +581,7 @@ func (sys SpatialBakeSystem) Update(ctx core.UpdateContext) {
 		addEdge(floorNode, surfNode, cost, d.ent)
 	}
 
-	// Stairs -> 1 bidirectional edge between two floor cells (or surface↔floor
+	// Stairs -> 1 bidirectional edge between two floor cells (or surface<->floor
 	// for bunker entrance). FromFloor==0, ToFloor==1 with rise == bunkerDepth
 	// is the bunker case - top "floor" doesn't exist as an entity, so we
 	// emit a surface edge.
@@ -678,7 +678,7 @@ func findFloorAt(floors []floorSnapshot, chunk components.ChunkCoord, y float32)
 // row-major layout is mirrored on NavGrid.Cells for cache-coherent A*.
 //
 // "Slope" here is max pairwise corner-height delta (1 m cell, raw deltas).
-// Diagonals are not divided by √2 - a sharp ridge on a diagonal still flags
+// Diagonals are not divided by sqrt2 - a sharp ridge on a diagonal still flags
 // as steep, which is the conservative choice for movement.
 func bakeNavSlope(grid *components.NavGrid, hm *components.Heightmap) {
 	for cj := 0; cj < components.NavGridSide; cj++ {
@@ -740,7 +740,7 @@ func absDelta(a, b float32) float32 {
 }
 
 // rasterizeWall marks every NavCell whose centre lies inside the wall's
-// oriented rectangle (length × thickness, rotated by Yaw) as Cost=0. If the
+// oriented rectangle (length x thickness, rotated by Yaw) as Cost=0. If the
 // wall has a passable opening (only OpeningDoor + Door.State == DoorOpen), the
 // opening segment along the wall axis is left untouched. Closed doors and
 // windows leave the opening at Cost=0 (windows block movement; closed doors
@@ -823,7 +823,7 @@ func rasterizeWall(grid *components.NavGrid, e wallEntry) {
 
 // rasterizeFloorWall marks cells of a FloorNavGrid as Cost=0 inside the wall's
 // oriented rectangle, mirroring rasterizeWall for chunk-NavGrids but with a
-// (sizeX, sizeZ, origin) sub-block instead of a full 64×64 grid. Passable
+// (sizeX, sizeZ, origin) sub-block instead of a full 64x64 grid. Passable
 // opening (open door) carves a gap along the wall axis. Windows and closed
 // doors leave Cost=0 over the opening.
 func rasterizeFloorWall(grid *components.FloorNavGrid, wallLocal rl.Vector3,
@@ -1127,7 +1127,7 @@ func (sys *SpatialBakeSystem) spawnCoverSlots(
 	coverIdx *CoverSlotIndex,
 	buildingIdx *BuildingChildIndex,
 ) {
-	// ── Prop slots ──
+	// -- Prop slots --
 	if propIdx != nil && registry != nil && coverIdx != nil {
 		// Snapshot the prop list - we'll be appending slot entities to the
 		// same bucket and don't want to iterate the new slots as if they were
@@ -1152,7 +1152,7 @@ func (sys *SpatialBakeSystem) spawnCoverSlots(
 		}
 	}
 
-	// ── Wall-based slots (windows + corners) ──
+	// -- Wall-based slots (windows + corners) --
 	if coverIdx == nil || buildingIdx == nil {
 		return
 	}
@@ -1413,7 +1413,7 @@ func bakeCoverCells(cov *components.CoverMap, cc components.ChunkCoord,
 // (false, _) when the host chunk isn't loaded.
 //
 // Vertices live on integer world coords (ChunkResolution=65, step=1 m). Inside
-// a chunk we have 64×64 quads; outside the chunk we'd need the neighbour for
+// a chunk we have 64x64 quads; outside the chunk we'd need the neighbour for
 // the (i=64, j) edge - fetched if loaded, otherwise we clamp to the chunk's
 // own edge so the function still returns a value rather than failing on the
 // boundary.
@@ -1548,8 +1548,8 @@ func maxF32(a, b float32) float32 {
 // using cover-slot entities in the 9-chunk window. Scan radius is the same
 // as CoverSeekThreshold - slots beyond stay at CoverDistanceFar.
 //
-// Phase 13 M13.4: brute-force O(cells × slots-in-9-chunks) per chunk. On the
-// placeholder scene (50 slots / chunk × 4096 cells × 9 chunks ≈ 1.8 M ops) it
+// Phase 13 M13.4: brute-force O(cells x slots-in-9-chunks) per chunk. On the
+// placeholder scene (50 slots / chunk x 4096 cells x 9 chunks ~ 1.8 M ops) it
 // fits in the spatial_bake budget; if Phase 14+ grows the slot population a
 // KD-tree / spatial-hash pass would replace this.
 func (sys *SpatialBakeSystem) bakeCoverDistance(coverTodo []spatialBakeChunkRec) {

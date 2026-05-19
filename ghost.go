@@ -192,7 +192,7 @@ func drawSelectionGhost(
 // drawDefendPositionArc draws a wedge-shaped sector indicator at the cursor
 // target, oriented along `forward`. Phase 13.6 M13.6.5: visual stub for the
 // future EngagementRules.SectorYaw / SectorHalfDot enforcement (Phase 14).
-// Width fixed at 90° (45° each side of facing), length 8 m - matches the
+// Width fixed at 90 deg (45 deg each side of facing), length 8 m - matches the
 // "sector vision" feel referenced in P8.
 //
 // Sector colour reuses the per-squad palette so multi-squad scenes can tell
@@ -200,7 +200,7 @@ func drawSelectionGhost(
 // is unmistakable without obscuring the terrain underneath.
 func drawDefendPositionArc(target components.WorldPos, forward rl.Vector3, squad ecs.Entity,
 	colorFn func(ecs.Entity) rl.Color) {
-	const halfAngle = math.Pi / 4 // 45° each side -> 90° total wedge
+	const halfAngle = math.Pi / 4 // 45 deg each side -> 90 deg total wedge
 	const length float32 = 8
 	// atan2(fx, fz) recovers the yaw used by FormationOffset.
 	yaw := float32(math.Atan2(float64(forward.X), float64(forward.Z)))
@@ -249,8 +249,8 @@ func drawGhostInBuilding(g *ghostContext, building ecs.Entity, count uint8, stan
 		}
 		// Compute opening centre in world space. WallSegment lays the wall
 		// along its local +Z axis rotated by Yaw; opening centre sits at
-		// OpeningCenterT × Length along that axis. WorldPos is the "from"
-		// endpoint, so add (sin(Yaw), cos(Yaw)) × offset to reach the centre.
+		// OpeningCenterT x Length along that axis. WorldPos is the "from"
+		// endpoint, so add (sin(Yaw), cos(Yaw)) x offset to reach the centre.
 		// (Same axis convention as drawBuildingWall in render_world.go.)
 		offsetAlong := wall.OpeningCenterT * wall.Length
 		dx := offsetAlong * float32(math.Sin(float64(wall.Yaw)))
@@ -264,7 +264,7 @@ func drawGhostInBuilding(g *ghostContext, building ecs.Entity, count uint8, stan
 }
 
 // drawGhostAlongTrench places ghost cubes equal-spaced along the polyline of
-// `trenchRoot`. Distribution is `total_length × (i+1) / (count+1)` - endpoints
+// `trenchRoot`. Distribution is `total_length x (i+1) / (count+1)` - endpoints
 // get an inset rather than sitting on the polyline tips (visually cleaner).
 //
 // Returns true if at least one ghost was placed. False on bad index / empty

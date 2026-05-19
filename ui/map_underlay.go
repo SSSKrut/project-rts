@@ -24,11 +24,11 @@ type MapUnderlay struct {
 type HeightSampler func(worldX, worldZ float32) float32
 
 // BakeUnderlay generates the hill-shade underlay for a square area
-// `sizeM × sizeM` metres centred at (centerX, centerZ). Sample step is
+// `sizeM x sizeM` metres centred at (centerX, centerZ). Sample step is
 // `scaleM` metres per pixel - 4 m/px for the 2 km Phase 10 placeholder
-// (500×500 = 250 KB upload, sub-second bake on a modern CPU).
+// (500x500 = 250 KB upload, sub-second bake on a modern CPU).
 //
-// Lighting model: diffuse only, light from above and to the NE at 45°. Slope
+// Lighting model: diffuse only, light from above and to the NE at 45 deg. Slope
 // dot product with the light direction gives the brightness.
 func BakeUnderlay(centerX, centerZ, sizeM, scaleM float32, sample HeightSampler) MapUnderlay {
 	if scaleM <= 0 {
@@ -52,15 +52,15 @@ func BakeUnderlay(centerX, centerZ, sizeM, scaleM float32, sample HeightSampler)
 	lz /= mag
 
 	// Fill a raw RGBA byte buffer ourselves - one CGo call per pixel via
-	// ImageDrawPixel turns 500×500 into 250 k cross-language hops and takes
+	// ImageDrawPixel turns 500x500 into 250 k cross-language hops and takes
 	// seconds at startup. NewImage + LoadTextureFromImage uploads the buffer
 	// in one shot. Keep RGBA8 (not Grayscale) so the same code path can later
 	// render coloured biome overlays without changing the texture format.
 	buf := make([]byte, int(pxSide)*int(pxSide)*4)
-	// Slope stencil: sample at ±slopeM rather than ±scaleM. The procgen
+	// Slope stencil: sample at +/-slopeM rather than +/-scaleM. The procgen
 	// heightmap has high-frequency components that flip slope sign every few
 	// metres; sampling at the pixel pitch produces a "noise mosaic" rather
-	// than readable terrain. Stencil widened to 4× pixel pitch (16 m at
+	// than readable terrain. Stencil widened to 4x pixel pitch (16 m at
 	// 4 m / px) smooths out the noise and reads as topography.
 	slopeM := scaleM * 4
 	for j := int32(0); j < pxSide; j++ {

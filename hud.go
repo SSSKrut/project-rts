@@ -67,9 +67,9 @@ func transitionEdgeCount(reg *components.TransitionRegistry) int {
 }
 
 // hudFontAtlasSize is the rasterised size of the loaded TTF glyph atlas.
-// Set ~2× the largest draw size (20 pt title) so the bilinear filter in
+// Set ~2x the largest draw size (20 pt title) so the bilinear filter in
 // loadHUDFont keeps strokes sharp when we render at 16/18 pt body text -
-// at 1× ratio the default POINT filter aliases glyph edges, which reads
+// at 1x ratio the default POINT filter aliases glyph edges, which reads
 // as "wobbly" / "drifting" characters on a monospace face.
 const hudFontAtlasSize int32 = 40
 

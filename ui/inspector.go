@@ -57,6 +57,30 @@ type InspectorCtx struct {
 	// player can tell two squads of the same template apart at a glance.
 	HPMap      *ecs.Map[components.HP]
 	FactionMap *ecs.Map[components.Faction]
+	// Phase 15 M15.C.1: TacticalOverride + SquadState handles drive the
+	// Override / Reason / Resume block on single-unit + single-squad views.
+	TacticalOverrideMap *ecs.Map[components.TacticalOverride]
+	SquadStateMap       *ecs.Map[components.SquadState]
+	// Phase 15 M15.B.1: IndividualPosition handle. Single-unit view shows a
+	// "Return to formation" chip when the unit has been hand-placed; clicking
+	// the chip removes the component and the unit falls back to its
+	// formation slot.
+	IndividualPositionMap *ecs.Map[components.IndividualPosition]
+	// Phase 15 M15.A.2: ActiveDoctrine handle. Inspector quick-bar shows
+	// 4 doctrine chips above the Movement section; clicking writes through
+	// the DoctrineSpec into the squad's three standing-rule components and
+	// records ActiveDoctrine.Code for the highlight.
+	ActiveDoctrineMap *ecs.Map[components.ActiveDoctrine]
+	// Phase 15 M15.C.0: ActiveAutonomy + BehaviorRulesEdit handles. 4-chip
+	// autonomy row above the Behavior section bulk-applies AutonomySpec to
+	// BehaviorRules, skipping any field whose dirty bit is set in
+	// BehaviorRulesEdit.DirtyMask.
+	ActiveAutonomyMap     *ecs.Map[components.ActiveAutonomy]
+	BehaviorRulesEditMap  *ecs.Map[components.BehaviorRulesEdit]
+	// Phase 15 M15.C.2: Event log resource. drawInspectorEmpty surfaces the
+	// last few entries so the player has a quick "what just happened" feed
+	// when no squad is selected. Per-squad filtering may follow.
+	EventLog *components.EventLog
 	// Phase 13 click input. Cursor is the current mouse position in screen
 	// coords; LMBPressed is true exactly on the frame the left button was
 	// pressed (passed through from main.go's rl.IsMouseButtonPressed call);
@@ -248,6 +272,28 @@ func drawInspectorEmpty(ctx InspectorCtx, x, y, width int32) int32 {
 			x+16, y, inspectorFontSize, rowText)
 		y += inspectorRowH
 	}
+
+	// Phase 15 M15.C.2 - recent events feed. Surfaces KIA / OrderCompleted /
+	// SuppressionStart even when no squad is selected.
+	if ctx.EventLog != nil && ctx.EventLog.Count > 0 {
+		y += inspectorRowH
+		drawText(ctx.Font, "Recent events:", x, y, inspectorFontSize, inspectorTextDim)
+		y += inspectorRowH
+		for _, ev := range ctx.EventLog.Latest(8) {
+			color := inspectorText
+			switch ev.Kind {
+			case components.EventKIA, components.EventOrderFailed:
+				color = rl.Color{R: 230, G: 110, B: 80, A: 255}
+			case components.EventSuppressionStart:
+				color = rl.Color{R: 230, G: 170, B: 90, A: 255}
+			}
+			drawText(ctx.Font,
+				fmt.Sprintf("[%5.1fs] %-10s %s", ev.At,
+					components.EventKindLabel(ev.Kind), ev.Text),
+				x, y, inspectorFontSize, color)
+			y += inspectorRowH
+		}
+	}
 	return y
 }
 
@@ -290,6 +336,14 @@ func drawInspectorUnit(ctx InspectorCtx, ent ecs.Entity, x, y int32) int32 {
 			x, y, inspectorFontSize, inspectorText)
 		y += inspectorRowH
 	}
+	// Phase 15 M15.C.1: Override / Reason / Resume block. Surfaces AI-driven
+	// control so the player understands why the unit just bolted from its
+	// formation slot.
+	if ctx.TacticalOverrideMap != nil {
+		if ov := ctx.TacticalOverrideMap.Get(ent); ov != nil {
+			y = drawOverrideBlock(ctx, ent, ov, x, y)
+		}
+	}
 	// Phase 13 M13.6: per-unit Stamina row. When the unit has no Stamina
 	// component (legacy / orphaned spawn) we skip rather than printing zeros.
 	if ctx.StaminaMap != nil {
@@ -326,6 +380,17 @@ func drawInspectorUnit(ctx InspectorCtx, ent ecs.Entity, x, y int32) int32 {
 		drawText(ctx.Font, "Squad:     - (soloist)",
 			x, y, inspectorFontSize, inspectorTextDim)
 		y += inspectorRowH
+	}
+	// Phase 15 M15.B.1 - "Return to formation" chip surfaces only when the
+	// unit has been hand-placed (IndividualPosition present). Clicking removes
+	// the marker; FormationSystem snaps the unit back to its slot on the next
+	// tick.
+	if ctx.IndividualPositionMap != nil && ctx.IndividualPositionMap.Has(ent) {
+		const chipW = 160
+		if drawChip(ctx, x, y, chipW, srChipH, "Return to formation", false) {
+			ctx.IndividualPositionMap.Remove(ent)
+		}
+		y += srChipH + 2
 	}
 	if eq := ctx.EquipmentMap.Get(ent); eq != nil {
 		drawText(ctx.Font, equipmentSummary(eq),
@@ -369,10 +434,34 @@ func drawInspectorSquad(ctx InspectorCtx, squad ecs.Entity, x, y, width int32) i
 		drawText(ctx.Font, macroPathLabel(mp),
 			x, y, inspectorFontSize, inspectorText)
 		y += inspectorRowH
+		// Phase 15 M15.A.5 - surface the stragglers gate. Only show when
+		// active so the row stays quiet during normal movement.
+		if mp.WaitingForStragglers {
+			drawText(ctx.Font, fmt.Sprintf("Waiting for stragglers (%d/%d)",
+				mp.StragglerCaughtUp, mp.StragglerTotal),
+				x, y, inspectorFontSize, rl.Color{R: 230, G: 170, B: 90, A: 255})
+			y += inspectorRowH
+		}
+	}
+	// Phase 15 M15.C.1: squad tactical state. Idle keeps the row out so the
+	// inspector stays quiet by default; Engaged / Scrambling get a coloured
+	// row so the player notices reactive behaviour.
+	if ctx.SquadStateMap != nil {
+		if state := ctx.SquadStateMap.Get(squad); state != nil {
+			if label := squadStateLabel(state.Code); label != "" {
+				color := inspectorTextDim
+				if state.Code == components.SquadStateScrambling {
+					color = rl.Color{R: 230, G: 110, B: 80, A: 255}
+				}
+				drawText(ctx.Font, "State:     "+label,
+					x, y, inspectorFontSize, color)
+				y += inspectorRowH
+			}
+		}
 	}
 	y += inspectorRowH / 2
 
-	// Phase 11: Order section. Head + up to 2 queued.
+	// Order section. Head + up to 2 queued.
 	y = drawInspectorOrderSection(ctx, squad, x, y, width)
 	y += inspectorRowH / 2
 
@@ -531,10 +620,11 @@ func drawText(font rl.Font, s string, x, y, size int32, c rl.Color) {
 }
 
 // drawInspectorOrderSection renders the squad's current Order + up to 2
-// queued orders. Returns the y-coord after the section so callers can chain
-// the next subsection vertically. PHASE-11.md P8.
+// queued orders as an inline timeline: each row carries a progress bar +
+// kind / state / target text + optional AT pill. Returns the y-coord after
+// the section. Phase 15 M15.C.5 reformat.
 func drawInspectorOrderSection(ctx InspectorCtx, squad ecs.Entity, x, y, width int32) int32 {
-	drawText(ctx.Font, "Order:", x, y, inspectorFontSize, inspectorTextDim)
+	drawText(ctx.Font, "Orders:", x, y, inspectorFontSize, inspectorTextDim)
 	y += inspectorRowH
 
 	if ctx.OrderQueueMap == nil {
@@ -548,10 +638,18 @@ func drawInspectorOrderSection(ctx InspectorCtx, squad ecs.Entity, x, y, width i
 		return y + inspectorRowH
 	}
 
-	// Head order row.
+	// Read squad's RoE so each row can flag AttackMove that the engagement
+	// mode silently overrides (M15.C.4). HoldFire blocks opportunistic fire
+	// even when the order carries the AttackMove flag.
+	eMode := components.HoldFire
+	if ctx.EngagementRulesMap != nil {
+		if er := ctx.EngagementRulesMap.Get(squad); er != nil {
+			eMode = er.Mode
+		}
+	}
+
 	cur := head.First
-	y = drawOrderRow(ctx, cur, "> ", x, y, width)
-	// Walk chain, render up to 2 more queued (PHASE-11.md P8).
+	y = drawOrderRow(ctx, cur, true, x, y, width, eMode)
 	const maxQueued = 2
 	queued := 0
 	for queued < maxQueued {
@@ -561,37 +659,121 @@ func drawInspectorOrderSection(ctx InspectorCtx, squad ecs.Entity, x, y, width i
 		}
 		cur = ch.Next
 		queued++
-		y = drawOrderRow(ctx, cur, "  ", x, y, width)
+		y = drawOrderRow(ctx, cur, false, x, y, width, eMode)
 	}
 	return y
 }
 
-// drawOrderRow draws one line: "PREFIX OrderKindName state-bar target".
-// Returns the new y. Used for both the head and queued orders.
-func drawOrderRow(ctx InspectorCtx, ord ecs.Entity, prefix string, x, y, width int32) int32 {
+// drawOrderRow renders one timeline row: progress bar + kind / state / target.
+// `active` highlights the head order's row background. When the order carries
+// OrderParamAttackMove an "AT" pill is appended on the right; HoldFire RoE
+// strikes the pill through and adds a warning sub-row. Returns the new y.
+func drawOrderRow(ctx InspectorCtx, ord ecs.Entity, active bool, x, y, width int32, eMode components.EngagementMode) int32 {
 	kind := ctx.OrderKindMap.Get(ord)
 	target := ctx.OrderTargetMap.Get(ord)
 	state := ctx.OrderStateMap.Get(ord)
 	if kind == nil || target == nil || state == nil {
-		drawText(ctx.Font, prefix+"(?)", x, y, inspectorFontSize, inspectorTextDim)
+		drawText(ctx.Font, "  (?)", x, y, inspectorFontSize, inspectorTextDim)
 		return y + inspectorRowH
 	}
+	progress := float32(0)
+	if pr := ctx.OrderProgressMap.Get(ord); pr != nil {
+		progress = pr.Value
+	}
+	drawOrderProgressBar(x, y, width, active, state.Code, progress)
+
 	label := orderKindLabel(kind.Code)
 	stateLbl := orderStateLabel(state.Code)
 	targetLbl := orderTargetLabel(ctx, kind.Code, target)
-	progressTxt := ""
-	if pr := ctx.OrderProgressMap.Get(ord); pr != nil && pr.Value > 0 {
-		progressTxt = fmt.Sprintf(" %d%%", int(pr.Value*100))
-	}
 	color := inspectorText
+	if !active {
+		color = inspectorTextDim
+	}
 	if state.Code == components.OrderStateBlocked || state.Code == components.OrderStateFailed {
 		color = rl.Color{R: 230, G: 110, B: 80, A: 255}
 	}
-	drawText(ctx.Font, fmt.Sprintf("%s%-12s %-10s%s %s",
-		prefix, label, stateLbl, progressTxt, targetLbl),
+	progressTxt := ""
+	if progress > 0 {
+		progressTxt = fmt.Sprintf(" %d%%", int(progress*100))
+	}
+	drawText(ctx.Font, fmt.Sprintf("  %-12s %-10s%s %s",
+		label, stateLbl, progressTxt, targetLbl),
 		x, y, inspectorFontSize, color)
-	_ = width
+
+	hasAttackMove := ctx.OrderAttackMoveMap != nil && ctx.OrderAttackMoveMap.Get(ord) != nil
+	if hasAttackMove {
+		blocked := eMode == components.HoldFire
+		drawAttackMovePill(ctx.Font, x, y, width, blocked)
+		if blocked {
+			y += inspectorRowH
+			drawText(ctx.Font, "   AttackMove ignored - RoE is HoldFire",
+				x, y, inspectorFontSize, rl.Color{R: 230, G: 170, B: 90, A: 255})
+		}
+	}
 	return y + inspectorRowH
+}
+
+// drawOrderProgressBar paints the row's progress bar underlay - a thin
+// filled rectangle behind the text that visualises OrderProgress.Value. The
+// active head order gets a brighter fill; queued rows get a dimmer track.
+// State-driven colour (blocked / failed render in warning orange).
+func drawOrderProgressBar(rowX, rowY, width int32, active bool, stateCode components.OrderStateCode, progress float32) {
+	const padY int32 = 1
+	track := rl.Color{R: 30, G: 35, B: 44, A: 255}
+	fill := rl.Color{R: 80, G: 130, B: 200, A: 200}
+	if !active {
+		fill = rl.Color{R: 60, G: 80, B: 120, A: 180}
+	}
+	if stateCode == components.OrderStateBlocked || stateCode == components.OrderStateFailed {
+		fill = rl.Color{R: 230, G: 110, B: 80, A: 200}
+	}
+	rowH := inspectorRowH - 2*padY
+	rl.DrawRectangle(rowX, rowY+padY, width, rowH, track)
+	if progress < 0 {
+		progress = 0
+	}
+	if progress > 1 {
+		progress = 1
+	}
+	fillW := int32(float32(width) * progress)
+	if fillW > 0 {
+		rl.DrawRectangle(rowX, rowY+padY, fillW, rowH, fill)
+	}
+	if active {
+		// Bright outline for the head order so the eye locks on it.
+		rl.DrawRectangleLines(rowX, rowY+padY, width, rowH, rl.Color{R: 110, G: 160, B: 220, A: 220})
+	}
+}
+
+// drawAttackMovePill renders a small "AT" pill at the right edge of the row.
+// When `blocked` is true, the pill background is dimmed and a strike-through
+// line runs across it; the caller adds an explanatory sub-row below.
+func drawAttackMovePill(font rl.Font, rowX, rowY, width int32, blocked bool) {
+	const pillW int32 = 24
+	const pillPadY int32 = 2
+	pillX := rowX + width - pillW
+	pillY := rowY + pillPadY
+	pillH := inspectorRowH - 2*pillPadY
+	bg := srChipActive
+	fg := contrastTextColor(bg)
+	if blocked {
+		bg = rl.Color{R: 60, G: 50, B: 50, A: 255}
+		fg = rl.Color{R: 200, G: 130, B: 110, A: 255}
+	}
+	rl.DrawRectangle(pillX, pillY, pillW, pillH, bg)
+	rl.DrawRectangleLines(pillX, pillY, pillW, pillH, srChipBorder)
+	size := rl.MeasureTextEx(font, "AT", float32(inspectorFontSize), 1)
+	rl.DrawTextEx(font, "AT", rl.Vector2{
+		X: float32(pillX) + (float32(pillW)-size.X)*0.5,
+		Y: float32(pillY) + (float32(pillH)-size.Y)*0.5,
+	}, float32(inspectorFontSize), 1, fg)
+	if blocked {
+		midY := float32(pillY) + float32(pillH)*0.5
+		rl.DrawLineEx(
+			rl.Vector2{X: float32(pillX) + 3, Y: midY},
+			rl.Vector2{X: float32(pillX+pillW) - 3, Y: midY},
+			2, rl.Color{R: 230, G: 110, B: 80, A: 255})
+	}
 }
 
 // orderKindLabel reads the spec table's Name. Phase 14.5 M14.5.0 - old
@@ -650,3 +832,76 @@ func orderTargetLabel(ctx InspectorCtx, kind components.OrderKindCode, t *compon
 // suppress the unused-math warning if math is no longer referenced after
 // edits. Currently used in drawInspectorUnit for yaw -> degrees.
 var _ = math.Pi
+
+// drawOverrideBlock renders the Override / Reason / Resume rows under a
+// suppressed unit's stats. Threshold is read off the unit's squad via
+// BehaviorRules; soloists fall back to the SurvivalInstinct default surfaced
+// in the Reason text.
+func drawOverrideBlock(ctx InspectorCtx, ent ecs.Entity, ov *components.TacticalOverride, x, y int32) int32 {
+	label := components.ReasonLabel(ov.Reason)
+	if label == "" {
+		return y
+	}
+	drawText(ctx.Font, "Override:  "+label,
+		x, y, inspectorFontSize, rl.Color{R: 230, G: 170, B: 90, A: 255})
+	y += inspectorRowH
+
+	reasonDetail := overrideReasonDetail(ctx, ent, ov)
+	if reasonDetail != "" {
+		drawText(ctx.Font, "Reason:    "+reasonDetail,
+			x, y, inspectorFontSize, inspectorTextDim)
+		y += inspectorRowH
+	}
+	if resume := components.ReasonResume(ov.Reason); resume != "" {
+		drawText(ctx.Font, "Resume:    "+resume,
+			x, y, inspectorFontSize, inspectorTextDim)
+		y += inspectorRowH
+	}
+	return y
+}
+
+// overrideReasonDetail expands the static ReasonLabel into a live numbers
+// string, e.g. "Suppression 0.72 > threshold 0.45". Falls back to an empty
+// string if the reason has no live numbers (placeholder reasons).
+func overrideReasonDetail(ctx InspectorCtx, ent ecs.Entity, ov *components.TacticalOverride) string {
+	switch ov.Reason {
+	case components.TacticalOverrideUnderFire:
+		supp := float32(0)
+		if ctx.SuppressionMap != nil {
+			if s := ctx.SuppressionMap.Get(ent); s != nil {
+				supp = s.Level
+			}
+		}
+		threshold := overrideThreshold(ctx, ent)
+		return fmt.Sprintf("Suppression %.2f > threshold %.2f", supp, threshold)
+	}
+	return ""
+}
+
+// overrideThreshold returns the unit's squad BehaviorRules.SuppressionThreshold
+// (matching SurvivalInstinct.thresholdFor), with a 0.45 fallback for soloists.
+func overrideThreshold(ctx InspectorCtx, ent ecs.Entity) float32 {
+	if ctx.SquadMemberMap == nil || ctx.BehaviorRulesMap == nil {
+		return 0.45
+	}
+	sm := ctx.SquadMemberMap.Get(ent)
+	if sm == nil || sm.Squad == (ecs.Entity{}) {
+		return 0.45
+	}
+	if br := ctx.BehaviorRulesMap.Get(sm.Squad); br != nil && br.SuppressionThreshold > 0 {
+		return br.SuppressionThreshold
+	}
+	return 0.45
+}
+
+// squadStateLabel returns the user-facing name of the squad's tactical
+// posture. Idle returns "" so callers can skip rendering the row.
+func squadStateLabel(c components.SquadStateCode) string {
+	switch c {
+	case components.SquadStateEngaged:
+		return "Engaged"
+	case components.SquadStateScrambling:
+		return "Scrambling"
+	}
+	return ""
+}

@@ -85,6 +85,10 @@ type OrderResolverSystem struct {
 	buildingChildIndex ecs.Resource[BuildingChildIndex]
 	floorComponentMap  *ecs.Map[components.Floor]
 
+	// Phase 15 M15.C.2 - EventLog resource. Push OrderCompleted / OrderFailed
+	// on lifecycle transitions.
+	eventLogRes ecs.Resource[components.EventLog]
+
 	squadService *SquadService
 }
 
@@ -122,6 +126,26 @@ func (sys *OrderResolverSystem) InitUI(w *ecs.World) {
 	sys.floorFilter = ecs.NewFilter2[components.WorldPos, components.Floor](w)
 	sys.buildingChildIndex = ecs.NewResource[BuildingChildIndex](w)
 	sys.floorComponentMap = ecs.NewMap[components.Floor](w)
+	sys.eventLogRes = ecs.NewResource[components.EventLog](w)
+}
+
+// pushOrderEvent records an order-lifecycle event into the global log.
+func (sys *OrderResolverSystem) pushOrderEvent(kind components.EventKind, squad ecs.Entity, target components.WorldPos) {
+	log := sys.eventLogRes.Get()
+	if log == nil {
+		return
+	}
+	text := "Order completed"
+	if kind == components.EventOrderFailed {
+		text = "Order failed"
+	}
+	log.Push(components.EventEntry{
+		Kind:  kind,
+		At:    sys.squadService.Clock(),
+		Pos:   target,
+		Squad: squad,
+		Text:  text,
+	})
 }
 
 func (OrderResolverSystem) Name() string { return "order_resolver" }
@@ -210,18 +234,11 @@ func (sys *OrderResolverSystem) Update(ctx core.UpdateContext) {
 				if pr := sys.orderProgressMap.Get(ord); pr != nil {
 					pr.Value = 1
 				}
-				// Phase 13.6 M13.6.4: arrived-facing - if the order carries an
-				// OrderParamFacing param, snap every roster member's Motion.Yaw
-				// to the target yaw. MoveTo and DefendPosition both benefit
-				// (Defend never reaches Completed via the InProgress->done path,
-				// but the snapshot here is harmless for any other kind that
-				// gets a facing param).
 				sys.applyArrivedFacing(squad, ord)
+				sys.pushOrderEvent(components.EventOrderCompleted, squad, target.Pos)
 			case completionFailed:
-				// Phase 14.5 Issue #10: AttackTarget on out-of-range alive
-				// target after MaxOutOfRangeSeconds -> Failed (so Inspector
-				// stops claiming the squad is engaging).
 				state.Code = components.OrderStateFailed
+				sys.pushOrderEvent(components.EventOrderFailed, squad, target.Pos)
 			case completionPending:
 				sys.updateProgress(squad, ord, target)
 			}
@@ -700,9 +717,9 @@ func (sys *OrderResolverSystem) countInsideBuilding(
 }
 
 // memberOnFloor returns true when `pos` sits over the horizontal extent of any
-// live Floor plate AND its Y is within ±1.5 m of the floor surface. The Y
-// proximity catches both surface stories (member Y ≈ floor Y) and bunkers
-// (member Y dropped into the sunken floor). Cheap: 1-3 buildings × 1-3 floors
+// live Floor plate AND its Y is within +/-1.5 m of the floor surface. The Y
+// proximity catches both surface stories (member Y ~ floor Y) and bunkers
+// (member Y dropped into the sunken floor). Cheap: 1-3 buildings x 1-3 floors
 // per scene = handful of plate checks per call.
 func (sys *OrderResolverSystem) memberOnFloor(pos *components.WorldPos) bool {
 	mx := float32(pos.Chunk.X)*components.ChunkSize + pos.Local.X

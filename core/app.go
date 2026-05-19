@@ -81,7 +81,7 @@ type App struct {
 	TimeScale float32
 
 	// LastNonZeroScale remembers the speed we were running at before Space
-	// paused us, so an unpause restores it rather than snapping to 1×.
+	// paused us, so an unpause restores it rather than snapping to 1x.
 	LastNonZeroScale float32
 }
 

@@ -86,7 +86,7 @@ const (
 	// SquadReplanCenterDrift - if center is further than this from the next
 	// waypoint, force a replan. Models bunch-around-obstacle drift.
 	SquadReplanCenterDrift float32 = 5.0
-	// SquadArrivalCoeff × Spacing = "close enough to the goal - squad idle".
+	// SquadArrivalCoeff x Spacing = "close enough to the goal - squad idle".
 	SquadArrivalCoeff float32 = 1.5
 	// SquadWaypointReached - center within this distance pops the head
 	// waypoint. Slightly larger than unit arrivalRadius so the macro path
@@ -195,13 +195,17 @@ func (sys *SquadMacroPathSystem) processSquad(world *ecs.World, w macroPathWork,
 
 	// Pop head waypoints already crossed by the center. Also covers the
 	// case where FormationSystem hasn't advanced Head yet (e.g. during the
-	// first tick after a replan).
-	for mp.Head < mp.Count {
-		d := center.Sub(mp.Waypoints[mp.Head])
-		if d.X*d.X+d.Z*d.Z < SquadWaypointReached*SquadWaypointReached {
-			mp.Head++
-		} else {
-			break
+	// first tick after a replan). Phase 15 M15.A.5 - skip the pop while
+	// waiting for stragglers so the gate FormationSystem set this tick
+	// stays consistent across the slower 1 s SquadMacroPath cadence.
+	if !mp.WaitingForStragglers {
+		for mp.Head < mp.Count {
+			d := center.Sub(mp.Waypoints[mp.Head])
+			if d.X*d.X+d.Z*d.Z < SquadWaypointReached*SquadWaypointReached {
+				mp.Head++
+			} else {
+				break
+			}
 		}
 	}
 
@@ -331,6 +335,41 @@ func SquadCenter(world *ecs.World, roster *components.CommandRoster, posMap *ecs
 func centerXZDistSq(a, b components.WorldPos) float32 {
 	d := a.Sub(b)
 	return d.X*d.X + d.Z*d.Z
+}
+
+// SquadSpread returns (maxDistance, caughtUp, total) where maxDistance is the
+// largest XZ distance from `center` to any live roster member, caughtUp is
+// the number of members within `caughtThreshold` of center, and total is the
+// number of live members. Used by Phase 15 M15.A.5 wait-for-stragglers gate.
+func SquadSpread(
+	world *ecs.World,
+	roster *components.CommandRoster,
+	center components.WorldPos,
+	posMap *ecs.Map[components.WorldPos],
+	caughtThreshold float32,
+) (float32, uint8, uint8) {
+	var maxSq float32
+	var caught, total uint8
+	thresholdSq := caughtThreshold * caughtThreshold
+	for i := uint8(0); i < roster.Count; i++ {
+		mem := roster.Members[i]
+		if mem == (ecs.Entity{}) || !world.Alive(mem) {
+			continue
+		}
+		p := posMap.Get(mem)
+		if p == nil {
+			continue
+		}
+		total++
+		dSq := centerXZDistSq(*p, center)
+		if dSq > maxSq {
+			maxSq = dSq
+		}
+		if dSq <= thresholdSq {
+			caught++
+		}
+	}
+	return float32(math.Sqrt(float64(maxSq))), caught, total
 }
 
 // decimationStep - how many fine-grained NavService waypoints to skip between

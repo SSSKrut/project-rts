@@ -127,7 +127,7 @@ func NewPropTypeRegistry() *components.PropTypeRegistry {
 		BBoxRadius:  1.25,
 		Traversable: true,
 	}
-	// Junction - square plate sized per-spawn via uniform Scale (= 1.5 ×
+	// Junction - square plate sized per-spawn via uniform Scale (= 1.5 x
 	// max-incident-edge-width). Single shared meta keeps the registry small.
 	r.Metas[components.PropJunction] = components.PropMeta{
 		Primitive:   components.PrimitivePlane,

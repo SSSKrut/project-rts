@@ -152,7 +152,7 @@ func (sys RoadSystem) Update(ctx core.UpdateContext) {
 		}
 	}
 
-	// ── Pass 1: heightmap flatten ──
+	// -- Pass 1: heightmap flatten --
 	type processedEnt struct {
 		id ecs.Entity
 	}
@@ -191,7 +191,7 @@ func (sys RoadSystem) Update(ctx core.UpdateContext) {
 		}
 	}
 
-	// ── Pass 2: spawn road / bridge / junction props ──
+	// -- Pass 2: spawn road / bridge / junction props --
 	var pendingProps []roadPendingProp
 	var spawned []processedEnt
 
@@ -309,7 +309,7 @@ func propTypeForKind(k components.RoadKind) components.PropType {
 }
 
 // segmentBBoxClipXZ - Liang-Barsky clip of segment (ax,az)->(bx,bz) against
-// axis-aligned XZ rectangle [minX, maxX] × [minZ, maxZ]. Returns the t-range
+// axis-aligned XZ rectangle [minX, maxX] x [minZ, maxZ]. Returns the t-range
 // of the segment portion inside the rectangle, or ok=false if disjoint.
 func segmentBBoxClipXZ(ax, az, bx, bz, minX, minZ, maxX, maxZ float32) (float32, float32, bool) {
 	dx := bx - ax

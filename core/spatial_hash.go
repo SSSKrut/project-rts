@@ -62,7 +62,7 @@ type SpatialHash struct {
 // cellSize should roughly match the worst-case query radius - too small
 // forces queries to scan many cells; too large blurs the index toward O(N).
 // PHASE-14.5.md P4 picks 32 m for Units (separation query radius ~1.5 m,
-// vision range ~64 m -> 2×2 cells; weapon range ~300 m -> ~10×10 cells, still
+// vision range ~64 m -> 2x2 cells; weapon range ~300 m -> ~10x10 cells, still
 // far below O(N) for 200 units).
 func NewSpatialHash(cellSize float32) *SpatialHash {
 	if cellSize <= 0 {

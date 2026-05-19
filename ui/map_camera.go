@@ -20,7 +20,7 @@ type MapCamera struct {
 }
 
 // NewMapCamera returns a camera centred at origin with default zoom range.
-// 0.5 px/m (= 2 m/px) is a reasonable default for the 2×2 km test underlay.
+// 0.5 px/m (= 2 m/px) is a reasonable default for the 2x2 km test underlay.
 func NewMapCamera() MapCamera {
 	return MapCamera{
 		Center:  components.WorldPos{},

@@ -159,7 +159,7 @@ func (m *PanelManager) Recompute(screenW, screenH int32) {
 	}
 }
 
-// TogglePreset flips Field ↔ Command. Caller is responsible for Recompute()
+// TogglePreset flips Field <-> Command. Caller is responsible for Recompute()
 // after - keeping the calls separate lets main.go also realloc the 3D RT in
 // the same place.
 func (m *PanelManager) TogglePreset() {
