@@ -4,6 +4,8 @@ import (
 	rl "github.com/gen2brain/raylib-go/raylib"
 
 	"rts-go/components"
+	"rts-go/systems"
+	"rts-go/systems/building_gen"
 )
 
 // makeStartingRoadGraph builds the Phase-4 test graph: a four-node chain
@@ -30,38 +32,36 @@ func makeStartingRoadGraph() components.RoadGraph {
 	}
 }
 
-// makeStartingBuildings - Phase 5 hardcoded test scene: a single-storey house,
-// a two-storey house (verifies stairs), and a sunken bunker (verifies
-// RectCut). Footprints are sized to fit cleanly inside their host chunks (P5).
+// makeStartingBuildings - test scene driven by the Phase 16.5 generator.
+// Phase 16.A loader (.glb files via manifest) will replace this once art
+// assets exist; until then the generator stands in.
 func makeStartingBuildings() []components.BuildingPlan {
 	wp := func(wx, wz float32) components.WorldPos {
 		return components.WorldPos{}.Add(rl.Vector3{X: wx, Y: 0, Z: wz})
 	}
+	makeHouse := func(seed uint64, x, z float32, stories uint8, sizeX, sizeZ float32, kind components.BuildingKind) components.BuildingPlan {
+		pos := wp(x, z)
+		pos.Local.Y = systems.GroundHeight(
+			pos.Local.X+float32(pos.Chunk.X)*components.ChunkSize,
+			pos.Local.Z+float32(pos.Chunk.Z)*components.ChunkSize,
+		)
+		params := building_gen.HouseParams{
+			Stories:  stories,
+			SizeX:    sizeX,
+			SizeZ:    sizeZ,
+			DoorSide: 4,
+		}
+		return *building_gen.GenerateHouse(seed, params, pos, kind)
+	}
 	return []components.BuildingPlan{
-		{
-			Pos:     wp(-25, -40),
-			Kind:    components.BuildingHouse,
-			Stories: 1,
-			Size:    rl.Vector2{X: 8, Y: 8},
-			Yaw:     0,
-			Seed:    0xA1,
-		},
-		{
-			Pos:     wp(40, 30),
-			Kind:    components.BuildingHouse,
-			Stories: 2,
-			Size:    rl.Vector2{X: 12, Y: 10},
-			Yaw:     0,
-			Seed:    0xB2,
-		},
-		{
-			Pos:     wp(-30, 55),
-			Kind:    components.BuildingBunker,
-			Stories: 1,
-			Size:    rl.Vector2{X: 10, Y: 10},
-			Yaw:     0,
-			Seed:    0xC3,
-		},
+		makeHouse(0xA1, -25, -40, 1, 8, 8, components.BuildingHouse),
+		makeHouse(0xB2, 40, 30, 2, 12, 10, components.BuildingHouse),
+		makeHouse(0xC3, -30, 55, 1, 10, 10, components.BuildingBunker),
+		// Phase 16.B.0 multi-chunk smoke: 20m-wide house centred at X=5,
+		// footprint spans X in [-5, 15] - crosses the chunk (-1,0)/(0,0)
+		// boundary. Walking past either chunk should keep half the house
+		// visible while the other half tears down with its host chunk.
+		makeHouse(0xD4, 5, 20, 1, 20, 8, components.BuildingHouse),
 	}
 }
 

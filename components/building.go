@@ -5,6 +5,18 @@ import (
 	"github.com/mlange-42/ark/ecs"
 )
 
+// Shared geometric constants. Generator (Phase 16.5) and BuildingSystem
+// reference these so the runtime layout stays consistent with what the
+// loader / .glb meshes are expected to emit.
+const (
+	FloorHeight        float32 = 3.0
+	WallThickness      float32 = 0.3
+	BunkerDepth        float32 = 3.0
+	BunkerFalloffWidth float32 = 4.0
+	StairsLength       float32 = 3.0
+	StairsWidth        float32 = 1.5
+)
+
 // BuildingKind drives layout (Bunker is sunken, House is surface) and
 // downstream gameplay attributes.
 type BuildingKind uint8
@@ -29,21 +41,155 @@ type Building struct {
 	Seed      uint64
 }
 
-// BuildingPlan is the hand-authored spec used at startup to instantiate
-// Building entities. After startup nothing reads the plan list - the
-// Building component carries everything systems need.
+// BuildingPlan is the per-building layout spec produced by either the
+// Phase 16.A .glb loader or the Phase 16.5 generator. BuildingSystem reads
+// the Walls / Floors / Stairs / Levels slices to spawn child entities.
+//
+// Pos / Size / Kind / Stories / Yaw / Seed are the legacy Phase 5 metadata
+// (still consumed by main.go for Building root placement and by the map
+// renderer for footprint rects). Empty Walls slice = "no full spec yet" -
+// useful for headless / tests that build a Building root without a layout.
 type BuildingPlan struct {
 	Pos     WorldPos
 	Kind    BuildingKind
 	Stories uint8
-	Size    rl.Vector2 // SizeX, SizeZ in metres
+	Size    rl.Vector2 // SizeX, SizeZ in metres - top-down footprint
 	Yaw     float32
 	Seed    uint64
+
+	// Phase 16.A.3 / 16.5.A. World-space coords. All Local fields on child
+	// specs are chunk-local of the building's host chunk (Pos.Chunk).
+	Levels           []LevelSpec
+	Walls            []WallSpec
+	Floors           []FloorSpec
+	Stairs           []StairSpec
+	Furniture        []FurnitureSpec
+	Markers          []MarkerSpec
+	LevelTransitions []LevelTransitionSpec
 }
 
 // BuildingPlanList is the singleton resource read once at startup.
 type BuildingPlanList struct {
 	Plans []BuildingPlan
+}
+
+// NoLevelRef sentinel for spec LevelRef fields when the entity has no
+// level association (rare - legacy plans, validator skip).
+const NoLevelRef uint8 = 0xFF
+
+// LevelSpec is one level volume in a BuildingPlan. AABB is world-space.
+// DisplayOrder is an optional override for UI chip ordering - 0 means
+// "use avgY ascending + alphabetical tiebreak".
+type LevelSpec struct {
+	Name         string
+	AABB         AABB3D
+	DisplayOrder uint8
+}
+
+// WallSpec is one external or internal wall. Local is the "from" endpoint
+// in chunk-local coords of the building's host chunk. OutwardNormal points
+// away from the interior (or +X for internal partitions; either side is
+// "outward"). LevelRefs are indices into BuildingPlan.Levels - a wall
+// straddling two storeys carries both.
+type WallSpec struct {
+	Local         rl.Vector3
+	Segment       WallSegment
+	OutwardNormal rl.Vector3
+	LevelRefs     []uint8
+}
+
+// FloorSpec is one Floor plate. LevelRef is the index of the Level this
+// plate belongs to (mandatory in extended plans).
+type FloorSpec struct {
+	Local    rl.Vector3
+	Floor    Floor
+	LevelRef uint8
+}
+
+// StairAnchor connects one waypoint of a stair to a Level via LevelRef.
+// Multi-segment stairs (switchback / spiral) carry multiple anchors -
+// usually 0 and len(Waypoints)-1, but mid-anchors are allowed.
+type StairAnchor struct {
+	WpIndex  uint8
+	LevelRef uint8
+}
+
+// StairSpec is one stair entity + a waypoint chain in chunk-local coords +
+// level anchors at the endpoints. NavService consumes Waypoints + Anchors
+// to emit NodeStairWp transition edges.
+type StairSpec struct {
+	Local     rl.Vector3
+	Stairs    Stairs
+	Waypoints []rl.Vector3
+	Anchors   []StairAnchor
+}
+
+// MarkerKind tags marker_<kind>_<name> annotations from .glb / generator.
+type MarkerKind uint8
+
+const (
+	MarkerSpawn MarkerKind = iota
+	MarkerCapture
+	MarkerSniperPerch
+	MarkerEntry
+)
+
+// FurnitureSpec is one interior prop (sandbags / table / crate / ...).
+// Distinct from outdoor PropSpawn: furniture lives as a BuildingMember
+// child and despawns with the host chunk eviction.
+type FurnitureSpec struct {
+	Local    rl.Vector3
+	Kind     PropType
+	Yaw      float32
+	LevelRef uint8
+}
+
+// MarkerSpec is one point of interest (spawn / capture / sniper perch).
+type MarkerSpec struct {
+	Local    rl.Vector3
+	Kind     MarkerKind
+	LevelRef uint8
+}
+
+// LevelTransitionSpec describes a door_<A>-<B> connection between two
+// levels. ViaWall is the index into BuildingPlan.Walls of the wall
+// carrying the door; -1 marks transitions via stairs / passages.
+type LevelTransitionSpec struct {
+	LevelA  uint8
+	LevelB  uint8
+	ViaWall int16
+}
+
+// Level is the per-Level ECS component. One entity per LevelSpec is spawned
+// by BuildingSystem alongside walls / floors / stairs. Phase 16.B reads
+// this to bake LevelNavGrid + LevelCoverMap; Phase 16.C reads it for
+// chip widgets and fog-of-war.
+type Level struct {
+	AABB         AABB3D
+	Name         string
+	DisplayOrder uint8
+}
+
+// LevelTransition is a per-door (or per-passage) link between two Level
+// entities. Phase 16.B uses it to thread cross-level pathfinding.
+type LevelTransition struct {
+	LevelA ecs.Entity
+	LevelB ecs.Entity
+}
+
+// Furniture is a sandbox / table / crate placed inside a building. Owned
+// by the host building via BuildingMember; level association via the
+// Level field (entity).
+type Furniture struct {
+	Kind  PropType
+	Yaw   float32
+	Level ecs.Entity
+}
+
+// Marker is a spawn / capture / sniperperch annotation attached to a level.
+type Marker struct {
+	Kind  MarkerKind
+	Level ecs.Entity
 }
 
 // BuildingMember marks a child entity (wall / floor / stairs / opening) as

@@ -221,7 +221,7 @@ func drawDefendPositionArc(target components.WorldPos, forward rl.Vector3, squad
 // Phase 13.6 simplification: no threat-aware ranking (Phase 15 SurvivalInstinct
 // will read window.CoverDirection vs threatDir for real ranking). Window order
 // is whatever `BuildingChildIndex` returns, which is insertion-order from
-// BuildingSystem.generateBuildingLayout - deterministic per building.
+// BuildingSystem.spawnBuilding - deterministic per building.
 func drawGhostInBuilding(g *ghostContext, building ecs.Entity, count uint8, stance components.Stance) bool {
 	if g.buildingIndex == nil || g.windowMap == nil || g.wallMap == nil {
 		return false

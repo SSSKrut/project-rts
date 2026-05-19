@@ -89,6 +89,8 @@ func main() {
 	ecs.AddResource(app.World, &buildingPlans)
 	buildingIndex := systems.NewBuildingChildIndex()
 	ecs.AddResource(app.World, &buildingIndex)
+	buildingPlanIndex := systems.NewBuildingPlanIndex()
+	ecs.AddResource(app.World, &buildingPlanIndex)
 	trenches := components.TrenchNetwork{Lines: makeStartingTrenches()}
 	ecs.AddResource(app.World, &trenches)
 	coverSlotIndex := systems.NewCoverSlotIndex()
@@ -290,6 +292,8 @@ func main() {
 	activeCamMap.Add(camEnt, &components.ActiveCamera{})
 
 	buildingMap := ecs.NewMap[components.Building](app.World)
+	buildingMemberMap := ecs.NewMap[components.BuildingMember](app.World)
+	levelMap := ecs.NewMap[components.Level](app.World)
 	for i := range buildingPlans.Plans {
 		p := &buildingPlans.Plans[i]
 		root := app.World.NewEntity()
@@ -299,9 +303,7 @@ func main() {
 			MaxX: p.Pos.Local.X + float32(p.Pos.Chunk.X)*components.ChunkSize + p.Size.X*0.5,
 			MaxZ: p.Pos.Local.Z + float32(p.Pos.Chunk.Z)*components.ChunkSize + p.Size.Y*0.5,
 		}
-		bpos := p.Pos
-		bpos.Local.Y = systems.GroundHeight(fp.CenterX(), fp.CenterZ())
-		posMap.Add(root, &bpos)
+		posMap.Add(root, &p.Pos)
 		buildingMap.Add(root, &components.Building{
 			Kind:      p.Kind,
 			Stories:   p.Stories,
@@ -310,6 +312,38 @@ func main() {
 			Seed:      p.Seed,
 		})
 		alwaysActiveMap.Add(root, &components.AlwaysActive{})
+		buildingPlanIndex.Plans[root] = p
+
+		// Phase 16.B.0: Level entities live for the building's whole life,
+		// independent of chunk lifecycle. They are AlwaysActive so a child
+		// (Furniture / Marker / LevelTransition) spawned in any chunk can
+		// reference a Level by stable entity handle.
+		levels := make([]ecs.Entity, len(p.Levels))
+		for li := range p.Levels {
+			ls := &p.Levels[li]
+			lev := app.World.NewEntity()
+			lwx := ls.AABB.CenterX()
+			lwz := ls.AABB.CenterZ()
+			lcx := int32(math.Floor(float64(lwx) / float64(components.ChunkSize)))
+			lcz := int32(math.Floor(float64(lwz) / float64(components.ChunkSize)))
+			posMap.Add(lev, &components.WorldPos{
+				Chunk: components.ChunkCoord{X: lcx, Z: lcz},
+				Local: rl.Vector3{
+					X: lwx - float32(lcx)*components.ChunkSize,
+					Y: ls.AABB.CenterY(),
+					Z: lwz - float32(lcz)*components.ChunkSize,
+				},
+			})
+			buildingMemberMap.Add(lev, &components.BuildingMember{Building: root})
+			alwaysActiveMap.Add(lev, &components.AlwaysActive{})
+			levelMap.Add(lev, &components.Level{
+				AABB:         ls.AABB,
+				Name:         ls.Name,
+				DisplayOrder: ls.DisplayOrder,
+			})
+			levels[li] = lev
+		}
+		buildingPlanIndex.Levels[root] = levels
 	}
 
 	// Phase 11: one TrenchRoot entity per polyline so the hit-test resolver

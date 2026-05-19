@@ -424,7 +424,7 @@ func (sys SpatialBakeSystem) Update(ctx core.UpdateContext) {
 			if ws.pos.Chunk != fr.pos.Chunk {
 				continue
 			}
-			if absDelta(ws.pos.Local.Y, fr.pos.Local.Y) > floorHeight*0.5 {
+			if absDelta(ws.pos.Local.Y, fr.pos.Local.Y) > components.FloorHeight*0.5 {
 				continue
 			}
 			rasterizeFloorWall(&grid, ws.pos.Local, ws.w, ws.openingPassable, originX, originZ)

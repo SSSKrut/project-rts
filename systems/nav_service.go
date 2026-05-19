@@ -255,7 +255,7 @@ func (s *NavService) resolveNode(wp components.WorldPos, idx *TerrainChunkIndex,
 		if fr.chunk != wp.Chunk {
 			continue
 		}
-		if absDelta(wp.Local.Y, fr.y) > floorHeight*0.5 {
+		if absDelta(wp.Local.Y, fr.y) > components.FloorHeight*0.5 {
 			continue
 		}
 		lx := wp.Local.X - fr.originX

@@ -2,6 +2,7 @@ package systems
 
 import (
 	"fmt"
+	"math"
 	"time"
 
 	rl "github.com/gen2brain/raylib-go/raylib"
@@ -262,17 +263,30 @@ func (sys TerrainStreamingSystem) Update(ctx core.UpdateContext) {
 	coverIdx := sys.coverSlotIndexRes.Get()
 	transitionReg := sys.transitionRes.Get()
 
-	// Build a chunk -> buildings-rooted-here map only if any buildings exist
-	// and we're actually evicting something - keeps the common path cheap.
+	// Phase 16.B.0: a Building's footprint may overlap multiple chunks, so
+	// when chunk X evicts we must despawn only those children whose
+	// Pos.Chunk == X. Bucket by EVERY overlapping chunk; same root shows up
+	// in 1..N buckets.
 	var buildingsByChunk map[components.ChunkCoord][]ecs.Entity
 	if bIdx != nil && len(evictions) > 0 {
 		qb := sys.buildingFilter.Query()
 		for qb.Next() {
-			_, pos := qb.Get()
+			b, _ := qb.Get()
+			root := qb.Entity()
+			fp := b.Footprint
+			minCX := int32(math.Floor(float64(fp.MinX) / float64(components.ChunkSize)))
+			maxCX := int32(math.Floor(float64(fp.MaxX) / float64(components.ChunkSize)))
+			minCZ := int32(math.Floor(float64(fp.MinZ) / float64(components.ChunkSize)))
+			maxCZ := int32(math.Floor(float64(fp.MaxZ) / float64(components.ChunkSize)))
 			if buildingsByChunk == nil {
 				buildingsByChunk = make(map[components.ChunkCoord][]ecs.Entity)
 			}
-			buildingsByChunk[pos.Chunk] = append(buildingsByChunk[pos.Chunk], qb.Entity())
+			for cx := minCX; cx <= maxCX; cx++ {
+				for cz := minCZ; cz <= maxCZ; cz++ {
+					cc := components.ChunkCoord{X: cx, Z: cz}
+					buildingsByChunk[cc] = append(buildingsByChunk[cc], root)
+				}
+			}
 		}
 	}
 
@@ -298,39 +312,55 @@ func (sys TerrainStreamingSystem) Update(ctx core.UpdateContext) {
 				delete(propIdx.Loaded, ev.cc)
 			}
 		}
-		// Tear down every building child (walls / floors / etc.) for any
-		// Building rooted in this chunk. The Building root is AlwaysActive
-		// and survives - children respawn on chunk return.
+		// Tear down only those building children whose Pos.Chunk == ev.cc.
+		// Other children of the same building keep living in their own
+		// chunks; root + Level entities are AlwaysActive and ignore eviction
+		// entirely. Children respawn deterministically on chunk return.
 		if bIdx != nil {
 			for _, root := range buildingsByChunk[ev.cc] {
-				if children, ok := bIdx.Loaded[root]; ok {
-					evictedChildren := make(map[ecs.Entity]bool, len(children))
-					for _, c := range children {
+				children, ok := bIdx.Loaded[root]
+				if !ok {
+					continue
+				}
+				evictedChildren := make(map[ecs.Entity]bool)
+				remaining := children[:0]
+				for _, c := range children {
+					cpos := sys.posMap.Get(c)
+					if cpos == nil {
+						continue
+					}
+					if cpos.Chunk == ev.cc {
 						if coverIdx != nil {
 							delete(coverIdx.ByHost, c)
 						}
 						evictedChildren[c] = true
 						ctx.World.RemoveEntity(c)
+					} else {
+						remaining = append(remaining, c)
 					}
-					// Drop every TransitionEdge whose owner just despawned -
-					// otherwise A* could route through a stale doorway / stair
-					// edge. Per Phase 7 P3 (transition cleanup on eviction).
-					if transitionReg != nil {
-						for k, edges := range transitionReg.Out {
-							kept := edges[:0]
-							for _, e := range edges {
-								if !evictedChildren[e.Owner] && !evictedChildren[e.From.Floor] && !evictedChildren[e.To.Floor] {
-									kept = append(kept, e)
-								}
-							}
-							if len(kept) == 0 {
-								delete(transitionReg.Out, k)
-							} else {
-								transitionReg.Out[k] = kept
+				}
+				// Drop every TransitionEdge whose owner just despawned -
+				// otherwise A* could route through a stale doorway / stair
+				// edge. Per Phase 7 P3 (transition cleanup on eviction).
+				if transitionReg != nil && len(evictedChildren) > 0 {
+					for k, edges := range transitionReg.Out {
+						kept := edges[:0]
+						for _, e := range edges {
+							if !evictedChildren[e.Owner] && !evictedChildren[e.From.Floor] && !evictedChildren[e.To.Floor] {
+								kept = append(kept, e)
 							}
 						}
+						if len(kept) == 0 {
+							delete(transitionReg.Out, k)
+						} else {
+							transitionReg.Out[k] = kept
+						}
 					}
+				}
+				if len(remaining) == 0 {
 					delete(bIdx.Loaded, root)
+				} else {
+					bIdx.Loaded[root] = remaining
 				}
 			}
 		}
