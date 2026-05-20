@@ -1,6 +1,8 @@
 package main
 
 import (
+	"fmt"
+
 	"rts-go/components"
 	"rts-go/systems"
 
@@ -335,6 +337,10 @@ func resolveRMBOrderWithParams(
 		hit = hitTester.HitTest(target)
 	}
 	kind, entityTarget := resolveTargetIntoOrder(hit, kindOverride)
+	fmt.Printf("[order] resolved kind=%d hitKind=%d entityTarget=%v target=(%.1f,%.1f)\n",
+		kind, hit.Kind, entityTarget,
+		target.Local.X+float32(target.Chunk.X)*components.ChunkSize,
+		target.Local.Z+float32(target.Chunk.Z)*components.ChunkSize)
 
 	// PHASE-11.md P9: distribute orders by squad ownership. SquadsToOrder is
 	// the unique squads touched by the selection; Soloists are units not in

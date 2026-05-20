@@ -1,6 +1,7 @@
 package systems
 
 import (
+	"fmt"
 	"math"
 
 	rl "github.com/gen2brain/raylib-go/raylib"
@@ -9,11 +10,17 @@ import (
 	"rts-go/components"
 )
 
+// Phase 16.B.1.b debug: print first empty FindPath result and first
+// successful FindPath so we can tell empty-path bug from wrong-path bug.
+var navDebugReported bool
+var navOKReported bool
+var navSnapshotReported bool
+
 // NavService is the multi-graph A* pathfinder. Service object (not a System);
 // pre-built handles via NewNavService and reused across calls.
 //
 // Phase 7 widens the planner past per-chunk surface NavGrids: each Floor
-// entity also carries a FloorNavGrid, and surface<->floor / floor<->floor
+// entity also carries a LevelNavGrid, and surface<->floor / floor<->floor
 // transitions live in a TransitionRegistry resource. WorldPos->NavNode
 // resolution checks floor footprint membership first; in-grid neighbours +
 // registry edges are unified in one A* expansion.
@@ -22,9 +29,10 @@ type NavService struct {
 	transitionRes ecs.Resource[components.TransitionRegistry]
 	buildingIndex ecs.Resource[BuildingChildIndex]
 	navGridMap    *ecs.Map[components.NavGrid]
-	floorNavMap   *ecs.Map[components.FloorNavGrid]
-	floorMap      *ecs.Map[components.Floor]
+	floorNavMap   *ecs.Map[components.LevelNavGrid]
+	levelMap      *ecs.Map[components.Level]
 	posMap        *ecs.Map[components.WorldPos]
+	levelFilter   *ecs.Filter2[components.Level, components.WorldPos]
 }
 
 func NewNavService(w *ecs.World) *NavService {
@@ -33,9 +41,10 @@ func NewNavService(w *ecs.World) *NavService {
 		transitionRes: ecs.NewResource[components.TransitionRegistry](w),
 		buildingIndex: ecs.NewResource[BuildingChildIndex](w),
 		navGridMap:    ecs.NewMap[components.NavGrid](w),
-		floorNavMap:   ecs.NewMap[components.FloorNavGrid](w),
-		floorMap:      ecs.NewMap[components.Floor](w),
+		floorNavMap:   ecs.NewMap[components.LevelNavGrid](w),
+		levelMap:      ecs.NewMap[components.Level](w),
 		posMap:        ecs.NewMap[components.WorldPos](w),
+		levelFilter:   ecs.NewFilter2[components.Level, components.WorldPos](w),
 	}
 }
 
@@ -73,21 +82,59 @@ func (s *NavService) FindPath(from, to components.WorldPos, opts NavOpts) []comp
 	}
 	registry := s.transitionRes.Get()
 
-	floors := s.snapshotFloors()
+	floors := s.snapshotLevels()
+	// Phase 16.B.1.b diagnostic: spot-check the door surface cell of House #0
+	// (43, 24) in chunk(-1,-1). If it's cost=0 or NavInBuilding-flagged, the
+	// transition edge is reachable in the registry but not via gridNeighbours.
+	if !navSnapshotReported {
+		doorSurf := components.NavNode{Kind: components.NodeSurface,
+			Chunk: components.ChunkCoord{X: -1, Z: -1}, I: 43, J: 24}
+		doorCell, doorOK := s.cellAt(doorSurf, idx, floors)
+		fmt.Printf("[nav] doorSurfCell(43,24): ok=%v cost=%d flags=%d\n", doorOK, doorCell.Cost, doorCell.Flags)
+		// Same for (43, 23) and (43, 25) - adjacent cells; if (43, 24) is OK
+		// but unreachable, neighbour state matters.
+		for j := int16(19); j <= 25; j++ {
+			n := components.NavNode{Kind: components.NodeSurface,
+				Chunk: components.ChunkCoord{X: -1, Z: -1}, I: 43, J: j}
+			c, ok := s.cellAt(n, idx, floors)
+			fmt.Printf("[nav] cell I=43 J=%d ok=%v cost=%d flags=%d\n", j, ok, c.Cost, c.Flags)
+		}
+	}
+	if !navSnapshotReported {
+		for i, lr := range floors {
+			fmt.Printf("[nav] snapshot[%d] ent=%v chunk=%v origin=(%.1f,%.1f) size=%dx%d aabbY=[%.1f..%.1f]\n",
+				i, lr.ent, lr.chunk, lr.originX, lr.originZ, lr.sizeX, lr.sizeZ, lr.aabb.MinY, lr.aabb.MaxY)
+		}
+		navSnapshotReported = true
+	}
 
 	fromNode, fromOK := s.resolveNode(from, idx, floors)
 	toNode, toOK := s.resolveNode(to, idx, floors)
 	if !fromOK || !toOK {
+		fmt.Printf("[nav] EMPTY: resolve failed fromOK=%v toOK=%v to=(%.1f,%.1f)\n",
+			fromOK, toOK,
+			to.Local.X+float32(to.Chunk.X)*components.ChunkSize,
+			to.Local.Z+float32(to.Chunk.Z)*components.ChunkSize)
 		return []components.WorldPos{}
 	}
 	if fromNode == toNode {
+		fmt.Printf("[nav] SAME node: kind=%d I=%d J=%d (from==to, no path needed)\n",
+			fromNode.Kind, fromNode.I, fromNode.J)
 		return nil
 	}
 
-	if c, ok := s.cellAt(fromNode, idx, floors); !ok || c.Cost == 0 {
+	fromCell, fromCellOK := s.cellAt(fromNode, idx, floors)
+	if !fromCellOK || fromCell.Cost == 0 {
+		fmt.Printf("[nav] EMPTY: from blocked kind=%d cost=%d flags=%d\n",
+			fromNode.Kind, fromCell.Cost, fromCell.Flags)
 		return []components.WorldPos{}
 	}
-	if c, ok := s.cellAt(toNode, idx, floors); !ok || c.Cost == 0 {
+	toCell, toCellOK := s.cellAt(toNode, idx, floors)
+	if !toCellOK || toCell.Cost == 0 {
+		fmt.Printf("[nav] EMPTY: to blocked kind=%d cost=%d flags=%d to=(%.1f,%.1f)\n",
+			toNode.Kind, toCell.Cost, toCell.Flags,
+			to.Local.X+float32(to.Chunk.X)*components.ChunkSize,
+			to.Local.Z+float32(to.Chunk.Z)*components.ChunkSize)
 		return []components.WorldPos{}
 	}
 
@@ -168,6 +215,34 @@ func (s *NavService) FindPath(from, to components.WorldPos, opts NavOpts) []comp
 	}
 
 	if !found {
+		closedCount := len(closed)
+		statesCount := len(states)
+		surfaceClosed := 0
+		levelClosed := 0
+		levelMatchClosed := 0
+		doorSurfClosed := false
+		goalCellClosed := false
+		for n := range closed {
+			switch n.Kind {
+			case components.NodeSurface:
+				surfaceClosed++
+				if n.I == 43 && n.J == 24 && n.Chunk.X == -1 && n.Chunk.Z == -1 {
+					doorSurfClosed = true
+				}
+			case components.NodeLevel:
+				levelClosed++
+				if n.Level == toNode.Level {
+					levelMatchClosed++
+					if n.I == toNode.I && n.J == toNode.J {
+						goalCellClosed = true
+					}
+				}
+			}
+		}
+		fmt.Printf("[nav] NOT FOUND closed=%d (surf=%d level=%d sameLevel=%d) openLen=%d doorSurfClosed=%v goalClosed=%v\n",
+			closedCount, surfaceClosed, levelClosed, levelMatchClosed,
+			open.len(), doorSurfClosed, goalCellClosed)
+		fmt.Printf("[nav]     from=%+v to=%+v states=%d\n", fromNode, toNode, statesCount)
 		return []components.WorldPos{}
 	}
 
@@ -192,83 +267,92 @@ func (s *NavService) FindPath(from, to components.WorldPos, opts NavOpts) []comp
 	if len(waypoints) > 1 {
 		waypoints = waypoints[1:]
 	}
+	usesTransition := false
+	for _, n := range nodes {
+		if n.Kind == components.NodeLevel {
+			usesTransition = true
+			break
+		}
+	}
+	fmt.Printf("[nav] OK len=%d via-level=%v to=(%.1f,%.1f) toKind=%d\n",
+		len(waypoints), usesTransition,
+		to.Local.X+float32(to.Chunk.X)*components.ChunkSize,
+		to.Local.Z+float32(to.Chunk.Z)*components.ChunkSize,
+		toNode.Kind)
 	return waypoints
 }
 
-// floorRec - lightweight per-floor record used during a single FindPath call.
-type floorRec struct {
-	ent           ecs.Entity
-	chunk         components.ChunkCoord
-	originX       float32
-	originZ       float32
-	y             float32
-	sizeX, sizeZ  uint8
-	grid          *components.FloorNavGrid
+// levelRec - per-Level lookup record used during one FindPath call.
+// Phase 16.B.1.b: the navigation grid is now anchored on a Level entity,
+// one per interior volume; floors are render-only.
+type levelRec struct {
+	ent     ecs.Entity
+	chunk   components.ChunkCoord
+	aabb    components.AABB3D
+	originX float32 // chunk-local origin of the grid (= AABB.MinX - chunkBaseX)
+	originZ float32
+	sizeX   uint8
+	sizeZ   uint8
+	grid    *components.LevelNavGrid
 }
 
-// snapshotFloors walks every loaded building child via BuildingChildIndex and
-// keeps any entity that carries both Floor + FloorNavGrid. The set is small
-// (<= ~6 floors on the placeholder scene), so a linear scan during resolve and
-// neighbour expansion is fine.
-func (s *NavService) snapshotFloors() []floorRec {
-	bIdx := s.buildingIndex.Get()
-	if bIdx == nil {
-		return nil
-	}
-	var out []floorRec
-	for _, children := range bIdx.Loaded {
-		for _, c := range children {
-			fComp := s.floorMap.Get(c)
-			if fComp == nil {
-				continue
-			}
-			grid := s.floorNavMap.Get(c)
-			if grid == nil {
-				continue
-			}
-			pos := s.posMap.Get(c)
-			if pos == nil {
-				continue
-			}
-			out = append(out, floorRec{
-				ent:     c,
-				chunk:   pos.Chunk,
-				originX: pos.Local.X - fComp.SizeX*0.5,
-				originZ: pos.Local.Z - fComp.SizeZ*0.5,
-				y:       pos.Local.Y,
-				sizeX:   grid.SizeX,
-				sizeZ:   grid.SizeZ,
-				grid:    grid,
-			})
+// snapshotLevels walks every Level entity that already has a baked
+// LevelNavGrid and returns a per-call slice for resolve / neighbour
+// expansion. Level entities are AlwaysActive so they aren't tied to a
+// BuildingChildIndex - we filter directly.
+func (s *NavService) snapshotLevels() []levelRec {
+	var out []levelRec
+	q := s.levelFilter.Query()
+	for q.Next() {
+		lvl, pos := q.Get()
+		grid := s.floorNavMap.Get(q.Entity())
+		if grid == nil {
+			continue
 		}
+		chunkBaseX := float32(pos.Chunk.X) * components.ChunkSize
+		chunkBaseZ := float32(pos.Chunk.Z) * components.ChunkSize
+		out = append(out, levelRec{
+			ent:     q.Entity(),
+			chunk:   pos.Chunk,
+			aabb:    lvl.AABB,
+			originX: lvl.AABB.MinX - chunkBaseX,
+			originZ: lvl.AABB.MinZ - chunkBaseZ,
+			sizeX:   grid.SizeX,
+			sizeZ:   grid.SizeZ,
+			grid:    grid,
+		})
 	}
 	return out
 }
 
-// resolveNode maps a WorldPos to a NavNode. Floor footprint check is first -
-// if the WorldPos.Y is close to a covering floor's Y (within floorHeight/2),
-// the NavNode is NodeFloor. Otherwise NodeSurface, using the standard global
-// cell math.
-func (s *NavService) resolveNode(wp components.WorldPos, idx *TerrainChunkIndex, floors []floorRec) (components.NavNode, bool) {
-	for i := range floors {
-		fr := &floors[i]
-		if fr.chunk != wp.Chunk {
+// resolveNode maps a WorldPos to a NavNode. If the position falls inside a
+// Level's AABB (XZ + Y proximity), the NavNode is NodeLevel. Otherwise it's
+// NodeSurface, derived from the global cell math.
+func (s *NavService) resolveNode(wp components.WorldPos, idx *TerrainChunkIndex, levels []levelRec) (components.NavNode, bool) {
+	worldX := wp.Local.X + float32(wp.Chunk.X)*components.ChunkSize
+	worldZ := wp.Local.Z + float32(wp.Chunk.Z)*components.ChunkSize
+	const yPad float32 = 0.6
+	for i := range levels {
+		lr := &levels[i]
+		if !lr.aabb.ContainsXZ(worldX, worldZ) {
 			continue
 		}
-		if absDelta(wp.Local.Y, fr.y) > components.FloorHeight*0.5 {
+		if wp.Local.Y < lr.aabb.MinY-yPad || wp.Local.Y > lr.aabb.MaxY+yPad {
 			continue
 		}
-		lx := wp.Local.X - fr.originX
-		lz := wp.Local.Z - fr.originZ
+		gridChunkBaseX := float32(lr.chunk.X) * components.ChunkSize
+		gridChunkBaseZ := float32(lr.chunk.Z) * components.ChunkSize
+		lx := worldX - (gridChunkBaseX + lr.originX)
+		lz := worldZ - (gridChunkBaseZ + lr.originZ)
 		if lx < 0 || lz < 0 {
 			continue
 		}
 		ci := int16(math.Floor(float64(lx)))
 		cj := int16(math.Floor(float64(lz)))
-		if ci < 0 || ci >= int16(fr.sizeX) || cj < 0 || cj >= int16(fr.sizeZ) {
+		if ci < 0 || ci >= int16(lr.sizeX) || cj < 0 || cj >= int16(lr.sizeZ) {
 			continue
 		}
-		return components.NavNode{Kind: components.NodeFloor, Floor: fr.ent, I: ci, J: cj}, true
+		return components.NavNode{Kind: components.NodeLevel, Level: lr.ent, I: ci, J: cj}, true
 	}
 	gi, gj := worldPosToCell(wp)
 	cc := components.ChunkCoord{X: gi >> navGridShift, Z: gj >> navGridShift}
@@ -290,7 +374,7 @@ func (s *NavService) resolveNode(wp components.WorldPos, idx *TerrainChunkIndex,
 // inaccessible. The interior of a building can only be reached through a
 // TransitionEdge (Door / Stairs) that lands the path on a Floor NavNode;
 // pure surface expansion must go around the footprint.
-func (s *NavService) cellAt(n components.NavNode, idx *TerrainChunkIndex, floors []floorRec) (components.NavCell, bool) {
+func (s *NavService) cellAt(n components.NavNode, idx *TerrainChunkIndex, floors []levelRec) (components.NavCell, bool) {
 	switch n.Kind {
 	case components.NodeSurface:
 		ent, ok := idx.Loaded[n.Chunk]
@@ -309,16 +393,16 @@ func (s *NavService) cellAt(n components.NavNode, idx *TerrainChunkIndex, floors
 			return cell, false
 		}
 		return cell, true
-	case components.NodeFloor:
+	case components.NodeLevel:
 		for i := range floors {
-			if floors[i].ent != n.Floor {
+			if floors[i].ent != n.Level {
 				continue
 			}
 			fr := &floors[i]
 			if n.I < 0 || n.I >= int16(fr.sizeX) || n.J < 0 || n.J >= int16(fr.sizeZ) {
 				return components.NavCell{}, false
 			}
-			return fr.grid.Cells[int(n.J)*components.MaxFloorSide+int(n.I)], true
+			return fr.grid.Cells[int(n.J)*components.MaxLevelSide+int(n.I)], true
 		}
 	}
 	return components.NavCell{}, false
@@ -326,15 +410,15 @@ func (s *NavService) cellAt(n components.NavNode, idx *TerrainChunkIndex, floors
 
 // nodeWorldPos returns the centre-of-cell WorldPos for a NavNode. Used by the
 // heuristic, path reconstruction, and the walker.
-func (s *NavService) nodeWorldPos(n components.NavNode, floors []floorRec) components.WorldPos {
+func (s *NavService) nodeWorldPos(n components.NavNode, floors []levelRec) components.WorldPos {
 	switch n.Kind {
 	case components.NodeSurface:
 		gi := int32(n.Chunk.X)<<navGridShift + int32(n.I)
 		gj := int32(n.Chunk.Z)<<navGridShift + int32(n.J)
 		return cellToWorldPos(gi, gj)
-	case components.NodeFloor:
+	case components.NodeLevel:
 		for i := range floors {
-			if floors[i].ent != n.Floor {
+			if floors[i].ent != n.Level {
 				continue
 			}
 			fr := &floors[i]
@@ -342,7 +426,7 @@ func (s *NavService) nodeWorldPos(n components.NavNode, floors []floorRec) compo
 			lz := fr.originZ + float32(n.J) + 0.5
 			return components.WorldPos{
 				Chunk: fr.chunk,
-				Local: rl.Vector3{X: lx, Y: fr.y, Z: lz},
+				Local: rl.Vector3{X: lx, Y: fr.aabb.MinY, Z: lz},
 			}
 		}
 	}
@@ -385,13 +469,13 @@ func (s *NavService) gridNeighbours(n components.NavNode) []gridNeighbour {
 			}
 			count++
 		}
-	case components.NodeFloor:
+	case components.NodeLevel:
 		for _, off := range offsets {
 			ni := int16(int(n.I) + off[0])
 			nj := int16(int(n.J) + off[1])
 			out[count] = gridNeighbour{
 				node: components.NavNode{
-					Kind: components.NodeFloor, Floor: n.Floor, I: ni, J: nj,
+					Kind: components.NodeLevel, Level: n.Level, I: ni, J: nj,
 				},
 				diag: off[2] == 1,
 			}

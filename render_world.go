@@ -103,15 +103,15 @@ func drawCoverMapOverlay(chunkPos components.WorldPos, cc components.ChunkCoord,
 	_ = cc
 }
 
-// drawFloorNavOverlay renders one FloorNavGrid as a layer of coloured plates
+// drawFloorNavOverlay renders one LevelNavGrid as a layer of coloured plates
 // 5 cm above the floor surface. Black = Cost=0 (wall / blocked); green = open.
-func drawFloorNavOverlay(floorPos components.WorldPos, grid *components.FloorNavGrid) {
+func drawFloorNavOverlay(floorPos components.WorldPos, grid *components.LevelNavGrid) {
 	chunkBase := (components.WorldPos{Chunk: floorPos.Chunk}).ToRenderSpace(systems.CurrentOriginChunk)
 	const plate float32 = 0.85
 	const lift float32 = 0.05
 	for cj := uint8(0); cj < grid.SizeZ; cj++ {
 		for ci := uint8(0); ci < grid.SizeX; ci++ {
-			cell := grid.Cells[int(cj)*components.MaxFloorSide+int(ci)]
+			cell := grid.Cells[int(cj)*components.MaxLevelSide+int(ci)]
 			c := rl.Vector3{
 				X: chunkBase.X + grid.Origin.X + float32(ci) + 0.5,
 				Y: grid.Origin.Y + lift,
@@ -247,13 +247,17 @@ func drawProp(meta components.PropMeta, pos rl.Vector3, yaw, scale float32) {
 }
 
 // drawBuildingFloor draws a horizontal grey plate at the floor's WorldPos.
-// Floor.Y is the slab top - drop a thin slab below it.
-func drawBuildingFloor(pos rl.Vector3, f components.Floor) {
+// Floor.Y is the slab top - drop a thin slab below it. Phase 16.C.2: when
+// `fogged` is true (level un-discovered or stale), the slab desaturates
+// toward dark grey - visual cue that the room hasn't been seen recently.
+func drawBuildingFloor(pos rl.Vector3, f components.Floor, fogged bool) {
 	const slabThickness float32 = 0.15
-	// Centre cube vertically below the floor surface.
+	col := rl.Color{R: 110, G: 110, B: 120, A: 255}
+	if fogged {
+		col = rl.Color{R: 55, G: 55, B: 60, A: 220}
+	}
 	c := rl.Vector3{X: pos.X, Y: pos.Y - slabThickness*0.5, Z: pos.Z}
-	rl.DrawCubeV(c, rl.Vector3{X: f.SizeX, Y: slabThickness, Z: f.SizeZ},
-		rl.Color{R: 110, G: 110, B: 120, A: 255})
+	rl.DrawCubeV(c, rl.Vector3{X: f.SizeX, Y: slabThickness, Z: f.SizeZ}, col)
 }
 
 // drawBuildingWall renders a wall segment with optional opening (door / window).
@@ -261,11 +265,63 @@ func drawBuildingFloor(pos rl.Vector3, f components.Floor) {
 // +Y = up. Walls without an opening are one cube; walls with one are split
 // into left + right solids, lintel above and (for windows) sill below, with
 // a coloured panel filling the opening.
-func drawBuildingWall(pos rl.Vector3, w components.WallSegment) {
+//
+// Phase 16.C.4: WallRenderMode polishes the cutaway look.
+//   - WallRenderAll          : solid (default).
+//   - WallRenderCameraFacing : if the wall's outward normal points toward
+//     the camera, opaque wall mass becomes semi-transparent so the player
+//     can see in. Door / window panels stay solid.
+//   - WallRenderWireframe    : every cube draws as an outline.
+//
+// `outward` is the wall's outward XZ unit vector (CoverDirection.Dir on the
+// wall entity). For the All variant it's ignored.
+func drawBuildingWall(pos rl.Vector3, w components.WallSegment, mode components.WallRenderMode, outward rl.Vector3, fogged bool) {
 	wallCol := rl.Color{R: 175, G: 170, B: 165, A: 255}
 	doorCol := rl.Color{R: 90, G: 60, B: 35, A: 255}
 	winCol := rl.Color{R: 160, G: 200, B: 230, A: 200}
 	lintelCol := rl.Color{R: 150, G: 145, B: 140, A: 255}
+
+	if fogged {
+		wallCol = rl.Color{R: 75, G: 75, B: 80, A: 220}
+		lintelCol = rl.Color{R: 65, G: 65, B: 70, A: 220}
+		doorCol = rl.Color{R: 50, G: 50, B: 55, A: 220}
+		winCol = rl.Color{R: 95, G: 100, B: 110, A: 200}
+	}
+
+	wireMode := mode == components.WallRenderWireframe
+
+	if mode == components.WallRenderCameraFacing {
+		// Wall centre in world coords. After Rotatef(yaw,+Y) local +Z maps
+		// to world (sin(yaw), 0, cos(yaw)); the centre sits at Length/2
+		// along that direction from `pos` and Height/2 up.
+		s := float32(math.Sin(float64(w.Yaw)))
+		c := float32(math.Cos(float64(w.Yaw)))
+		wcx := pos.X + (w.Length*0.5)*s
+		wcz := pos.Z + (w.Length*0.5)*c
+		camPos := systems.CurrentCamera.Position
+		dx := camPos.X - wcx
+		dz := camPos.Z - wcz
+		l := float32(math.Sqrt(float64(dx*dx + dz*dz)))
+		if l > 0.0001 {
+			dx /= l
+			dz /= l
+		}
+		// If outward points toward the camera the player sees the wall's
+		// exterior face -> ramp solid mass down to semi-transparent so the
+		// interior is visible behind it.
+		if outward.X*dx+outward.Z*dz > 0.2 {
+			wallCol.A = 60
+			lintelCol.A = 60
+		}
+	}
+
+	drawCube := func(c rl.Vector3, size rl.Vector3, col rl.Color) {
+		if wireMode {
+			rl.DrawCubeWires(c, size.X, size.Y, size.Z, col)
+		} else {
+			rl.DrawCubeV(c, size, col)
+		}
+	}
 
 	rl.PushMatrix()
 	rl.Translatef(pos.X, pos.Y, pos.Z)
@@ -273,7 +329,7 @@ func drawBuildingWall(pos rl.Vector3, w components.WallSegment) {
 
 	if w.OpeningKind == components.OpeningNone || w.OpeningWidth <= 0 {
 		c := rl.Vector3{X: 0, Y: w.Height * 0.5, Z: w.Length * 0.5}
-		rl.DrawCubeV(c, rl.Vector3{X: w.Thickness, Y: w.Height, Z: w.Length}, wallCol)
+		drawCube(c, rl.Vector3{X: w.Thickness, Y: w.Height, Z: w.Length}, wallCol)
 		rl.PopMatrix()
 		return
 	}
@@ -290,36 +346,37 @@ func drawBuildingWall(pos rl.Vector3, w components.WallSegment) {
 
 	if openStart > 0 {
 		c := rl.Vector3{X: 0, Y: w.Height * 0.5, Z: openStart * 0.5}
-		rl.DrawCubeV(c, rl.Vector3{X: w.Thickness, Y: w.Height, Z: openStart}, wallCol)
+		drawCube(c, rl.Vector3{X: w.Thickness, Y: w.Height, Z: openStart}, wallCol)
 	}
 	if openEnd < w.Length {
 		rightLen := w.Length - openEnd
 		c := rl.Vector3{X: 0, Y: w.Height * 0.5, Z: openEnd + rightLen*0.5}
-		rl.DrawCubeV(c, rl.Vector3{X: w.Thickness, Y: w.Height, Z: rightLen}, wallCol)
+		drawCube(c, rl.Vector3{X: w.Thickness, Y: w.Height, Z: rightLen}, wallCol)
 	}
 
 	// Sill (only when bottom > 0, i.e. windows).
 	if w.OpeningBottom > 0 {
 		c := rl.Vector3{X: 0, Y: w.OpeningBottom * 0.5, Z: openingCenter}
-		rl.DrawCubeV(c, rl.Vector3{X: w.Thickness, Y: w.OpeningBottom, Z: openEnd - openStart}, lintelCol)
+		drawCube(c, rl.Vector3{X: w.Thickness, Y: w.OpeningBottom, Z: openEnd - openStart}, lintelCol)
 	}
 	// Lintel above opening.
 	lintelBottom := w.OpeningBottom + w.OpeningHeight
 	if lintelBottom < w.Height {
 		lintelH := w.Height - lintelBottom
 		c := rl.Vector3{X: 0, Y: lintelBottom + lintelH*0.5, Z: openingCenter}
-		rl.DrawCubeV(c, rl.Vector3{X: w.Thickness, Y: lintelH, Z: openEnd - openStart}, lintelCol)
+		drawCube(c, rl.Vector3{X: w.Thickness, Y: lintelH, Z: openEnd - openStart}, lintelCol)
 	}
 
-	// Panel inside the opening.
+	// Panel inside the opening. Door / window panels stay solid even in
+	// CameraFacing alpha mode so the player can still identify them.
 	panelY := w.OpeningBottom + w.OpeningHeight*0.5
 	switch w.OpeningKind {
 	case components.OpeningDoor:
 		c := rl.Vector3{X: 0, Y: panelY, Z: openingCenter}
-		rl.DrawCubeV(c, rl.Vector3{X: w.Thickness * 0.6, Y: w.OpeningHeight, Z: openEnd - openStart}, doorCol)
+		drawCube(c, rl.Vector3{X: w.Thickness * 0.6, Y: w.OpeningHeight, Z: openEnd - openStart}, doorCol)
 	case components.OpeningWindow:
 		c := rl.Vector3{X: 0, Y: panelY, Z: openingCenter}
-		rl.DrawCubeV(c, rl.Vector3{X: w.Thickness * 0.3, Y: w.OpeningHeight, Z: openEnd - openStart}, winCol)
+		drawCube(c, rl.Vector3{X: w.Thickness * 0.3, Y: w.OpeningHeight, Z: openEnd - openStart}, winCol)
 	}
 
 	rl.PopMatrix()

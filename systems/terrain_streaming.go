@@ -346,7 +346,7 @@ func (sys TerrainStreamingSystem) Update(ctx core.UpdateContext) {
 					for k, edges := range transitionReg.Out {
 						kept := edges[:0]
 						for _, e := range edges {
-							if !evictedChildren[e.Owner] && !evictedChildren[e.From.Floor] && !evictedChildren[e.To.Floor] {
+							if !evictedChildren[e.Owner] && !evictedChildren[e.From.Level] && !evictedChildren[e.To.Level] {
 								kept = append(kept, e)
 							}
 						}

@@ -14,6 +14,9 @@ import (
 // RoadBridge. n0->n1 is highway, n2->n3 is dirt track - visual proof that
 // kinds survive preprocessing.
 func makeStartingRoadGraph() components.RoadGraph {
+	if isDoorScene() {
+		return components.RoadGraph{}
+	}
 	wp := func(wx, wz float32) components.WorldPos {
 		return components.WorldPos{}.Add(rl.Vector3{X: wx, Y: 0, Z: wz})
 	}
@@ -36,6 +39,9 @@ func makeStartingRoadGraph() components.RoadGraph {
 // Phase 16.A loader (.glb files via manifest) will replace this once art
 // assets exist; until then the generator stands in.
 func makeStartingBuildings() []components.BuildingPlan {
+	if isDoorScene() {
+		return doorSceneBuildings()
+	}
 	wp := func(wx, wz float32) components.WorldPos {
 		return components.WorldPos{}.Add(rl.Vector3{X: wx, Y: 0, Z: wz})
 	}
@@ -68,6 +74,9 @@ func makeStartingBuildings() []components.BuildingPlan {
 // makeStartingTrenches - one ~30 m defensive earthwork running between the
 // bunker and the road, so persistence + clearance are exercised in one place.
 func makeStartingTrenches() []components.Trench {
+	if isDoorScene() {
+		return nil
+	}
 	wp := func(wx, wz float32) components.WorldPos {
 		return components.WorldPos{}.Add(rl.Vector3{X: wx, Y: 0, Z: wz})
 	}

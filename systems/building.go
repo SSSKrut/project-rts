@@ -39,6 +39,8 @@ type BuildingSystem struct {
 	doorMap             *ecs.Map[components.Door]
 	windowMap           *ecs.Map[components.Window]
 	memberMap           *ecs.Map[components.BuildingMember]
+	levelMemberMap      *ecs.Map[components.LevelMember]
+	stairLevelsMap      *ecs.Map[components.StairLevels]
 	occupancyMap        *ecs.Map[components.Occupancy]
 	coverDirectionMap   *ecs.Map[components.CoverDirection]
 	shootingArcMap      *ecs.Map[components.ShootingArc]
@@ -70,6 +72,8 @@ func (sys *BuildingSystem) InitUI(w *ecs.World) {
 	sys.doorMap = ecs.NewMap[components.Door](w)
 	sys.windowMap = ecs.NewMap[components.Window](w)
 	sys.memberMap = ecs.NewMap[components.BuildingMember](w)
+	sys.levelMemberMap = ecs.NewMap[components.LevelMember](w)
+	sys.stairLevelsMap = ecs.NewMap[components.StairLevels](w)
 	sys.occupancyMap = ecs.NewMap[components.Occupancy](w)
 	sys.coverDirectionMap = ecs.NewMap[components.CoverDirection](w)
 	sys.shootingArcMap = ecs.NewMap[components.ShootingArc](w)
@@ -252,6 +256,14 @@ func (sys *BuildingSystem) spawnBuilding(ctx core.UpdateContext, idx *BuildingCh
 		sys.posMap.Add(e, &components.WorldPos{Chunk: cc, Local: local})
 		sys.memberMap.Add(e, &components.BuildingMember{Building: root})
 		sys.lodRelevantMap.Add(e, &components.LODRelevant{})
+		// Walls spanning multiple levels carry the lowest as their primary
+		// LevelMember; the cutaway renderer uses wall.WorldPos.Y to derive
+		// the visible level range independently.
+		if len(ws.LevelRefs) > 0 {
+			if lev := resolveLevel(ws.LevelRefs[0]); lev != (ecs.Entity{}) {
+				sys.levelMemberMap.Add(e, &components.LevelMember{Level: lev})
+			}
+		}
 
 		seg := ws.Segment
 		sys.wallMap.Add(e, &seg)
@@ -302,6 +314,9 @@ func (sys *BuildingSystem) spawnBuilding(ctx core.UpdateContext, idx *BuildingCh
 		sys.posMap.Add(e, &components.WorldPos{Chunk: cc, Local: local})
 		sys.memberMap.Add(e, &components.BuildingMember{Building: root})
 		sys.lodRelevantMap.Add(e, &components.LODRelevant{})
+		if lev := resolveLevel(fs.LevelRef); lev != (ecs.Entity{}) {
+			sys.levelMemberMap.Add(e, &components.LevelMember{Level: lev})
+		}
 		f := fs.Floor
 		sys.floorMap.Add(e, &f)
 		idx.Loaded[root] = append(idx.Loaded[root], e)
@@ -319,6 +334,15 @@ func (sys *BuildingSystem) spawnBuilding(ctx core.UpdateContext, idx *BuildingCh
 		sys.lodRelevantMap.Add(e, &components.LODRelevant{})
 		s := ss.Stairs
 		sys.stairsMap.Add(e, &s)
+		// Phase 16.B.1.b: attach the two Level entities this stair joins,
+		// resolved from the first and last anchor in the spec. Used by
+		// SpatialBakeSystem to wire NavNode level endpoints.
+		var fromLev, toLev ecs.Entity
+		if len(ss.Anchors) > 0 {
+			fromLev = resolveLevel(ss.Anchors[0].LevelRef)
+			toLev = resolveLevel(ss.Anchors[len(ss.Anchors)-1].LevelRef)
+		}
+		sys.stairLevelsMap.Add(e, &components.StairLevels{From: fromLev, To: toLev})
 		idx.Loaded[root] = append(idx.Loaded[root], e)
 	}
 
@@ -337,6 +361,9 @@ func (sys *BuildingSystem) spawnBuilding(ctx core.UpdateContext, idx *BuildingCh
 			Yaw:   fs.Yaw,
 			Level: resolveLevel(fs.LevelRef),
 		})
+		if lev := resolveLevel(fs.LevelRef); lev != (ecs.Entity{}) {
+			sys.levelMemberMap.Add(e, &components.LevelMember{Level: lev})
+		}
 		idx.Loaded[root] = append(idx.Loaded[root], e)
 	}
 
@@ -354,6 +381,9 @@ func (sys *BuildingSystem) spawnBuilding(ctx core.UpdateContext, idx *BuildingCh
 			Kind:  ms.Kind,
 			Level: resolveLevel(ms.LevelRef),
 		})
+		if lev := resolveLevel(ms.LevelRef); lev != (ecs.Entity{}) {
+			sys.levelMemberMap.Add(e, &components.LevelMember{Level: lev})
+		}
 		idx.Loaded[root] = append(idx.Loaded[root], e)
 	}
 }

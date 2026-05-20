@@ -192,6 +192,64 @@ type Marker struct {
 	Level ecs.Entity
 }
 
+// StairLevels names the two Level entities this stair connects. From is the
+// lower / starting anchor, To is the upper / terminal anchor (or both equal
+// for bunker entrances where the surface side has no Level entity yet -
+// Phase 16.B.0+ treats those uniformly until exterior pseudo-level lands).
+// Written by BuildingSystem.spawnBuilding from StairSpec.Anchors and read by
+// SpatialBakeSystem to wire NavNode level endpoints without rescanning plans.
+type StairLevels struct {
+	From ecs.Entity
+	To   ecs.Entity
+}
+
+// LevelMember tags a child entity (wall / floor / furniture / marker) with
+// its owning Level entity. Resolved at spawn time from the spec's LevelRef
+// (Phase 16.B.0+). Walls spanning multiple levels carry their lowest level
+// here; multi-level cutaway logic queries the wall's bbox directly.
+// Stairs deliberately have no LevelMember - they connect two levels.
+type LevelMember struct {
+	Level ecs.Entity
+}
+
+// WallRenderMode controls how external walls of the currently-viewed level
+// render under cutaway. Phase 16.C.0 wires the All variant only; C.4 fills
+// in CameraFacing alpha + Wireframe outline.
+type WallRenderMode uint8
+
+const (
+	WallRenderAll          WallRenderMode = iota // default - all walls solid
+	WallRenderCameraFacing                       // camera-facing walls become semi-transparent
+	WallRenderWireframe                          // walls -> outline only
+)
+
+// LevelVisibility is Phase 16.C.2 fog-of-war state per Level entity.
+// Discovered flips true the first time any friendly unit (or, in smoke,
+// the camera anchor) enters the level's bbox. LastSeenAt is the session
+// clock of the most recent friendly presence; renderers fog the level
+// once (now - LastSeenAt) exceeds FogVisibleDuration.
+type LevelVisibility struct {
+	Discovered bool
+	LastSeenAt float32
+}
+
+// FogVisibleDuration is how long after the last friendly presence a level
+// stays "fresh" (full-colour render). Short for development; gameplay
+// tuning later in Phase 16+.
+const FogVisibleDuration float32 = 5.0
+
+// BuildingViewMode lives on the building root. It drives the Sims cutaway:
+// when InteriorOpen is true, the renderer hides every Level whose avgY is
+// above CurrentLevel.avgY, exposing CurrentLevel's interior. Default state
+// (InteriorOpen=false, WallMode=WallRenderAll) yields the regular building
+// silhouette. CurrentLevel = ecs.Entity{} means "fall back to lowest level"
+// at read time.
+type BuildingViewMode struct {
+	InteriorOpen bool
+	CurrentLevel ecs.Entity
+	WallMode     WallRenderMode
+}
+
 // BuildingMember marks a child entity (wall / floor / stairs / opening) as
 // belonging to a parent building. Damage / destruction bubbles to the root.
 type BuildingMember struct {

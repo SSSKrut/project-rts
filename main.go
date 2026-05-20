@@ -193,6 +193,12 @@ func main() {
 	mapPingDecaySys := systems.NewMapPingDecaySystem()
 	mapPingDecaySys.InitUI(app.World)
 
+	// Phase 16.C.2 - per-Level fog-of-war tracking. Marks LevelVisibility
+	// when an anchor / unit enters the level bbox; renderer fades unseen
+	// levels.
+	levelVisSys := systems.NewLevelVisibilitySystem()
+	levelVisSys.InitUI(app.World)
+
 	// Phase 15 M15.A.0 - reactive cover seek. Runs after WeaponSystem (fresh
 	// Suppression) and before FormationSystem (so override-driven ActionQueue
 	// writes survive the formation pass).
@@ -247,6 +253,7 @@ func main() {
 	app.AddSystem(weaponSys)
 	app.AddSystem(particleSys)
 	app.AddSystem(threatDecaySys)
+	app.AddSystem(levelVisSys)
 	app.AddSystem(mapPingDecaySys)
 	app.AddSystem(orderResolverSys)
 	app.AddSystem(survivalSys)
@@ -265,7 +272,11 @@ func main() {
 	alwaysActiveMap := ecs.NewMap[components.AlwaysActive](app.World)
 
 	anchor := app.World.NewEntity()
-	posMap.Add(anchor, &components.WorldPos{})
+	anchorPos := components.WorldPos{}
+	if isDoorScene() {
+		anchorPos = doorSceneAnchorPos()
+	}
+	posMap.Add(anchor, &anchorPos)
 	lodActiveMap.Add(anchor, &components.LODActive{})
 	lodAnchorMap.Add(anchor, &components.LODAnchor{})
 	alwaysActiveMap.Add(anchor, &components.AlwaysActive{})
@@ -294,6 +305,8 @@ func main() {
 	buildingMap := ecs.NewMap[components.Building](app.World)
 	buildingMemberMap := ecs.NewMap[components.BuildingMember](app.World)
 	levelMap := ecs.NewMap[components.Level](app.World)
+	buildingViewModeMap := ecs.NewMap[components.BuildingViewMode](app.World)
+	levelVisibilityMap := ecs.NewMap[components.LevelVisibility](app.World)
 	for i := range buildingPlans.Plans {
 		p := &buildingPlans.Plans[i]
 		root := app.World.NewEntity()
@@ -341,9 +354,25 @@ func main() {
 				Name:         ls.Name,
 				DisplayOrder: ls.DisplayOrder,
 			})
+			levelVisibilityMap.Add(lev, &components.LevelVisibility{})
 			levels[li] = lev
 		}
 		buildingPlanIndex.Levels[root] = levels
+		fmt.Printf("[startup] building %d kind=%d stories=%d levels=%d footprint=(%.0f..%.0f, %.0f..%.0f)\n",
+			i, p.Kind, p.Stories, len(levels), fp.MinX, fp.MaxX, fp.MinZ, fp.MaxZ)
+
+		// Phase 16.C.0: BuildingViewMode is the cutaway state for this
+		// building. Defaults: closed, ground-level selected (spec sorts
+		// levels by storey ascending, so levels[0] is the lowest).
+		var currentLevel ecs.Entity
+		if len(levels) > 0 {
+			currentLevel = levels[0]
+		}
+		buildingViewModeMap.Add(root, &components.BuildingViewMode{
+			InteriorOpen: false,
+			CurrentLevel: currentLevel,
+			WallMode:     components.WallRenderAll,
+		})
 	}
 
 	// Phase 11: one TrenchRoot entity per polyline so the hit-test resolver
@@ -472,36 +501,80 @@ func main() {
 	// so the role differentiation (cap colours, ShortLabel, map icon) is
 	// visible immediately at startup. Phase 14 M14.1: stamped FactionPlayer.
 	playerFaction := components.Faction{ID: components.FactionPlayer}
-	squadService.CreateFromTemplate(
-		systems.TmplLightInfantry,
-		components.WorldPos{}.Add(rl.Vector3{X: -25, Z: -40}),
-		components.FormationLine, playerFaction, roleService, unitFactory)
-	squadService.CreateFromTemplate(
-		systems.TmplMGTeam,
-		components.WorldPos{}.Add(rl.Vector3{X: 40, Z: 30}),
-		components.FormationWedge, playerFaction, roleService, unitFactory)
-	squadService.CreateFromTemplate(
-		systems.TmplATTeam,
-		components.WorldPos{}.Add(rl.Vector3{X: -30, Z: 55}),
-		components.FormationColumn, playerFaction, roleService, unitFactory)
-	squadService.CreateFromTemplate(
-		systems.TmplMotorRifle,
-		components.WorldPos{}.Add(rl.Vector3{X: -20, Z: 0}),
-		components.FormationLoose, playerFaction, roleService, unitFactory)
+	var doorScene *doorSceneState
+	if isDoorScene() {
+		// Minimal test scene: one 5-unit Recon squad 12 m south of the
+		// single test house, no enemy. Building / Level entities were
+		// spawned above; capture the first ones into doorScene for the
+		// auto-verifier + O / I / K / U hotkeys.
+		testSquad := squadService.CreateFromTemplate(
+			systems.TmplMotorRifle, doorSceneSquadSpawn(),
+			components.FormationLine, playerFaction, roleService, unitFactory)
+		var firstBuilding, firstLevel ecs.Entity
+		var firstLevelAABB components.AABB3D
+		var firstFootprint components.AABB2D
+		buildingScan := ecs.NewFilter1[components.Building](app.World)
+		bq := buildingScan.Query()
+		for bq.Next() {
+			b := bq.Get()
+			firstBuilding = bq.Entity()
+			firstFootprint = b.Footprint
+			break
+		}
+		bq.Close()
+		if levels, ok := buildingPlanIndex.Levels[firstBuilding]; ok && len(levels) > 0 {
+			firstLevel = levels[0]
+			if lv := levelMap.Get(firstLevel); lv != nil {
+				firstLevelAABB = lv.AABB
+			}
+		}
+		doorScene = &doorSceneState{
+			Squad:        testSquad,
+			Building:     firstBuilding,
+			Level:        firstLevel,
+			LevelAABB:    firstLevelAABB,
+			Footprint:    firstFootprint,
+			World:        app.World,
+			SquadService: squadService,
+			PosMap:       posMap,
+			RosterMap:    rosterMap,
+		}
+	} else {
+		// Phase 16.B.1.b: squads spawn OUTSIDE buildings so formation slots
+		// don't land on wall-rasterised surface cells (which would block path
+		// planning). Player can RMB inside a building to test enter-through-door
+		// nav.
+		squadService.CreateFromTemplate(
+			systems.TmplLightInfantry,
+			components.WorldPos{}.Add(rl.Vector3{X: -25, Z: -55}),
+			components.FormationLine, playerFaction, roleService, unitFactory)
+		squadService.CreateFromTemplate(
+			systems.TmplMGTeam,
+			components.WorldPos{}.Add(rl.Vector3{X: 40, Z: 15}),
+			components.FormationWedge, playerFaction, roleService, unitFactory)
+		squadService.CreateFromTemplate(
+			systems.TmplATTeam,
+			components.WorldPos{}.Add(rl.Vector3{X: -30, Z: 40}),
+			components.FormationColumn, playerFaction, roleService, unitFactory)
+		squadService.CreateFromTemplate(
+			systems.TmplMotorRifle,
+			components.WorldPos{}.Add(rl.Vector3{X: -20, Z: 0}),
+			components.FormationLoose, playerFaction, roleService, unitFactory)
 
-	// Phase 14 M14.1: hostile MotorRifle squad ~60 m from the player base on
-	// the opposite side. DefendPosition order parks them in place (Phase 14
-	// simple: enemies don't patrol - Phase 15 reactive movement). Once
-	// WeaponSystem lands in M14.2 the player can engage by hand.
-	enemySpawn := components.WorldPos{}.Add(rl.Vector3{X: 5, Z: -90})
-	enemySquad := squadService.CreateFromTemplate(
-		systems.TmplMotorRifle, enemySpawn,
-		components.FormationLine, components.Faction{ID: components.FactionEnemyRed},
-		roleService, unitFactory)
-	if enemySquad != (ecs.Entity{}) {
-		squadService.IssueOrder(enemySquad,
-			components.OrderKindDefendPosition, enemySpawn, ecs.Entity{},
-			false, systems.OrderParams{})
+		// Phase 14 M14.1: hostile MotorRifle squad ~60 m from the player base on
+		// the opposite side. DefendPosition order parks them in place (Phase 14
+		// simple: enemies don't patrol - Phase 15 reactive movement). Once
+		// WeaponSystem lands in M14.2 the player can engage by hand.
+		enemySpawn := components.WorldPos{}.Add(rl.Vector3{X: 5, Z: -90})
+		enemySquad := squadService.CreateFromTemplate(
+			systems.TmplMotorRifle, enemySpawn,
+			components.FormationLine, components.Faction{ID: components.FactionEnemyRed},
+			roleService, unitFactory)
+		if enemySquad != (ecs.Entity{}) {
+			squadService.IssueOrder(enemySquad,
+				components.OrderKindDefendPosition, enemySpawn, ecs.Entity{},
+				false, systems.OrderParams{})
+		}
 	}
 
 	// Render filters.
@@ -512,6 +585,12 @@ func main() {
 	wallRenderFilter := ecs.NewFilter2[components.WorldPos, components.WallSegment](app.World)
 	floorRenderFilter := ecs.NewFilter2[components.WorldPos, components.Floor](app.World)
 	stairsRenderFilter := ecs.NewFilter2[components.WorldPos, components.Stairs](app.World)
+	// Phase 16.C.0 cutaway state. levelMap and buildingViewModeMap were
+	// already constructed for spawn; levelMemberMap is the new read handle.
+	levelCutawayFilter := ecs.NewFilter2[components.Level, components.BuildingMember](app.World)
+	levelMemberMap := ecs.NewMap[components.LevelMember](app.World)
+	coverDirReadMap := ecs.NewMap[components.CoverDirection](app.World)
+	levelVisReadMap := ecs.NewMap[components.LevelVisibility](app.World)
 	navOverlayFilter := ecs.NewFilter4[components.WorldPos, components.ChunkCoord, components.NavGrid, components.Heightmap](app.World).
 		With(ecs.C[components.LODActive]())
 	coverOverlayFilter := ecs.NewFilter4[components.WorldPos, components.ChunkCoord, components.CoverMap, components.Heightmap](app.World).
@@ -520,7 +599,7 @@ func main() {
 	// Phase 15 M15.C.3 - MapPing filter for the pulsing-ring render pass.
 	mapPingFilter := ecs.NewFilter2[components.WorldPos, components.MapPing](app.World)
 	navGridChunkFilter := ecs.NewFilter1[components.NavGrid](app.World)
-	floorNavFilter := ecs.NewFilter3[components.WorldPos, components.Floor, components.FloorNavGrid](app.World)
+	floorNavFilter := ecs.NewFilter3[components.WorldPos, components.Level, components.LevelNavGrid](app.World)
 	visionAwareFilter := ecs.NewFilter2[components.WorldPos, components.Awareness](app.World).
 		With(ecs.C[components.Unit]())
 
@@ -619,9 +698,10 @@ func main() {
 	// release after the player lets go of Ctrl still applies the intended
 	// override.
 	var (
-		rmbPressCtrl   bool
-		rmbPressAlt    bool
-		rmbPressDouble bool
+		rmbPressCtrl           bool
+		rmbPressAlt            bool
+		rmbPressDouble         bool
+		rmbPressTargetIsBuilding bool
 		lastRMBPressAt float32 // session-time of the previous press
 	)
 	// Window for treating consecutive RMB presses as a double-click. PHASE-13.md
@@ -647,15 +727,18 @@ func main() {
 	// Selection / hover state. Hover refreshes each frame from cursor + focused
 	// panel; `hovered` is consumed by the inspector and the map renderer.
 	var (
-		navPath        []components.WorldPos
-		selected       []ecs.Entity
-		hovered        ecs.Entity
-		marqueeStart   rl.Vector2 // screen coords
-		marqueeActive  bool
-		marqueeOrigin  ui.PanelID
-		expandedHUDOn  bool
-		showMapDebugLy bool // toggled per-frame by hold-G
-		binds          [5]bindEntry
+		navPath          []components.WorldPos
+		selected         []ecs.Entity
+		hovered          ecs.Entity
+		hoveredBuilding  ecs.Entity                  // Phase 16.C.1
+		selectedBuilding ecs.Entity                  // Phase 16.C.1 - sticky
+		buildingWidget   *ui.BuildingWidgetLayout    // Phase 16.C.1 (per frame)
+		marqueeStart     rl.Vector2                  // screen coords
+		marqueeActive    bool
+		marqueeOrigin    ui.PanelID
+		expandedHUDOn    bool
+		showMapDebugLy   bool // toggled per-frame by hold-G
+		binds            [5]bindEntry
 	)
 	const marqueeClickThreshold float32 = 5
 
@@ -771,6 +854,13 @@ func main() {
 				panelMap = panelMgr.Get(ui.PanelMap)
 				scene3DRT.EnsureSize(panel3D)
 			}
+		}
+
+		// -- Door test scene auto-verifier + hotkeys (O / I / K / U) --
+		if doorScene != nil {
+			doorScene.EnsureInit()
+			doorScene.Update(float32(app.Elapsed().Seconds()))
+			doorScene.HandleHotkeys(focused == ui.Panel3D)
 		}
 
 		// -- Space -> toggle pause; +/- -> cycle speed 1->2->4->8->1 --
@@ -929,7 +1019,36 @@ func main() {
 		// Phase 13.5 guard: a splitter drag claims LMB exclusively. Skip
 		// selection / marquee / map-pick on the press that started the drag
 		// AND every frame the drag is active.
-		if !panelMgr.IsDragging() && rl.IsMouseButtonPressed(rl.MouseButtonLeft) {
+		//
+		// Phase 16.C.1: building widget chips claim the press too. If the
+		// cursor sits over a chip when LMB goes down, apply the mutation
+		// (CurrentLevel / WallMode / InteriorOpen) and skip marquee start;
+		// otherwise the click would also start a stray selection rectangle.
+		widgetClickConsumed := false
+		if !panelMgr.IsDragging() && rl.IsMouseButtonPressed(rl.MouseButtonLeft) && buildingWidget != nil {
+			if hit := ui.HitTestBuildingWidget(buildingWidget, cursor); hit != nil {
+				target := buildingWidget.Root
+				if bvm := buildingViewModeMap.Get(target); bvm != nil {
+					levels := buildingPlanIndex.Levels[target]
+					switch hit.Kind {
+					case ui.ChipKindLevel:
+						if hit.Index >= 0 && hit.Index < len(levels) {
+							bvm.CurrentLevel = levels[hit.Index]
+						}
+					case ui.ChipKindWallMode:
+						bvm.WallMode = components.WallRenderMode(hit.Index)
+					case ui.ChipKindInside:
+						bvm.InteriorOpen = !bvm.InteriorOpen
+					}
+					// Clicking a chip implicitly pins the widget on this
+					// building so it doesn't disappear when the cursor moves
+					// off the chip during a follow-up click.
+					selectedBuilding = target
+					widgetClickConsumed = true
+				}
+			}
+		}
+		if !panelMgr.IsDragging() && !widgetClickConsumed && rl.IsMouseButtonPressed(rl.MouseButtonLeft) {
 			switch focused {
 			case ui.Panel3D:
 				marqueeStart = cursor
@@ -976,8 +1095,18 @@ func main() {
 						} else {
 							selected = []ecs.Entity{hit}
 						}
+						// Clicking a unit removes any prior building pin.
+						selectedBuilding = ecs.Entity{}
+					} else if hoveredBuilding != (ecs.Entity{}) {
+						// Phase 16.C.1: empty 3D click that landed on a
+						// building footprint pins the widget on that building.
+						selectedBuilding = hoveredBuilding
+						if !shiftHeld {
+							selected = nil
+						}
 					} else if !shiftHeld {
 						selected = nil
+						selectedBuilding = ecs.Entity{}
 					}
 				} else {
 					localStart := rl.Vector2{X: marqueeStart.X - panel3DContent.X, Y: marqueeStart.Y - panel3DContent.Y}
@@ -1023,6 +1152,31 @@ func main() {
 				pressTarget, targetOK = mouseTargetWorldPos(systems.CurrentCamera,
 					anchorPos.ToRenderSpace(systems.CurrentOriginChunk),
 					panel3DLocal, panel3DW, panel3DH)
+				// Phase 16.B.1.b UX: if the cursor is hovering a building,
+				// the ground-raycast can land just outside the wall (camera
+				// angle). Snap target to that building's ground-floor Level
+				// centre so the path planner resolves to NodeLevel and
+				// routes through the door instead of bumping the wall.
+				rmbPressTargetIsBuilding = false
+				if targetOK && hoveredBuilding != (ecs.Entity{}) {
+					if levels := buildingPlanIndex.Levels[hoveredBuilding]; len(levels) > 0 {
+						if lvl := levelMap.Get(levels[0]); lvl != nil {
+							wx := lvl.AABB.CenterX()
+							wz := lvl.AABB.CenterZ()
+							cx := int32(math.Floor(float64(wx) / float64(components.ChunkSize)))
+							cz := int32(math.Floor(float64(wz) / float64(components.ChunkSize)))
+							pressTarget = components.WorldPos{
+								Chunk: components.ChunkCoord{X: cx, Z: cz},
+								Local: rl.Vector3{
+									X: wx - float32(cx)*components.ChunkSize,
+									Y: lvl.AABB.MinY,
+									Z: wz - float32(cz)*components.ChunkSize,
+								},
+							}
+							rmbPressTargetIsBuilding = true
+						}
+					}
+				}
 			case ui.PanelMap:
 				pressTarget = ui.MapPanelToWorld(cursor, mapCam, panelMapContent)
 				targetOK = true
@@ -1036,6 +1190,12 @@ func main() {
 				rmbPressAlt = altHeld
 				rmbPressDouble = (now - lastRMBPressAt) <= rmbDoubleWindow
 				lastRMBPressAt = now
+				fmt.Printf("[rmb] press snapped=%v hovered=%v target=(%.1f,%.1f) selected=%d focused=%s\n",
+					rmbPressTargetIsBuilding,
+					hoveredBuilding != (ecs.Entity{}),
+					pressTarget.Local.X+float32(pressTarget.Chunk.X)*components.ChunkSize,
+					pressTarget.Local.Z+float32(pressTarget.Chunk.Z)*components.ChunkSize,
+					len(selected), focused)
 				// Phase 13.6 M13.6.4: capture selection state at press-time so
 				// Tick can disambiguate facing-drag (squad selected) from
 				// camera-orbit drag (no selection).
@@ -1084,7 +1244,25 @@ func main() {
 				}
 				if !placed {
 					mods := rmbModifiersFromPress(rmbPressCtrl, rmbPressAlt, rmbPressDouble)
-					resolveRMBOrder(selected, pieMenu.Target, shiftHeld, nil, mods, hitTester,
+					var kindOverride *components.OrderKindCode
+					if rmbPressTargetIsBuilding {
+						// Phase 16.B.1.b UX: RMB-snapped-to-building target
+						// means "move inside through the door", not Garrison
+						// (which is the default hit-test interpretation for
+						// any pos inside footprint). Force MoveTo.
+						k := components.OrderKindMoveTo
+						kindOverride = &k
+					}
+					overrideStr := "nil"
+					if kindOverride != nil {
+						overrideStr = fmt.Sprintf("%d", *kindOverride)
+					}
+					fmt.Printf("[rmb] tap commit override=%s target=(%.1f,%.1f) selected=%d\n",
+						overrideStr,
+						pieMenu.Target.Local.X+float32(pieMenu.Target.Chunk.X)*components.ChunkSize,
+						pieMenu.Target.Local.Z+float32(pieMenu.Target.Chunk.Z)*components.ChunkSize,
+						len(selected))
+					resolveRMBOrder(selected, pieMenu.Target, shiftHeld, kindOverride, mods, hitTester,
 						squadService, navService, squadMemberMap, posMap, actionQueueMap)
 				}
 				pieMenu.SourcePanel = ui.PanelNone
@@ -1239,6 +1417,55 @@ func main() {
 			stamper.StampHeightmap(*anchorPos, systems.Crater(2.0, 4.0), 4.0)
 		}
 
+		// -- B -> toggle BuildingViewMode.InteriorOpen on every building.
+		// Phase 16.C.0 smoke; replaced by per-building widget (M16.C.1).
+		// PgUp / PgDn cycle CurrentLevel up / down across the building's
+		// level list (sorted ascending by storey by HouseTemplate).
+		if focused == ui.Panel3D && rl.IsKeyPressed(rl.KeyB) {
+			qbf := buildingFilter.Query()
+			for qbf.Next() {
+				root := qbf.Entity()
+				bvm := buildingViewModeMap.Get(root)
+				if bvm == nil {
+					continue
+				}
+				bvm.InteriorOpen = !bvm.InteriorOpen
+			}
+		}
+		if focused == ui.Panel3D && (rl.IsKeyPressed(rl.KeyPageDown) || rl.IsKeyPressed(rl.KeyPageUp)) {
+			step := 1
+			if rl.IsKeyPressed(rl.KeyPageUp) {
+				step = -1
+			}
+			qbf := buildingFilter.Query()
+			for qbf.Next() {
+				root := qbf.Entity()
+				bvm := buildingViewModeMap.Get(root)
+				if bvm == nil {
+					continue
+				}
+				levels := buildingPlanIndex.Levels[root]
+				if len(levels) <= 1 {
+					continue
+				}
+				idx := 0
+				for i, l := range levels {
+					if l == bvm.CurrentLevel {
+						idx = i
+						break
+					}
+				}
+				idx += step
+				if idx < 0 {
+					idx = 0
+				}
+				if idx >= len(levels) {
+					idx = len(levels) - 1
+				}
+				bvm.CurrentLevel = levels[idx]
+			}
+		}
+
 		if rl.IsKeyPressed(rl.KeyP) {
 			if ctrlHeld {
 				app.Prof.PrintSnapshot()
@@ -1278,6 +1505,66 @@ func main() {
 			ghostTarget, ghostTargetOK = mouseTargetWorldPos(systems.CurrentCamera,
 				anchorPos.ToRenderSpace(systems.CurrentOriginChunk),
 				panel3DLocal, panel3DW, panel3DH)
+		}
+
+		// Phase 16.C.1: building hover - cursor's ground target inside any
+		// Building.Footprint surfaces that building as hoverable. Used both
+		// to gate the chip widget and to claim LMB clicks on it.
+		hoveredBuilding = ecs.Entity{}
+		if focused == ui.Panel3D && ghostTargetOK {
+			gtX := ghostTarget.Local.X + float32(ghostTarget.Chunk.X)*components.ChunkSize
+			gtZ := ghostTarget.Local.Z + float32(ghostTarget.Chunk.Z)*components.ChunkSize
+			qbf := buildingFilter.Query()
+			for qbf.Next() {
+				b := qbf.Get()
+				if b.Footprint.Contains(gtX, gtZ) {
+					hoveredBuilding = qbf.Entity()
+					qbf.Close()
+					break
+				}
+			}
+		}
+
+		// Widget target priority: a sticky selectedBuilding wins so the
+		// player can move the cursor onto the chips without the panel
+		// vanishing. Otherwise show a hover preview for whatever footprint
+		// the cursor sits inside.
+		effectiveBuilding := selectedBuilding
+		if effectiveBuilding != (ecs.Entity{}) && !app.World.Alive(effectiveBuilding) {
+			selectedBuilding = ecs.Entity{}
+			effectiveBuilding = ecs.Entity{}
+		}
+		if effectiveBuilding == (ecs.Entity{}) {
+			effectiveBuilding = hoveredBuilding
+		}
+		buildingWidget = nil
+		if effectiveBuilding != (ecs.Entity{}) {
+			if bvm := buildingViewModeMap.Get(effectiveBuilding); bvm != nil {
+				if rootPos := posMap.Get(effectiveBuilding); rootPos != nil {
+					elev := float32(3)
+					if bldg := buildingMap.Get(effectiveBuilding); bldg != nil {
+						elev = float32(bldg.Stories)*components.FloorHeight + 1
+					}
+					above := *rootPos
+					above.Local.Y += elev
+					rp := above.ToRenderSpace(systems.CurrentOriginChunk)
+					w := int32(panel3DContent.Width)
+					h := int32(panel3DContent.Height)
+					if w > 0 && h > 0 {
+						sp := rl.GetWorldToScreenEx(rp, systems.CurrentCamera, w, h)
+						if sp.X >= 0 && sp.X <= panel3DContent.Width && sp.Y >= 0 && sp.Y <= panel3DContent.Height {
+							screen := rl.Vector2{
+								X: panel3DContent.X + sp.X,
+								Y: panel3DContent.Y + sp.Y,
+							}
+							levels := buildingPlanIndex.Levels[effectiveBuilding]
+							buildingWidget = ui.ComputeBuildingWidget(
+								effectiveBuilding, bvm, levels, screen, levelMap,
+							)
+						}
+					}
+				}
+			}
 		}
 
 		// Gate the 3D camera's orbit / wheel zoom by panel focus. Wheel events
@@ -1373,20 +1660,94 @@ func main() {
 			}
 		}
 
+		// Phase 16.C.0: build a per-frame "hidden level" set. A Level is
+		// hidden when its owning building has BuildingViewMode.InteriorOpen
+		// AND the level's avgY sits above CurrentLevel's avgY + epsilon.
+		// Skip-render gating below reads this map.
+		hiddenLevels := map[ecs.Entity]bool{}
+		qLev := levelCutawayFilter.Query()
+		for qLev.Next() {
+			lvl, member := qLev.Get()
+			bvm := buildingViewModeMap.Get(member.Building)
+			if bvm == nil || !bvm.InteriorOpen {
+				continue
+			}
+			if bvm.CurrentLevel == (ecs.Entity{}) {
+				continue
+			}
+			curLev := levelMap.Get(bvm.CurrentLevel)
+			if curLev == nil {
+				continue
+			}
+			if lvl.AABB.CenterY() > curLev.AABB.CenterY()+0.1 {
+				hiddenLevels[qLev.Entity()] = true
+			}
+		}
+
+		// Phase 16.C.2: a level is "fogged" when it's never been discovered
+		// OR was last seen more than FogVisibleDuration ago. Static layout
+		// (walls / floors) renders with a grey tint; dynamic contents would
+		// be culled outright (no renderer yet for furniture / hostiles).
+		now := levelVisSys.Clock()
+		levelFogged := func(level ecs.Entity) bool {
+			if level == (ecs.Entity{}) {
+				return false
+			}
+			vis := levelVisReadMap.Get(level)
+			if vis == nil {
+				return false
+			}
+			if !vis.Discovered {
+				return true
+			}
+			return now-vis.LastSeenAt > components.FogVisibleDuration
+		}
+
 		floorLive := 0
 		qf := floorRenderFilter.Query()
 		for qf.Next() {
 			pos, fl := qf.Get()
+			fogged := false
+			if lm := levelMemberMap.Get(qf.Entity()); lm != nil {
+				if hiddenLevels[lm.Level] {
+					continue
+				}
+				fogged = levelFogged(lm.Level)
+			}
 			renderPos := pos.ToRenderSpace(systems.CurrentOriginChunk)
-			drawBuildingFloor(renderPos, *fl)
+			drawBuildingFloor(renderPos, *fl, fogged)
 			floorLive++
 		}
 		wallLive := 0
 		qw := wallRenderFilter.Query()
 		for qw.Next() {
 			pos, ws := qw.Get()
+			e := qw.Entity()
+			mode := components.WallRenderAll
+			var outward rl.Vector3
+			fogged := false
+			if lm := levelMemberMap.Get(e); lm != nil {
+				if hiddenLevels[lm.Level] {
+					continue
+				}
+				fogged = levelFogged(lm.Level)
+				// Phase 16.C.4: wall mode only applies to walls of the
+				// currently-viewed level inside an open cutaway. Lower
+				// levels render normally even when InteriorOpen.
+				if member := buildingMemberMap.Get(e); member != nil {
+					if bvm := buildingViewModeMap.Get(member.Building); bvm != nil &&
+						bvm.InteriorOpen && lm.Level == bvm.CurrentLevel {
+						mode = bvm.WallMode
+					}
+				}
+				if mode == components.WallRenderCameraFacing {
+					if cd := coverDirReadMap.Get(e); cd != nil {
+						outward = cd.Dir
+					}
+				}
+			}
 			renderPos := pos.ToRenderSpace(systems.CurrentOriginChunk)
-			drawBuildingWall(renderPos, *ws)
+			drawBuildingWall(renderPos, *ws, mode, outward, fogged)
 			wallLive++
 		}
 		qst := stairsRenderFilter.Query()
@@ -1394,6 +1755,39 @@ func main() {
 			pos, st := qst.Get()
 			renderPos := pos.ToRenderSpace(systems.CurrentOriginChunk)
 			drawBuildingStairs(renderPos, *st)
+		}
+
+		// Phase 16.C.1 polish: outline boxes around the hovered (preview) and
+		// selected (pinned) buildings. Drawn after walls/floors so the lines
+		// sit on top of the geometry from most angles. Box is padded 0.15 m
+		// outwards from the footprint to keep the wireframe legible against
+		// the wall surfaces.
+		drawBuildingOutline := func(root ecs.Entity, color rl.Color) {
+			if root == (ecs.Entity{}) || !app.World.Alive(root) {
+				return
+			}
+			bldg := buildingMap.Get(root)
+			rootPos := posMap.Get(root)
+			if bldg == nil || rootPos == nil {
+				return
+			}
+			const pad float32 = 0.15
+			height := float32(bldg.Stories) * components.FloorHeight
+			if height < 1 {
+				height = components.FloorHeight
+			}
+			sizeX := bldg.Footprint.SizeX() + 2*pad
+			sizeZ := bldg.Footprint.SizeZ() + 2*pad
+			center := *rootPos
+			center.Local.Y += height * 0.5
+			rp := center.ToRenderSpace(systems.CurrentOriginChunk)
+			rl.DrawCubeWires(rp, sizeX, height, sizeZ, color)
+		}
+		if hoveredBuilding != (ecs.Entity{}) && hoveredBuilding != selectedBuilding {
+			drawBuildingOutline(hoveredBuilding, rl.Color{R: 255, G: 220, B: 60, A: 200})
+		}
+		if selectedBuilding != (ecs.Entity{}) {
+			drawBuildingOutline(selectedBuilding, rl.Color{R: 90, G: 200, B: 240, A: 230})
 		}
 
 		// Debug overlays - all gated by hold-key. The hold-G road overlay also
@@ -1488,6 +1882,52 @@ func main() {
 			for qFloor.Next() {
 				pos, _, grid := qFloor.Get()
 				drawFloorNavOverlay(*pos, grid)
+			}
+		}
+
+		// Phase 16.B.1.b debug: J shows every TransitionEdge in the registry
+		// as a coloured 3D line. Surface<->Level edges = green, Level<->Level
+		// = yellow. Missing lines through a door/stair = the bake failed to
+		// resolve LevelMember / StairLevels for that opening.
+		if rl.IsKeyDown(rl.KeyJ) {
+			levelGridReadMap := ecs.NewMap[components.LevelNavGrid](app.World)
+			nodeWorld := func(n components.NavNode) (rl.Vector3, bool) {
+				switch n.Kind {
+				case components.NodeSurface:
+					wx := float32(n.Chunk.X)*components.ChunkSize + float32(n.I) + 0.5
+					wz := float32(n.Chunk.Z)*components.ChunkSize + float32(n.J) + 0.5
+					wp := components.WorldPos{}.Add(rl.Vector3{
+						X: wx, Y: systems.GroundHeight(wx, wz) + 0.5, Z: wz,
+					})
+					return wp.ToRenderSpace(systems.CurrentOriginChunk), true
+				case components.NodeLevel:
+					rootPos := posMap.Get(n.Level)
+					ng := levelGridReadMap.Get(n.Level)
+					if rootPos == nil || ng == nil {
+						return rl.Vector3{}, false
+					}
+					rChunkBaseX := float32(rootPos.Chunk.X) * components.ChunkSize
+					rChunkBaseZ := float32(rootPos.Chunk.Z) * components.ChunkSize
+					cx := rChunkBaseX + ng.Origin.X + float32(n.I) + 0.5
+					cz := rChunkBaseZ + ng.Origin.Z + float32(n.J) + 0.5
+					wp := components.WorldPos{}.Add(rl.Vector3{X: cx, Y: ng.Origin.Y + 0.5, Z: cz})
+					return wp.ToRenderSpace(systems.CurrentOriginChunk), true
+				}
+				return rl.Vector3{}, false
+			}
+			for _, edges := range transitionRegistry.Out {
+				for _, e := range edges {
+					a, ok1 := nodeWorld(e.From)
+					b, ok2 := nodeWorld(e.To)
+					if !ok1 || !ok2 {
+						continue
+					}
+					col := rl.Color{R: 50, G: 220, B: 80, A: 255} // surf<->level
+					if e.From.Kind == components.NodeLevel && e.To.Kind == components.NodeLevel {
+						col = rl.Color{R: 240, G: 220, B: 60, A: 255}
+					}
+					rl.DrawLine3D(a, b, col)
+				}
 			}
 		}
 
@@ -1697,6 +2137,16 @@ func main() {
 			}
 		}
 		rl.EndScissorMode()
+
+		// Phase 16.C.1: cutaway chip widget for the hovered building.
+		// Layout was built in the input phase against the same cursor and
+		// camera as the click hit-test, so the visual matches the click.
+		if buildingWidget != nil {
+			rl.BeginScissorMode(int32(panel3DContent.X), int32(panel3DContent.Y),
+				int32(panel3DContent.Width), int32(panel3DContent.Height))
+			ui.DrawBuildingWidget(buildingWidget, hudFont)
+			rl.EndScissorMode()
+		}
 
 		// Marquee (panel-local clipped). Drawn after composite so it sits over
 		// the 3D scene; scissored to Panel3D so dragging outside the panel

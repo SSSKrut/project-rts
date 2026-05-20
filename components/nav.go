@@ -78,50 +78,56 @@ type NavBaked struct{}
 // CoverBaked marks a chunk whose CoverMap + cover slot pass has run.
 type CoverBaked struct{}
 
-// MaxFloorSide is the per-side cell count cap for a FloorNavGrid. 32 m,
+// MaxLevelSide is the per-side cell count cap for a LevelNavGrid. 32 m,
 // large enough for every placeholder building footprint.
-const MaxFloorSide = 32
+const MaxLevelSide = 32
 
-// MaxFloorCells is the total cell count of a FloorNavGrid.
-const MaxFloorCells = MaxFloorSide * MaxFloorSide
+// MaxLevelCells is the total cell count of a LevelNavGrid.
+const MaxLevelCells = MaxLevelSide * MaxLevelSide
 
-// FloorNavGrid is the per-Floor navigation bake. Cells are 1 m * 1 m, indexed
-// as cj*MaxFloorSide + ci. Origin is the floor's chunk-local (0,0) corner;
-// only the first SizeX * SizeZ block of Cells is valid.
+// LevelNavGrid is the navigation bake for one interior level. Cells are
+// 1 m * 1 m, indexed as cj*MaxLevelSide + ci. Origin is the level's
+// chunk-local (0,0) corner; only the first SizeX * SizeZ block of Cells is
+// valid.
 //
-// Walls of the same floor (matched by WorldPos.Y) become Cost=0. Open doors
-// punch passages. Windows and closed doors stay Cost=0. A floor is a plane;
+// Walls of the same level (matched by WorldPos.Y) become Cost=0. Open doors
+// punch passages. Windows and closed doors stay Cost=0. A level is a plane;
 // slope is not computed.
-type FloorNavGrid struct {
+//
+// Phase 16.B.1.a: pure type rename from FloorNavGrid. The grid still lives
+// on a Floor entity; M16.B.1.b will re-anchor it onto the Level entity
+// (one grid per Level instead of per Floor).
+type LevelNavGrid struct {
 	SizeX, SizeZ uint8
 	Origin       Vec3
-	Cells        [MaxFloorCells]NavCell
+	Cells        [MaxLevelCells]NavCell
 }
 
-// Vec3 is a small 3-float so FloorNavGrid stays import-free from rl.
+// Vec3 is a small 3-float so LevelNavGrid stays import-free from rl.
 type Vec3 struct {
 	X, Y, Z float32
 }
 
-// FloorNavBaked marks a Floor entity whose FloorNavGrid has been baked.
-type FloorNavBaked struct{}
+// LevelNavBaked marks an entity whose LevelNavGrid has been baked.
+type LevelNavBaked struct{}
 
 // NavNodeKind discriminates a NavNode reference. Surface = cell on a chunk's
-// NavGrid; Floor = cell on a Floor's FloorNavGrid.
+// NavGrid; Level = cell on a Level's LevelNavGrid.
 type NavNodeKind uint8
 
 const (
 	NodeSurface NavNodeKind = iota
-	NodeFloor
+	NodeLevel
 )
 
 // NavNode is the multi-graph cell identifier consumed by A*. For Surface,
-// (Chunk, I, J) is the global cell coord. For Floor, Floor is the entity ID
-// of the host Floor and (I, J) are local cell indices.
+// (Chunk, I, J) is the global cell coord. For Level, Level is the entity ID
+// of the host Level (Phase 16.B.1.b: the grid lives on a Level entity, one
+// per interior level volume).
 type NavNode struct {
 	Kind  NavNodeKind
 	Chunk ChunkCoord
-	Floor ecs.Entity
+	Level ecs.Entity
 	I, J  int16
 }
 

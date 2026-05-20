@@ -310,11 +310,41 @@ func (sys *FormationSystem) processSquad(world *ecs.World, w formationWork, leav
 		// open door behind the commander. When no walkable cell exists in the
 		// search radius the member converges on the squad center rather than
 		// charging into a wall.
-		if ip == nil && !sys.cellInsideBuilding(centerTarget) {
-			if clamped, ok := sys.clampSlotXZ(target); ok {
-				target = clamped
-			} else {
-				target = center
+		//
+		// Phase 16.B.1.d - door funnel: when the slot target lies inside a
+		// building footprint but the member itself is still outside, the
+		// straight-line path crosses a wall (reflectAgainstWalls dead-ends
+		// the unit beside the door). Route the lagging member through the
+		// last macro waypoint that's still outside the footprint (= door
+		// approach point) instead of its raw slot offset. Once the member
+		// is inside, the slot kicks back in normally. Leader (slot 0) is
+		// the path runner - never funnelled.
+		if ip == nil {
+			centerInside := sys.cellInsideBuilding(centerTarget)
+			memberInside := sys.cellInsideBuilding(*mPos)
+			switch {
+			case !centerInside:
+				if clamped, ok := sys.clampSlotXZ(target); ok {
+					target = clamped
+				} else {
+					target = center
+				}
+			case centerInside && !memberInside && i != 0:
+				// Scan the macro waypoint stream for the last entry that is
+				// still on the surface (= the door approach cell). Falls back
+				// to the leader's current position when every queued waypoint
+				// is already inside.
+				doorApproach, foundApproach := sys.lastOutsideWaypoint(mp)
+				if foundApproach {
+					target = doorApproach
+				} else {
+					leader := roster.Members[0]
+					if world.Alive(leader) {
+						if lp := sys.posMap.Get(leader); lp != nil {
+							target = *lp
+						}
+					}
+				}
 			}
 		}
 
@@ -433,6 +463,26 @@ func (sys *FormationSystem) clampSlotXZ(target components.WorldPos) (components.
 		}
 	}
 	return target, false
+}
+
+// lastOutsideWaypoint scans the macro path's queued waypoints (Head..Count)
+// and returns the latest one whose surface NavGrid cell is NOT marked
+// NavInBuilding. That's the cell just before the door cross-over for
+// paths that thread through a building entrance. (false) when every
+// queued waypoint is already inside, in which case the caller should
+// fall back to the leader's live position.
+func (sys *FormationSystem) lastOutsideWaypoint(mp *components.MacroPath) (components.WorldPos, bool) {
+	var last components.WorldPos
+	found := false
+	for i := mp.Head; i < mp.Count; i++ {
+		w := mp.Waypoints[i]
+		if sys.cellInsideBuilding(w) {
+			break
+		}
+		last = w
+		found = true
+	}
+	return last, found
 }
 
 // cellInsideBuilding returns true when the surface NavGrid cell covering

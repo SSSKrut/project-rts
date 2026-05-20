@@ -78,7 +78,7 @@ type OrderResolverSystem struct {
 	floorFilter *ecs.Filter2[components.WorldPos, components.Floor]
 
 	// Phase 14.6 followup - Garrison target.Pos points at a Floor entity's
-	// WorldPos (NodeFloor in the multi-graph A*) so NavService.FindPath can
+	// WorldPos (NodeLevel in the multi-graph A*) so NavService.FindPath can
 	// route through a Door TransitionEdge. Surface-inside-footprint cells
 	// are NavInBuilding (M14.6.1) and refuse expansion - without a floor
 	// goal the resolver path would terminate at the wall.
@@ -329,7 +329,7 @@ func (sys *OrderResolverSystem) resolveTargetPos(kind components.OrderKindCode, 
 		if b := sys.buildingMap.Get(target.Entity); b != nil {
 			// Phase 14.6 followup - prefer the ground-floor (lowest Level)
 			// child's WorldPos. NavService.resolveNode matches it as a
-			// NodeFloor, so A* routes through a Door TransitionEdge instead
+			// NodeLevel, so A* routes through a Door TransitionEdge instead
 			// of dead-ending at a NavInBuilding surface cell.
 			if fp, ok := sys.firstFloorPos(target.Entity); ok {
 				target.Pos = fp
