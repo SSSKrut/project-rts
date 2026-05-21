@@ -140,6 +140,68 @@ func (b *Builder) AddStraightStair(local rl.Vector3, yaw, length, width, rise fl
 	})
 }
 
+// AddCascadeStair appends a 180-degree switchback stair between two levels.
+// Two flights of StairsLength/2 each meet at a mid landing; total Rise =
+// FloorHeight. Footprint = StairsLength x (2*StairsWidth) at `local` (the
+// lower-left corner of the cascade box). `yaw` rotates the whole cascade
+// around +Y; yaw=0 means the lower flight runs along +Z and the upper flight
+// returns along -Z.
+//
+// Phase 17 M17.D.2: used by GenerateHouse / Office for Stories >= 3, where
+// stacking straight stairs along one wall would either run off the floor
+// plate or block the same corner across multiple storeys.
+func (b *Builder) AddCascadeStair(local rl.Vector3, yaw float32, fromLevelRef, toLevelRef uint8) (int, int) {
+	half := components.StairsLength * 0.5
+	sin := float32(math.Sin(float64(yaw)))
+	cos := float32(math.Cos(float64(yaw)))
+
+	// Local-space (pre-yaw) waypoints, then rotate around `local`.
+	rotate := func(dx, dz float32) (float32, float32) {
+		return local.X + dx*cos + dz*sin, local.Z - dx*sin + dz*cos
+	}
+
+	lowerStart := local
+	lsx, lsz := rotate(0, 0)
+	lowerStart.X, lowerStart.Z = lsx, lsz
+	// landing X = +width, Z = +half (cascade turns at the far end of the lower flight)
+	lsmidX, lsmidZ := rotate(0.5*components.StairsWidth, half)
+	landingY := local.Y + components.FloorHeight*0.5
+	lowerMid := rl.Vector3{X: lsmidX, Y: landingY, Z: lsmidZ}
+	// upper flight returns along the parallel track (Z back to 0)
+	usmidX, usmidZ := rotate(components.StairsWidth, 0)
+	upperEnd := rl.Vector3{X: usmidX, Y: local.Y + components.FloorHeight, Z: usmidZ}
+
+	lowerIdx := b.addStair(components.StairSpec{
+		Local: lowerStart,
+		Stairs: components.Stairs{
+			FromFloor: 0, ToFloor: 0,
+			Yaw:    yaw,
+			Length: half,
+			Width:  components.StairsWidth,
+			Rise:   components.FloorHeight * 0.5,
+		},
+		Waypoints: []rl.Vector3{lowerStart, lowerMid},
+		Anchors: []components.StairAnchor{
+			{WpIndex: 0, LevelRef: fromLevelRef},
+		},
+	})
+	upperIdx := b.addStair(components.StairSpec{
+		Local: lowerMid,
+		Stairs: components.Stairs{
+			FromFloor: 0, ToFloor: 1,
+			Yaw:    yaw + float32(math.Pi),
+			Length: half,
+			Width:  components.StairsWidth,
+			Rise:   components.FloorHeight * 0.5,
+		},
+		Waypoints: []rl.Vector3{lowerMid, upperEnd},
+		Anchors: []components.StairAnchor{
+			{WpIndex: 1, LevelRef: toLevelRef},
+		},
+	})
+	return lowerIdx, upperIdx
+}
+
 // AddCustomStair appends a stair with an explicit waypoint chain and level
 // anchors. Used by templates that need switchback / horizontal-passage
 // topology.

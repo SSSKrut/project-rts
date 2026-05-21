@@ -59,7 +59,7 @@ func makeStartingBuildings() []components.BuildingPlan {
 		}
 		return *building_gen.GenerateHouse(seed, params, pos, kind)
 	}
-	return []components.BuildingPlan{
+	plans := []components.BuildingPlan{
 		makeHouse(0xA1, -25, -40, 1, 8, 8, components.BuildingHouse),
 		makeHouse(0xB2, 40, 30, 2, 12, 10, components.BuildingHouse),
 		makeHouse(0xC3, -30, 55, 1, 10, 10, components.BuildingBunker),
@@ -69,6 +69,27 @@ func makeStartingBuildings() []components.BuildingPlan {
 		// visible while the other half tears down with its host chunk.
 		makeHouse(0xD4, 5, 20, 1, 20, 8, components.BuildingHouse),
 	}
+
+	// Phase 17 M17.D test placements: one Office (3 storeys + cascade stair +
+	// interior partition + 2 entrances) and one Compound (L-shape with three
+	// connected wings around an implied courtyard).
+	officePos := wp(70, -20)
+	officePos.Local.Y = systems.GroundHeight(
+		officePos.Local.X+float32(officePos.Chunk.X)*components.ChunkSize,
+		officePos.Local.Z+float32(officePos.Chunk.Z)*components.ChunkSize,
+	)
+	plans = append(plans, *building_gen.GenerateOffice(0xE5, officePos))
+
+	compoundCentre := wp(-60, 10)
+	compoundCentre.Local.Y = systems.GroundHeight(
+		compoundCentre.Local.X+float32(compoundCentre.Chunk.X)*components.ChunkSize,
+		compoundCentre.Local.Z+float32(compoundCentre.Chunk.Z)*components.ChunkSize,
+	)
+	for _, p := range building_gen.GenerateCompound(0xF6, compoundCentre) {
+		plans = append(plans, *p)
+	}
+
+	return plans
 }
 
 // makeStartingTrenches - one ~30 m defensive earthwork running between the

@@ -21,6 +21,9 @@ func GenerateHouse(seed uint64, p HouseParams, pos components.WorldPos, kind com
 	if p.Stories == 0 {
 		p.Stories = 1
 	}
+	if p.Stories > 5 {
+		p.Stories = 5
+	}
 	if p.SizeX <= 0 {
 		p.SizeX = 8
 	}
@@ -66,9 +69,22 @@ func GenerateHouse(seed uint64, p HouseParams, pos components.WorldPos, kind com
 		levelRefs[s] = ref
 	}
 
-	doorSide := p.DoorSide
-	if doorSide >= 4 {
-		doorSide = uint8(seed % 4)
+	// Phase 17 M17.D.3: multi-entrance support. DoorSides list wins; falling
+	// back to the legacy single DoorSide field (with seed pick for 4+) when
+	// the slice is empty.
+	doorSet := uint8(0)
+	if len(p.DoorSides) > 0 {
+		for _, side := range p.DoorSides {
+			if side < 4 {
+				doorSet |= 1 << side
+			}
+		}
+	} else {
+		doorSide := p.DoorSide
+		if doorSide >= 4 {
+			doorSide = uint8(seed % 4)
+		}
+		doorSet = 1 << doorSide
 	}
 
 	for s := uint8(0); s < p.Stories; s++ {
@@ -78,7 +94,7 @@ func GenerateHouse(seed uint64, p HouseParams, pos components.WorldPos, kind com
 			wallIdx := b.AddWall(from, to, components.FloorHeight, components.WallThickness, outward, levelRefs[s])
 
 			length := vec2Dist(from, to)
-			if s == 0 && side == doorSide {
+			if s == 0 && doorSet&(1<<side) != 0 {
 				b.SetOpening(wallIdx, components.OpeningDoor, 0.5, 1.2, 0, 2.2)
 				continue
 			}
@@ -96,16 +112,41 @@ func GenerateHouse(seed uint64, p HouseParams, pos components.WorldPos, kind com
 		b.AddFloor(rl.Vector3{X: cx, Y: baseY, Z: cz}, p.SizeX, p.SizeZ, s, levelRefs[s])
 	}
 
+	// Stair placement: straight ladder for 2-storey buildings, switchback
+	// cascade for 3+. Cascade footprint = StairsLength x 2*StairsWidth, which
+	// fits comfortably in the SW corner of an 8x8 plate. Tucked at minX+inset
+	// so the centre of the floor stays clear.
 	const inset float32 = 0.5
+	useCascade := p.Stories >= 3
 	for s := uint8(0); s+1 < p.Stories; s++ {
 		baseY := floorY + float32(s)*components.FloorHeight
 		local := rl.Vector3{X: minX + inset, Y: baseY, Z: minZ + inset}
-		b.AddStraightStair(
-			local, 0,
-			components.StairsLength, components.StairsWidth, components.FloorHeight,
-			s, s+1,
-			levelRefs[s], levelRefs[s+1],
-		)
+		if useCascade {
+			b.AddCascadeStair(local, 0, levelRefs[s], levelRefs[s+1])
+		} else {
+			b.AddStraightStair(
+				local, 0,
+				components.StairsLength, components.StairsWidth, components.FloorHeight,
+				s, s+1,
+				levelRefs[s], levelRefs[s+1],
+			)
+		}
+	}
+
+	// Phase 17 M17.D.3: optional interior partition. Splits each storey with
+	// a single N-S wall biased by seed, with a 1.2 m doorway in the centre.
+	// Minimal pass - no Room metadata is emitted, see plan note.
+	if p.Interior {
+		for s := uint8(0); s < p.Stories; s++ {
+			baseY := floorY + float32(s)*components.FloorHeight
+			// Partition runs N-S at ~1/3 across the X axis. Doorway centred.
+			partX := minX + p.SizeX*0.4
+			from := rl.Vector3{X: partX, Y: baseY, Z: minZ + 0.1}
+			to := rl.Vector3{X: partX, Y: baseY, Z: maxZ - 0.1}
+			outward := rl.Vector3{X: 1, Y: 0, Z: 0}
+			wallIdx := b.AddWall(from, to, components.FloorHeight, components.WallThickness, outward, levelRefs[s])
+			b.SetOpening(wallIdx, components.OpeningDoor, 0.5, 1.0, 0, 2.0)
+		}
 	}
 
 	if kind == components.BuildingBunker {

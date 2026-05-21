@@ -25,7 +25,7 @@ type BehaviorRules struct {
 	// shouldn't go silent under direct attack.
 	AllowReturnFire bool
 
-	// SuppressionThreshold - SurvivalInstinct gate. When Suppression.Level
+	// SuppressionThreshold - SurvivalInstinct gate. When Threat.Suppression
 	// exceeds this value, the unit becomes a candidate for TacticalOverride
 	// (find cover, reposition, prone).
 	SuppressionThreshold float32

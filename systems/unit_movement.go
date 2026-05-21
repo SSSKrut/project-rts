@@ -69,7 +69,7 @@ const stopDuration float32 = 0.1
 // marker add/remove uses per-worker buffers + serial post-pass to keep
 // archetype mutations off the parallel critical path.
 type UnitMovementSystem struct {
-	unitFilter *ecs.Filter5[components.Unit, components.WorldPos, components.Motion, components.ActionQueue, components.Stance]
+	unitFilter *ecs.Filter6[components.Unit, components.WorldPos, components.Motion, components.ActionQueue, components.Stance, components.MicroPath]
 	pool       *core.WorkerPool
 	// Phase 14.5 M14.5.2: separation pass reads from the shared SpatialHash
 	// resource (rebuilt by SpatialHashRebuildSystem each tick before this
@@ -87,6 +87,8 @@ type UnitMovementSystem struct {
 	orderMovementOverrideMap *ecs.Map[components.OrderParamMovementProfile]
 	movementProfileMap       *ecs.Map[components.MovementProfile]
 	posMap                   *ecs.Map[components.WorldPos]
+	// Phase 17 M17.B.4 - read for combat-move facing decoupling.
+	threatMap *ecs.Map[components.Threat]
 
 	// Phase 14.6 M14.6.1 - wall reflection. Walls snapshot bucketed by chunk
 	// once per tick in the serial pre-pass; step() reads the 3x3 chunk window
@@ -131,7 +133,7 @@ func NewUnitMovementSystem(pool *core.WorkerPool) *UnitMovementSystem {
 }
 
 func (sys *UnitMovementSystem) InitUI(w *ecs.World) {
-	sys.unitFilter = ecs.NewFilter5[components.Unit, components.WorldPos, components.Motion, components.ActionQueue, components.Stance](w)
+	sys.unitFilter = ecs.NewFilter6[components.Unit, components.WorldPos, components.Motion, components.ActionQueue, components.Stance, components.MicroPath](w)
 	sys.memberMap = ecs.NewMap[components.SquadMember](w)
 	sys.staminaMap = ecs.NewMap[components.Stamina](w)
 	sys.staminaExhaustedMap = ecs.NewMap[components.StaminaExhausted](w)
@@ -139,6 +141,7 @@ func (sys *UnitMovementSystem) InitUI(w *ecs.World) {
 	sys.orderMovementOverrideMap = ecs.NewMap[components.OrderParamMovementProfile](w)
 	sys.movementProfileMap = ecs.NewMap[components.MovementProfile](w)
 	sys.posMap = ecs.NewMap[components.WorldPos](w)
+	sys.threatMap = ecs.NewMap[components.Threat](w)
 	sys.spatialHash = ecs.NewResource[core.SpatialHash](w)
 	sys.world = w
 	sys.wallFilter = ecs.NewFilter2[components.WorldPos, components.WallSegment](w)
@@ -166,6 +169,8 @@ type unitWork struct {
 	mot       *components.Motion
 	queue     *components.ActionQueue
 	stance    *components.Stance
+	microPath *components.MicroPath // M17.A short-term waypoint stream
+	threat    *components.Threat    // M17.B - read for combat-move facing
 	profile   components.MovementProfile
 	stamina   *components.Stamina // nil if unit has no Stamina component
 	exhausted bool                // current StaminaExhausted marker presence
@@ -210,16 +215,19 @@ func (sys *UnitMovementSystem) Update(ctx core.UpdateContext) {
 	q := sys.unitFilter.Query()
 	for q.Next() {
 		ent := q.Entity()
-		_, pos, mot, queue, stance := q.Get()
+		_, pos, mot, queue, stance, mp := q.Get()
 		profile := sys.resolveProfile(ent)
 		stamina := sys.staminaMap.Get(ent)
 		exhausted := sys.staminaExhaustedMap.Has(ent)
+		threat := sys.threatMap.Get(ent)
 		sys.workBuf = append(sys.workBuf, unitWork{
 			ent:       ent,
 			pos:       pos,
 			mot:       mot,
 			queue:     queue,
 			stance:    stance,
+			microPath: mp,
+			threat:    threat,
 			profile:   profile,
 			stamina:   stamina,
 			exhausted: exhausted,
@@ -336,8 +344,12 @@ func (sys *UnitMovementSystem) step(
 	// Stance auto-transition (P9): when no explicit ActionStance is currently
 	// at the queue head, snap toward the squad's standing default. Phase 13
 	// transition is instant; Phase 25 may add a time cost.
+	//
+	// Phase 17 M17.C: respect StanceControllerSystem's animation lock - if it
+	// just dropped the unit into Prone under fire, the squad standing default
+	// would otherwise pop the unit back up next tick and Stance would flap.
 	hasActiveStanceAction := w.queue.Count > 0 && w.queue.Actions[w.queue.Head].Kind == components.ActionStance
-	if !hasActiveStanceAction && w.stance.Code != w.profile.Stance {
+	if !hasActiveStanceAction && w.stance.Code != w.profile.Stance && sys.elapsed >= w.stance.LockUntil {
 		w.stance.Code = w.profile.Stance
 	}
 
@@ -394,10 +406,26 @@ func (sys *UnitMovementSystem) step(
 	action := &w.queue.Actions[w.queue.Head]
 	switch action.Kind {
 	case components.ActionMoveTo:
-		diff := action.Target.Sub(*w.pos)
+		// M17.A: if MicroPath has unspent waypoints, steer at the current
+		// waypoint instead of the final goal so the unit follows the planner's
+		// route through doors / around obstacles. Falls back to action.Target
+		// when the path is empty (fresh unit, soloist with no formation,
+		// straight-line micro-distance, NavService.FindPath returned []).
+		shortTerm := action.Target
+		if w.microPath != nil && w.microPath.Count > 0 && w.microPath.Head < w.microPath.Count {
+			shortTerm = w.microPath.Waypoints[w.microPath.Head]
+		}
+		finalDiff := action.Target.Sub(*w.pos)
+		if finalDiff.X*finalDiff.X+finalDiff.Z*finalDiff.Z < arrivalRadius*arrivalRadius {
+			popAction(w.queue)
+			return markerOp
+		}
+		diff := shortTerm.Sub(*w.pos)
 		distSq := diff.X*diff.X + diff.Z*diff.Z
 		if distSq < arrivalRadius*arrivalRadius {
-			popAction(w.queue)
+			// Reached the short-term waypoint; the unit is mid-route so we
+			// don't popAction (the final-goal arrival check above handles
+			// that). MicroPathSystem advances Head next tick.
 			return markerOp
 		}
 		dist := float32(math.Sqrt(float64(distSq)))
@@ -494,29 +522,52 @@ func (sys *UnitMovementSystem) step(
 				progress = 1
 			}
 		}
+		// Phase 17 M17.B.4 - combat-move: under Alerted/Threatened, the body
+		// faces the threat (so weapons stay on target) while the legs walk
+		// along VelocityYaw. The throttle below also keeps the unit from
+		// running backwards: when the body is > 90 deg off the desired
+		// motion direction and there's still > 3 m to cover, we cut speed
+		// to 0.3x so the turn lands before the sprint.
+		velocityYaw := w.mot.VelocityYaw
+		if speed > 0.01 {
+			velocityYaw = float32(math.Atan2(float64(vx), float64(vz)))
+		}
+		desiredFacingYaw := velocityYaw
+		if w.threat != nil && w.threat.State >= components.ThreatAlerted &&
+			(w.threat.ThreatDir.X != 0 || w.threat.ThreatDir.Z != 0) {
+			desiredFacingYaw = float32(math.Atan2(
+				float64(-w.threat.ThreatDir.X),
+				float64(-w.threat.ThreatDir.Z),
+			))
+		}
+		if dist > 3.0 && speed > 0.5 {
+			bodyDelta := wrapAngle(velocityYaw - w.mot.Yaw)
+			if bodyDelta > math.Pi/2 || bodyDelta < -math.Pi/2 {
+				speed *= 0.3
+				if desiredSpeed > 1e-3 {
+					rescale := speed / desiredSpeed
+					vx *= rescale
+					vz *= rescale
+				}
+			}
+		}
+
 		move := rl.Vector3{X: vx * dt, Y: dy * progress, Z: vz * dt}
 		*w.pos = w.pos.Add(move)
 		w.mot.Speed = speed
-		if speed > 0.01 {
-			// Phase 15 M15.B.5 - cap yaw rate so units don't snap-spin. Wrap
-			// the delta into [-pi, pi] before clamping so a 350 deg desired
-			// turn folds into -10 deg the short way around.
-			desiredYaw := float32(math.Atan2(float64(vx), float64(vz)))
-			delta := desiredYaw - w.mot.Yaw
-			for delta > math.Pi {
-				delta -= 2 * math.Pi
-			}
-			for delta < -math.Pi {
-				delta += 2 * math.Pi
-			}
-			maxYawDelta := maxYawRate * dt
-			if delta > maxYawDelta {
-				delta = maxYawDelta
-			} else if delta < -maxYawDelta {
-				delta = -maxYawDelta
-			}
-			w.mot.Yaw += delta
+		w.mot.VelocityYaw = velocityYaw
+
+		// Phase 15 M15.B.5 - cap yaw rate so units don't snap-spin. Wrap the
+		// delta into [-pi, pi] before clamping so a 350 deg desired turn
+		// folds into -10 deg the short way around.
+		delta := wrapAngle(desiredFacingYaw - w.mot.Yaw)
+		maxYawDelta := maxYawRate * dt
+		if delta > maxYawDelta {
+			delta = maxYawDelta
+		} else if delta < -maxYawDelta {
+			delta = -maxYawDelta
 		}
+		w.mot.Yaw += delta
 
 	case components.ActionStop:
 		w.mot.Speed = 0
@@ -535,6 +586,18 @@ func (sys *UnitMovementSystem) step(
 }
 
 // popAction advances the queue head past the current action.
+// wrapAngle folds an angle in radians into [-pi, pi]. Used by yaw delta
+// math so a 350 deg "desired" turn becomes a -10 deg short-way turn.
+func wrapAngle(a float32) float32 {
+	for a > math.Pi {
+		a -= 2 * math.Pi
+	}
+	for a < -math.Pi {
+		a += 2 * math.Pi
+	}
+	return a
+}
+
 func popAction(q *components.ActionQueue) {
 	if q.Count == 0 {
 		return

@@ -183,9 +183,21 @@ func main() {
 	weaponSys := systems.NewWeaponSystem(workerPool, damageService, particleHandles)
 	weaponSys.InitUI(app.World)
 
+	// Phase 17 M17.0.1 - per-unit Threat aggregator. Runs after WeaponSystem
+	// (which mutates Threat.Suppression / ThreatDir) so SurvivalInstinct /
+	// future StanceController read a recomputed Total + State.
+	threatSys := systems.NewThreatSystem()
+	threatSys.InitUI(app.World)
+
+	// Phase 17 M17.C - autonomous stance controller. Reads Threat.State after
+	// threatSys recomputes it, maps to Prone / Crouch / standing default, with
+	// animation lock + player-override gate.
+	stanceSys := systems.NewStanceControllerSystem()
+	stanceSys.InitUI(app.World)
+
 	// Cleanup of expired ThreatSource entities. SurvivalInstinct reads
-	// Suppression (a faster signal); ThreatSource entities will become the
-	// primary input once M15.A.1 ScatterProtocol consumes the cluster.
+	// Threat.Suppression (a faster signal); ThreatSource entities will become
+	// the primary input once M15.A.1 ScatterProtocol consumes the cluster.
 	threatDecaySys := systems.NewThreatDecaySystem()
 	threatDecaySys.InitUI(app.World)
 
@@ -200,8 +212,8 @@ func main() {
 	levelVisSys.InitUI(app.World)
 
 	// Phase 15 M15.A.0 - reactive cover seek. Runs after WeaponSystem (fresh
-	// Suppression) and before FormationSystem (so override-driven ActionQueue
-	// writes survive the formation pass).
+	// Threat.Suppression) and before FormationSystem (so override-driven
+	// ActionQueue writes survive the formation pass).
 	survivalSys := systems.NewSurvivalInstinctSystem()
 	survivalSys.InitUI(app.World)
 
@@ -213,6 +225,13 @@ func main() {
 
 	formationSys := systems.NewFormationSystem(squadService, workerPool)
 	formationSys.InitUI(app.World)
+
+	// Phase 17 M17.A - per-unit waypoint planner. Runs after FormationSystem
+	// (the writer of ActionQueue.Head.Target + MicroPath.Dirty) so the next
+	// tick's UnitMovement reads a fresh waypoint stream. Serial - NavService
+	// holds Filter handles and is not concurrent-safe.
+	microPathSys := systems.NewMicroPathSystem(navService, workerPool)
+	microPathSys.InitUI(app.World)
 
 	mapMarkerCacheSys := &systems.MapMarkerCacheSystem{}
 	mapMarkerCacheSys.InitUI(app.World)
@@ -252,6 +271,8 @@ func main() {
 	app.AddSystem(visionSys)
 	app.AddSystem(weaponSys)
 	app.AddSystem(particleSys)
+	app.AddSystem(threatSys)
+	app.AddSystem(stanceSys)
 	app.AddSystem(threatDecaySys)
 	app.AddSystem(levelVisSys)
 	app.AddSystem(mapPingDecaySys)
@@ -259,6 +280,7 @@ func main() {
 	app.AddSystem(survivalSys)
 	app.AddSystem(squadMacroPathSys)
 	app.AddSystem(formationSys)
+	app.AddSystem(microPathSys)
 	app.AddSystem(mapMarkerCacheSys)
 	app.AddSystem(lodSys)
 	app.AddSystem(movementSys)
@@ -398,7 +420,9 @@ func main() {
 	motionMap := ecs.NewMap[components.Motion](app.World)
 	colliderMap := ecs.NewMap[components.Collider](app.World)
 	visionMap := ecs.NewMap[components.Vision](app.World)
-	suppressionMap := ecs.NewMap[components.Suppression](app.World)
+	threatMap := ecs.NewMap[components.Threat](app.World)
+	dangerBufMap := ecs.NewMap[components.DangerBuffer](app.World)
+	microPathMap := ecs.NewMap[components.MicroPath](app.World)
 	awarenessMap := ecs.NewMap[components.Awareness](app.World)
 	blackboardMap := ecs.NewMap[components.LocalBlackboard](app.World)
 	actionQueueMap := ecs.NewMap[components.ActionQueue](app.World)
@@ -490,7 +514,9 @@ func main() {
 		motionMap.Add(ent, &components.Motion{})
 		colliderMap.Add(ent, &components.Collider{Radius: 0.35})
 		visionMap.Add(ent, &components.Vision{RangeM: 40, AngleDot: 0.5})
-		suppressionMap.Add(ent, &components.Suppression{})
+		threatMap.Add(ent, &components.Threat{})
+		dangerBufMap.Add(ent, &components.DangerBuffer{})
+		microPathMap.Add(ent, &components.MicroPath{})
 		awarenessMap.Add(ent, &components.Awareness{})
 		blackboardMap.Add(ent, &components.LocalBlackboard{})
 		actionQueueMap.Add(ent, &components.ActionQueue{})
@@ -2056,7 +2082,7 @@ func main() {
 			PosMap:                   posMap,
 			StanceMap:                stanceMap,
 			MotionMap:                motionMap,
-			SuppressionMap:           suppressionMap,
+			ThreatMap:                threatMap,
 			EquipmentMap:             equipmentMap,
 			SquadMemberMap:           squadMemberMap,
 			RosterMap:                rosterMap,

@@ -52,7 +52,7 @@ type WeaponSystem struct {
 	motionMap      *ecs.Map[components.Motion]
 	weaponMap      *ecs.Map[components.Weapon]
 	factionMap     *ecs.Map[components.Faction]
-	suppressionMap *ecs.Map[components.Suppression]
+	threatMap      *ecs.Map[components.Threat]
 	doorMap        *ecs.Map[components.Door]
 	colliderMap    *ecs.Map[components.Collider]
 	// Phase 14 M14.3 - RoE + AttackMove gating. shouldFire walks the seer's
@@ -85,9 +85,9 @@ type WeaponSystem struct {
 	// and Suppression.Level decay. ecs.Map[ThreatSource] for archetype
 	// mutation in the post-pass; the decay walk uses the registered
 	// SuppressionFilter so the system stays serial.
-	threatSourceMap   *ecs.Map[components.ThreatSource]
-	suppressionFilter *ecs.Filter2[components.Unit, components.Suppression]
-	worldRef          *ecs.World
+	threatSourceMap *ecs.Map[components.ThreatSource]
+	dangerBufMap    *ecs.Map[components.DangerBuffer]
+	worldRef        *ecs.World
 
 	// Phase 14.5 M14.5.3 - shared spatial hash for unit-vs-ray, propagateSuppression.
 	spatialHash ecs.Resource[core.SpatialHash]
@@ -193,11 +193,13 @@ type threatEvent struct {
 
 // suppressionEvent - per-impact propagation. Each shot generates one event;
 // the serial post-pass walks units within suppressionRadius of impact and
-// adjusts Suppression.Level / ThreatDir. hitMul switches between direct-hit
-// (0.5) and miss-radius (0.2) coefficients per PHASE-14.md P5.
+// pushes DangerBulletImpact entries into their DangerBuffer (Phase 17 M17.0.2;
+// previously wrote Suppression.Level directly). hitMul switches between
+// direct-hit (0.5) and miss-radius (0.2) coefficients per PHASE-14.md P5.
 type suppressionEvent struct {
-	impact rl.Vector3
-	hitMul float32
+	impact  rl.Vector3
+	hitMul  float32
+	shooter ecs.Entity
 }
 
 const (
@@ -228,9 +230,6 @@ const (
 	// linearly with distance.
 	suppressionHitMul  float32 = 0.5
 	suppressionMissMul float32 = 0.2
-	// suppressionDecayRate - per-second decay applied each tick. 0.1 means
-	// full suppression (Level=1.0) clears in 10 s without new pressure.
-	suppressionDecayRate float32 = 0.1
 	// threatTTL - ThreatSource entity lifetime in seconds. Phase 15
 	// SurvivalInstinct reads the cluster; longer TTL = stickier "I know
 	// where the danger came from" memory.
@@ -277,7 +276,7 @@ func (sys *WeaponSystem) InitUI(w *ecs.World) {
 	sys.motionMap = ecs.NewMap[components.Motion](w)
 	sys.weaponMap = ecs.NewMap[components.Weapon](w)
 	sys.factionMap = ecs.NewMap[components.Faction](w)
-	sys.suppressionMap = ecs.NewMap[components.Suppression](w)
+	sys.threatMap = ecs.NewMap[components.Threat](w)
 	sys.doorMap = ecs.NewMap[components.Door](w)
 	sys.colliderMap = ecs.NewMap[components.Collider](w)
 	sys.squadMemberMap = ecs.NewMap[components.SquadMember](w)
@@ -286,7 +285,7 @@ func (sys *WeaponSystem) InitUI(w *ecs.World) {
 	sys.orderAttackMoveMap = ecs.NewMap[components.OrderParamAttackMove](w)
 	sys.orderKindMap = ecs.NewMap[components.OrderKind](w)
 	sys.threatSourceMap = ecs.NewMap[components.ThreatSource](w)
-	sys.suppressionFilter = ecs.NewFilter2[components.Unit, components.Suppression](w)
+	sys.dangerBufMap = ecs.NewMap[components.DangerBuffer](w)
 	sys.worldRef = w
 
 	sys.spatialHash = ecs.NewResource[core.SpatialHash](w)
@@ -434,11 +433,10 @@ func (sys *WeaponSystem) Update(ctx core.UpdateContext) {
 		sys.workerSplash[i] = sys.workerSplash[i][:0]
 	}
 
-	// -- Phase 14 M14.5: Suppression decay pass. Walks every Unit's
-	// Suppression component before the firing pass so this tick's new
-	// pressure isn't immediately decayed away. Serial - each unit writes
-	// its own component, but the walk is cheap (one filter pass).
-	sys.decaySuppression(dt)
+	// Phase 17 M17.0.2: Suppression decay moved out of WeaponSystem into
+	// ThreatSystem (which now owns all per-channel decay). dt is no longer
+	// consumed here but kept tracked for parity with future producers.
+	_ = dt
 
 	// -- 1a. Snapshot every live unit as a candidate target --
 	qT := sys.targetFilter.Query()
@@ -511,8 +509,8 @@ func (sys *WeaponSystem) Update(ctx core.UpdateContext) {
 			moving = 1
 		}
 		supp := float32(0)
-		if sp := sys.suppressionMap.Get(shooter); sp != nil {
-			supp = sp.Level
+		if sp := sys.threatMap.Get(shooter); sp != nil {
+			supp = sp.Suppression
 		}
 		dispersion *= 1 + 0.3*moving + 0.5*supp
 
@@ -629,11 +627,13 @@ func (sys *WeaponSystem) Update(ctx core.UpdateContext) {
 			})
 		}
 	}
-	// Suppression propagation: per-impact, raise nearby units' Level and
-	// point their ThreatDir back toward the impact.
+	// Suppression propagation: per-impact, push DangerBulletImpact events into
+	// each nearby unit's DangerBuffer. ThreatSystem drains the buffer next tick
+	// and translates Strength + impact-relative direction into Threat.Suppression
+	// + ThreatDir.
 	for w := range sys.workerSuppression {
 		for _, ev := range sys.workerSuppression[w] {
-			sys.propagateSuppression(ev.impact, ev.hitMul)
+			sys.propagateSuppression(ev, now)
 		}
 	}
 }
@@ -692,9 +692,9 @@ func (sys *WeaponSystem) applySplashDamage(ev splashEvent, hash *core.SpatialHas
 		if !sys.worldRef.Alive(ent) {
 			return
 		}
-		// Only damage Units (Suppression component is on Units; we read
+		// Only damage Units (Threat component is on Units; we read
 		// HP through DamageService).
-		if sys.suppressionMap.Get(ent) == nil {
+		if sys.threatMap.Get(ent) == nil {
 			return
 		}
 		t := float32(1) - dSq/rSq
@@ -721,81 +721,53 @@ func (sys *WeaponSystem) applySplashDamage(ev splashEvent, hash *core.SpatialHas
 	})
 }
 
-// decaySuppression walks every Unit's Suppression and decays Level toward
-// zero by `suppressionDecayRate * dt`. Cheap serial pass - no archetype
-// changes, just float writes.
-func (sys *WeaponSystem) decaySuppression(dt float32) {
-	if dt <= 0 {
-		return
-	}
-	drop := suppressionDecayRate * dt
-	q := sys.suppressionFilter.Query()
-	for q.Next() {
-		_, supp := q.Get()
-		if supp.Level <= 0 {
-			continue
-		}
-		supp.Level -= drop
-		if supp.Level < 0 {
-			supp.Level = 0
-		}
-	}
-}
-
-// propagateSuppression raises Suppression.Level on every unit within
-// suppressionRadius of `impact` and points the per-unit ThreatDir vector
-// from the impact toward the unit (i.e. "away from the danger" - Phase 15
-// SurvivalInstinct will use it to pick cover slots on the opposite side).
+// propagateSuppression pushes a DangerBulletImpact event into the DangerBuffer
+// of every unit within suppressionRadius of `ev.impact`. Strength = hitMul *
+// (1 - d/radius), matching the Phase 14 falloff curve. ThreatSystem drains the
+// buffer next tick and converts Strength + impact-to-unit direction into
+// Threat.Suppression + ThreatDir (recency-weighted average across all events
+// in the same tick).
 //
-// hitMul switches the per-impact intensity:
-//   - suppressionHitMul (0.5) - direct hit on a unit (target gets the full
-//     amount regardless of radius).
+// hitMul:
+//   - suppressionHitMul (0.5) - direct hit on a unit.
 //   - suppressionMissMul (0.2) - near miss, scaled linearly by distance.
-//
-// Bounded by 0..1.
-//
-// Phase 14.5 M14.5.3: switched from O(N) Suppression filter walk to a
-// SpatialHash ForEachInRadius query. Each shot now touches only the dozen-ish
-// units near its impact instead of every unit in the world - big win for
-// crowd firefights where O(Nxshots) blew up quickly.
-func (sys *WeaponSystem) propagateSuppression(impact rl.Vector3, hitMul float32) {
+func (sys *WeaponSystem) propagateSuppression(ev suppressionEvent, now float32) {
 	hash := sys.spatialHash.Get()
 	if hash == nil {
 		return
 	}
-	hash.ForEachInRadius(impact.X, impact.Z, suppressionRadius, func(ent ecs.Entity, dSq float32) {
-		// Stale-entity guard - see core/spatial_hash.go invariants.
+	impactPos := components.Normalize(components.WorldPos{
+		Local: rl.Vector3{X: ev.impact.X, Y: ev.impact.Y, Z: ev.impact.Z},
+	})
+	hash.ForEachInRadius(ev.impact.X, ev.impact.Z, suppressionRadius, func(ent ecs.Entity, dSq float32) {
 		if !sys.worldRef.Alive(ent) {
 			return
 		}
-		supp := sys.suppressionMap.Get(ent)
-		if supp == nil {
-			return // not a Unit (no Suppression component).
+		buf := sys.dangerBufMap.Get(ent)
+		if buf == nil {
+			return // not a Unit (no DangerBuffer component).
 		}
-		// We need ThreatDir from live pos (the hash entry's X/Z is the
-		// rebuild-time snapshot - close enough for ThreatDir but the
-		// direction is more meaningful from current pos).
 		pos := sys.posMap.Get(ent)
 		if pos == nil {
 			return
 		}
 		ux := float32(pos.Chunk.X)*components.ChunkSize + pos.Local.X
 		uz := float32(pos.Chunk.Z)*components.ChunkSize + pos.Local.Z
-		dx := ux - impact.X
-		dz := uz - impact.Z
-		_ = dSq // we recompute from live pos below
+		dx := ux - ev.impact.X
+		dz := uz - ev.impact.Z
+		_ = dSq
 		d := float32(math.Sqrt(float64(dx*dx + dz*dz)))
 		falloff := float32(1) - d/suppressionRadius
 		if falloff < 0 {
 			falloff = 0
 		}
-		supp.Level += hitMul * falloff
-		if supp.Level > 1 {
-			supp.Level = 1
-		}
-		if d > 1e-3 {
-			supp.ThreatDir = rl.Vector3{X: dx / d, Y: 0, Z: dz / d}
-		}
+		components.PushDanger(buf, components.DangerEvent{
+			Kind:     components.DangerBulletImpact,
+			Source:   ev.shooter,
+			Pos:      impactPos,
+			Strength: ev.hitMul * falloff,
+			Time:     now,
+		})
 	})
 }
 
@@ -1015,8 +987,9 @@ func resolveShot(
 		hitMul = suppressionHitMul
 	}
 	*suppBuf = append(*suppBuf, suppressionEvent{
-		impact: impact,
-		hitMul: hitMul,
+		impact:  impact,
+		hitMul:  hitMul,
+		shooter: s.shooter,
 	})
 }
 

@@ -34,6 +34,12 @@ type FormationSystem struct {
 	navGridMap    *ecs.Map[components.NavGrid]
 	chunkIndexRes ecs.Resource[TerrainChunkIndex]
 
+	// Phase 17 M17.A.3 - leader-wake bias and Dirty-flag retarget. Formation
+	// writes the squad's slot targets into ActionQueue.Head.Target and flips
+	// MicroPath.Dirty whenever the goal shifts; MicroPathSystem picks that up
+	// and replans through NavService.
+	microPathMap *ecs.Map[components.MicroPath]
+
 	// Phase 15 M15.A.0 - members carrying a TacticalOverride are AI-driven
 	// (e.g. SurvivalInstinct moving them to cover). FormationSystem reads but
 	// does not write their ActionQueue while the marker is held.
@@ -81,6 +87,7 @@ func (sys *FormationSystem) InitUI(w *ecs.World) {
 	sys.chunkIndexRes = ecs.NewResource[TerrainChunkIndex](w)
 	sys.tacticalOverrideMap = ecs.NewMap[components.TacticalOverride](w)
 	sys.individualPosMap = ecs.NewMap[components.IndividualPosition](w)
+	sys.microPathMap = ecs.NewMap[components.MicroPath](w)
 }
 
 func (FormationSystem) Name() string { return "formation" }
@@ -300,70 +307,64 @@ func (sys *FormationSystem) processSquad(world *ecs.World, w formationWork, leav
 			}
 		} else {
 			offX, offZ := FormationOffset(fd.Type, i, fd.Spacing, fd.Forward)
+			// Phase 17 M17.A.3 leader-wake bias: when the squad's leader has a
+			// MicroPath in flight, slot i > 0 anchors its target on a waypoint
+			// from the leader's queue (k = min(i, remaining-1)) instead of the
+			// raw squad-center projection. Pulls trailing members into a
+			// column-like file when the leader is threading a corridor; in
+			// open ground the lateral offset still spreads them out because
+			// the same FormationOffset is applied.
 			target = centerTarget.Add(rl.Vector3{X: offX, Y: 0, Z: offZ})
-		}
-		// Phase 14.6 M14.6.1 / Phase 15 M15.B.4 - keep slot targets out of
-		// building interiors and blocked cells when approaching from outside.
-		// Once the squad center has crossed into a footprint (commander entered
-		// through a door), let inside slots stand - UnitMovement.reflectAgainstWalls
-		// keeps trailing members away from walls while they funnel through the
-		// open door behind the commander. When no walkable cell exists in the
-		// search radius the member converges on the squad center rather than
-		// charging into a wall.
-		//
-		// Phase 16.B.1.d - door funnel: when the slot target lies inside a
-		// building footprint but the member itself is still outside, the
-		// straight-line path crosses a wall (reflectAgainstWalls dead-ends
-		// the unit beside the door). Route the lagging member through the
-		// last macro waypoint that's still outside the footprint (= door
-		// approach point) instead of its raw slot offset. Once the member
-		// is inside, the slot kicks back in normally. Leader (slot 0) is
-		// the path runner - never funnelled.
-		if ip == nil {
-			centerInside := sys.cellInsideBuilding(centerTarget)
-			memberInside := sys.cellInsideBuilding(*mPos)
-			switch {
-			case !centerInside:
-				if clamped, ok := sys.clampSlotXZ(target); ok {
-					target = clamped
-				} else {
-					target = center
-				}
-			case centerInside && !memberInside && i != 0:
-				// Scan the macro waypoint stream for the last entry that is
-				// still on the surface (= the door approach cell). Falls back
-				// to the leader's current position when every queued waypoint
-				// is already inside.
-				doorApproach, foundApproach := sys.lastOutsideWaypoint(mp)
-				if foundApproach {
-					target = doorApproach
-				} else {
-					leader := roster.Members[0]
-					if world.Alive(leader) {
-						if lp := sys.posMap.Get(leader); lp != nil {
-							target = *lp
+			if i > 0 {
+				leader := roster.Members[0]
+				if leader != (ecs.Entity{}) && world.Alive(leader) {
+					if leaderMP := sys.microPathMap.Get(leader); leaderMP != nil && leaderMP.Count > leaderMP.Head {
+						remaining := int(leaderMP.Count - leaderMP.Head)
+						k := int(i)
+						if k > remaining-1 {
+							k = remaining - 1
 						}
+						wp := leaderMP.Waypoints[int(leaderMP.Head)+k]
+						target = wp.Add(rl.Vector3{X: offX, Y: 0, Z: offZ})
 					}
 				}
 			}
 		}
+		// Phase 14.6 M14.6.1 / Phase 15 M15.B.4 - keep slot targets out of
+		// blocked cells when approaching from outside a building. Once the
+		// commander has entered, inside slots stand; MicroPathSystem then
+		// routes lagging members through the door rather than the funnel-hack
+		// scan we used pre-Phase-17.
+		if ip == nil && !sys.cellInsideBuilding(centerTarget) {
+			if clamped, ok := sys.clampSlotXZ(target); ok {
+				target = clamped
+			} else {
+				target = center
+			}
+		}
 
-		// Re-push only if the new target meaningfully differs from the
-		// last queued MoveTo. Cuts the per-tick pop-push cycle at the
-		// destination and stops the rotating-offset chase that some
-		// formations could fall into.
+		// Phase 17 M17.A.2 - retarget the existing MoveTo head in place
+		// instead of ClearActions + PushAction. Flip MicroPath.Dirty when the
+		// goal shifts > formationPushTolerance so MicroPathSystem replans.
 		if aq.Count > 0 {
-			lastIdx := (int(aq.Tail) + components.ActionQueueSize - 1) % components.ActionQueueSize
-			last := aq.Actions[lastIdx]
-			if last.Kind == components.ActionMoveTo {
-				d := last.Target.Sub(target)
+			head := &aq.Actions[aq.Head]
+			if head.Kind == components.ActionMoveTo {
+				d := head.Target.Sub(target)
 				if d.X*d.X+d.Z*d.Z < formationPushTolerance*formationPushTolerance {
 					continue
 				}
+				head.Target = target
+				if mp := sys.microPathMap.Get(mem); mp != nil {
+					mp.Dirty = true
+				}
+				continue
 			}
 		}
 		ClearActions(aq)
 		PushAction(aq, components.Action{Kind: components.ActionMoveTo, Target: target})
+		if mp := sys.microPathMap.Get(mem); mp != nil {
+			mp.Dirty = true
+		}
 	}
 }
 
@@ -463,26 +464,6 @@ func (sys *FormationSystem) clampSlotXZ(target components.WorldPos) (components.
 		}
 	}
 	return target, false
-}
-
-// lastOutsideWaypoint scans the macro path's queued waypoints (Head..Count)
-// and returns the latest one whose surface NavGrid cell is NOT marked
-// NavInBuilding. That's the cell just before the door cross-over for
-// paths that thread through a building entrance. (false) when every
-// queued waypoint is already inside, in which case the caller should
-// fall back to the leader's live position.
-func (sys *FormationSystem) lastOutsideWaypoint(mp *components.MacroPath) (components.WorldPos, bool) {
-	var last components.WorldPos
-	found := false
-	for i := mp.Head; i < mp.Count; i++ {
-		w := mp.Waypoints[i]
-		if sys.cellInsideBuilding(w) {
-			break
-		}
-		last = w
-		found = true
-	}
-	return last, found
 }
 
 // cellInsideBuilding returns true when the surface NavGrid cell covering

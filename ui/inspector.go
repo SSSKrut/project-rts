@@ -22,7 +22,7 @@ type InspectorCtx struct {
 	PosMap           *ecs.Map[components.WorldPos]
 	StanceMap        *ecs.Map[components.Stance]
 	MotionMap        *ecs.Map[components.Motion]
-	SuppressionMap   *ecs.Map[components.Suppression]
+	ThreatMap        *ecs.Map[components.Threat]
 	EquipmentMap     *ecs.Map[components.Equipment]
 	SquadMemberMap   *ecs.Map[components.SquadMember]
 	RosterMap        *ecs.Map[components.CommandRoster]
@@ -331,8 +331,9 @@ func drawInspectorUnit(ctx InspectorCtx, ent ecs.Entity, x, y int32) int32 {
 			x, y, inspectorFontSize, inspectorText)
 		y += inspectorRowH
 	}
-	if sup := ctx.SuppressionMap.Get(ent); sup != nil {
-		drawText(ctx.Font, fmt.Sprintf("Suppress:  %.2f", sup.Level),
+	if th := ctx.ThreatMap.Get(ent); th != nil {
+		drawText(ctx.Font, fmt.Sprintf("Threat:    %.2f %s  supp %.2f",
+			th.Total, threatStateLabel(th.State), th.Suppression),
 			x, y, inspectorFontSize, inspectorText)
 		y += inspectorRowH
 	}
@@ -861,21 +862,35 @@ func drawOverrideBlock(ctx InspectorCtx, ent ecs.Entity, ov *components.Tactical
 }
 
 // overrideReasonDetail expands the static ReasonLabel into a live numbers
-// string, e.g. "Suppression 0.72 > threshold 0.45". Falls back to an empty
-// string if the reason has no live numbers (placeholder reasons).
+// string, e.g. "Threat 0.72 > threshold 0.45". Falls back to an empty string
+// if the reason has no live numbers (placeholder reasons).
 func overrideReasonDetail(ctx InspectorCtx, ent ecs.Entity, ov *components.TacticalOverride) string {
 	switch ov.Reason {
 	case components.TacticalOverrideUnderFire:
-		supp := float32(0)
-		if ctx.SuppressionMap != nil {
-			if s := ctx.SuppressionMap.Get(ent); s != nil {
-				supp = s.Level
+		total := float32(0)
+		if ctx.ThreatMap != nil {
+			if s := ctx.ThreatMap.Get(ent); s != nil {
+				total = s.Total
 			}
 		}
 		threshold := overrideThreshold(ctx, ent)
-		return fmt.Sprintf("Suppression %.2f > threshold %.2f", supp, threshold)
+		return fmt.Sprintf("Threat %.2f > threshold %.2f", total, threshold)
 	}
 	return ""
+}
+
+// threatStateLabel returns the short-form name for the Threat.State band,
+// used in the Inspector single-unit row. Phase 17 M17.0.3.
+func threatStateLabel(s components.ThreatState) string {
+	switch s {
+	case components.ThreatVigilant:
+		return "Vigilant"
+	case components.ThreatAlerted:
+		return "Alerted"
+	case components.ThreatThreatened:
+		return "Threatened"
+	}
+	return "Safe"
 }
 
 // overrideThreshold returns the unit's squad BehaviorRules.SuppressionThreshold

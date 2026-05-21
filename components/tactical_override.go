@@ -65,14 +65,15 @@ func ReasonResume(r TacticalOverrideReason) string {
 
 // TacticalOverride is the marker that says "this unit is AI-driven right now -
 // FormationSystem leaves it alone, an explicit player order clears it." Set
-// by SurvivalInstinctSystem when a unit's Suppression crosses the squad's
-// BehaviorRules.SuppressionThreshold; cleared when threat passes, the player
-// issues a new order, or the safety Until timer expires.
+// by SurvivalInstinctSystem when a unit's Threat.Suppression crosses the
+// squad's BehaviorRules.SuppressionThreshold; cleared when threat passes, the
+// player issues a new order, or the safety Until timer expires.
 //
-// LowSuppSince is the session-time the unit's Suppression first dropped below
-// the clear threshold; 0 while still above. Resets to 0 whenever Suppression
-// climbs back up. The clear path waits for a sustained low-suppression window
-// (clearLowDuration) before removing the marker - hysteresis against jitter.
+// LowSuppSince is the session-time the unit's Threat.Suppression first
+// dropped below the clear threshold; 0 while still above. Resets to 0
+// whenever it climbs back up. The clear path waits for a sustained
+// low-suppression window (clearLowDuration) before removing the marker -
+// hysteresis against jitter.
 //
 // AssignedSlot is the cover slot the unit moves toward. Stored so the next
 // pass can recognise the unit's claim (occupancy penalty) and a future Phase

@@ -1,7 +1,6 @@
 package components
 
 import (
-	rl "github.com/gen2brain/raylib-go/raylib"
 	"github.com/mlange-42/ark/ecs"
 )
 
@@ -20,15 +19,38 @@ const (
 	StanceProne
 )
 
+// Stance carries the unit's current posture + an animation lock window.
+// LockUntil is session-time (matches squadService.Clock); writers (player
+// command, StanceControllerSystem) set it to "now + animLock" so the next
+// autonomous flipper can't snap-spin between bands.
 type Stance struct {
-	Code StanceCode
+	Code      StanceCode
+	LockUntil float32
 }
 
-// Motion - current facing & speed. Yaw is forward radians around +Y. Speed
-// is |velocity| in m/s.
+// StanceOverride - player-set stance lock. While Until is in the future,
+// StanceControllerSystem skips the unit (the player meant Z/X/C / pie-menu
+// stance, leave it alone). Phase 21 hot-keys will write this marker; Phase 17
+// only defines the type so the controller's gate is in place.
+type StanceOverride struct {
+	Until float32
+}
+
+// Motion - current facing & speed. Yaw is the facing-yaw (radians around +Y),
+// what renderers and Vision read. Speed is |velocity| in m/s.
+//
+// Phase 17 M17.B.4: VelocityYaw is the direction of motion this frame (the
+// "where I'm walking"), computed from the move delta in UnitMovementSystem.
+// It's separated from Yaw so combat-move can decouple body facing from path
+// direction - under fire a unit looks at the threat while sidestepping along
+// VelocityYaw, instead of snapping the body to whatever the path tangent is.
+//
+// Both yaws follow the same convention as Motion.Yaw did pre-split:
+// 0 = +Z (north), increasing clockwise around +Y.
 type Motion struct {
-	Yaw   float32
-	Speed float32
+	Yaw          float32 // facing yaw - drives render + Vision cone
+	VelocityYaw  float32 // direction of last frame's motion
+	Speed        float32
 }
 
 // Collider - XZ radius for separation steering and selection raycasts.
@@ -41,13 +63,6 @@ type Collider struct {
 type Vision struct {
 	RangeM   float32
 	AngleDot float32
-}
-
-// Suppression - incoming-fire stress. ThreatDir points toward the source of
-// pressure (last bullet impact).
-type Suppression struct {
-	Level     float32
-	ThreatDir rl.Vector3
 }
 
 // AwarenessSlots is the fixed-size memory of recently-seen targets per unit.

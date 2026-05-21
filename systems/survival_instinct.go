@@ -34,25 +34,35 @@ import (
 // ActionQueue writes survive past the next formation tick. UnitMovement is
 // override-blind; it just executes the queued action.
 type SurvivalInstinctSystem struct {
-	unitFilter     *ecs.Filter3[components.Unit, components.WorldPos, components.Suppression]
-	slotFilter     *ecs.Filter2[components.WorldPos, components.CoverSlot]
-	squadFilter    *ecs.Filter2[components.Squad, components.CommandRoster]
-	queueMap       *ecs.Map[components.ActionQueue]
-	overrideMap    *ecs.Map[components.TacticalOverride]
-	memberMap      *ecs.Map[components.SquadMember]
-	behaviorMap    *ecs.Map[components.BehaviorRules]
-	suppressionMap *ecs.Map[components.Suppression]
-	squadStateMap  *ecs.Map[components.SquadState]
-	posMap         *ecs.Map[components.WorldPos]
-	eventLogRes    ecs.Resource[components.EventLog]
+	unitFilter    *ecs.Filter3[components.Unit, components.WorldPos, components.Threat]
+	slotFilter    *ecs.Filter2[components.WorldPos, components.CoverSlot]
+	squadFilter   *ecs.Filter2[components.Squad, components.CommandRoster]
+	queueMap      *ecs.Map[components.ActionQueue]
+	overrideMap   *ecs.Map[components.TacticalOverride]
+	memberMap     *ecs.Map[components.SquadMember]
+	behaviorMap   *ecs.Map[components.BehaviorRules]
+	threatMap     *ecs.Map[components.Threat]
+	squadStateMap *ecs.Map[components.SquadState]
+	rosterMap     *ecs.Map[components.CommandRoster]
+	microPathMap  *ecs.Map[components.MicroPath]
+	posMap        *ecs.Map[components.WorldPos]
+	eventLogRes   ecs.Resource[components.EventLog]
 
 	world *ecs.World
 
-	slots      []siCoverSlot
-	acquires   []siAcquireOp
-	clears     []ecs.Entity
-	stateAdds  []siStateAdd
-	squadInfo  map[ecs.Entity]siSquadInfo
+	slots     []siCoverSlot
+	acquires  []siAcquireOp
+	clears    []ecs.Entity
+	stateAdds []siStateAdd
+	squadInfo map[ecs.Entity]siSquadInfo
+
+	// Phase 17 M17.B.3: persistent capacity tracking. slot entity -> number of
+	// units currently holding it via TacticalOverride.AssignedSlot. Incremented
+	// in the acquire pass, decremented when the override clears or the unit
+	// dies / changes slot. pickCover uses it to penalise full slots without
+	// resorting to a hard reject (a saturated slot can still win as a
+	// last-resort when nothing else is in range).
+	occupancyClaim map[ecs.Entity]uint8
 
 	elapsed float32
 }
@@ -133,25 +143,28 @@ const scrambleSafetyDuration float32 = 60.0
 // InitUI after the World exists.
 func NewSurvivalInstinctSystem() *SurvivalInstinctSystem {
 	return &SurvivalInstinctSystem{
-		slots:     make([]siCoverSlot, 0, 64),
-		acquires:  make([]siAcquireOp, 0, 16),
-		clears:    make([]ecs.Entity, 0, 16),
-		stateAdds: make([]siStateAdd, 0, 4),
-		squadInfo: make(map[ecs.Entity]siSquadInfo, 8),
+		slots:          make([]siCoverSlot, 0, 64),
+		acquires:       make([]siAcquireOp, 0, 16),
+		clears:         make([]ecs.Entity, 0, 16),
+		stateAdds:      make([]siStateAdd, 0, 4),
+		squadInfo:      make(map[ecs.Entity]siSquadInfo, 8),
+		occupancyClaim: make(map[ecs.Entity]uint8, 32),
 	}
 }
 
 func (sys *SurvivalInstinctSystem) InitUI(w *ecs.World) {
 	sys.world = w
-	sys.unitFilter = ecs.NewFilter3[components.Unit, components.WorldPos, components.Suppression](w)
+	sys.unitFilter = ecs.NewFilter3[components.Unit, components.WorldPos, components.Threat](w)
 	sys.slotFilter = ecs.NewFilter2[components.WorldPos, components.CoverSlot](w)
 	sys.squadFilter = ecs.NewFilter2[components.Squad, components.CommandRoster](w)
 	sys.queueMap = ecs.NewMap[components.ActionQueue](w)
 	sys.overrideMap = ecs.NewMap[components.TacticalOverride](w)
 	sys.memberMap = ecs.NewMap[components.SquadMember](w)
 	sys.behaviorMap = ecs.NewMap[components.BehaviorRules](w)
-	sys.suppressionMap = ecs.NewMap[components.Suppression](w)
+	sys.threatMap = ecs.NewMap[components.Threat](w)
 	sys.squadStateMap = ecs.NewMap[components.SquadState](w)
+	sys.rosterMap = ecs.NewMap[components.CommandRoster](w)
+	sys.microPathMap = ecs.NewMap[components.MicroPath](w)
 	sys.posMap = ecs.NewMap[components.WorldPos](w)
 	sys.eventLogRes = ecs.NewResource[components.EventLog](w)
 }
@@ -212,28 +225,33 @@ func (sys *SurvivalInstinctSystem) Update(ctx core.UpdateContext) {
 	// Pass 2 - per-unit decision. We can mutate scalar fields on the
 	// TacticalOverride pointer in-place; archetype changes (Add / Remove) are
 	// queued for the post-pass.
+	//
+	// Phase 17 M17.0.3: trigger / clear gates compare against Threat.Total
+	// (aggregate of Suppression + ShotsFired + Endangered + Injury) instead of
+	// the Suppression channel alone. BehaviorRules.SuppressionThreshold keeps
+	// its float knob - it now means "total threat above this triggers cover".
 	q := sys.unitFilter.Query()
 	for q.Next() {
 		ent := q.Entity()
-		_, pos, supp := q.Get()
+		_, pos, threat := q.Get()
 		threshold := sys.thresholdFor(ent)
 		clearThreshold := threshold * 0.6
 		scrambling, squadThreat := sys.squadScrambleContext(ent)
 		// When the squad is Scrambling every member acquires cover, even ones
-		// whose own Suppression is still cold. Fallback threatDir comes from
-		// the squad-level aggregate computed in Pass 1.5.
+		// whose own Threat is still cold. Fallback threatDir comes from the
+		// squad-level aggregate computed in Pass 1.5.
 		effectiveThreshold := threshold
 		if scrambling {
 			effectiveThreshold = 0
 		}
-		threatDir := supp.ThreatDir
+		threatDir := threat.ThreatDir
 		if threatDir.X == 0 && threatDir.Z == 0 && scrambling {
 			threatDir = squadThreat
 		}
 
 		existing := sys.overrideMap.Get(ent)
 		if existing == nil {
-			if supp.Level <= effectiveThreshold && !scrambling {
+			if threat.Total <= effectiveThreshold && !scrambling {
 				continue
 			}
 			slot, slotPos, found := sys.pickCover(ent, pos, threatDir, claimed)
@@ -250,7 +268,7 @@ func (sys *SurvivalInstinctSystem) Update(ctx core.UpdateContext) {
 			sys.clears = append(sys.clears, ent)
 			continue
 		}
-		if supp.Level < clearThreshold && !scrambling {
+		if threat.Total < clearThreshold && !scrambling {
 			if existing.LowSuppSince == 0 {
 				existing.LowSuppSince = now
 			} else if now-existing.LowSuppSince >= siClearLowDuration {
@@ -265,6 +283,11 @@ func (sys *SurvivalInstinctSystem) Update(ctx core.UpdateContext) {
 	// can be re-acquired on the same tick if it's still suppressed; rare but
 	// possible if Until expired while threat is fresh), then acquires.
 	for _, e := range sys.clears {
+		if ov := sys.overrideMap.Get(e); ov != nil && ov.AssignedSlot != (ecs.Entity{}) {
+			if sys.occupancyClaim[ov.AssignedSlot] > 0 {
+				sys.occupancyClaim[ov.AssignedSlot]--
+			}
+		}
 		if sys.overrideMap.Has(e) {
 			sys.overrideMap.Remove(e)
 		}
@@ -277,8 +300,27 @@ func (sys *SurvivalInstinctSystem) Update(ctx core.UpdateContext) {
 		if aq == nil {
 			continue
 		}
-		ClearActions(aq)
-		PushAction(aq, components.Action{Kind: components.ActionMoveTo, Target: op.pos})
+		// Phase 17 M17.B.5: retarget in place + MicroPath.Dirty instead of
+		// ClearActions+PushAction. UnitMovement / MicroPathSystem then route
+		// the unit toward the cover slot via A* (the cover may be on the far
+		// side of a doorway or building corner; straight-line steering would
+		// jam against a wall).
+		if aq.Count > 0 && aq.Actions[aq.Head].Kind == components.ActionMoveTo {
+			aq.Actions[aq.Head].Target = op.pos
+		} else {
+			ClearActions(aq)
+			PushAction(aq, components.Action{Kind: components.ActionMoveTo, Target: op.pos})
+		}
+		if mp := sys.microPathMap.Get(op.unit); mp != nil {
+			mp.Dirty = true
+		}
+		// If the unit already held a different slot, release the old claim.
+		if existing := sys.overrideMap.Get(op.unit); existing != nil &&
+			existing.AssignedSlot != (ecs.Entity{}) && existing.AssignedSlot != op.slot {
+			if sys.occupancyClaim[existing.AssignedSlot] > 0 {
+				sys.occupancyClaim[existing.AssignedSlot]--
+			}
+		}
 		if sys.overrideMap.Has(op.unit) {
 			sys.overrideMap.Remove(op.unit)
 		}
@@ -288,6 +330,7 @@ func (sys *SurvivalInstinctSystem) Update(ctx core.UpdateContext) {
 			LowSuppSince: 0,
 			AssignedSlot: op.slot,
 		})
+		sys.occupancyClaim[op.slot]++
 	}
 }
 
@@ -318,28 +361,25 @@ func (sys *SurvivalInstinctSystem) pushSuppressionEvent(squad ecs.Entity, now fl
 
 // rosterMember returns the first live member of `squad` (commander preferred).
 // Used as a positional anchor for events that need a representative location.
+//
+// Called from pushSuppressionEvent which itself runs inside runScatterProtocol's
+// squadFilter query - so this resolves CommandRoster via Map.Get (O(1), no lock)
+// rather than re-opening a nested query (which previously left a lock dangling
+// when the early return / break short-circuited Ark's auto-close, eventually
+// panicking the next archetype mutation with "cannot modify a locked world").
 func (sys *SurvivalInstinctSystem) rosterMember(squad ecs.Entity) ecs.Entity {
 	if !sys.world.Alive(squad) {
 		return ecs.Entity{}
 	}
-	// Walk via SquadFilter is not handy here; cheap to re-resolve via
-	// squadStateMap path is no help (it doesn't carry roster). Use the
-	// roster map directly through reflection-free path: we already touched
-	// roster in the squadFilter pass and stored squadInfo, but not the first
-	// member. Just iterate the small squadFilter again.
-	q := sys.squadFilter.Query()
-	for q.Next() {
-		if q.Entity() != squad {
-			continue
+	roster := sys.rosterMap.Get(squad)
+	if roster == nil {
+		return ecs.Entity{}
+	}
+	for i := uint8(0); i < roster.Count; i++ {
+		mem := roster.Members[i]
+		if mem != (ecs.Entity{}) && sys.world.Alive(mem) {
+			return mem
 		}
-		_, roster := q.Get()
-		for i := uint8(0); i < roster.Count; i++ {
-			mem := roster.Members[i]
-			if mem != (ecs.Entity{}) && sys.world.Alive(mem) {
-				return mem
-			}
-		}
-		break
 	}
 	return ecs.Entity{}
 }
@@ -373,9 +413,13 @@ func (sys *SurvivalInstinctSystem) squadScrambleContext(unit ecs.Entity) (bool, 
 }
 
 // runScatterProtocol walks every squad, lazy-adds SquadState when missing,
-// pushes the latest squad-average Suppression into the history ring, and runs
-// the Idle / Engaged / Scrambling transition logic. squadInfo is repopulated
-// from scratch each tick so Pass 2 reads a consistent view.
+// pushes the latest squad-average Threat.Total into the history ring, and
+// runs the Idle / Engaged / Scrambling transition logic. squadInfo is
+// repopulated from scratch each tick so Pass 2 reads a consistent view.
+//
+// Phase 17 M17.0.3: history tracks Total instead of raw Suppression, so a
+// far-fire-only spike (ShotsFired channel) can also flip a squad into
+// Scrambling once that producer ships.
 func (sys *SurvivalInstinctSystem) runScatterProtocol(now float32) {
 	clear(sys.squadInfo)
 	sys.stateAdds = sys.stateAdds[:0]
@@ -388,7 +432,7 @@ func (sys *SurvivalInstinctSystem) runScatterProtocol(now float32) {
 			continue
 		}
 
-		avgSupp, threatDir := sys.aggregateSquadSuppression(roster)
+		avgSupp, threatDir := sys.aggregateSquadThreat(roster)
 
 		state := sys.squadStateMap.Get(squad)
 		if state == nil {
@@ -453,10 +497,10 @@ func (sys *SurvivalInstinctSystem) runScatterProtocol(now float32) {
 	}
 }
 
-// aggregateSquadSuppression walks the roster, returns the mean Suppression.Level
-// across live members + the unit-length suppression-weighted ThreatDir (XZ).
-// Members without a Suppression component count as zero contribution.
-func (sys *SurvivalInstinctSystem) aggregateSquadSuppression(roster *components.CommandRoster) (float32, rl.Vector3) {
+// aggregateSquadThreat walks the roster, returns the mean Threat.Total
+// across live members + the unit-length Total-weighted ThreatDir (XZ).
+// Members without a Threat component count as zero contribution.
+func (sys *SurvivalInstinctSystem) aggregateSquadThreat(roster *components.CommandRoster) (float32, rl.Vector3) {
 	var sum, weight float32
 	var tx, tz float32
 	var live float32
@@ -466,14 +510,14 @@ func (sys *SurvivalInstinctSystem) aggregateSquadSuppression(roster *components.
 			continue
 		}
 		live++
-		supp := sys.suppressionMap.Get(mem)
-		if supp == nil {
+		threat := sys.threatMap.Get(mem)
+		if threat == nil {
 			continue
 		}
-		sum += supp.Level
-		tx += supp.ThreatDir.X * supp.Level
-		tz += supp.ThreatDir.Z * supp.Level
-		weight += supp.Level
+		sum += threat.Total
+		tx += threat.ThreatDir.X * threat.Total
+		tz += threat.ThreatDir.Z * threat.Total
+		weight += threat.Total
 	}
 	if live == 0 {
 		return 0, rl.Vector3{}
@@ -507,19 +551,29 @@ func (sys *SurvivalInstinctSystem) windowDelta(state *components.SquadState) flo
 }
 
 // pickCover returns the best cover slot for a unit at `pos` threatened from
-// direction `threatDir`. Score formula (PHASE-15.md A-P2):
+// direction `threatDir`. Phase 17 M17.B.1/M17.B.2/M17.B.3 score formula:
 //
-//   score = max(0, dot(slot.OriginDir, threatDir))
-//         * 1/(1 + dist/10m)
-//         * (1 - occupancyPenalty)
-//         * slot.Quality
+//   score = quality*100 + facing*20 - dist*5 - anglePenalty*30 - capacityPenalty*50
 //
-// occupancyPenalty is 0.5 when another unit has the slot in its current
-// override. The slot's OriginDir points outward from cover - aligning with
-// threatDir means the unit will face the threat with cover behind it.
+// facing = dot(slot.OriginDir, threatDir). In our convention OriginDir points
+// outward from the cover material toward the unit side (slot lives just
+// outside the cover), and threatDir = unit←from-threat also points toward the
+// unit side, so a "between threat and unit" slot has facing ~ +1. Slots
+// behind the unit relative to the threat get facing << 0; M17.B.1 rejects
+// anything with facing < -0.3 (tolerance keeps side-cover viable but kills
+// "cover behind my back" picks).
+//
+// anglePenalty = 1 - dot(approach_forward, dir_to_slot). Approach forward is
+// the "away from threat" direction (-threatDir) - the unit should not be
+// running backwards toward a slot, so slots behind the unit get penalised.
+//
+// capacityPenalty grows with the persistent occupancyClaim count: 1 if any
+// other unit already holds the slot via TacticalOverride.AssignedSlot, 20 if
+// the slot is at the soft cap. Within-tick reservations from `claimed`
+// double-count for the same effect.
 //
 // Returns (slot, worldPos, true) on success or (_, _, false) when no slot
-// is in range or scores positively.
+// passes the validation gate.
 func (sys *SurvivalInstinctSystem) pickCover(
 	unit ecs.Entity, pos *components.WorldPos, threatDir rl.Vector3,
 	claimed map[ecs.Entity]ecs.Entity,
@@ -532,12 +586,17 @@ func (sys *SurvivalInstinctSystem) pickCover(
 		tx /= l
 		tz /= l
 	}
+	// Approach forward: away from threat (the unit is bolting from danger,
+	// so "ahead" for utility purposes is the survive-away direction).
+	fx, fz := -tx, -tz
+
 	unitX := float32(pos.Chunk.X)*components.ChunkSize + pos.Local.X
 	unitZ := float32(pos.Chunk.Z)*components.ChunkSize + pos.Local.Z
 
 	var bestEnt ecs.Entity
 	var bestPos components.WorldPos
-	var bestScore float32
+	const negInf = float32(-1e9)
+	bestScore := negInf
 
 	for i := range sys.slots {
 		s := &sys.slots[i]
@@ -548,23 +607,38 @@ func (sys *SurvivalInstinctSystem) pickCover(
 			continue
 		}
 		facing := s.originX*tx + s.originZ*tz
-		if facing <= 0 {
+		if facing < -0.3 {
 			continue
 		}
 		dist := float32(math.Sqrt(float64(distSq)))
-		falloff := 1.0 / (1.0 + dist/10.0)
-		occ := float32(0)
-		if owner, ok := claimed[s.ent]; ok && owner != unit {
-			occ = 0.5
+		var dirX, dirZ float32
+		if dist > 1e-3 {
+			dirX = dx / dist
+			dirZ = dz / dist
 		}
-		score := facing * falloff * (1 - occ) * s.quality
+		align := fx*dirX + fz*dirZ
+		anglePenalty := 1 - align // [0, 2]
+
+		var capacityPenalty float32
+		claim := sys.occupancyClaim[s.ent]
+		if owner, ok := claimed[s.ent]; ok && owner != unit {
+			claim++
+		}
+		switch {
+		case claim >= 2:
+			capacityPenalty = 20
+		case claim >= 1:
+			capacityPenalty = 1
+		}
+
+		score := s.quality*100 + facing*20 - dist*5 - anglePenalty*30 - capacityPenalty*50
 		if score > bestScore {
 			bestScore = score
 			bestEnt = s.ent
 			bestPos = s.worldPos
 		}
 	}
-	if bestScore <= 0 {
+	if bestEnt == (ecs.Entity{}) {
 		return ecs.Entity{}, components.WorldPos{}, false
 	}
 	return bestEnt, bestPos, true
