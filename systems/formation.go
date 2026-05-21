@@ -49,6 +49,11 @@ type FormationSystem struct {
 	// offset against squad center). TacticalOverride still wins over this.
 	individualPosMap *ecs.Map[components.IndividualPosition]
 
+	// Phase 18 formation editor: orientation lock (north / movement) and
+	// arbitrary per-slot offsets in squad-local frame.
+	orientMap      *ecs.Map[components.FormationOrientation]
+	customSlotsMap *ecs.Map[components.FormationCustomSlots]
+
 	// Phase 11.6 M11.6.2: reusable snapshot buffer.
 	workBuf []formationWork
 
@@ -88,6 +93,8 @@ func (sys *FormationSystem) InitUI(w *ecs.World) {
 	sys.tacticalOverrideMap = ecs.NewMap[components.TacticalOverride](w)
 	sys.individualPosMap = ecs.NewMap[components.IndividualPosition](w)
 	sys.microPathMap = ecs.NewMap[components.MicroPath](w)
+	sys.orientMap = ecs.NewMap[components.FormationOrientation](w)
+	sys.customSlotsMap = ecs.NewMap[components.FormationCustomSlots](w)
 }
 
 func (FormationSystem) Name() string { return "formation" }
@@ -137,6 +144,7 @@ const formationForwardLockDist float32 = 5.0
 // stable between snapshot and ParallelFor since neither branch changes
 // archetype for snapshotted entities.
 type formationWork struct {
+	squad  ecs.Entity
 	roster *components.CommandRoster
 	mp     *components.MacroPath
 	fd     *components.FormationData
@@ -150,7 +158,12 @@ func (sys *FormationSystem) Update(ctx core.UpdateContext) {
 	q := sys.filter.Query()
 	for q.Next() {
 		_, roster, mp, fd := q.Get()
-		sys.workBuf = append(sys.workBuf, formationWork{roster: roster, mp: mp, fd: fd})
+		sys.workBuf = append(sys.workBuf, formationWork{
+			squad:  q.Entity(),
+			roster: roster,
+			mp:     mp,
+			fd:     fd,
+		})
 	}
 	work := sys.workBuf
 
@@ -306,7 +319,21 @@ func (sys *FormationSystem) processSquad(world *ecs.World, w formationWork, leav
 				target = baseCenter.Add(rl.Vector3{X: ip.RelativeOffset.X, Y: 0, Z: ip.RelativeOffset.Y})
 			}
 		} else {
-			offX, offZ := FormationOffset(fd.Type, i, fd.Spacing, fd.Forward)
+			// Phase 18 orientation lock: OrientNorth overrides the live
+			// motion-derived forward with the world +Z axis so the
+			// formation keeps its compass alignment regardless of march
+			// direction. OrientMovement (default) uses the running forward
+			// we computed above.
+			forward := fd.Forward
+			if o := sys.orientMap.Get(w.squad); o != nil && o.Mode == components.OrientNorth {
+				forward = rl.Vector3{X: 0, Y: 0, Z: 1}
+			}
+			var offX, offZ float32
+			if cs := sys.customSlotsMap.Get(w.squad); cs != nil {
+				offX, offZ = customSlotWorld(cs.Slots[i], forward)
+			} else {
+				offX, offZ = FormationOffset(fd.Type, i, fd.Spacing, forward)
+			}
 			// Phase 17 M17.A.3 leader-wake bias: when the squad's leader has a
 			// MicroPath in flight, slot i > 0 anchors its target on a waypoint
 			// from the leader's queue (k = min(i, remaining-1)) instead of the
@@ -366,6 +393,19 @@ func (sys *FormationSystem) processSquad(world *ecs.World, w formationWork, leav
 			mp.Dirty = true
 		}
 	}
+}
+
+// customSlotWorld projects a squad-local slot offset (X=right of forward,
+// Y=along forward) into world XZ given the current forward direction.
+// Mirrors the right/forward basis used by FormationOffset so editor-set
+// slots end up in the same coordinate frame as kind-based ones.
+func customSlotWorld(slot rl.Vector2, forward rl.Vector3) (float32, float32) {
+	fx, fz := forward.X, forward.Z
+	if fx*fx+fz*fz < 1e-4 {
+		fx, fz = 0, 1
+	}
+	rx, rz := fz, -fx
+	return slot.X*rx + slot.Y*fx, slot.X*rz + slot.Y*fz
 }
 
 // FormationOffset returns the XZ offset of `slot` from the squad center for

@@ -100,6 +100,10 @@ func main() {
 	ecs.AddResource(app.World, &transitionRegistry)
 	mapMarkerCache := components.NewMapMarkerCache()
 	ecs.AddResource(app.World, &mapMarkerCache)
+	// Phase 18 formation presets - shared across squads via the formation
+	// editor "Save current" / "Apply preset" buttons.
+	formationPresets := components.FormationPresets{}
+	ecs.AddResource(app.World, &formationPresets)
 	// Phase 14.5 M14.5.4 - VisualEvents resource replaced by ECS-entity
 	// particles. Spawn handles + ParticleSystem registered below.
 	// Phase 14.5 M14.5.2: SpatialHash for Unit XZ positions. Rebuilt every
@@ -438,6 +442,8 @@ func main() {
 	squadMemberMap := ecs.NewMap[components.SquadMember](app.World)
 	rosterMap := ecs.NewMap[components.CommandRoster](app.World)
 	formationDataMap := ecs.NewMap[components.FormationData](app.World)
+	formationOrientMap := ecs.NewMap[components.FormationOrientation](app.World)
+	formationCustomSlotsMap := ecs.NewMap[components.FormationCustomSlots](app.World)
 	// Order / quick-bar maps that input handlers + ghost preview reuse outside
 	// the Inspector layer. Maps used ONLY by the Inspector are reachable via
 	// inspectorMaps.X without a separate declaration here.
@@ -731,6 +737,8 @@ func main() {
 		topBarSpeedUp     rl.Rectangle
 		// Phase 18.C tree-of-splits popup menu (per-leaf widget switch / close).
 		chevronMenu ui.ChevronMenu
+		// Phase 18 floating panels (formation editor, future dialogs).
+		floating = ui.NewFloatingState()
 	)
 	const marqueeClickThreshold float32 = 5
 	// chromeBusy = "UI chrome currently owns mouse/keyboard". When true the
@@ -738,7 +746,8 @@ func main() {
 	// top-bar buttons / timeline blocks) skip their LMB handlers so a chrome
 	// interaction doesn't double-fire into the world below.
 	chromeBusy := func() bool {
-		return panelMgr.IsDragging() || panelMgr.IsCornerDragging() || chevronMenu.Open
+		return panelMgr.IsDragging() || panelMgr.IsCornerDragging() ||
+			chevronMenu.Open || floating.IsBusy(rl.GetMousePosition())
 	}
 
 	isSelected := func(e ecs.Entity) int {
@@ -819,6 +828,8 @@ func main() {
 			}
 		case panelMgr.IsCornerDragging():
 			rl.SetMouseCursor(rl.MouseCursorResizeAll)
+		case floating.IsResizing() || floating.ResizeHover(cursor):
+			rl.SetMouseCursor(rl.MouseCursorResizeNWSE)
 		case splitterHover != nil:
 			if splitterHover.Orient == ui.SplitVertical {
 				rl.SetMouseCursor(rl.MouseCursorResizeEW)
@@ -833,12 +844,23 @@ func main() {
 			rl.SetMouseCursor(rl.MouseCursorDefault)
 		}
 
+		// Phase 18 floating panels eat LMB first (drag header, X close,
+		// content focus). Returns true when this frame's LMB was consumed.
+		floatingConsumed := floating.HandleInput(cursor,
+			rl.IsMouseButtonPressed(rl.MouseButtonLeft),
+			rl.IsMouseButtonDown(rl.MouseButtonLeft),
+			rl.IsKeyPressed(rl.KeyEscape),
+			screenW, screenH)
+
 		// LMB press dispatch. Order matters: menu-open takes priority so the
 		// rest of the UI doesn't react under it. lmbDown is the raw "press
 		// this frame" signal (menu still needs to receive it even when
 		// chromeBusy gates everything else); lmbPress is the gated form
-		// used by splitter / chevron / corner start.
-		lmbDown := rl.IsMouseButtonPressed(rl.MouseButtonLeft)
+		// used by splitter / chevron / corner start. A press inside any
+		// floating panel is forwarded to the panel only - workspace chrome
+		// and content stay silent.
+		overFloating := floating.HitTest(cursor) != nil
+		lmbDown := rl.IsMouseButtonPressed(rl.MouseButtonLeft) && !floatingConsumed && !overFloating
 		lmbPress := lmbDown && !panelMgr.IsDragging() && !panelMgr.IsCornerDragging()
 		if chevronMenu.Open && lmbDown {
 			if idx := chevronMenu.HitItem(hudFont, cursor); idx >= 0 {
@@ -1423,11 +1445,33 @@ func main() {
 			}
 		}
 
-		// -- T -> form Squad --
+		// -- T -> form Squad. Phase 18 auto-formation rule: infantry-only
+		// merges land in FormationLoose (free); mixed infantry+vehicle
+		// merges snapshot current world positions into FormationCustomSlots
+		// + lock OrientNorth so each member stays where it stood relative
+		// to the new squad centre. Phase 19 will populate the vehicle
+		// branch; until then the mixed check is always false.
 		if rl.IsKeyPressed(rl.KeyT) && len(selected) >= 2 {
-			newSquad := squadService.CreateFromUnits(selected, components.FormationLine)
+			mixed := containsVehicle(selected, app.World)
+			kind := components.FormationLoose
+			if mixed {
+				kind = components.FormationLine
+			}
+			// Snapshot positions BEFORE create (CreateFromUnits may despawn
+			// old squads but doesn't move WorldPos).
+			snapshots := make(map[ecs.Entity]components.WorldPos, len(selected))
+			for _, e := range selected {
+				if p := posMap.Get(e); p != nil {
+					snapshots[e] = *p
+				}
+			}
+			newSquad := squadService.CreateFromUnits(selected, kind)
 			if newSquad != (ecs.Entity{}) && app.World.Alive(newSquad) {
 				if r := rosterMap.Get(newSquad); r != nil {
+					if mixed {
+						applyPreservedSlots(newSquad, r, snapshots,
+							formationCustomSlotsMap, formationOrientMap)
+					}
 					selected = append(selected[:0], r.Members[:r.Count]...)
 				}
 			}
@@ -1464,6 +1508,35 @@ func main() {
 						fd.Type = newKind
 						fd.Spacing = systems.FormationSpacing(newKind)
 					}
+				}
+			}
+		}
+
+		// -- E -> toggle formation editor floating panel for the selected
+		//        squad. Phase 18 floating-panels demo + concentric-rings UI.
+		//        (F is taken by FloorNavGrid debug hold-overlay.)
+		if rl.IsKeyPressed(rl.KeyE) && len(selected) > 0 {
+			if commonSquad, homo := groupSelected(selected, squadMemberMap); homo && commonSquad != (ecs.Entity{}) && app.World.Alive(commonSquad) {
+				if floating.IsOpen("formation-editor") {
+					floating.Close("formation-editor")
+				} else {
+					editor := ui.NewFormationEditor(commonSquad, ui.FormationEditorCtx{
+						World:          app.World,
+						RosterMap:      rosterMap,
+						FormationMap:   formationDataMap,
+						OrientMap:      formationOrientMap,
+						CustomSlotsMap: formationCustomSlotsMap,
+						RoleMap:        roleMap,
+						PosMap:         posMap,
+						SquadColor:     squadColor,
+						Presets:        &formationPresets,
+					})
+					floating.Open(&ui.FloatingPanel{
+						ID:     "formation-editor",
+						Title:  "Squad formation",
+						Bounds: rl.Rectangle{X: 220, Y: 80, Width: 360, Height: 400},
+						Render: editor.Render,
+					})
 				}
 			}
 		}
@@ -2292,6 +2365,11 @@ func main() {
 		// sits over title bars.
 		chevronMenu.Draw(hudFont, cursor)
 
+		// Phase 18 floating panels (formation editor + future dialogs).
+		// Drawn after chevron menu so floaters sit above it; rendered
+		// before pie menu so RMB pie still wins as top overlay.
+		floating.DrawAll(hudFont, cursor, rl.IsMouseButtonPressed(rl.MouseButtonLeft))
+
 		// Pie menu (RMB-hold overlay, M11.6). Drawn after chrome so it sits
 		// above every panel.
 		pieMenu.Draw(hudFont, cursor)
@@ -2354,6 +2432,61 @@ func main() {
 
 		recordTraceFrame(app, rl.GetFrameTime()*1000, rl.GetFPS(), cen)
 		handleTraceHotkeys(app)
+	}
+}
+
+// containsVehicle reports whether any unit in `units` is non-infantry.
+// Placeholder until Phase 19 lands the Vehicle component — currently
+// always returns false (every unit on the field is infantry). When
+// vehicles ship, swap the body for a real Vehicle-map.Has loop.
+func containsVehicle(units []ecs.Entity, world *ecs.World) bool {
+	_ = world
+	_ = units
+	return false
+}
+
+// applyPreservedSlots snapshots each rostered member's pre-merge world
+// position into FormationCustomSlots, expressed in north-relative local
+// frame (X = world +X, Y = world +Z), then sets OrientNorth so the layout
+// doesn't rotate with motion. Slot 0 (commander) is the anchor: all other
+// slots are offsets from the commander's snapshot position.
+func applyPreservedSlots(
+	squad ecs.Entity,
+	roster *components.CommandRoster,
+	snapshots map[ecs.Entity]components.WorldPos,
+	customSlotsMap *ecs.Map[components.FormationCustomSlots],
+	orientMap *ecs.Map[components.FormationOrientation],
+) {
+	if roster == nil || roster.Count == 0 {
+		return
+	}
+	commander := roster.Members[0]
+	center, ok := snapshots[commander]
+	if !ok {
+		return
+	}
+	var cs components.FormationCustomSlots
+	for i := uint8(0); i < roster.Count; i++ {
+		mem := roster.Members[i]
+		snap, ok := snapshots[mem]
+		if !ok {
+			continue
+		}
+		// WorldPos.Sub returns a world-space rl.Vector3 from `other` to `p`
+		// (chunk-aware), so this is already the per-member offset from
+		// the commander in metres.
+		diff := snap.Sub(center)
+		cs.Slots[i] = rl.Vector2{X: diff.X, Y: diff.Z}
+	}
+	if customSlotsMap.Has(squad) {
+		*customSlotsMap.Get(squad) = cs
+	} else {
+		customSlotsMap.Add(squad, &cs)
+	}
+	if orientMap.Has(squad) {
+		orientMap.Get(squad).Mode = components.OrientNorth
+	} else {
+		orientMap.Add(squad, &components.FormationOrientation{Mode: components.OrientNorth})
 	}
 }
 
