@@ -23,15 +23,16 @@ import (
 const layoutSavePath = "./save/layout.json"
 
 // layoutFileVersion identifies the on-disk schema revision. Bumped when
-// fields are added/removed in a way Phase 22 readers can't infer. Phase 13.5
-// keeps it at 1.
-const layoutFileVersion uint16 = 1
+// fields are added/removed in a way readers can't infer. Phase 18 bumped to
+// 2 to add TimelineRatio.
+const layoutFileVersion uint16 = 2
 
 // layoutFile is the JSON-serialised representation of mutable layout state.
 type layoutFile struct {
 	Version        uint16  `json:"version"`
 	RightColRatio  float32 `json:"right_col_ratio"`
 	InspectorRatio float32 `json:"inspector_ratio"`
+	TimelineRatio  float32 `json:"timeline_ratio"`
 }
 
 // loadLayout reads the layout file (if present) and applies its ratios to
@@ -62,6 +63,7 @@ func loadLayout(panelMgr *ui.PanelManager) {
 	}
 	panelMgr.RightColRatio = clampRatio(lf.RightColRatio, 0.10, 0.60)
 	panelMgr.InspectorRatio = clampRatio(lf.InspectorRatio, 0.10, 0.90)
+	panelMgr.TimelineRatio = clampRatio(lf.TimelineRatio, 0.05, 0.60)
 }
 
 // saveLayout marshals the current PanelManager ratios into layout.json. Atomic
@@ -81,6 +83,7 @@ func saveLayout(panelMgr *ui.PanelManager) {
 		Version:        layoutFileVersion,
 		RightColRatio:  panelMgr.RightColRatio,
 		InspectorRatio: panelMgr.InspectorRatio,
+		TimelineRatio:  panelMgr.TimelineRatio,
 	}
 	data, err := json.MarshalIndent(&lf, "", "  ")
 	if err != nil {

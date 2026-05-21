@@ -9,7 +9,7 @@ import (
 // caller, inside scissor if needed.
 
 const (
-	titleBarHeight int32 = 20
+	titleBarHeight int32 = 24
 )
 
 var (

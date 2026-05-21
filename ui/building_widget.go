@@ -38,10 +38,10 @@ type BuildingWidgetLayout struct {
 }
 
 const (
-	widgetChipW  = 32
-	widgetChipH  = 20
+	widgetChipW  = 36
+	widgetChipH  = 22
 	widgetGap    = 4
-	widgetFontPx = 12
+	widgetFontPx = 14
 )
 
 // ComputeBuildingWidget assembles a chip layout above `screenPos`. Returns

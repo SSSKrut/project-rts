@@ -136,10 +136,10 @@ func roleOf(ctx InspectorCtx, ent ecs.Entity) components.UnitRoleKind {
 }
 
 const (
-	inspectorFontSize int32 = 14
-	inspectorRowH     int32 = 18
-	inspectorPadX     int32 = 8
-	inspectorPadY     int32 = 6
+	inspectorFontSize int32 = 16
+	inspectorRowH     int32 = 22
+	inspectorPadX     int32 = 10
+	inspectorPadY     int32 = 8
 )
 
 var (

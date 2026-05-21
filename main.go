@@ -445,6 +445,11 @@ func main() {
 	orderKindMap := ecs.NewMap[components.OrderKind](app.World)
 	orderTargetMap := ecs.NewMap[components.OrderTarget](app.World)
 	orderChainMap := ecs.NewMap[components.OrderChain](app.World)
+	// Phase 18 timeline panel reads these directly from main.go - inspectorMaps
+	// only exposes the head + 2-queued used by the inline order section.
+	orderStateMap := ecs.NewMap[components.OrderState](app.World)
+	orderProgressMap := ecs.NewMap[components.OrderProgress](app.World)
+	orderIssuedAtMap := ecs.NewMap[components.OrderIssuedAt](app.World)
 	movementProfileMap := ecs.NewMap[components.MovementProfile](app.World)
 	staminaMap := ecs.NewMap[components.Stamina](app.World)
 	hpMap := ecs.NewMap[components.HP](app.World)
@@ -715,6 +720,15 @@ func main() {
 		expandedHUDOn    bool
 		showMapDebugLy   bool // toggled per-frame by hold-G
 		binds            [5]bindEntry
+		// Phase 18 timeline panel state.
+		timelineView      = ui.NewTimelineView()
+		timelineData      ui.TimelineData
+		timelineHoverHit  ui.TimelineHit
+		timelineHoverOK   bool
+		timelineHoverBlk  ui.TimelineOrderBlock
+		topBarPlayPause   rl.Rectangle
+		topBarSpeedDown   rl.Rectangle
+		topBarSpeedUp     rl.Rectangle
 	)
 	const marqueeClickThreshold float32 = 5
 
@@ -791,14 +805,14 @@ func main() {
 			switch panelMgr.DraggingSplitter() {
 			case ui.SplitterMain:
 				rl.SetMouseCursor(rl.MouseCursorResizeEW)
-			case ui.SplitterRight:
+			case ui.SplitterRight, ui.SplitterTimeline:
 				rl.SetMouseCursor(rl.MouseCursorResizeNS)
 			}
 		case splitterHover != ui.SplitterNone:
 			switch splitterHover {
 			case ui.SplitterMain:
 				rl.SetMouseCursor(rl.MouseCursorResizeEW)
-			case ui.SplitterRight:
+			case ui.SplitterRight, ui.SplitterTimeline:
 				rl.SetMouseCursor(rl.MouseCursorResizeNS)
 			}
 		default:
@@ -969,6 +983,89 @@ func main() {
 				}
 			} else {
 				scrollDragging = false
+			}
+		}
+
+		// -- Phase 18 top bar: LMB on play/pause/speed buttons --
+		if focused == ui.PanelTopBar && !panelMgr.IsDragging() && !scrollDragging &&
+			rl.IsMouseButtonPressed(rl.MouseButtonLeft) {
+			switch ui.TopBarHitTest(cursor, topBarPlayPause, topBarSpeedDown, topBarSpeedUp) {
+			case ui.TopBarHitPlayPause:
+				if app.TimeScale > 0 {
+					app.LastNonZeroScale = app.TimeScale
+					app.TimeScale = 0
+				} else {
+					if app.LastNonZeroScale <= 0 {
+						app.LastNonZeroScale = 1
+					}
+					app.TimeScale = app.LastNonZeroScale
+				}
+			case ui.TopBarHitSpeedDown:
+				app.TimeScale = nextTimeScale(app.TimeScale, -1)
+				app.LastNonZeroScale = app.TimeScale
+			case ui.TopBarHitSpeedUp:
+				app.TimeScale = nextTimeScale(app.TimeScale, +1)
+				app.LastNonZeroScale = app.TimeScale
+			}
+		}
+
+		// -- Phase 18 timeline: hover/click on order blocks, wheel pan/zoom --
+		timelineHoverOK = false
+		if focused == ui.PanelTimeline && !panelMgr.IsDragging() {
+			panelTL := panelMgr.Get(ui.PanelTimeline)
+			timelineHoverHit, timelineHoverOK = ui.TimelineHitTest(panelTL, timelineData, timelineView, cursor)
+			if timelineHoverHit.HitOrder {
+				for _, r := range timelineData.Rows {
+					if r.Squad != timelineHoverHit.Squad {
+						continue
+					}
+					for _, ob := range r.Orders {
+						if ob.Order == timelineHoverHit.Order {
+							timelineHoverBlk = ob
+							break
+						}
+					}
+				}
+			}
+			if wheel := rl.GetMouseWheelMove(); wheel != 0 {
+				if shiftHeld {
+					factor := float32(math.Pow(1.15, float64(wheel)))
+					next := timelineView.PixelsPerSec * factor
+					if next < ui.TimelineMinPxPerSec {
+						next = ui.TimelineMinPxPerSec
+					}
+					if next > ui.TimelineMaxPxPerSec {
+						next = ui.TimelineMaxPxPerSec
+					}
+					timelineView.PixelsPerSec = next
+					timelineView.Follow = false
+				} else {
+					timelineView.OffsetT -= wheel * 30 / timelineView.PixelsPerSec
+					timelineView.Follow = false
+				}
+			}
+			if rl.IsMouseButtonPressed(rl.MouseButtonLeft) && !scrollDragging {
+				if timelineHoverOK && timelineHoverHit.Squad != (ecs.Entity{}) &&
+					app.World.Alive(timelineHoverHit.Squad) {
+					if r := rosterMap.Get(timelineHoverHit.Squad); r != nil {
+						selected = selected[:0]
+						for i := uint8(0); i < r.Count; i++ {
+							if m := r.Members[i]; m != (ecs.Entity{}) && app.World.Alive(m) {
+								selected = append(selected, m)
+							}
+						}
+						navPath = nil
+					}
+					if timelineHoverHit.HitOrder && app.World.Alive(timelineHoverHit.Order) {
+						if t := orderTargetMap.Get(timelineHoverHit.Order); t != nil {
+							*posMap.Get(anchor) = t.Pos
+						}
+					}
+				}
+			}
+			// Double-click on the panel background -> re-enable Follow.
+			if rl.IsMouseButtonPressed(rl.MouseButtonRight) && timelineHoverOK && !timelineHoverHit.HitOrder {
+				timelineView.Follow = true
 			}
 		}
 
@@ -2046,11 +2143,22 @@ func main() {
 			ui.DrawScrollbar(inspectorPanel, inspectorScroll)
 		}
 
-		// Time panel.
-		ui.DrawTimePanel(panelMgr.Get(ui.PanelTime), hudFont, ui.TimeDisplay{
-			Scale:   app.TimeScale,
-			Elapsed: float32(app.Elapsed().Seconds()),
-		})
+		// Phase 18 top bar (chromeless toolbar).
+		topBarPlayPause, topBarSpeedDown, topBarSpeedUp = ui.DrawTopBar(
+			panelMgr.Get(ui.PanelTopBar), hudFont, ui.TimeDisplay{
+				Scale:   app.TimeScale,
+				Elapsed: float32(app.Elapsed().Seconds()),
+			})
+
+		// Phase 18 timeline panel.
+		timelineData = buildTimelineData(app.World, squadFilter, posMap, factionMap,
+			orderQueueMap, orderChainMap, orderKindMap, orderTargetMap, orderStateMap,
+			orderProgressMap, orderIssuedAtMap, squadColor,
+			float32(app.Elapsed().Seconds()))
+		ui.DrawTimelinePanel(panelMgr.Get(ui.PanelTimeline), hudFont, timelineData, &timelineView)
+		if timelineHoverOK && timelineHoverHit.HitOrder {
+			ui.DrawTimelineTooltip(hudFont, cursor, timelineHoverBlk)
+		}
 
 		// 3D RT composite into Panel3D bounds.
 		scene3DRT.Composite(panel3D)
@@ -2118,8 +2226,10 @@ func main() {
 
 		// Chrome (border + title) on every panel, drawn last so it overlays
 		// content (including marquee strokes that bleed onto the title bar).
-		for _, id := range []ui.PanelID{ui.Panel3D, ui.PanelMap, ui.PanelInspect, ui.PanelTime} {
-			ui.DrawChrome(panelMgr.Get(id), hudFont, 14)
+		// PanelTopBar drawn by DrawTopBar itself (no chrome). PanelTimeline
+		// gets normal chrome so its title + border match the rest.
+		for _, id := range []ui.PanelID{ui.Panel3D, ui.PanelMap, ui.PanelInspect, ui.PanelTimeline} {
+			ui.DrawChrome(panelMgr.Get(id), hudFont, 16)
 		}
 
 		// Pie menu (RMB-hold overlay, M11.6). Drawn after chrome so it sits
@@ -2207,4 +2317,119 @@ func nextTimeScale(cur float32, step int) float32 {
 	}
 	idx = (idx + step + len(stops)) % len(stops)
 	return stops[idx]
+}
+
+// buildTimelineData snapshots all squads + their order queues into a flat
+// structure for ui.DrawTimelinePanel. Phase 18 MVP: live orders only (head +
+// chain). Queued blocks stack right after the head's estimated end so the
+// timeline reads left-to-right even before resolver actually starts them.
+func buildTimelineData(
+	world *ecs.World,
+	squadFilter *ecs.Filter2[components.Squad, components.CommandRoster],
+	posMap *ecs.Map[components.WorldPos],
+	factionMap *ecs.Map[components.Faction],
+	orderQueueMap *ecs.Map[components.OrderQueueHead],
+	orderChainMap *ecs.Map[components.OrderChain],
+	orderKindMap *ecs.Map[components.OrderKind],
+	orderTargetMap *ecs.Map[components.OrderTarget],
+	orderStateMap *ecs.Map[components.OrderState],
+	orderProgressMap *ecs.Map[components.OrderProgress],
+	orderIssuedAtMap *ecs.Map[components.OrderIssuedAt],
+	squadColor func(ent ecs.Entity) rl.Color,
+	nowT float32,
+) ui.TimelineData {
+	data := ui.TimelineData{NowT: nowT}
+	q := squadFilter.Query()
+	for q.Next() {
+		squad := q.Entity()
+		_, roster := q.Get()
+		center, _ := systems.SquadCenter(world, roster, posMap)
+
+		head := orderQueueMap.Get(squad)
+		row := ui.TimelineSquadRow{
+			Squad: squad,
+			Color: squadColor(squad),
+		}
+		if head != nil && head.First != (ecs.Entity{}) {
+			lastEnd := float32(0)
+			cur := head.First
+			isHead := true
+			for cur != (ecs.Entity{}) && world.Alive(cur) {
+				kind := orderKindMap.Get(cur)
+				state := orderStateMap.Get(cur)
+				target := orderTargetMap.Get(cur)
+				if kind == nil || state == nil || target == nil {
+					break
+				}
+				startT := nowT
+				if iss := orderIssuedAtMap.Get(cur); iss != nil {
+					startT = iss.Time
+				}
+				if !isHead && startT < lastEnd {
+					startT = lastEnd
+				}
+				est := estimateOrderDuration(kind.Code, center, target.Pos)
+				endT := startT + est
+				prog := float32(0)
+				if pr := orderProgressMap.Get(cur); pr != nil {
+					prog = pr.Value
+				}
+				row.Orders = append(row.Orders, ui.TimelineOrderBlock{
+					Order:     cur,
+					KindCode:  kind.Code,
+					StateCode: state.Code,
+					StartT:    startT,
+					EndT:      endT,
+					Progress:  prog,
+					IsHead:    isHead,
+				})
+				lastEnd = endT
+				ch := orderChainMap.Get(cur)
+				if ch == nil {
+					break
+				}
+				cur = ch.Next
+				isHead = false
+			}
+		}
+		data.Rows = append(data.Rows, row)
+	}
+	q.Close()
+	_ = factionMap
+	return data
+}
+
+// estimateOrderDuration is a heuristic display-only duration per order kind.
+// MoveTo / Garrison / OccupyTrench mix travel time (dist / 5 m/s) with a
+// fixed action timer; pure timers (Defend / Patrol / Attack / Suppress) use
+// a flat block so the player still sees something on the timeline.
+func estimateOrderDuration(kind components.OrderKindCode, from, to components.WorldPos) float32 {
+	var moveTime float32
+	switch kind {
+	case components.OrderKindMoveTo, components.OrderKindGarrison, components.OrderKindOccupyTrench:
+		moveTime = components.Distance(from, to) / ui.TimelineMoveSpeedMps
+	}
+	var est float32
+	switch kind {
+	case components.OrderKindMoveTo:
+		est = moveTime
+	case components.OrderKindGarrison:
+		est = moveTime + ui.TimelineGarrisonDurationSec
+	case components.OrderKindOccupyTrench:
+		est = moveTime + ui.TimelineDefendDurationSec
+	case components.OrderKindDefendPosition:
+		est = ui.TimelineDefendDurationSec
+	case components.OrderKindPatrol:
+		est = ui.TimelinePatrolDurationSec
+	case components.OrderKindAttackTarget:
+		est = ui.TimelineAttackDurationSec
+	case components.OrderKindSuppressFire:
+		est = ui.TimelineSuppressDurationSec
+	default:
+		est = ui.TimelineUnknownDurationSec
+	}
+	if est < ui.TimelineMinBlockDurationSec {
+		est = ui.TimelineMinBlockDurationSec
+	}
+	return est
 }

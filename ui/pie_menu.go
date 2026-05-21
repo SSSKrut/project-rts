@@ -304,7 +304,7 @@ func (m *PieMenu) Draw(font rl.Font, cursor rl.Vector2) {
 
 		label := pieKindLabel(k)
 		// Centre the text at (lx, ly).
-		const fs int32 = 13
+		const fs int32 = 15
 		w := rl.MeasureTextEx(font, label, float32(fs), 1).X
 		rl.DrawTextEx(font, label,
 			rl.Vector2{X: lx - w*0.5, Y: ly - float32(fs)*0.5},
@@ -313,7 +313,7 @@ func (m *PieMenu) Draw(font rl.Font, cursor rl.Vector2) {
 
 	// Inner "cancel" affordance - small x if cursor in cancel zone.
 	if !hasHover {
-		const fs int32 = 12
+		const fs int32 = 13
 		txt := "cancel"
 		w := rl.MeasureTextEx(font, txt, float32(fs), 1).X
 		rl.DrawTextEx(font, txt,

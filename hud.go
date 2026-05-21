@@ -66,30 +66,44 @@ func transitionEdgeCount(reg *components.TransitionRegistry) int {
 	return n
 }
 
-// hudFontAtlasSize is the rasterised size of the loaded TTF glyph atlas.
-// Set ~2x the largest draw size (20 pt title) so the bilinear filter in
-// loadHUDFont keeps strokes sharp when we render at 16/18 pt body text -
-// at 1x ratio the default POINT filter aliases glyph edges, which reads
-// as "wobbly" / "drifting" characters on a monospace face.
-const hudFontAtlasSize int32 = 40
+// hudFontAtlasSize matches the largest draw size in the UI (22 pt collapsed
+// HUD) so nothing is ever upscaled. Body text (14-16 pt) lands at a healthy
+// 0.64..0.73 minification ratio under bilinear, which keeps the slight
+// macOS-style softening without smearing:
+//
+//   draw  ratio   look
+//   13    0.59    tick labels, tooltip
+//   14    0.64    timeline blocks, role labels
+//   16    0.73    inspector body, top-bar clock
+//   18    0.82    expanded HUD lines
+//   22    1.00    collapsed HUD, exact match
+const hudFontAtlasSize int32 = 22
 
-// hudFontPaths is the search list for a portable monospace font. First hit
-// wins; on miss the HUD falls back to raylib's default bitmap font.
+// hudFontPaths is the search list for a portable monospace font. Medium
+// weight first - heavier strokes read like a Mac UI font under bilinear
+// filtering. Regular as fallback when the Medium variant isn't installed.
+// First hit wins; on miss the HUD falls back to raylib's default bitmap.
 var hudFontPaths = []string{
-	// Manjaro / Arch (this dev box).
+	// Manjaro / Arch.
+	"/usr/share/fonts/noto/NotoSansMono-Medium.ttf",
 	"/usr/share/fonts/noto/NotoSansMono-Regular.ttf",
 	// Debian / Ubuntu.
+	"/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf",
 	"/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+	"/usr/share/fonts/truetype/liberation/LiberationMono-Bold.ttf",
 	"/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf",
 	// Fedora.
+	"/usr/share/fonts/dejavu-sans-mono-fonts/DejaVuSansMono-Bold.ttf",
 	"/usr/share/fonts/dejavu-sans-mono-fonts/DejaVuSansMono.ttf",
 	"/usr/share/fonts/dejavu/DejaVuSansMono.ttf",
 	// Generic.
+	"/usr/share/fonts/TTF/DejaVuSansMono-Bold.ttf",
 	"/usr/share/fonts/TTF/DejaVuSansMono.ttf",
 	// macOS.
 	"/System/Library/Fonts/Menlo.ttc",
 	"/System/Library/Fonts/Monaco.ttf",
 	// Windows.
+	"C:/Windows/Fonts/consolab.ttf",
 	"C:/Windows/Fonts/consola.ttf",
 }
 
@@ -145,8 +159,8 @@ func drawCollapsedProfHUD(p *core.Profiler, screenW int32, font rl.Font) {
 	line1 := fmt.Sprintf("%d FPS  %.1f ms (tick %.1f / other %.1f)", fps, frameMs, tickMs, otherMs)
 	line2 := fmt.Sprintf("heap %.1f MB  ents %d", heapMB, p.EntityCount())
 
-	const fontSize int32 = 18
-	const lineH int32 = 24 // matches TTF ascender+descender at 18 pt
+	const fontSize int32 = 22
+	const lineH int32 = 28 // matches TTF ascender+descender at 22 pt
 	const margin int32 = 10
 	w1 := measureHUDText(font, line1, fontSize)
 	w2 := measureHUDText(font, line2, fontSize)
@@ -166,10 +180,10 @@ func drawCollapsedProfHUD(p *core.Profiler, screenW int32, font rl.Font) {
 // stays legible regardless of background.
 func drawExpandedProfHUD(p *core.Profiler, screenW int32, cen census, font rl.Font) {
 	const expandedHUDRows = 10
-	const fontSize int32 = 16
+	const fontSize int32 = 18
 	const margin int32 = 10
-	const headerOffset int32 = 62 // below the 2-line collapsed HUD (10 + 24*2)
-	const lineH int32 = 22        // 16-pt monospace + descender slack
+	const headerOffset int32 = 72 // below the 2-line collapsed HUD (10 + 28*2)
+	const lineH int32 = 26        // 18-pt monospace + descender slack
 
 	rows := []string{"--- systems (ms median) ---"}
 	medians := p.SystemMediansSorted()

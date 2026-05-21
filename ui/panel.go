@@ -16,8 +16,8 @@ import (
 )
 
 // SplitterID identifies which inter-panel splitter the cursor is hovering /
-// dragging. Phase 13.5 M13.5.2 introduces two splitters; Phase 22 split-tree
-// will generalise to a per-node identity.
+// dragging. Phase 18 adds SplitterTimeline; Phase 18.C tree-of-splits will
+// generalise to a per-node identity.
 type SplitterID uint8
 
 const (
@@ -31,6 +31,10 @@ const (
 	// Inspector (top) and the side view (bottom). Drag vertically to
 	// redistribute height via InspectorRatio.
 	SplitterRight
+	// SplitterTimeline - horizontal line between the central row (3D + side
+	// column) and the bottom timeline panel. Drag vertically to redistribute
+	// height via TimelineRatio.
+	SplitterTimeline
 )
 
 // splitterGrabRadius is the hit-zone half-thickness around a splitter line.
@@ -54,7 +58,8 @@ const (
 	Panel3D       PanelID = "3d"
 	PanelMap      PanelID = "map"
 	PanelInspect  PanelID = "inspector"
-	PanelTime     PanelID = "time"
+	PanelTopBar   PanelID = "topbar"
+	PanelTimeline PanelID = "timeline"
 	PanelNone     PanelID = ""
 )
 
@@ -104,6 +109,9 @@ type PanelManager struct {
 	// Phase 13.5 - mutable layout ratios.
 	RightColRatio  float32 // 0..1, side column's share of width
 	InspectorRatio float32 // 0..1, inspector's share of side column height
+	// Phase 18 - timeline panel share of content height (height below the
+	// top bar). The central row (Panel3D + side col) gets 1 - TimelineRatio.
+	TimelineRatio float32
 
 	// Cached screen dimensions from the latest Recompute. UpdateDrag uses
 	// these to convert cursor delta -> ratio delta without re-querying raylib
@@ -117,8 +125,9 @@ type PanelManager struct {
 	dragInitialDirt bool    // tracks whether the drag actually mutated ratio
 
 	// Per-panel scroll state (Phase 13.5 M13.5.3). Indexed parallel to
-	// Panels - Scroll[i] belongs to Panels[i].
-	Scroll [4]ScrollState
+	// Panels - Scroll[i] belongs to Panels[i]. Phase 18 added two panels
+	// (TopBar + Timeline) so the array fits the new canonical order below.
+	Scroll [5]ScrollState
 }
 
 // NewPanelManager constructs the manager with four empty-bounds panels in
@@ -130,12 +139,14 @@ func NewPanelManager() *PanelManager {
 			{ID: Panel3D, Title: "Field"},
 			{ID: PanelMap, Title: "Map"},
 			{ID: PanelInspect, Title: "Inspector"},
-			{ID: PanelTime, Title: "Time"},
+			{ID: PanelTopBar, Title: ""},
+			{ID: PanelTimeline, Title: "Timeline"},
 		},
 		Layout:         PresetField,
 		focused:        PanelNone,
 		RightColRatio:  DefaultRightColRatio,
 		InspectorRatio: DefaultInspectorRatio,
+		TimelineRatio:  DefaultTimelineRatio,
 	}
 }
 
@@ -148,9 +159,9 @@ func (m *PanelManager) Recompute(screenW, screenH int32) {
 	var rects map[PanelID]rl.Rectangle
 	switch m.Layout {
 	case PresetCommand:
-		rects = layoutCommand(screenW, screenH, m.RightColRatio, m.InspectorRatio)
+		rects = layoutCommand(screenW, screenH, m.RightColRatio, m.InspectorRatio, m.TimelineRatio)
 	default:
-		rects = layoutField(screenW, screenH, m.RightColRatio, m.InspectorRatio)
+		rects = layoutField(screenW, screenH, m.RightColRatio, m.InspectorRatio, m.TimelineRatio)
 	}
 	for i := range m.Panels {
 		if r, ok := rects[m.Panels[i].ID]; ok {
@@ -240,12 +251,29 @@ func (m *PanelManager) splitterMainX() float32 {
 	return float32(m.screenW) - float32(m.screenW)*m.RightColRatio
 }
 
+// centralRowHeight returns the height of the middle band (3D + side col),
+// i.e. screen minus top bar minus timeline. Phase 18 helper - used by both
+// splitter Y lookups so all geometry stays consistent.
+func (m *PanelManager) centralRowHeight() float32 {
+	avail := float32(m.screenH - topBarHeight)
+	if avail < 0 {
+		avail = 0
+	}
+	tlH := avail * m.TimelineRatio
+	return avail - tlH
+}
+
 // splitterRightY returns the Y coord of the horizontal Right splitter line.
 // It sits inside the right column between Inspector (top) and the side view
 // (bottom). Inspector lives in the same screen position in both presets.
 func (m *PanelManager) splitterRightY() float32 {
-	contentH := float32(m.screenH - timeBarHeight)
-	return contentH * m.InspectorRatio
+	return float32(topBarHeight) + m.centralRowHeight()*m.InspectorRatio
+}
+
+// splitterTimelineY returns the Y coord of the horizontal Timeline splitter
+// (boundary between the central row and the timeline panel).
+func (m *PanelManager) splitterTimelineY() float32 {
+	return float32(topBarHeight) + m.centralRowHeight()
 }
 
 // SplitterAt returns the splitter under `cursor`, or SplitterNone if none.
@@ -255,14 +283,24 @@ func (m *PanelManager) SplitterAt(cursor rl.Vector2) SplitterID {
 	if m.screenW <= 0 || m.screenH <= 0 {
 		return SplitterNone
 	}
-	contentH := float32(m.screenH - timeBarHeight)
-	// Time-bar area - splitters don't extend below contentH.
-	if cursor.Y >= contentH {
+	// Top-bar area + timeline area - splitters don't live there.
+	if cursor.Y < float32(topBarHeight) {
 		return SplitterNone
 	}
 	mainX := m.splitterMainX()
 	rightY := m.splitterRightY()
+	timelineY := m.splitterTimelineY()
 
+	// Timeline splitter wins when cursor is in its grab band; it spans the
+	// full screen width.
+	if cursor.Y >= timelineY-splitterGrabRadius && cursor.Y <= timelineY+splitterGrabRadius {
+		return SplitterTimeline
+	}
+	// Cursor below the timeline splitter is inside the timeline panel - no
+	// splitter target there.
+	if cursor.Y > timelineY {
+		return SplitterNone
+	}
 	// Right splitter check first - its Y-band overlaps with Main's X-band at
 	// the corner, but a horizontal cursor sweep inside the right column should
 	// land on Right, not Main. So Right wins when cursor is inside the right
@@ -272,7 +310,7 @@ func (m *PanelManager) SplitterAt(cursor rl.Vector2) SplitterID {
 			return SplitterRight
 		}
 	}
-	// Main splitter: vertical line at mainX, spanning full content height.
+	// Main splitter: vertical line at mainX, spanning the central row.
 	if cursor.X >= mainX-splitterGrabRadius && cursor.X <= mainX+splitterGrabRadius {
 		return SplitterMain
 	}
@@ -300,6 +338,8 @@ func (m *PanelManager) BeginDrag(splitter SplitterID) {
 		m.dragStartRatio = m.RightColRatio
 	case SplitterRight:
 		m.dragStartRatio = m.InspectorRatio
+	case SplitterTimeline:
+		m.dragStartRatio = m.TimelineRatio
 	default:
 		m.dragging = SplitterNone
 	}
@@ -336,25 +376,52 @@ func (m *PanelManager) UpdateDrag(cursor rl.Vector2) {
 			m.dragInitialDirt = true
 		}
 	case SplitterRight:
-		// Splitter follows cursor.Y inside the right column.
-		// inspectorH = cursor.Y; sideH = contentH - cursor.Y.
-		contentH := float32(m.screenH - timeBarHeight)
-		y := cursor.Y
+		// Splitter follows cursor.Y inside the right column. Y measured from
+		// just below the top bar. central row = inspector + side col.
+		centralH := m.centralRowHeight()
+		topOfCentral := float32(topBarHeight)
+		yLocal := cursor.Y - topOfCentral
 		minY := panelMinH
-		maxY := contentH - panelMinH
+		maxY := centralH - panelMinH
 		if minY > maxY {
-			minY = contentH * 0.5
+			minY = centralH * 0.5
 			maxY = minY
 		}
-		if y < minY {
-			y = minY
+		if yLocal < minY {
+			yLocal = minY
 		}
-		if y > maxY {
-			y = maxY
+		if yLocal > maxY {
+			yLocal = maxY
 		}
-		newRatio := y / contentH
+		newRatio := yLocal / centralH
 		if newRatio != m.InspectorRatio {
 			m.InspectorRatio = newRatio
+			m.dragInitialDirt = true
+		}
+	case SplitterTimeline:
+		// Splitter follows cursor.Y between central row and timeline. Y
+		// measured from just below the top bar.
+		avail := float32(m.screenH - topBarHeight)
+		if avail <= 0 {
+			return
+		}
+		topOfCentral := float32(topBarHeight)
+		yLocal := cursor.Y - topOfCentral
+		minY := panelMinH
+		maxY := avail - panelMinH
+		if minY > maxY {
+			minY = avail * 0.5
+			maxY = minY
+		}
+		if yLocal < minY {
+			yLocal = minY
+		}
+		if yLocal > maxY {
+			yLocal = maxY
+		}
+		newRatio := (avail - yLocal) / avail
+		if newRatio != m.TimelineRatio {
+			m.TimelineRatio = newRatio
 			m.dragInitialDirt = true
 		}
 	}
@@ -386,6 +453,8 @@ func (m *PanelManager) AbortDrag() {
 		m.RightColRatio = m.dragStartRatio
 	case SplitterRight:
 		m.InspectorRatio = m.dragStartRatio
+	case SplitterTimeline:
+		m.TimelineRatio = m.dragStartRatio
 	}
 	m.dragging = SplitterNone
 	m.dragInitialDirt = false

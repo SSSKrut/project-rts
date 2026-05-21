@@ -72,7 +72,7 @@ func drawUnitRoleLabel(renderPos rl.Vector3, st components.Stance, role componen
 		return
 	}
 	label := role.ShortLabel()
-	const fontSize float32 = 12
+	const fontSize float32 = 14
 	size := rl.MeasureTextEx(font, label, fontSize, 1)
 	// Position so the label centre lines up with the projected head.
 	screenX := panel3DContent.X + sp.X - size.X*0.5

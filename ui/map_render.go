@@ -328,7 +328,7 @@ func drawSquadMarkers(content rl.Rectangle, ctx MapRenderCtx) {
 			if commander != (ecs.Entity{}) && ctx.World.Alive(commander) {
 				if r := ctx.RoleMap.Get(commander); r != nil {
 					label := r.Kind.ShortLabel()
-					const fontSize float32 = 11
+					const fontSize float32 = 13
 					sz := rl.MeasureTextEx(ctx.Font, label, fontSize, 1)
 					txt := rl.Color{R: 0, G: 0, B: 0, A: 230}
 					if (0.299*float32(col.R) + 0.587*float32(col.G) + 0.114*float32(col.B)) < 140 {
