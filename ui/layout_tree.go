@@ -244,3 +244,122 @@ func SwapPanels(a, b *LayoutNode) {
 	a.Panel, b.Panel = b.Panel, a.Panel
 	a.Title, b.Title = b.Title, a.Title
 }
+
+// DockSide picks which edge of a target leaf a dropped source will dock at.
+type DockSide uint8
+
+const (
+	DockNone DockSide = iota
+	DockLeft
+	DockRight
+	DockTop
+	DockBottom
+)
+
+// DockSideFor classifies which edge of `target` the cursor is closest to,
+// using normalized X / Y diamond regions. Returns DockNone for a degenerate
+// target.
+func DockSideFor(target *LayoutNode, cursor rl.Vector2) DockSide {
+	if target == nil {
+		return DockNone
+	}
+	b := target.Bounds
+	if b.Width <= 0 || b.Height <= 0 {
+		return DockNone
+	}
+	rx := (cursor.X - b.X) / b.Width
+	ry := (cursor.Y - b.Y) / b.Height
+	dxFromEdge := rx
+	if 1-rx < dxFromEdge {
+		dxFromEdge = 1 - rx
+	}
+	dyFromEdge := ry
+	if 1-ry < dyFromEdge {
+		dyFromEdge = 1 - ry
+	}
+	if dxFromEdge < dyFromEdge {
+		if rx < 0.5 {
+			return DockLeft
+		}
+		return DockRight
+	}
+	if ry < 0.5 {
+		return DockTop
+	}
+	return DockBottom
+}
+
+// DockWrapBounds returns the rect of the subtree that DockNear will wrap
+// when docking `source` at `target` on `side`. Equal to target.Parent.Bounds
+// when target has a parent; falls back to target.Bounds when target is root.
+// Used by the drag preview to highlight what area will be reorganised.
+func DockWrapBounds(target *LayoutNode) rl.Rectangle {
+	if target == nil {
+		return rl.Rectangle{}
+	}
+	if target.Parent != nil {
+		return target.Parent.Bounds
+	}
+	return target.Bounds
+}
+
+// DockHighlightRect returns the rect inside DockWrapBounds where the source
+// will land. Used by the drag preview.
+func DockHighlightRect(target *LayoutNode, side DockSide) rl.Rectangle {
+	b := DockWrapBounds(target)
+	if b.Width <= 0 || b.Height <= 0 {
+		return rl.Rectangle{}
+	}
+	switch side {
+	case DockLeft:
+		return rl.Rectangle{X: b.X, Y: b.Y, Width: b.Width * 0.5, Height: b.Height}
+	case DockRight:
+		return rl.Rectangle{X: b.X + b.Width*0.5, Y: b.Y, Width: b.Width * 0.5, Height: b.Height}
+	case DockTop:
+		return rl.Rectangle{X: b.X, Y: b.Y, Width: b.Width, Height: b.Height * 0.5}
+	case DockBottom:
+		return rl.Rectangle{X: b.X, Y: b.Y + b.Height*0.5, Width: b.Width, Height: b.Height * 0.5}
+	}
+	return rl.Rectangle{}
+}
+
+// DockNear restructures the tree so `source` becomes a strip on `side` of
+// the subtree containing `target`. The wrap point is target.Parent (so the
+// new strip spans the full "level" the target lives in); if target is the
+// root, wrap target itself. Returns the new Split node (which replaces the
+// wrap point in its old parent). Caller must ensure `source` has already
+// been detached from the tree before calling.
+func DockNear(source, target *LayoutNode, side DockSide) *LayoutNode {
+	if source == nil || target == nil || side == DockNone {
+		return nil
+	}
+	wrap := target.Parent
+	if wrap == nil {
+		wrap = target
+	}
+	oldParent := wrap.Parent
+
+	var newSplit *LayoutNode
+	switch side {
+	case DockLeft:
+		newSplit = NewSplit(SplitVertical, 0.5, source, wrap)
+	case DockRight:
+		newSplit = NewSplit(SplitVertical, 0.5, wrap, source)
+	case DockTop:
+		newSplit = NewSplit(SplitHorizontal, 0.5, source, wrap)
+	case DockBottom:
+		newSplit = NewSplit(SplitHorizontal, 0.5, wrap, source)
+	default:
+		return nil
+	}
+	newSplit.Parent = oldParent
+	if oldParent != nil {
+		if oldParent.Children[0] == wrap {
+			oldParent.Children[0] = newSplit
+		} else {
+			oldParent.Children[1] = newSplit
+		}
+	}
+	// NewSplit already wired source.Parent and wrap.Parent to newSplit.
+	return newSplit
+}

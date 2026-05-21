@@ -73,12 +73,26 @@ func drawChevron(r rl.Rectangle, font rl.Font) {
 // ContentRect returns where panel content draws without re-stamping chrome.
 // Used by code that draws content multiple times per frame (e.g. before
 // chrome to paint background, after chrome to paint scissored overlays).
+// Phase 18.C: clamp width/height to non-negative so panels with zero
+// Bounds (the result of a chevron Close or corner-merge that removed the
+// leaf from the tree) don't pass negative-sized rects to BeginScissorMode
+// — raylib treats those as "scissor disabled" and the panel's draw calls
+// leak across the whole screen, ghosting onto the surviving leaves.
 func ContentRect(p Panel) rl.Rectangle {
 	b := p.Bounds
+	w := b.Width - 2
+	h := b.Height - 2 - float32(titleBarHeight)
+	if w < 0 {
+		w = 0
+	}
+	if h < 0 {
+		h = 0
+	}
 	return rl.Rectangle{
-		X: b.X + 1, Y: b.Y + 1 + float32(titleBarHeight),
-		Width:  b.Width - 2,
-		Height: b.Height - 2 - float32(titleBarHeight),
+		X:      b.X + 1,
+		Y:      b.Y + 1 + float32(titleBarHeight),
+		Width:  w,
+		Height: h,
 	}
 }
 

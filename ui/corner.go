@@ -32,6 +32,8 @@ var (
 	cornerPreviewColor   = rl.Color{R: 90, G: 200, B: 255, A: 200}
 	cornerMergeOverlay   = rl.Color{R: 70, G: 78, B: 88, A: 170}
 	cornerMergeBorder    = rl.Color{R: 220, G: 90, B: 90, A: 220}
+	cornerDockHighlight  = rl.Color{R: 90, G: 200, B: 255, A: 110}
+	cornerDockBorder     = rl.Color{R: 90, G: 200, B: 255, A: 230}
 )
 
 // CornerPos labels which corner of a leaf the handle sits in.
@@ -54,7 +56,8 @@ const (
 	CornerDragNone   CornerDragKind = iota
 	CornerSplitVert                  // horizontal motion → vertical divider
 	CornerSplitHoriz                 // vertical motion → horizontal divider
-	CornerMerge                      // cursor left source leaf → absorb into sibling
+	CornerMerge                      // cursor on source's direct sibling → close source
+	CornerDock                       // cursor on a non-sibling leaf → restructure
 )
 
 // CornerHandleRect returns the hit / draw rect for one corner of a leaf.
@@ -119,6 +122,11 @@ func (m *PanelManager) CornerDragLeaf() *LayoutNode { return m.cornerLeaf }
 func (m *PanelManager) CornerDragOrigin() rl.Vector2 { return m.cornerStart }
 
 // CornerDragMode classifies the in-progress drag.
+//   - Cursor inside source.Bounds → split (axis from larger |dx|/|dy|).
+//   - Cursor on source.Sibling()  → merge (close source).
+//   - Cursor on another leaf      → dock (restructure to host source as a
+//     full-level strip on the cursor's nearest edge of the target).
+//   - Else (cursor outside any leaf) → none.
 func (m *PanelManager) CornerDragMode(cursor rl.Vector2) CornerDragKind {
 	if m.cornerLeaf == nil {
 		return CornerDragNone
@@ -135,10 +143,45 @@ func (m *PanelManager) CornerDragMode(cursor rl.Vector2) CornerDragKind {
 		}
 		return CornerSplitHoriz
 	}
-	if m.cornerLeaf.Sibling() != nil {
+	target := m.cornerTargetAt(cursor)
+	if target == nil {
+		return CornerDragNone
+	}
+	if target == m.cornerLeaf.Sibling() {
 		return CornerMerge
 	}
-	return CornerDragNone
+	return CornerDock
+}
+
+// cornerTargetAt returns the leaf under `cursor` that is NOT the source.
+// Excludes top-bar area.
+func (m *PanelManager) cornerTargetAt(cursor rl.Vector2) *LayoutNode {
+	if m.Workspace == nil {
+		return nil
+	}
+	if pointInRect(cursor, m.TopBar.Bounds) {
+		return nil
+	}
+	hit := m.Workspace.LeafAt(cursor)
+	if hit == m.cornerLeaf {
+		return nil
+	}
+	return hit
+}
+
+// CornerDragTarget returns the current dock / merge target leaf (or nil).
+func (m *PanelManager) CornerDragTarget(cursor rl.Vector2) *LayoutNode {
+	return m.cornerTargetAt(cursor)
+}
+
+// CornerDragSide returns which edge of the dock target the cursor is
+// closest to (only meaningful for CornerDock mode).
+func (m *PanelManager) CornerDragSide(cursor rl.Vector2) DockSide {
+	target := m.cornerTargetAt(cursor)
+	if target == nil {
+		return DockNone
+	}
+	return DockSideFor(target, cursor)
 }
 
 // CancelCornerDrag drops the pending drag without committing.
@@ -155,6 +198,11 @@ func (m *PanelManager) CommitCornerDrag(cursor rl.Vector2) bool {
 		return false
 	}
 	mode := m.CornerDragMode(cursor)
+	target := m.cornerTargetAt(cursor)
+	side := DockNone
+	if target != nil {
+		side = DockSideFor(target, cursor)
+	}
 	m.cornerLeaf = nil
 
 	switch mode {
@@ -162,6 +210,8 @@ func (m *PanelManager) CommitCornerDrag(cursor rl.Vector2) bool {
 		return m.commitSplit(leaf, mode, cursor)
 	case CornerMerge:
 		return m.commitMerge(leaf)
+	case CornerDock:
+		return m.commitDock(leaf, target, side)
 	}
 	return false
 }
@@ -248,6 +298,48 @@ func (m *PanelManager) commitMerge(leaf *LayoutNode) bool {
 	}
 	if wasRootChild {
 		m.Workspace = sib
+	}
+	m.Recompute(m.screenW, m.screenH)
+	return true
+}
+
+// commitDock detaches `source` from its old slot and re-attaches it as a
+// strip on `side` of the subtree containing `target`. Step-by-step:
+//
+//  1. MergeIntoSibling(source) - source's parent split collapses, sibling
+//     takes its place; if source was a child of the root, sibling becomes
+//     the new root.
+//  2. DockNear(source, target, side) - wraps target.Parent (or target if
+//     root) in a fresh Split with source on the chosen side.
+//
+// After step 1, target's ancestor pointers may have shifted; we re-read
+// them inside DockNear so the wrap level is correct.
+func (m *PanelManager) commitDock(source, target *LayoutNode, side DockSide) bool {
+	if source == nil || target == nil || source == target || side == DockNone {
+		return false
+	}
+	if source.Parent == nil {
+		return false
+	}
+	sourceWasRootChild := source.Parent == m.Workspace
+	sib := MergeIntoSibling(source)
+	if sib == nil {
+		return false
+	}
+	if sourceWasRootChild {
+		m.Workspace = sib
+	}
+	wrap := target.Parent
+	if wrap == nil {
+		wrap = target
+	}
+	wrapWasRoot := wrap == m.Workspace
+	newSplit := DockNear(source, target, side)
+	if newSplit == nil {
+		return false
+	}
+	if wrapWasRoot {
+		m.Workspace = newSplit
 	}
 	m.Recompute(m.screenW, m.screenH)
 	return true
@@ -343,6 +435,22 @@ func DrawCornerDragPreview(m *PanelManager, cursor rl.Vector2) {
 		rl.DrawRectangleRec(sib.Bounds, cornerMergeOverlay)
 		rl.DrawRectangleLinesEx(m.cornerLeaf.Bounds, 2, cornerMergeBorder)
 		drawMergeArrow(m.cornerLeaf.Bounds, sib.Bounds)
+	case CornerDock:
+		target := m.cornerTargetAt(cursor)
+		if target == nil {
+			return
+		}
+		side := DockSideFor(target, cursor)
+		wrap := DockWrapBounds(target)
+		highlight := DockHighlightRect(target, side)
+		// Dim the wrap area (what's about to be restructured).
+		rl.DrawRectangleRec(wrap, cornerMergeOverlay)
+		// Bright accent over the side where source will land.
+		rl.DrawRectangleRec(highlight, cornerDockHighlight)
+		rl.DrawRectangleLinesEx(highlight, 2, cornerDockBorder)
+		// Mark the source leaf so user sees what's leaving its old slot.
+		rl.DrawRectangleLinesEx(m.cornerLeaf.Bounds, 2, cornerDockBorder)
+		drawMergeArrow(m.cornerLeaf.Bounds, highlight)
 	}
 }
 
