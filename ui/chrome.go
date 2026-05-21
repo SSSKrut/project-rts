@@ -18,8 +18,9 @@ var (
 	titleTextColor   = rl.Color{R: 210, G: 220, B: 230, A: 255}
 )
 
-// DrawChrome renders the border + title bar of the panel. Returns the inner
-// content rectangle (panel minus border + title bar).
+// DrawChrome renders the border + title bar of the panel, including the
+// Phase 18.C chevron button on the right of the title bar. Returns the
+// inner content rectangle (panel minus border + title bar).
 func DrawChrome(p Panel, font rl.Font, fontSize int32) rl.Rectangle {
 	b := p.Bounds
 	rl.DrawRectangleLinesEx(b, 1, panelBorderColor)
@@ -31,14 +32,42 @@ func DrawChrome(p Panel, font rl.Font, fontSize int32) rl.Rectangle {
 	}
 	rl.DrawRectangleRec(titleRect, titleBarColor)
 	rl.DrawTextEx(font, p.Title,
-		rl.Vector2{X: titleRect.X + 6, Y: titleRect.Y + 2},
+		rl.Vector2{X: titleRect.X + 8, Y: titleRect.Y + 4},
 		float32(fontSize), 1.0, titleTextColor)
+
+	drawChevron(ChevronRect(p), font)
 
 	return rl.Rectangle{
 		X: b.X + 1, Y: b.Y + 1 + float32(titleBarHeight),
 		Width:  b.Width - 2,
 		Height: b.Height - 2 - float32(titleBarHeight),
 	}
+}
+
+// ChevronRect returns the click target for the panel-switch chevron at the
+// right edge of the title bar.
+func ChevronRect(p Panel) rl.Rectangle {
+	b := p.Bounds
+	const sz float32 = 22
+	return rl.Rectangle{
+		X:      b.X + b.Width - sz - 2,
+		Y:      b.Y + 1,
+		Width:  sz,
+		Height: float32(titleBarHeight),
+	}
+}
+
+var chevronColor = rl.Color{R: 200, G: 215, B: 230, A: 220}
+
+func drawChevron(r rl.Rectangle, font rl.Font) {
+	cx := r.X + r.Width*0.5
+	cy := r.Y + r.Height*0.5 + 1
+	const w float32 = 4
+	const h float32 = 3
+	v1 := rl.Vector2{X: cx - w, Y: cy - h}
+	v2 := rl.Vector2{X: cx + w, Y: cy - h}
+	v3 := rl.Vector2{X: cx, Y: cy + h}
+	rl.DrawTriangle(v1, v3, v2, chevronColor)
 }
 
 // ContentRect returns where panel content draws without re-stamping chrome.

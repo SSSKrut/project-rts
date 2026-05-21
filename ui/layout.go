@@ -2,106 +2,127 @@ package ui
 
 import rl "github.com/gen2brain/raylib-go/raylib"
 
-// Phase 18 layout - five rects driven by screen size + three ratios:
+// Phase 18.C layout - one fixed TopBar strip + a recursive workspace tree
+// below. The tree is mutated by user actions (corner-drag split, chevron
+// menu swap/close); ratios stored on each Split node persist through
+// resizes. Top bar stays fixed at the top of the screen at all times.
 //
-//   Field:                            Command:
-//   +-----------------------------+   +-----------------------------+
-//   | TopBar (32 px - time controls + future menu)                  |
-//   +-----------------+-----------+   +-----------------+-----------+
-//   |                 |   Insp    |   |                 |   Insp    |
-//   |       3D        +-----------+   |       Map       +-----------+
-//   |     (big)       |   Map     |   |     (big)       |    3D     |
-//   |                 |  (side)   |   |                 |  (side)   |
-//   +-----------------+-----------+   +-----------------+-----------+
-//   | Timeline (squad rows + order blocks)                          |
-//   +---------------------------------------------------------------+
+//   +----------------- TopBar (36 px) ----------------+
+//   |                                                 |
+//   |              Workspace tree                     |
+//   |                                                 |
+//   +-------------------------------------------------+
 //
-// Field puts the 3D scene in the big slot, Command swaps to map-primary.
-// Inspector lives at the same screen position in both presets. Top bar /
-// Timeline span full width and are preset-agnostic.
+// Default Field preset:
 //
-// Heights: top bar = 32 px fixed; timeline = (screenH - 32) * TimelineRatio.
-// Central row gets the remainder. Column split inside the central row
-// (sideCol vs big) = RightColRatio; side column splits vertically by
-// InspectorRatio.
+//   Split(Horiz, 0.80) [
+//     Split(Vert, 0.75) [
+//       Leaf(3D),
+//       Split(Horiz, 0.40) [
+//         Leaf(Inspector),
+//         Leaf(Map),
+//       ]
+//     ],
+//     Leaf(Timeline),
+//   ]
 
 const topBarHeight int32 = 36
 
-// DefaultRightColRatio is the side column's default share of screen width.
-// Wide enough that inspector text rows aren't clipped at 1600x900; narrow
-// enough that the big slot stays usable for marquee selects.
-//
-// Phase 13.5 M13.5.1: ratios moved from package consts to PanelManager fields
-// so splitter drag (M13.5.2) can mutate them at runtime. NewPanelManager
-// seeds the fields with these defaults; loadLayout (M13.5.5) overrides them
-// from save/layout.json on startup when present.
+// DefaultRightColRatio is the side column's default share of width.
 const DefaultRightColRatio float32 = 0.25
 
-// DefaultInspectorRatio splits the side column vertically. Inspector gets the
-// top share, the secondary view (map in Field, 3D in Command) gets the rest.
+// DefaultInspectorRatio splits the side column vertically.
 const DefaultInspectorRatio float32 = 0.4
 
 // DefaultTimelineRatio - timeline panel share of the height below the top
-// bar. 0.20 fits ~5 squad rows at 1080p.
+// bar.
 const DefaultTimelineRatio float32 = 0.20
 
-func layoutField(screenW, screenH int32, rightCol, inspector, timeline float32) map[PanelID]rl.Rectangle {
-	return splitGrid(screenW, screenH, Panel3D, PanelMap, rightCol, inspector, timeline)
+// LayoutPreset selects the starting tree at first launch (no layout.json
+// present yet). Tab swaps content between PanelMap and Panel3D leaves
+// post-launch instead of swapping the whole tree, so user-edited layouts
+// stay intact.
+type LayoutPreset uint8
+
+const (
+	PresetField   LayoutPreset = iota // 3D in the big slot, Map in the side
+	PresetCommand                     // Map in the big slot, 3D in the side
+)
+
+// presetFieldTree builds the default Field workspace tree. Inverse ratios:
+// Timeline gets (1 - 0.80) = 0.20 height, side col gets (1 - 0.75) = 0.25
+// width, side col bottom gets (1 - 0.40) = 0.60 of its column height.
+func presetFieldTree() *LayoutNode {
+	return NewSplit(SplitHorizontal, 1-DefaultTimelineRatio,
+		NewSplit(SplitVertical, 1-DefaultRightColRatio,
+			NewLeaf(Panel3D, "Field"),
+			NewSplit(SplitHorizontal, DefaultInspectorRatio,
+				NewLeaf(PanelInspect, "Inspector"),
+				NewLeaf(PanelMap, "Map"),
+			),
+		),
+		NewLeaf(PanelTimeline, "Timeline"),
+	)
 }
 
-func layoutCommand(screenW, screenH int32, rightCol, inspector, timeline float32) map[PanelID]rl.Rectangle {
-	return splitGrid(screenW, screenH, PanelMap, Panel3D, rightCol, inspector, timeline)
+// presetCommandTree mirrors Field but with 3D and Map swapped.
+func presetCommandTree() *LayoutNode {
+	return NewSplit(SplitHorizontal, 1-DefaultTimelineRatio,
+		NewSplit(SplitVertical, 1-DefaultRightColRatio,
+			NewLeaf(PanelMap, "Map"),
+			NewSplit(SplitHorizontal, DefaultInspectorRatio,
+				NewLeaf(PanelInspect, "Inspector"),
+				NewLeaf(Panel3D, "Field"),
+			),
+		),
+		NewLeaf(PanelTimeline, "Timeline"),
+	)
 }
 
-// splitGrid lays out five rects: PanelTopBar (full width, top), the central
-// row split into `big` (left/main) + side column (Inspector top, `side`
-// below), and PanelTimeline (full width, bottom).
-//
-// rightCol = side column width as a fraction of screen width (0..1).
-// inspector = inspector's share of the central row height (0..1).
-// timeline = timeline panel's share of (screenH - topBarHeight) (0..1).
-func splitGrid(screenW, screenH int32, big, side PanelID, rightCol, inspector, timeline float32) map[PanelID]rl.Rectangle {
-	topBar := rl.Rectangle{X: 0, Y: 0, Width: float32(screenW), Height: float32(topBarHeight)}
+// presetTree returns the initial workspace tree for the given preset.
+func presetTree(p LayoutPreset) *LayoutNode {
+	if p == PresetCommand {
+		return presetCommandTree()
+	}
+	return presetFieldTree()
+}
 
+// WorkspaceRect returns the rect available for the workspace tree given the
+// current screen size (everything below the top bar).
+func WorkspaceRect(screenW, screenH int32) rl.Rectangle {
 	avail := screenH - topBarHeight
 	if avail < 0 {
 		avail = 0
 	}
-	timelineH := int32(float32(avail) * timeline)
-	centralH := avail - timelineH
-
-	rightW := int32(float32(screenW) * rightCol)
-	leftW := screenW - rightW
-
-	bigRect := rl.Rectangle{
+	return rl.Rectangle{
 		X: 0, Y: float32(topBarHeight),
-		Width:  float32(leftW),
-		Height: float32(centralH),
-	}
-	inspectH := int32(float32(centralH) * inspector)
-	inspectRect := rl.Rectangle{
-		X:      float32(leftW),
-		Y:      float32(topBarHeight),
-		Width:  float32(rightW),
-		Height: float32(inspectH),
-	}
-	sideRect := rl.Rectangle{
-		X:      float32(leftW),
-		Y:      float32(topBarHeight + inspectH),
-		Width:  float32(rightW),
-		Height: float32(centralH - inspectH),
-	}
-	timelineRect := rl.Rectangle{
-		X:      0,
-		Y:      float32(topBarHeight + centralH),
 		Width:  float32(screenW),
-		Height: float32(timelineH),
-	}
-	return map[PanelID]rl.Rectangle{
-		PanelTopBar:   topBar,
-		big:           bigRect,
-		side:          sideRect,
-		PanelInspect:  inspectRect,
-		PanelTimeline: timelineRect,
+		Height: float32(avail),
 	}
 }
+
+// TopBarRect returns the rect for the fixed top bar.
+func TopBarRect(screenW int32) rl.Rectangle {
+	return rl.Rectangle{X: 0, Y: 0, Width: float32(screenW), Height: float32(topBarHeight)}
+}
+
+// WidgetTitle returns the canonical title for a PanelID, used both for
+// chrome rendering and the chevron menu listing.
+func WidgetTitle(id PanelID) string {
+	switch id {
+	case Panel3D:
+		return "Field"
+	case PanelMap:
+		return "Map"
+	case PanelInspect:
+		return "Inspector"
+	case PanelTimeline:
+		return "Timeline"
+	}
+	return string(id)
+}
+
+// WorkspacePanelKinds is the list of widget kinds the chevron menu can
+// switch a leaf to. TopBar is intentionally excluded — it's not a
+// workspace widget.
+var WorkspacePanelKinds = [...]PanelID{Panel3D, PanelMap, PanelInspect, PanelTimeline}

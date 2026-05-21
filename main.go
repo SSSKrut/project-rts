@@ -729,8 +729,17 @@ func main() {
 		topBarPlayPause   rl.Rectangle
 		topBarSpeedDown   rl.Rectangle
 		topBarSpeedUp     rl.Rectangle
+		// Phase 18.C tree-of-splits popup menu (per-leaf widget switch / close).
+		chevronMenu ui.ChevronMenu
 	)
 	const marqueeClickThreshold float32 = 5
+	// chromeBusy = "UI chrome currently owns mouse/keyboard". When true the
+	// content layers (3D selection / marquee / map click / inspector chips /
+	// top-bar buttons / timeline blocks) skip their LMB handlers so a chrome
+	// interaction doesn't double-fire into the world below.
+	chromeBusy := func() bool {
+		return panelMgr.IsDragging() || panelMgr.IsCornerDragging() || chevronMenu.Open
+	}
 
 	isSelected := func(e ecs.Entity) int {
 		for i := range selected {
@@ -792,57 +801,97 @@ func main() {
 			panelMap = panelMgr.Get(ui.PanelMap)
 		}
 
-		// -- Phase 13.5 M13.5.2 - splitter hover / drag --
-		// Splitter takes priority over panel-content input: hover sets the
-		// resize cursor; LMB-press on a splitter starts a drag that consumes
-		// LMB until release. Drag updates RightColRatio / InspectorRatio live
-		// and re-runs Recompute so other code (chrome, content) sees the new
-		// bounds the same frame.
+		// -- Phase 18.C - splitter / corner / chevron hover + drag --
+		// Priority chain: open menu wins LMB; then splitter (drag existing
+		// divider); then chevron (open menu); then corner-grab (start a
+		// pending split). The chrome cursor reflects the topmost target.
 		splitterHover := panelMgr.SplitterAt(cursor)
+		cornerHover := panelMgr.CornerAt(cursor)
+		chevronHover := chevronLeafAt(panelMgr, cursor)
 		switch {
 		case panelMgr.IsDragging():
-			// Show resize cursor for the splitter we're actively dragging.
-			switch panelMgr.DraggingSplitter() {
-			case ui.SplitterMain:
+			if sp := panelMgr.DraggingSplitter(); sp != nil {
+				if sp.Orient == ui.SplitVertical {
+					rl.SetMouseCursor(rl.MouseCursorResizeEW)
+				} else {
+					rl.SetMouseCursor(rl.MouseCursorResizeNS)
+				}
+			}
+		case panelMgr.IsCornerDragging():
+			rl.SetMouseCursor(rl.MouseCursorResizeAll)
+		case splitterHover != nil:
+			if splitterHover.Orient == ui.SplitVertical {
 				rl.SetMouseCursor(rl.MouseCursorResizeEW)
-			case ui.SplitterRight, ui.SplitterTimeline:
+			} else {
 				rl.SetMouseCursor(rl.MouseCursorResizeNS)
 			}
-		case splitterHover != ui.SplitterNone:
-			switch splitterHover {
-			case ui.SplitterMain:
-				rl.SetMouseCursor(rl.MouseCursorResizeEW)
-			case ui.SplitterRight, ui.SplitterTimeline:
-				rl.SetMouseCursor(rl.MouseCursorResizeNS)
-			}
+		case cornerHover != nil:
+			rl.SetMouseCursor(rl.MouseCursorResizeNWSE)
+		case chevronHover != nil:
+			rl.SetMouseCursor(rl.MouseCursorPointingHand)
 		default:
 			rl.SetMouseCursor(rl.MouseCursorDefault)
 		}
-		// LMB on splitter -> BeginDrag. Consumes the press so the rest of the
-		// frame's LMB handlers (selection / marquee) skip.
-		if !panelMgr.IsDragging() && splitterHover != ui.SplitterNone &&
-			rl.IsMouseButtonPressed(rl.MouseButtonLeft) {
+
+		// LMB press dispatch. Order matters: menu-open takes priority so the
+		// rest of the UI doesn't react under it. lmbDown is the raw "press
+		// this frame" signal (menu still needs to receive it even when
+		// chromeBusy gates everything else); lmbPress is the gated form
+		// used by splitter / chevron / corner start.
+		lmbDown := rl.IsMouseButtonPressed(rl.MouseButtonLeft)
+		lmbPress := lmbDown && !panelMgr.IsDragging() && !panelMgr.IsCornerDragging()
+		if chevronMenu.Open && lmbDown {
+			if idx := chevronMenu.HitItem(hudFont, cursor); idx >= 0 {
+				it := chevronMenu.Items[idx]
+				if !it.Disabled {
+					handleMenuItem(panelMgr, &chevronMenu, it)
+					saveLayout(panelMgr)
+				}
+				chevronMenu.Close()
+			} else {
+				chevronMenu.Close()
+			}
+			panel3D = panelMgr.Get(ui.Panel3D)
+			panelMap = panelMgr.Get(ui.PanelMap)
+			scene3DRT.EnsureSize(panel3D)
+		} else if lmbPress && splitterHover != nil {
 			panelMgr.BeginDrag(splitterHover)
+		} else if lmbPress && chevronHover != nil {
+			isRoot := chevronHover == panelMgr.Workspace
+			ch := ui.ChevronRect(ui.Panel{Bounds: chevronHover.Bounds})
+			chevronMenu.OpenAt(chevronHover, ch, isRoot)
+		} else if lmbPress && cornerHover != nil {
+			panelMgr.BeginCornerDrag(cornerHover, cursor)
 		}
-		// Active drag - apply cursor pos to ratio. On release, persist if
-		// changed (M13.5.5 will wire actual saveLayout call; for now the
-		// release just ends the drag).
+
+		// Active splitter drag - apply cursor pos to ratio, persist on
+		// release.
 		if panelMgr.IsDragging() {
 			if rl.IsMouseButtonDown(rl.MouseButtonLeft) {
 				panelMgr.UpdateDrag(cursor)
-				// Re-sync local panel handles since Recompute moved them.
 				panel3D = panelMgr.Get(ui.Panel3D)
 				panelMap = panelMgr.Get(ui.PanelMap)
 				scene3DRT.EnsureSize(panel3D)
 			} else {
 				if panelMgr.EndDrag() {
-					// Phase 13.5 M13.5.5: persist on EndDrag returning
-					// changed=true. Atomic write - failure logged, not fatal.
 					saveLayout(panelMgr)
 				}
 				panel3D = panelMgr.Get(ui.Panel3D)
 				panelMap = panelMgr.Get(ui.PanelMap)
 				scene3DRT.EnsureSize(panel3D)
+			}
+		}
+		// Active corner drag - release commits a new split.
+		if panelMgr.IsCornerDragging() {
+			if !rl.IsMouseButtonDown(rl.MouseButtonLeft) {
+				if panelMgr.CommitCornerDrag(cursor) {
+					saveLayout(panelMgr)
+				}
+				panel3D = panelMgr.Get(ui.Panel3D)
+				panelMap = panelMgr.Get(ui.PanelMap)
+				scene3DRT.EnsureSize(panel3D)
+			} else if rl.IsKeyPressed(rl.KeyEscape) {
+				panelMgr.CancelCornerDrag()
 			}
 		}
 
@@ -946,7 +995,7 @@ func main() {
 		// Wheel only fires when the cursor is over the Inspector panel and
 		// no splitter drag is active. MapCamera's wheel block above is gated
 		// on focused == ui.PanelMap, so the two paths are mutually exclusive.
-		if focused == ui.PanelInspect && !panelMgr.IsDragging() {
+		if focused == ui.PanelInspect && !chromeBusy() {
 			if wheel := rl.GetMouseWheelMove(); wheel != 0 {
 				if scroll := panelMgr.ScrollByID(ui.PanelInspect); scroll != nil {
 					scroll.OffsetY -= wheel * wheelScrollSpeed
@@ -959,7 +1008,7 @@ func main() {
 		// Splitter drag has priority - it uses LMB too, so guard against both.
 		inspScrollPanel := panelMgr.Get(ui.PanelInspect)
 		inspScroll := panelMgr.ScrollByID(ui.PanelInspect)
-		if !panelMgr.IsDragging() && inspScroll != nil {
+		if !chromeBusy() && inspScroll != nil {
 			thumb := ui.ScrollbarThumbRect(inspScrollPanel, inspScroll)
 			if !scrollDragging && thumb.Width > 0 && thumb.Height > 0 &&
 				rl.IsMouseButtonPressed(rl.MouseButtonLeft) &&
@@ -987,7 +1036,7 @@ func main() {
 		}
 
 		// -- Phase 18 top bar: LMB on play/pause/speed buttons --
-		if focused == ui.PanelTopBar && !panelMgr.IsDragging() && !scrollDragging &&
+		if focused == ui.PanelTopBar && !chromeBusy() && !scrollDragging &&
 			rl.IsMouseButtonPressed(rl.MouseButtonLeft) {
 			switch ui.TopBarHitTest(cursor, topBarPlayPause, topBarSpeedDown, topBarSpeedUp) {
 			case ui.TopBarHitPlayPause:
@@ -1011,7 +1060,7 @@ func main() {
 
 		// -- Phase 18 timeline: hover/click on order blocks, wheel pan/zoom --
 		timelineHoverOK = false
-		if focused == ui.PanelTimeline && !panelMgr.IsDragging() {
+		if focused == ui.PanelTimeline && !chromeBusy() {
 			panelTL := panelMgr.Get(ui.PanelTimeline)
 			timelineHoverHit, timelineHoverOK = ui.TimelineHitTest(panelTL, timelineData, timelineView, cursor)
 			if timelineHoverHit.HitOrder {
@@ -1098,7 +1147,7 @@ func main() {
 		// (CurrentLevel / WallMode / InteriorOpen) and skip marquee start;
 		// otherwise the click would also start a stray selection rectangle.
 		widgetClickConsumed := false
-		if !panelMgr.IsDragging() && rl.IsMouseButtonPressed(rl.MouseButtonLeft) && buildingWidget != nil {
+		if !chromeBusy() && rl.IsMouseButtonPressed(rl.MouseButtonLeft) && buildingWidget != nil {
 			if hit := ui.HitTestBuildingWidget(buildingWidget, cursor); hit != nil {
 				target := buildingWidget.Root
 				if bvm := buildingViewModeMap.Get(target); bvm != nil {
@@ -1121,7 +1170,7 @@ func main() {
 				}
 			}
 		}
-		if !panelMgr.IsDragging() && !widgetClickConsumed && rl.IsMouseButtonPressed(rl.MouseButtonLeft) {
+		if !chromeBusy() && !widgetClickConsumed && rl.IsMouseButtonPressed(rl.MouseButtonLeft) {
 			switch focused {
 			case ui.Panel3D:
 				marqueeStart = cursor
@@ -2129,7 +2178,7 @@ func main() {
 			Font:          hudFont,
 			EventLog:      eventLog,
 			Cursor:        cursor,
-			LMBPressed:    !panelMgr.IsDragging() && !scrollDragging && rl.IsMouseButtonPressed(rl.MouseButtonLeft),
+			LMBPressed:    !chromeBusy() && !scrollDragging && rl.IsMouseButtonPressed(rl.MouseButtonLeft),
 			PanelFocused:  inspectorFocused,
 			Scroll:        inspectorScroll,
 			SquadColor:    squadColor,
@@ -2226,11 +2275,22 @@ func main() {
 
 		// Chrome (border + title) on every panel, drawn last so it overlays
 		// content (including marquee strokes that bleed onto the title bar).
-		// PanelTopBar drawn by DrawTopBar itself (no chrome). PanelTimeline
-		// gets normal chrome so its title + border match the rest.
-		for _, id := range []ui.PanelID{ui.Panel3D, ui.PanelMap, ui.PanelInspect, ui.PanelTimeline} {
-			ui.DrawChrome(panelMgr.Get(id), hudFont, 16)
+		// PanelTopBar drawn by DrawTopBar itself (no chrome). All workspace
+		// leaves get normal chrome via tree walk - Phase 18.C tree layout
+		// means we no longer iterate a fixed list of PanelIDs.
+		panelMgr.Workspace.WalkLeaves(func(l *ui.LayoutNode) {
+			ui.DrawChrome(ui.Panel{ID: l.Panel, Bounds: l.Bounds, Title: l.Title}, hudFont, 16)
+		})
+
+		// Phase 18.C corner-grab handles + active split preview line.
+		ui.DrawCornerHandles(panelMgr, cursor)
+		if panelMgr.IsCornerDragging() {
+			ui.DrawCornerDragPreview(panelMgr, cursor)
 		}
+
+		// Chevron popup menu (Phase 18.C). Drawn after chrome so the menu
+		// sits over title bars.
+		chevronMenu.Draw(hudFont, cursor)
 
 		// Pie menu (RMB-hold overlay, M11.6). Drawn after chrome so it sits
 		// above every panel.
@@ -2295,6 +2355,60 @@ func main() {
 		recordTraceFrame(app, rl.GetFrameTime()*1000, rl.GetFPS(), cen)
 		handleTraceHotkeys(app)
 	}
+}
+
+// chevronLeafAt returns the workspace leaf whose chevron button sits under
+// the cursor, or nil. Walks the tree and tests each leaf's chevron rect.
+func chevronLeafAt(panelMgr *ui.PanelManager, cursor rl.Vector2) *ui.LayoutNode {
+	if panelMgr == nil || panelMgr.Workspace == nil {
+		return nil
+	}
+	var hit *ui.LayoutNode
+	panelMgr.Workspace.WalkLeaves(func(l *ui.LayoutNode) {
+		if hit != nil {
+			return
+		}
+		ch := ui.ChevronRect(ui.Panel{Bounds: l.Bounds})
+		if cursor.X >= ch.X && cursor.X < ch.X+ch.Width &&
+			cursor.Y >= ch.Y && cursor.Y < ch.Y+ch.Height {
+			hit = l
+		}
+	})
+	return hit
+}
+
+// handleMenuItem dispatches a chevron-menu selection: switch the leaf to
+// a different widget (swapping with the existing host if it's already in
+// the tree) or merge the leaf into its sibling (close pane).
+func handleMenuItem(panelMgr *ui.PanelManager, menu *ui.ChevronMenu, it ui.MenuItem) {
+	leaf := menu.Leaf
+	if leaf == nil {
+		return
+	}
+	switch it.Kind {
+	case ui.MenuItemSwitch:
+		if it.Target == leaf.Panel {
+			return
+		}
+		// If the target widget is already shown elsewhere, swap contents
+		// so each PanelID appears at most once.
+		if other := panelMgr.Workspace.FindLeaf(it.Target); other != nil {
+			ui.SwapPanels(leaf, other)
+		} else {
+			leaf.Panel = it.Target
+			leaf.Title = ui.WidgetTitle(it.Target)
+		}
+	case ui.MenuItemClose:
+		if leaf.Parent == nil {
+			return
+		}
+		wasRootChild := leaf.Parent == panelMgr.Workspace
+		sib := ui.MergeIntoSibling(leaf)
+		if wasRootChild && sib != nil {
+			panelMgr.SetWorkspace(sib)
+		}
+	}
+	panelMgr.Recompute(int32(rl.GetScreenWidth()), int32(rl.GetScreenHeight()))
 }
 
 // nextTimeScale advances the speed multiplier through 1 -> 2 -> 4 -> 8 -> 1

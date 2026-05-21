@@ -1,57 +1,38 @@
 // Package ui hosts the multi-panel UI layer introduced in Phase 10.
 //
-// The package is deliberately ECS-agnostic: panels are screen-space rectangles
-// with a content callback or direct draw, no World queries inside this file.
-// Each panel's content lives in its own file (scene3d.go, inspector.go,
-// time.go, map_render.go) and is wired by main.go.
-//
-// L1 layout = fixed grid. Two presets (Field / Command) swap which slot the
-// 3D scene and the map occupy. L3 (splitters) / L4 (movable + dock zones) is
-// Phase 22 - this file's exported surface (PanelManager.{Recompute, FocusedAt,
-// Get}) is what stays stable across that migration.
+// Phase 18.C migrated to a tree-of-splits workspace below a fixed top bar.
+// Layout is a recursive LayoutNode (Leaf | Split); Recompute walks it DFS
+// and fills Bounds on every node. PanelManager.Get(id) looks up the leaf
+// rect via the cache built during Recompute. Splitter drag mutates the
+// matching Split node's Ratio. Corner-drag wraps a leaf in a new Split;
+// the chevron menu can swap a leaf's widget or merge it with its sibling.
 package ui
 
 import (
 	rl "github.com/gen2brain/raylib-go/raylib"
 )
 
-// SplitterID identifies which inter-panel splitter the cursor is hovering /
-// dragging. Phase 18 adds SplitterTimeline; Phase 18.C tree-of-splits will
-// generalise to a per-node identity.
-type SplitterID uint8
+// SplitterID identifies a draggable divider. Phase 18.C swapped the old
+// enum for the *LayoutNode of the Split being dragged; SplitterNone == nil.
+// Type alias keeps existing call sites readable.
+type SplitterID = *LayoutNode
 
-const (
-	// SplitterNone - cursor isn't on any splitter.
-	SplitterNone SplitterID = iota
-	// SplitterMain - vertical line between the big slot (3D in Field preset /
-	// Map in Command) and the right column (Inspector + side view stacked).
-	// Drag horizontally to redistribute width via RightColRatio.
-	SplitterMain
-	// SplitterRight - horizontal line inside the right column between
-	// Inspector (top) and the side view (bottom). Drag vertically to
-	// redistribute height via InspectorRatio.
-	SplitterRight
-	// SplitterTimeline - horizontal line between the central row (3D + side
-	// column) and the bottom timeline panel. Drag vertically to redistribute
-	// height via TimelineRatio.
-	SplitterTimeline
-)
+// SplitterNone marks "no splitter under the cursor". Tested with == nil.
+var SplitterNone SplitterID = nil
 
 // splitterGrabRadius is the hit-zone half-thickness around a splitter line.
-// Visual splitter = the existing 1-px panel border; hit-zone wider so the
-// cursor can grab without pixel-precision (Fitts).
 const splitterGrabRadius float32 = 6
 
-// panelMinW / panelMinH - min sizes used when clamping splitter drags so a
-// panel can't be shrunk to invisibility. Inspector quick-bar chips become
-// unusable below ~180 px wide; panelMinH=100 prevents zero-height drag.
+// panelMinW / panelMinH bound how small a single leaf can shrink during a
+// splitter drag.
 const (
 	panelMinW float32 = 180
 	panelMinH float32 = 100
 )
 
-// PanelID identifies one of the four MVP panels. String-typed instead of an
-// enum because it shows up in debug overlays and HUD labels.
+// PanelID identifies a widget kind. Each kind has its own draw callback in
+// main.go; multiple leaves may not show the same kind at once (chevron
+// menu enforces this via swap).
 type PanelID string
 
 const (
@@ -63,117 +44,93 @@ const (
 	PanelNone     PanelID = ""
 )
 
-// LayoutPreset chooses which slot holds the 3D scene vs the map. Tab toggles
-// the two presets at runtime.
-type LayoutPreset uint8
-
-const (
-	PresetField   LayoutPreset = iota // 3D is the big slot, map is the side slot.
-	PresetCommand                     // Map is the big slot, 3D is the side slot.
-)
-
-// Panel - one screen-space rectangle. Bounds recomputed by LayoutManager on
-// resize / preset swap. Title is shown in the panel's top-left corner.
+// Panel is the screen-space rectangle handed back to draw callers. ID
+// identifies the widget kind, Bounds is the cached rect from the latest
+// Recompute, Title is the chrome label.
 type Panel struct {
 	ID     PanelID
 	Bounds rl.Rectangle
 	Title  string
 }
 
-// ScrollState - per-panel vertical scroll position + measured content height.
-//
-// Phase 13.5 M13.5.3: Inspector renders with `y -= OffsetY` so contents shift
-// up under the scissor; at the end of the draw it writes the total used
-// height into ContentHeight so the scrollbar can size its thumb. Phase 21
-// will extend other panels (Map / Time stay fixed since they don't overflow).
+// ScrollState is the per-leaf vertical scroll position + measured content
+// height. Stored per PanelID in PanelManager.scroll - keyed by widget kind
+// rather than tree position so a chevron swap doesn't reset scroll for the
+// widget the player is reading.
 type ScrollState struct {
 	OffsetY       float32
 	ContentHeight float32
 }
 
-// PanelManager owns the fixed list of panels and the active LayoutPreset.
-// Panels slice order doubles as Z-order - first = bottom, last = top. In L1
-// nothing overlaps so this only matters for the FocusedAt fallback when two
-// rects share a border pixel.
-//
-// Phase 13.5 M13.5.1: RightColRatio / InspectorRatio are mutable so splitter
-// drag (M13.5.2) can resize panels at runtime; loadLayout (M13.5.5) restores
-// them from save/layout.json on startup. screenW / screenH are remembered
-// from the latest Recompute so UpdateDrag can re-apply ratios without the
-// caller passing them every frame.
+// PanelManager owns the fixed top-bar panel + the workspace tree. Layout
+// is the active preset for save/load bookkeeping (mutations on the tree
+// don't change it; Tab toggles content of two key leaves rather than
+// rebuilding the tree).
 type PanelManager struct {
-	Panels  []Panel
-	Layout  LayoutPreset
+	TopBar    Panel
+	Workspace *LayoutNode
+	Layout    LayoutPreset
+
+	scroll  map[PanelID]*ScrollState
 	focused PanelID
 
-	// Phase 13.5 - mutable layout ratios.
-	RightColRatio  float32 // 0..1, side column's share of width
-	InspectorRatio float32 // 0..1, inspector's share of side column height
-	// Phase 18 - timeline panel share of content height (height below the
-	// top bar). The central row (Panel3D + side col) gets 1 - TimelineRatio.
-	TimelineRatio float32
-
-	// Cached screen dimensions from the latest Recompute. UpdateDrag uses
-	// these to convert cursor delta -> ratio delta without re-querying raylib
-	// inside ui/.
 	screenW, screenH int32
 
-	// Splitter drag state (Phase 13.5 M13.5.2). dragging == SplitterNone
-	// means no drag in progress.
-	dragging        SplitterID
-	dragStartRatio  float32 // ratio snapshot at BeginDrag (for EndDrag-changed flag)
-	dragInitialDirt bool    // tracks whether the drag actually mutated ratio
+	// dragging splitter (Phase 18.C: pointer to a Split node).
+	dragging       SplitterID
+	dragStartRatio float32
+	dragDirty      bool
 
-	// Per-panel scroll state (Phase 13.5 M13.5.3). Indexed parallel to
-	// Panels - Scroll[i] belongs to Panels[i]. Phase 18 added two panels
-	// (TopBar + Timeline) so the array fits the new canonical order below.
-	Scroll [5]ScrollState
+	// corner-drag bookkeeping (Phase 18.C). cornerLeaf is the leaf whose
+	// corner is being dragged; cornerStart holds the press cursor; once
+	// motion crosses cornerThreshold the system commits a new Split.
+	cornerLeaf  *LayoutNode
+	cornerStart rl.Vector2
+	cornerDirty bool
 }
 
-// NewPanelManager constructs the manager with four empty-bounds panels in
-// canonical order. Caller must call Recompute(screenW, screenH) before the
-// first draw - bounds are zero until then.
+// NewPanelManager builds the default Field-preset tree.
 func NewPanelManager() *PanelManager {
 	return &PanelManager{
-		Panels: []Panel{
-			{ID: Panel3D, Title: "Field"},
-			{ID: PanelMap, Title: "Map"},
-			{ID: PanelInspect, Title: "Inspector"},
-			{ID: PanelTopBar, Title: ""},
-			{ID: PanelTimeline, Title: "Timeline"},
-		},
-		Layout:         PresetField,
-		focused:        PanelNone,
-		RightColRatio:  DefaultRightColRatio,
-		InspectorRatio: DefaultInspectorRatio,
-		TimelineRatio:  DefaultTimelineRatio,
+		TopBar:    Panel{ID: PanelTopBar, Title: ""},
+		Workspace: presetFieldTree(),
+		Layout:    PresetField,
+		scroll:    map[PanelID]*ScrollState{},
+		focused:   PanelNone,
 	}
 }
 
-// Recompute rebuilds every panel's Bounds from the current screen size and
-// active LayoutPreset. Idempotent - call after resize, preset toggle, or any
-// time the cached rects might be stale.
+// SetWorkspace installs a fresh tree (used by layout persistence load).
+func (m *PanelManager) SetWorkspace(n *LayoutNode) {
+	if n == nil {
+		n = presetFieldTree()
+	}
+	m.Workspace = n
+}
+
+// Recompute rebuilds every leaf's Bounds for the current screen size.
 func (m *PanelManager) Recompute(screenW, screenH int32) {
 	m.screenW = screenW
 	m.screenH = screenH
-	var rects map[PanelID]rl.Rectangle
-	switch m.Layout {
-	case PresetCommand:
-		rects = layoutCommand(screenW, screenH, m.RightColRatio, m.InspectorRatio, m.TimelineRatio)
-	default:
-		rects = layoutField(screenW, screenH, m.RightColRatio, m.InspectorRatio, m.TimelineRatio)
-	}
-	for i := range m.Panels {
-		if r, ok := rects[m.Panels[i].ID]; ok {
-			m.Panels[i].Bounds = r
-		}
+	m.TopBar.Bounds = TopBarRect(screenW)
+	if m.Workspace != nil {
+		m.Workspace.Compute(WorkspaceRect(screenW, screenH))
 	}
 }
 
-// TogglePreset flips Field <-> Command. Caller is responsible for Recompute()
-// after - keeping the calls separate lets main.go also realloc the 3D RT in
-// the same place.
+// TogglePreset flips Field <-> Command by SWAPPING the contents of the
+// Panel3D and PanelMap leaves rather than rebuilding the tree, so the
+// user's drag-edited layout is preserved.
 func (m *PanelManager) TogglePreset() {
+	if m.Workspace == nil {
+		return
+	}
+	a := m.Workspace.FindLeaf(Panel3D)
+	b := m.Workspace.FindLeaf(PanelMap)
+	if a == nil || b == nil {
+		return
+	}
+	SwapPanels(a, b)
 	if m.Layout == PresetField {
 		m.Layout = PresetCommand
 	} else {
@@ -181,282 +138,228 @@ func (m *PanelManager) TogglePreset() {
 	}
 }
 
-// FocusedAt returns the topmost panel whose Bounds contains cursor. Returns
-// PanelNone when cursor is outside every panel (e.g. on the OS title bar). In
-// L1 panels don't overlap; iteration goes back-to-front to match the L3/L4
-// Z-order rule for free.
+// FocusedAt returns the PanelID under the cursor. Top bar wins above the
+// workspace; PanelNone if the cursor is somewhere weird (off-screen).
 func (m *PanelManager) FocusedAt(cursor rl.Vector2) PanelID {
-	for i := len(m.Panels) - 1; i >= 0; i-- {
-		p := &m.Panels[i]
-		if pointInRect(cursor, p.Bounds) {
-			m.focused = p.ID
-			return p.ID
-		}
+	if pointInRect(cursor, m.TopBar.Bounds) {
+		m.focused = PanelTopBar
+		return PanelTopBar
+	}
+	if leaf := m.Workspace.LeafAt(cursor); leaf != nil {
+		m.focused = leaf.Panel
+		return leaf.Panel
 	}
 	m.focused = PanelNone
 	return PanelNone
 }
 
-// Get returns the Panel by ID. Returns a zero Panel{} when the ID is unknown -
-// callers that hand out a fixed compile-time ID can assume Get always
-// succeeds.
+// Get returns the Panel for `id` (TopBar special-cased). For workspace IDs
+// the first leaf in the tree is returned. Returns a zero Panel when the
+// widget isn't currently in the tree.
 func (m *PanelManager) Get(id PanelID) Panel {
-	for i := range m.Panels {
-		if m.Panels[i].ID == id {
-			return m.Panels[i]
-		}
+	if id == PanelTopBar {
+		return m.TopBar
 	}
-	return Panel{}
+	leaf := m.Workspace.FindLeaf(id)
+	if leaf == nil {
+		return Panel{}
+	}
+	return Panel{ID: leaf.Panel, Bounds: leaf.Bounds, Title: leaf.Title}
 }
 
-// IsFocused is the per-frame gate used by input handlers. Reads the cached
-// focusedPanel from the last FocusedAt; call FocusedAt at the top of each
-// frame.
-func (m *PanelManager) IsFocused(id PanelID) bool {
-	return m.focused == id
+// LeafFor returns the actual *LayoutNode for a widget kind. Used by the
+// chevron menu / corner drag, which need to mutate the tree.
+func (m *PanelManager) LeafFor(id PanelID) *LayoutNode {
+	if m.Workspace == nil {
+		return nil
+	}
+	return m.Workspace.FindLeaf(id)
 }
 
-// Focused returns the cached focused panel ID. Useful when the same ID is
-// needed in multiple input blocks - call FocusedAt once and re-read via this.
-func (m *PanelManager) Focused() PanelID { return m.focused }
+// LeafAt returns the workspace leaf under `cursor` (nil if cursor is in
+// the top bar or outside the window).
+func (m *PanelManager) LeafAt(cursor rl.Vector2) *LayoutNode {
+	if pointInRect(cursor, m.TopBar.Bounds) {
+		return nil
+	}
+	return m.Workspace.LeafAt(cursor)
+}
 
-// CursorLocal converts a screen-space cursor to a panel-local Vector2 (cursor
-// relative to the panel's top-left). Used by raycast / marquee / picking in
-// the 3D and map panels.
+// IsFocused / Focused mirror the old API.
+func (m *PanelManager) IsFocused(id PanelID) bool { return m.focused == id }
+func (m *PanelManager) Focused() PanelID          { return m.focused }
+
+// CursorLocal converts a screen-space cursor to a panel-local Vector2.
 func CursorLocal(cursor rl.Vector2, p Panel) rl.Vector2 {
 	return rl.Vector2{X: cursor.X - p.Bounds.X, Y: cursor.Y - p.Bounds.Y}
 }
 
-// ScrollByID returns a pointer to the per-panel scroll state. Returns nil
-// if the ID is unknown - callers handing out a fixed compile-time ID can
-// assume non-nil.
+// ScrollByID returns (creating on demand) the scroll state for a widget.
 func (m *PanelManager) ScrollByID(id PanelID) *ScrollState {
-	for i := range m.Panels {
-		if m.Panels[i].ID == id {
-			return &m.Scroll[i]
-		}
+	if id == PanelTopBar {
+		return nil
 	}
-	return nil
+	if s, ok := m.scroll[id]; ok {
+		return s
+	}
+	s := &ScrollState{}
+	m.scroll[id] = s
+	return s
 }
 
 func pointInRect(p rl.Vector2, r rl.Rectangle) bool {
 	return p.X >= r.X && p.X < r.X+r.Width && p.Y >= r.Y && p.Y < r.Y+r.Height
 }
 
-// splitterMainX returns the X coord of the vertical Main splitter line. It
-// sits at the boundary between the big slot (left column) and the right
-// column. In both Field and Command presets this is the same - only the
-// content of the big slot changes (3D vs Map).
-func (m *PanelManager) splitterMainX() float32 {
-	return float32(m.screenW) - float32(m.screenW)*m.RightColRatio
-}
-
-// centralRowHeight returns the height of the middle band (3D + side col),
-// i.e. screen minus top bar minus timeline. Phase 18 helper - used by both
-// splitter Y lookups so all geometry stays consistent.
-func (m *PanelManager) centralRowHeight() float32 {
-	avail := float32(m.screenH - topBarHeight)
-	if avail < 0 {
-		avail = 0
-	}
-	tlH := avail * m.TimelineRatio
-	return avail - tlH
-}
-
-// splitterRightY returns the Y coord of the horizontal Right splitter line.
-// It sits inside the right column between Inspector (top) and the side view
-// (bottom). Inspector lives in the same screen position in both presets.
-func (m *PanelManager) splitterRightY() float32 {
-	return float32(topBarHeight) + m.centralRowHeight()*m.InspectorRatio
-}
-
-// splitterTimelineY returns the Y coord of the horizontal Timeline splitter
-// (boundary between the central row and the timeline panel).
-func (m *PanelManager) splitterTimelineY() float32 {
-	return float32(topBarHeight) + m.centralRowHeight()
-}
-
-// SplitterAt returns the splitter under `cursor`, or SplitterNone if none.
-// Hit-zone half-thickness = splitterGrabRadius around the splitter line.
-// Right splitter is only valid inside the right column's X range.
+// SplitterAt returns the Split node whose divider sits under cursor (within
+// splitterGrabRadius), or nil. Walks the workspace tree; the first hit
+// wins which is fine because dividers never overlap.
 func (m *PanelManager) SplitterAt(cursor rl.Vector2) SplitterID {
-	if m.screenW <= 0 || m.screenH <= 0 {
-		return SplitterNone
+	if m.Workspace == nil {
+		return nil
 	}
-	// Top-bar area + timeline area - splitters don't live there.
-	if cursor.Y < float32(topBarHeight) {
-		return SplitterNone
+	// Cursor in top bar - no workspace splitters live there.
+	if pointInRect(cursor, m.TopBar.Bounds) {
+		return nil
 	}
-	mainX := m.splitterMainX()
-	rightY := m.splitterRightY()
-	timelineY := m.splitterTimelineY()
-
-	// Timeline splitter wins when cursor is in its grab band; it spans the
-	// full screen width.
-	if cursor.Y >= timelineY-splitterGrabRadius && cursor.Y <= timelineY+splitterGrabRadius {
-		return SplitterTimeline
-	}
-	// Cursor below the timeline splitter is inside the timeline panel - no
-	// splitter target there.
-	if cursor.Y > timelineY {
-		return SplitterNone
-	}
-	// Right splitter check first - its Y-band overlaps with Main's X-band at
-	// the corner, but a horizontal cursor sweep inside the right column should
-	// land on Right, not Main. So Right wins when cursor is inside the right
-	// column AND within Y-grab of the right splitter.
-	if cursor.X >= mainX-splitterGrabRadius && cursor.X <= float32(m.screenW) {
-		if cursor.Y >= rightY-splitterGrabRadius && cursor.Y <= rightY+splitterGrabRadius {
-			return SplitterRight
+	var hit *LayoutNode
+	m.Workspace.WalkSplits(func(sp *LayoutNode) {
+		if hit != nil {
+			return
 		}
-	}
-	// Main splitter: vertical line at mainX, spanning the central row.
-	if cursor.X >= mainX-splitterGrabRadius && cursor.X <= mainX+splitterGrabRadius {
-		return SplitterMain
-	}
-	return SplitterNone
+		if cursorOnDivider(cursor, sp) {
+			hit = sp
+		}
+	})
+	return hit
 }
 
-// IsDragging reports whether a splitter drag is currently in progress.
-func (m *PanelManager) IsDragging() bool {
-	return m.dragging != SplitterNone
-}
-
-// DraggingSplitter returns the currently dragged splitter (SplitterNone if
-// no drag is active). Useful for cursor-icon override during drag.
-func (m *PanelManager) DraggingSplitter() SplitterID {
-	return m.dragging
-}
-
-// BeginDrag marks the start of a splitter drag and snapshots the current
-// ratio so EndDrag can decide whether a save is needed.
-func (m *PanelManager) BeginDrag(splitter SplitterID) {
-	m.dragging = splitter
-	m.dragInitialDirt = false
-	switch splitter {
-	case SplitterMain:
-		m.dragStartRatio = m.RightColRatio
-	case SplitterRight:
-		m.dragStartRatio = m.InspectorRatio
-	case SplitterTimeline:
-		m.dragStartRatio = m.TimelineRatio
-	default:
-		m.dragging = SplitterNone
+// cursorOnDivider reports whether cursor sits within splitterGrabRadius of
+// the split's divider line. The divider is the inside edge of the first
+// child's rect.
+func cursorOnDivider(cursor rl.Vector2, sp *LayoutNode) bool {
+	if sp == nil || !sp.IsSplit() {
+		return false
 	}
+	a := sp.Children[0].Bounds
+	switch sp.Orient {
+	case SplitVertical:
+		x := a.X + a.Width
+		return cursor.X >= x-splitterGrabRadius && cursor.X <= x+splitterGrabRadius &&
+			cursor.Y >= sp.Bounds.Y && cursor.Y <= sp.Bounds.Y+sp.Bounds.Height
+	case SplitHorizontal:
+		y := a.Y + a.Height
+		return cursor.Y >= y-splitterGrabRadius && cursor.Y <= y+splitterGrabRadius &&
+			cursor.X >= sp.Bounds.X && cursor.X <= sp.Bounds.X+sp.Bounds.Width
+	}
+	return false
+}
+
+// IsDragging reports an active splitter drag.
+func (m *PanelManager) IsDragging() bool { return m.dragging != nil }
+
+// DraggingSplitter returns the currently dragged Split (or nil).
+func (m *PanelManager) DraggingSplitter() SplitterID { return m.dragging }
+
+// BeginDrag starts a splitter drag, snapshotting the current ratio.
+func (m *PanelManager) BeginDrag(sp SplitterID) {
+	if sp == nil || !sp.IsSplit() {
+		return
+	}
+	m.dragging = sp
+	m.dragStartRatio = sp.Ratio
+	m.dragDirty = false
 }
 
 // UpdateDrag applies the current cursor position to the active splitter,
-// clamps to min-size constraints, mutates the ratio, and recomputes panel
-// bounds. No-op if no drag is in progress.
+// clamped to min sizes on either side.
 func (m *PanelManager) UpdateDrag(cursor rl.Vector2) {
-	if m.dragging == SplitterNone || m.screenW <= 0 || m.screenH <= 0 {
+	if m.dragging == nil {
 		return
 	}
-	switch m.dragging {
-	case SplitterMain:
-		// Splitter follows cursor.X. RightW = screenW - cursor.X.
-		// Clamp so both leftW and rightW >= panelMinW.
-		x := cursor.X
-		minX := panelMinW
-		maxX := float32(m.screenW) - panelMinW
-		if minX > maxX {
-			// Window too narrow for both mins - meet in the middle.
-			minX = float32(m.screenW) * 0.5
-			maxX = minX
-		}
-		if x < minX {
-			x = minX
-		}
-		if x > maxX {
-			x = maxX
-		}
-		newRatio := (float32(m.screenW) - x) / float32(m.screenW)
-		if newRatio != m.RightColRatio {
-			m.RightColRatio = newRatio
-			m.dragInitialDirt = true
-		}
-	case SplitterRight:
-		// Splitter follows cursor.Y inside the right column. Y measured from
-		// just below the top bar. central row = inspector + side col.
-		centralH := m.centralRowHeight()
-		topOfCentral := float32(topBarHeight)
-		yLocal := cursor.Y - topOfCentral
-		minY := panelMinH
-		maxY := centralH - panelMinH
-		if minY > maxY {
-			minY = centralH * 0.5
-			maxY = minY
-		}
-		if yLocal < minY {
-			yLocal = minY
-		}
-		if yLocal > maxY {
-			yLocal = maxY
-		}
-		newRatio := yLocal / centralH
-		if newRatio != m.InspectorRatio {
-			m.InspectorRatio = newRatio
-			m.dragInitialDirt = true
-		}
-	case SplitterTimeline:
-		// Splitter follows cursor.Y between central row and timeline. Y
-		// measured from just below the top bar.
-		avail := float32(m.screenH - topBarHeight)
-		if avail <= 0 {
-			return
-		}
-		topOfCentral := float32(topBarHeight)
-		yLocal := cursor.Y - topOfCentral
-		minY := panelMinH
-		maxY := avail - panelMinH
-		if minY > maxY {
-			minY = avail * 0.5
-			maxY = minY
-		}
-		if yLocal < minY {
-			yLocal = minY
-		}
-		if yLocal > maxY {
-			yLocal = maxY
-		}
-		newRatio := (avail - yLocal) / avail
-		if newRatio != m.TimelineRatio {
-			m.TimelineRatio = newRatio
-			m.dragInitialDirt = true
-		}
+	sp := m.dragging
+	r := computeRatioFromCursor(sp, cursor)
+	if r != sp.Ratio {
+		sp.Ratio = r
+		m.dragDirty = true
+		m.Recompute(m.screenW, m.screenH)
 	}
-	m.Recompute(m.screenW, m.screenH)
 }
 
 // EndDrag finalises a splitter drag. Returns true if the ratio actually
-// changed during the drag - callers use this to gate layout persistence
-// writes so we don't re-save on no-op clicks.
+// changed during the drag (caller persists layout on change).
 func (m *PanelManager) EndDrag() bool {
-	if m.dragging == SplitterNone {
+	if m.dragging == nil {
 		return false
 	}
-	changed := m.dragInitialDirt
-	m.dragging = SplitterNone
-	m.dragInitialDirt = false
+	changed := m.dragDirty
+	m.dragging = nil
+	m.dragDirty = false
 	return changed
 }
 
-// AbortDrag cancels a drag and reverts the ratio to its pre-drag value.
-// Used when an external event (Tab preset toggle, window resize) should
-// pre-empt the drag.
+// AbortDrag reverts the splitter to its pre-drag ratio.
 func (m *PanelManager) AbortDrag() {
-	if m.dragging == SplitterNone {
+	if m.dragging == nil {
 		return
 	}
-	switch m.dragging {
-	case SplitterMain:
-		m.RightColRatio = m.dragStartRatio
-	case SplitterRight:
-		m.InspectorRatio = m.dragStartRatio
-	case SplitterTimeline:
-		m.TimelineRatio = m.dragStartRatio
-	}
-	m.dragging = SplitterNone
-	m.dragInitialDirt = false
+	m.dragging.Ratio = m.dragStartRatio
+	m.dragging = nil
+	m.dragDirty = false
 	m.Recompute(m.screenW, m.screenH)
+}
+
+// computeRatioFromCursor clamps the drag so neither child shrinks below
+// the corresponding min size.
+func computeRatioFromCursor(sp *LayoutNode, cursor rl.Vector2) float32 {
+	b := sp.Bounds
+	switch sp.Orient {
+	case SplitVertical:
+		if b.Width <= 0 {
+			return sp.Ratio
+		}
+		min := panelMinW
+		max := b.Width - panelMinW
+		if min > max {
+			min = b.Width * 0.5
+			max = min
+		}
+		x := cursor.X - b.X
+		if x < min {
+			x = min
+		}
+		if x > max {
+			x = max
+		}
+		return clamp01(x / b.Width)
+	case SplitHorizontal:
+		if b.Height <= 0 {
+			return sp.Ratio
+		}
+		min := panelMinH
+		max := b.Height - panelMinH
+		if min > max {
+			min = b.Height * 0.5
+			max = min
+		}
+		y := cursor.Y - b.Y
+		if y < min {
+			y = min
+		}
+		if y > max {
+			y = max
+		}
+		return clamp01(y / b.Height)
+	}
+	return sp.Ratio
+}
+
+func clamp01(v float32) float32 {
+	if v < MinSplitRatio {
+		return MinSplitRatio
+	}
+	if v > MaxSplitRatio {
+		return MaxSplitRatio
+	}
+	return v
 }

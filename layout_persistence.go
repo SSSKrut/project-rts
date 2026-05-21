@@ -10,36 +10,84 @@ import (
 	"rts-go/ui"
 )
 
-// Phase 13.5 M13.5.5 - minimal layout persistence.
-//
-// Schema is a single JSON object with version + the two split ratios we
-// can mutate from the UI today. Phase 22 will extend this into a proper
-// layout-tree (named presets, dock state, undocked window positions); the
-// version field gives us a clean compat boundary for that.
+// Phase 18.C layout persistence v3 - serialises the workspace tree (Leaf /
+// Split + Ratio) plus the active preset. Old files (v1, v2) are silently
+// rejected; defaults apply so a stale on-disk layout never sticks the user
+// in a broken state.
 
-// layoutSavePath is where the panel ratios live. Sits alongside the
-// per-world save directory (`save/world-default/`) but at the root of `save/`
-// because the layout is user-level, not per-world.
 const layoutSavePath = "./save/layout.json"
 
-// layoutFileVersion identifies the on-disk schema revision. Bumped when
-// fields are added/removed in a way readers can't infer. Phase 18 bumped to
-// 2 to add TimelineRatio.
-const layoutFileVersion uint16 = 2
+// layoutFileVersion identifies the on-disk schema. Bumped to 3 when the
+// flat 3-ratio model became a recursive tree.
+const layoutFileVersion uint16 = 3
 
-// layoutFile is the JSON-serialised representation of mutable layout state.
-type layoutFile struct {
-	Version        uint16  `json:"version"`
-	RightColRatio  float32 `json:"right_col_ratio"`
-	InspectorRatio float32 `json:"inspector_ratio"`
-	TimelineRatio  float32 `json:"timeline_ratio"`
+type nodeJSON struct {
+	Kind     string     `json:"kind"`            // "leaf" | "split"
+	Panel    string     `json:"panel,omitempty"` // leaf only
+	Title    string     `json:"title,omitempty"` // leaf only
+	Orient   string     `json:"orient,omitempty"` // split only: "v" | "h"
+	Ratio    float32    `json:"ratio,omitempty"`
+	Children []nodeJSON `json:"children,omitempty"`
 }
 
-// loadLayout reads the layout file (if present) and applies its ratios to
-// the PanelManager BEFORE the first Recompute. Missing file = no-op (defaults
-// stay). Parse error / corruption = log warning + no-op (defaults stay).
-// Out-of-range ratios are clamped to a safe band so a hand-edited file can't
-// produce a 100%-Inspector layout the user can't recover from.
+type layoutFile struct {
+	Version uint16   `json:"version"`
+	Preset  uint8    `json:"layout_preset"`
+	Tree    nodeJSON `json:"tree"`
+}
+
+func encodeNode(n *ui.LayoutNode) nodeJSON {
+	if n == nil {
+		return nodeJSON{}
+	}
+	if n.IsLeaf() {
+		return nodeJSON{
+			Kind:  "leaf",
+			Panel: string(n.Panel),
+			Title: n.Title,
+		}
+	}
+	orient := "v"
+	if n.Orient == ui.SplitHorizontal {
+		orient = "h"
+	}
+	return nodeJSON{
+		Kind:   "split",
+		Orient: orient,
+		Ratio:  n.Ratio,
+		Children: []nodeJSON{
+			encodeNode(n.Children[0]),
+			encodeNode(n.Children[1]),
+		},
+	}
+}
+
+func decodeNode(j nodeJSON) *ui.LayoutNode {
+	switch j.Kind {
+	case "leaf":
+		return ui.NewLeaf(ui.PanelID(j.Panel), j.Title)
+	case "split":
+		if len(j.Children) != 2 {
+			return nil
+		}
+		a := decodeNode(j.Children[0])
+		b := decodeNode(j.Children[1])
+		if a == nil || b == nil {
+			return nil
+		}
+		o := ui.SplitVertical
+		if j.Orient == "h" {
+			o = ui.SplitHorizontal
+		}
+		return ui.NewSplit(o, j.Ratio, a, b)
+	}
+	return nil
+}
+
+// loadLayout reads the layout file (if present) and installs the persisted
+// tree on the PanelManager BEFORE the first Recompute. Missing file =
+// no-op. Parse error / unknown version = no-op, log warning, defaults
+// (Field preset) stay.
 func loadLayout(panelMgr *ui.PanelManager) {
 	if panelMgr == nil {
 		return
@@ -61,15 +109,18 @@ func loadLayout(panelMgr *ui.PanelManager) {
 			lf.Version, layoutFileVersion)
 		return
 	}
-	panelMgr.RightColRatio = clampRatio(lf.RightColRatio, 0.10, 0.60)
-	panelMgr.InspectorRatio = clampRatio(lf.InspectorRatio, 0.10, 0.90)
-	panelMgr.TimelineRatio = clampRatio(lf.TimelineRatio, 0.05, 0.60)
+	root := decodeNode(lf.Tree)
+	if root == nil {
+		log.Printf("layout: tree decode produced nil, using defaults")
+		return
+	}
+	panelMgr.SetWorkspace(root)
+	panelMgr.Layout = ui.LayoutPreset(lf.Preset)
 }
 
-// saveLayout marshals the current PanelManager ratios into layout.json. Atomic
-// via .tmp + os.Rename - partial writes from a crash mid-Marshal can't leave
-// a corrupt file in place. Errors are logged but not returned: layout
-// persistence failure shouldn't crash the game.
+// saveLayout marshals the current workspace tree + active preset into
+// layout.json. Atomic via .tmp + os.Rename so a crash mid-Marshal can't
+// leave a corrupt file. Errors are logged, not returned.
 func saveLayout(panelMgr *ui.PanelManager) {
 	if panelMgr == nil {
 		return
@@ -80,10 +131,9 @@ func saveLayout(panelMgr *ui.PanelManager) {
 		return
 	}
 	lf := layoutFile{
-		Version:        layoutFileVersion,
-		RightColRatio:  panelMgr.RightColRatio,
-		InspectorRatio: panelMgr.InspectorRatio,
-		TimelineRatio:  panelMgr.TimelineRatio,
+		Version: layoutFileVersion,
+		Preset:  uint8(panelMgr.Layout),
+		Tree:    encodeNode(panelMgr.Workspace),
 	}
 	data, err := json.MarshalIndent(&lf, "", "  ")
 	if err != nil {
@@ -100,16 +150,4 @@ func saveLayout(panelMgr *ui.PanelManager) {
 		_ = os.Remove(tmp)
 		return
 	}
-}
-
-// clampRatio bounds a float to [lo, hi]. Used when reading user-editable
-// JSON so a hand-typed value out of [0,1] doesn't wreck the layout.
-func clampRatio(v, lo, hi float32) float32 {
-	if v < lo {
-		return lo
-	}
-	if v > hi {
-		return hi
-	}
-	return v
 }
