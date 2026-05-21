@@ -1,4 +1,4 @@
-package building_gen
+package buildings
 
 // HouseParams configures GenerateHouse. Defaults via DefaultHouseParams.
 //

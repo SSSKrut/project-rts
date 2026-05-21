@@ -10,7 +10,7 @@ import (
 
 	"rts-go/components"
 	"rts-go/systems"
-	"rts-go/systems/building_gen"
+	"rts-go/gen/buildings"
 )
 
 // -scene=door spawns a minimal isolated world for reproducing the
@@ -50,7 +50,7 @@ func doorSceneBuildings() []components.BuildingPlan {
 		wp.Local.X+float32(wp.Chunk.X)*components.ChunkSize,
 		wp.Local.Z+float32(wp.Chunk.Z)*components.ChunkSize,
 	)
-	plan := building_gen.GenerateHouse(0xA0, building_gen.HouseParams{
+	plan := buildings.GenerateHouse(0xA0, buildings.HouseParams{
 		Stories:  1,
 		SizeX:    8,
 		SizeZ:    8,

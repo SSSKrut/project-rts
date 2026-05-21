@@ -5,7 +5,7 @@ import (
 
 	"rts-go/components"
 	"rts-go/systems"
-	"rts-go/systems/building_gen"
+	"rts-go/gen/buildings"
 )
 
 // makeStartingRoadGraph builds the Phase-4 test graph: a four-node chain
@@ -51,13 +51,13 @@ func makeStartingBuildings() []components.BuildingPlan {
 			pos.Local.X+float32(pos.Chunk.X)*components.ChunkSize,
 			pos.Local.Z+float32(pos.Chunk.Z)*components.ChunkSize,
 		)
-		params := building_gen.HouseParams{
+		params := buildings.HouseParams{
 			Stories:  stories,
 			SizeX:    sizeX,
 			SizeZ:    sizeZ,
 			DoorSide: 4,
 		}
-		return *building_gen.GenerateHouse(seed, params, pos, kind)
+		return *buildings.GenerateHouse(seed, params, pos, kind)
 	}
 	plans := []components.BuildingPlan{
 		makeHouse(0xA1, -25, -40, 1, 8, 8, components.BuildingHouse),
@@ -78,14 +78,14 @@ func makeStartingBuildings() []components.BuildingPlan {
 		officePos.Local.X+float32(officePos.Chunk.X)*components.ChunkSize,
 		officePos.Local.Z+float32(officePos.Chunk.Z)*components.ChunkSize,
 	)
-	plans = append(plans, *building_gen.GenerateOffice(0xE5, officePos))
+	plans = append(plans, *buildings.GenerateOffice(0xE5, officePos))
 
 	compoundCentre := wp(-60, 10)
 	compoundCentre.Local.Y = systems.GroundHeight(
 		compoundCentre.Local.X+float32(compoundCentre.Chunk.X)*components.ChunkSize,
 		compoundCentre.Local.Z+float32(compoundCentre.Chunk.Z)*components.ChunkSize,
 	)
-	for _, p := range building_gen.GenerateCompound(0xF6, compoundCentre) {
+	for _, p := range buildings.GenerateCompound(0xF6, compoundCentre) {
 		plans = append(plans, *p)
 	}
 

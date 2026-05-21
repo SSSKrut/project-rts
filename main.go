@@ -11,6 +11,7 @@ import (
 
 	"rts-go/components"
 	"rts-go/core"
+	"rts-go/entities"
 	"rts-go/systems"
 	"rts-go/ui"
 
@@ -415,18 +416,16 @@ func main() {
 		alwaysActiveMap.Add(ent, &components.AlwaysActive{})
 	}
 
-	unitMap := ecs.NewMap[components.Unit](app.World)
-	stanceMap := ecs.NewMap[components.Stance](app.World)
-	motionMap := ecs.NewMap[components.Motion](app.World)
-	colliderMap := ecs.NewMap[components.Collider](app.World)
-	visionMap := ecs.NewMap[components.Vision](app.World)
-	threatMap := ecs.NewMap[components.Threat](app.World)
-	dangerBufMap := ecs.NewMap[components.DangerBuffer](app.World)
-	microPathMap := ecs.NewMap[components.MicroPath](app.World)
-	awarenessMap := ecs.NewMap[components.Awareness](app.World)
-	blackboardMap := ecs.NewMap[components.LocalBlackboard](app.World)
-	actionQueueMap := ecs.NewMap[components.ActionQueue](app.World)
-	equipmentMap := ecs.NewMap[components.Equipment](app.World)
+	// Phase 17.5 refactor: unit spawn boilerplate hidden behind
+	// entities.UnitFactory. Read handles for components the Inspector / input
+	// layer touches are still reachable through factory fields (StanceMap,
+	// MotionMap, ThreatMap, ActionQueueMap ...).
+	unitFactoryRef := entities.NewUnitFactory(app.World, posMap)
+	actionQueueMap := unitFactoryRef.ActionQueueMap
+
+	// Inspector reads ~30 component maps. NewInspectorMaps pre-builds them
+	// in one call so the per-frame InspectorCtx literal stays small.
+	inspectorMaps := ui.NewInspectorMaps(app.World)
 	// Phase 12: RoleService owns weapon / radio / medkit / spade lifecycle so
 	// the Unit-side spawn block stays narrow. main.go just reads the maps
 	// (Inspector + render).
@@ -439,50 +438,18 @@ func main() {
 	squadMemberMap := ecs.NewMap[components.SquadMember](app.World)
 	rosterMap := ecs.NewMap[components.CommandRoster](app.World)
 	formationDataMap := ecs.NewMap[components.FormationData](app.World)
-	macroPathMap := ecs.NewMap[components.MacroPath](app.World)
-	// Phase 11 order maps. main.go reads (no mutation) for UI render. All
-	// writes flow through SquadService.IssueOrder / CancelAllOrders.
+	// Order / quick-bar maps that input handlers + ghost preview reuse outside
+	// the Inspector layer. Maps used ONLY by the Inspector are reachable via
+	// inspectorMaps.X without a separate declaration here.
 	orderQueueMap := ecs.NewMap[components.OrderQueueHead](app.World)
 	orderKindMap := ecs.NewMap[components.OrderKind](app.World)
-	orderStateMap := ecs.NewMap[components.OrderState](app.World)
 	orderTargetMap := ecs.NewMap[components.OrderTarget](app.World)
-	orderProgressMap := ecs.NewMap[components.OrderProgress](app.World)
 	orderChainMap := ecs.NewMap[components.OrderChain](app.World)
-
-	// Phase 13 maps. Read by Inspector quick-bars (M13.6) for visual state and
-	// by the chip-click handlers to write back into the squad's standing rules.
-	// Writes also originate from RoleService.AssignRole (Stamina) and
-	// SquadService.CreateFromTemplate (Movement / Engagement / Behavior).
 	movementProfileMap := ecs.NewMap[components.MovementProfile](app.World)
-	engagementRulesMap := ecs.NewMap[components.EngagementRules](app.World)
-	behaviorRulesMap := ecs.NewMap[components.BehaviorRules](app.World)
 	staminaMap := ecs.NewMap[components.Stamina](app.World)
-	orderAttackMoveMap := ecs.NewMap[components.OrderParamAttackMove](app.World)
-	orderMovementOverrideMap := ecs.NewMap[components.OrderParamMovementProfile](app.World)
-
-	// Phase 14 M14.1: HP + Faction read handles for the Inspector / render
-	// loop. Writes flow through DamageService (HP) and SquadService.
-	// CreateFromTemplate (Faction).
 	hpMap := ecs.NewMap[components.HP](app.World)
 	factionMap := ecs.NewMap[components.Faction](app.World)
-	// Phase 15 M15.C.1: TacticalOverride + SquadState read handles for the
-	// Inspector. Writes flow through SurvivalInstinctSystem (and
-	// SquadService.clearTacticalOverrides on player input).
-	tacticalOverrideMap := ecs.NewMap[components.TacticalOverride](app.World)
-	squadStateMap := ecs.NewMap[components.SquadState](app.World)
-	// Phase 15 M15.B.1: IndividualPosition handle. Shift+RMB on a squad subset
-	// stamps Absolute placements; Inspector "Return to formation" chip removes
-	// the marker. FormationSystem reads it per member.
 	individualPosMap := ecs.NewMap[components.IndividualPosition](app.World)
-	// Phase 15 M15.A.2: ActiveDoctrine handle. Inspector doctrine chip row
-	// writes through the squad's three standing-rule components and stamps
-	// the active code for the highlight.
-	activeDoctrineMap := ecs.NewMap[components.ActiveDoctrine](app.World)
-	// Phase 15 M15.C.0: Autonomy + dirty-mask handles. Autonomy chip row
-	// applies AutonomySpec to BehaviorRules skipping any field whose dirty
-	// bit was flipped by a hand-edit.
-	activeAutonomyMap := ecs.NewMap[components.ActiveAutonomy](app.World)
-	behaviorRulesEditMap := ecs.NewMap[components.BehaviorRulesEdit](app.World)
 
 	// Phase 14 M14.6: faction-aware squad colour. Lookups the entity's
 	// Faction and picks the player or enemy palette accordingly. Missing
@@ -501,27 +468,10 @@ func main() {
 	// (Primary weapon, Secondary gear: Radio / Medkit / Spade / sidearm).
 	roleService := systems.NewRoleService(app.World)
 
-	// unitFactory creates a "naked" soldier - every component the simulation
-	// needs (Unit / Stance / Motion / Vision / etc.) but no UnitRole and no
-	// Equipment entities. CreateFromTemplate calls this once per slot, then
-	// RoleService.AssignRole stamps the role + spawns the weapon/gear.
-	unitFactory := func(spawn components.WorldPos) ecs.Entity {
-		ent := app.World.NewEntity()
-		wp := spawn
-		posMap.Add(ent, &wp)
-		unitMap.Add(ent, &components.Unit{})
-		stanceMap.Add(ent, &components.Stance{Code: components.StanceStand})
-		motionMap.Add(ent, &components.Motion{})
-		colliderMap.Add(ent, &components.Collider{Radius: 0.35})
-		visionMap.Add(ent, &components.Vision{RangeM: 40, AngleDot: 0.5})
-		threatMap.Add(ent, &components.Threat{})
-		dangerBufMap.Add(ent, &components.DangerBuffer{})
-		microPathMap.Add(ent, &components.MicroPath{})
-		awarenessMap.Add(ent, &components.Awareness{})
-		blackboardMap.Add(ent, &components.LocalBlackboard{})
-		actionQueueMap.Add(ent, &components.ActionQueue{})
-		return ent
-	}
+	// unitFactory delegates to entities.UnitFactory.Spawn - kept as a closure
+	// so existing SquadService.CreateFromTemplate / pie-menu spawn callsites
+	// keep their func(WorldPos) ecs.Entity signature.
+	unitFactory := unitFactoryRef.Spawn
 
 	// Phase 12 starter scene: three 4-soldier squads with distinct templates
 	// so the role differentiation (cap colours, ShortLabel, map icon) is
@@ -671,7 +621,7 @@ func main() {
 		posMap:           posMap,
 		rosterMap:        rosterMap,
 		formationDataMap: formationDataMap,
-		stanceMap:        stanceMap,
+		stanceMap:        inspectorMaps.StanceMap,
 		movementMap:      movementProfileMap,
 		squadMemberMap:   squadMemberMap,
 		hitTester:        hitTester,
@@ -2075,49 +2025,17 @@ func main() {
 		inspectorPanel := panelMgr.Get(ui.PanelInspect)
 		inspectorScroll := panelMgr.ScrollByID(ui.PanelInspect)
 		ui.DrawInspector(inspectorPanel, ui.InspectorCtx{
-			World:                    app.World,
-			Selected:                 selected,
-			Hovered:                  hovered,
-			Font:                     hudFont,
-			PosMap:                   posMap,
-			StanceMap:                stanceMap,
-			MotionMap:                motionMap,
-			ThreatMap:                threatMap,
-			EquipmentMap:             equipmentMap,
-			SquadMemberMap:           squadMemberMap,
-			RosterMap:                rosterMap,
-			FormationDataMap:         formationDataMap,
-			MacroPathMap:             macroPathMap,
-			SquadFilter:              squadFilter,
-			OrderQueueMap:            orderQueueMap,
-			OrderKindMap:             orderKindMap,
-			OrderStateMap:            orderStateMap,
-			OrderTargetMap:           orderTargetMap,
-			OrderProgressMap:         orderProgressMap,
-			OrderChainMap:            orderChainMap,
-			BuildingMap:              buildingMap,
-			TrenchRootMap:            trenchRootMap,
-			RoleMap:                  roleMap,
-			MovementProfileMap:       movementProfileMap,
-			EngagementRulesMap:       engagementRulesMap,
-			BehaviorRulesMap:         behaviorRulesMap,
-			StaminaMap:               staminaMap,
-			OrderAttackMoveMap:       orderAttackMoveMap,
-			OrderMovementOverrideMap: orderMovementOverrideMap,
-			HPMap:                    hpMap,
-			FactionMap:               factionMap,
-			TacticalOverrideMap:      tacticalOverrideMap,
-			SquadStateMap:            squadStateMap,
-			IndividualPositionMap:    individualPosMap,
-			ActiveDoctrineMap:        activeDoctrineMap,
-			ActiveAutonomyMap:        activeAutonomyMap,
-			BehaviorRulesEditMap:     behaviorRulesEditMap,
-			EventLog:                 eventLog,
-			Cursor:                   cursor,
-			LMBPressed:               !panelMgr.IsDragging() && !scrollDragging && rl.IsMouseButtonPressed(rl.MouseButtonLeft),
-			PanelFocused:             inspectorFocused,
-			Scroll:                   inspectorScroll,
-			SquadColor:               squadColor,
+			InspectorMaps: inspectorMaps,
+			World:         app.World,
+			Selected:      selected,
+			Hovered:       hovered,
+			Font:          hudFont,
+			EventLog:      eventLog,
+			Cursor:        cursor,
+			LMBPressed:    !panelMgr.IsDragging() && !scrollDragging && rl.IsMouseButtonPressed(rl.MouseButtonLeft),
+			PanelFocused:  inspectorFocused,
+			Scroll:        inspectorScroll,
+			SquadColor:    squadColor,
 		})
 		// Phase 13.5 M13.5.3: scrollbar overlay drawn AFTER DrawInspector so
 		// the EndScissorMode released its clip first. ClampScrollOffset keeps

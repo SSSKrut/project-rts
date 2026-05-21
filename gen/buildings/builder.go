@@ -1,8 +1,8 @@
-// Package building_gen produces *components.BuildingPlan deterministically
+// Package buildings produces *components.BuildingPlan deterministically
 // from a (template, seed, params) triple. The output shape is identical to
 // what the Phase 16.A .glb loader emits, so downstream systems consume both
 // interchangeably.
-package building_gen
+package buildings
 
 import (
 	"math"

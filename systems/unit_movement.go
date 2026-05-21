@@ -1,9 +1,6 @@
 package systems
 
 import (
-	"math"
-
-	rl "github.com/gen2brain/raylib-go/raylib"
 	"github.com/mlange-42/ark/ecs"
 
 	"rts-go/components"
@@ -22,8 +19,8 @@ const (
 
 // Phase 15 M15.B.5 - living-movement polish constants.
 //
-// stanceAccel - per-stance acceleration cap (m/s^2). Stand 4, Crouch 2,
-// Prone 1: same shape as MaxSpeed table, prone units take longer to spin up.
+// stanceAccel - per-stance acceleration cap (m/s^2). Stand 4, Crouch 2, Prone
+// 1: same shape as MaxSpeed table, prone units take longer to spin up.
 // Applied symmetrically to speed-up and brake.
 //
 // maxYawRate - turn cap (rad/s) ~ 170 deg/s, realistic for infantry. Cap
@@ -37,24 +34,29 @@ var stanceAccel = [...]float32{
 const maxYawRate float32 = 3.0
 
 // perUnitSpeedSpread - half-width of the per-unit personality SpeedMul. With
-// 0.05 the multiplier sits in [0.95, 1.05] - members run at slightly different
-// paces so a squad doesn't lock-step.
+// 0.05 the multiplier sits in [0.95, 1.05] - members run at slightly
+// different paces so a squad doesn't lock-step.
 const perUnitSpeedSpread float32 = 0.05
 
-// arrivalRadius - how close the unit needs to be to its current MoveTo target
-// before the action pops from the queue. Slightly bigger than the cell-centre
-// dance to avoid jittering at the goal.
+// arrivalRadius - how close the unit needs to be to its current MoveTo
+// target before the action pops from the queue. Slightly bigger than the
+// cell-centre dance to avoid jittering at the goal.
 const arrivalRadius float32 = 0.6
 
 // stopDuration - how long an ActionStop holds the unit in place before it
 // pops off the queue. Phase 7 P7.
 const stopDuration float32 = 0.1
 
+// staminaRegenThreshold - Current/MaxLevel ratio at which the
+// StaminaExhausted marker is cleared. PHASE-13.md P3 sets this at 0.30 so
+// the unit must actually rest, not just touch zero.
+const staminaRegenThreshold float32 = 0.30
+
 // UnitMovementSystem advances units along their ActionQueue.
 //
-// Phase 11.5 M11.5.3 / M11.5.5: tier-gating removed and the per-unit step
-// is dispatched through WorkerPool.ParallelFor. snapshot -> parallel step ->
-// no post-pass (each worker writes only to its own unit's component pointers,
+// Phase 11.5 M11.5.3 / M11.5.5: tier-gating removed and the per-unit step is
+// dispatched through WorkerPool.ParallelFor. snapshot -> parallel step -> no
+// post-pass (each worker writes only to its own unit's component pointers,
 // no shared map mutation, no archetype changes).
 //
 // Phase 11.6 M11.6.2: snapshot buffers live on the struct and are reset to
@@ -65,9 +67,13 @@ const stopDuration float32 = 0.1
 // Phase 13 M13.3: per-unit step now reads the effective MovementProfile
 // (OrderParamMovementProfile on the squad's active order > squad's standing
 // MovementProfile > system default), drains/regenerates Stamina, and
-// auto-transitions stance toward the squad's standing default. StaminaExhausted
-// marker add/remove uses per-worker buffers + serial post-pass to keep
-// archetype mutations off the parallel critical path.
+// auto-transitions stance toward the squad's standing default.
+// StaminaExhausted marker add/remove uses per-worker buffers + serial
+// post-pass to keep archetype mutations off the parallel critical path.
+//
+// The per-unit body of `step()` lives in unit_movement_step.go; wall
+// collision helpers (colWall, makeColWall, reflectAgainstWalls) live in
+// unit_movement_walls.go.
 type UnitMovementSystem struct {
 	unitFilter *ecs.Filter6[components.Unit, components.WorldPos, components.Motion, components.ActionQueue, components.Stance, components.MicroPath]
 	pool       *core.WorkerPool
@@ -91,11 +97,12 @@ type UnitMovementSystem struct {
 	threatMap *ecs.Map[components.Threat]
 
 	// Phase 14.6 M14.6.1 - wall reflection. Walls snapshot bucketed by chunk
-	// once per tick in the serial pre-pass; step() reads the 3x3 chunk window
-	// around the unit to reflect velocity that would cross a wall this frame.
-	wallFilter      *ecs.Filter2[components.WorldPos, components.WallSegment]
-	doorMap         *ecs.Map[components.Door]
-	collisionWalls  map[components.ChunkCoord][]colWall
+	// once per tick in the serial pre-pass; step() reads the 3x3 chunk
+	// window around the unit to reflect velocity that would cross a wall
+	// this frame.
+	wallFilter     *ecs.Filter2[components.WorldPos, components.WallSegment]
+	doorMap        *ecs.Map[components.Door]
+	collisionWalls map[components.ChunkCoord][]colWall
 
 	// Reusable snapshot buffer. Filled in the serial pre-pass, read-only by
 	// workers during ParallelFor - safe because writes are indexed and never
@@ -110,11 +117,6 @@ type UnitMovementSystem struct {
 
 	elapsed float32
 }
-
-// staminaRegenThreshold - Current/MaxLevel ratio at which the StaminaExhausted
-// marker is cleared. PHASE-13.md P3 sets this at 0.30 so the unit must
-// actually rest, not just touch zero.
-const staminaRegenThreshold float32 = 0.30
 
 // NewUnitMovementSystem wires the system with a worker pool. nil pool falls
 // back to serial execution (useful for unit tests).
@@ -207,10 +209,11 @@ func (sys *UnitMovementSystem) Update(ctx core.UpdateContext) {
 	}
 	walls := sys.collisionWalls
 
-	// Snapshot units (component pointers) so the parallel pass can index into
-	// a slice without holding the live ECS query. Phase 13: also snapshot the
-	// effective MovementProfile + Stamina pointer for the unit so the parallel
-	// step doesn't have to re-resolve squad / order / overrides per tick.
+	// Snapshot units (component pointers) so the parallel pass can index
+	// into a slice without holding the live ECS query. Phase 13: also
+	// snapshot the effective MovementProfile + Stamina pointer for the unit
+	// so the parallel step doesn't have to re-resolve squad / order /
+	// overrides per tick.
 	sys.workBuf = sys.workBuf[:0]
 	q := sys.unitFilter.Query()
 	for q.Next() {
@@ -279,17 +282,8 @@ func (sys *UnitMovementSystem) Update(ctx core.UpdateContext) {
 	}
 }
 
-// staminaMarkerOp is the result of one unit step's stamina decision.
-type staminaMarkerOp uint8
-
-const (
-	staminaMarkerNone staminaMarkerOp = iota
-	staminaMarkerAdd
-	staminaMarkerRemove
-)
-
-// resolveProfile walks unit -> squad -> active order to determine the effective
-// MovementProfile. Resolution order matches PHASE-13.md P5:
+// resolveProfile walks unit -> squad -> active order to determine the
+// effective MovementProfile. Resolution order matches PHASE-13.md P5:
 //
 //  1. Active Order has OrderParamMovementProfile -> use that profile.
 //  2. Squad has MovementProfile -> use that profile.
@@ -319,424 +313,4 @@ func (sys *UnitMovementSystem) resolveProfile(unit ecs.Entity) components.Moveme
 		Pace: components.PaceWalk, Stance: components.StanceStand,
 		Posture: components.PostureStandard, PathStyle: components.PathStyleDirect,
 	}
-}
-
-// step advances one unit by dt seconds. Race-safe: every write goes through
-// the snapshot's per-unit pointers and never touches shared maps / resources.
-// Returns the StaminaExhausted marker toggle decision (caller batches it into
-// the per-worker buffer for the serial post-pass).
-//
-// Phase 14.5 M14.5.2: separation queries the shared SpatialHash (read-only
-// during the parallel section).
-func (sys *UnitMovementSystem) step(
-	w unitWork,
-	dt float32,
-	hash *core.SpatialHash,
-	walls map[components.ChunkCoord][]colWall,
-) staminaMarkerOp {
-	// Pace selection: StaminaExhausted forces Walk (P3). Otherwise use the
-	// effective profile's Pace.
-	effectivePace := w.profile.Pace
-	if w.exhausted {
-		effectivePace = components.PaceWalk
-	}
-
-	// Stance auto-transition (P9): when no explicit ActionStance is currently
-	// at the queue head, snap toward the squad's standing default. Phase 13
-	// transition is instant; Phase 25 may add a time cost.
-	//
-	// Phase 17 M17.C: respect StanceControllerSystem's animation lock - if it
-	// just dropped the unit into Prone under fire, the squad standing default
-	// would otherwise pop the unit back up next tick and Stance would flap.
-	hasActiveStanceAction := w.queue.Count > 0 && w.queue.Actions[w.queue.Head].Kind == components.ActionStance
-	if !hasActiveStanceAction && w.stance.Code != w.profile.Stance && sys.elapsed >= w.stance.LockUntil {
-		w.stance.Code = w.profile.Stance
-	}
-
-	// Drain / regen Stamina each tick. Recovery only when Pace=Walk AND
-	// Stance in {Stand, Crouch} (Prone doesn't recover - P3). Open question 5
-	// answered: crouch allows regen.
-	markerOp := staminaMarkerNone
-	if w.stamina != nil && w.stamina.MaxLevel > 0 {
-		drain := components.PaceStaminaDrain[effectivePace] * dt
-		switch effectivePace {
-		case components.PaceWalk:
-			if w.stance.Code != components.StanceProne {
-				w.stamina.Current += w.stamina.RecoverRate * dt
-				if w.stamina.Current > w.stamina.MaxLevel {
-					w.stamina.Current = w.stamina.MaxLevel
-				}
-			}
-		default:
-			w.stamina.Current -= drain
-			if w.stamina.Current < 0 {
-				w.stamina.Current = 0
-			}
-		}
-		// Marker decision: set when fully drained, clear once the unit has
-		// rested past the regen threshold. Hysteresis keeps the marker from
-		// flapping while the unit hovers at zero.
-		switch {
-		case !w.exhausted && w.stamina.Current <= 0:
-			markerOp = staminaMarkerAdd
-		case w.exhausted && w.stamina.Current >= staminaRegenThreshold*w.stamina.MaxLevel:
-			markerOp = staminaMarkerRemove
-		}
-	}
-
-	// Speed lookup uses the unit's current Stance x effective Pace. Phase 15
-	// M15.B.5 - per-unit SpeedMul derived from a SplitMix hash of the entity
-	// ID; ~ +/- 5 % so squad members visibly drift instead of lock-stepping.
-	maxSpeed := components.SpecForStance(w.stance.Code).MaxSpeed * components.PaceSpeedMul[effectivePace]
-	personalityHash := slotHash32(uint32(w.ent.ID()))
-	speedJitter := perUnitSpeedSpread * (2*float32(personalityHash&0xFFFF)/0xFFFF - 1)
-	maxSpeed *= 1 + speedJitter
-
-	if w.queue.Count == 0 {
-		// Phase 15 M15.B.5 - brake instead of instant zero so the unit decelerates
-		// visibly when the queue drains.
-		brake := stanceAccel[w.stance.Code] * dt
-		if w.mot.Speed > brake {
-			w.mot.Speed -= brake
-		} else {
-			w.mot.Speed = 0
-		}
-		return markerOp
-	}
-	action := &w.queue.Actions[w.queue.Head]
-	switch action.Kind {
-	case components.ActionMoveTo:
-		// M17.A: if MicroPath has unspent waypoints, steer at the current
-		// waypoint instead of the final goal so the unit follows the planner's
-		// route through doors / around obstacles. Falls back to action.Target
-		// when the path is empty (fresh unit, soloist with no formation,
-		// straight-line micro-distance, NavService.FindPath returned []).
-		shortTerm := action.Target
-		if w.microPath != nil && w.microPath.Count > 0 && w.microPath.Head < w.microPath.Count {
-			shortTerm = w.microPath.Waypoints[w.microPath.Head]
-		}
-		finalDiff := action.Target.Sub(*w.pos)
-		if finalDiff.X*finalDiff.X+finalDiff.Z*finalDiff.Z < arrivalRadius*arrivalRadius {
-			popAction(w.queue)
-			return markerOp
-		}
-		diff := shortTerm.Sub(*w.pos)
-		distSq := diff.X*diff.X + diff.Z*diff.Z
-		if distSq < arrivalRadius*arrivalRadius {
-			// Reached the short-term waypoint; the unit is mid-route so we
-			// don't popAction (the final-goal arrival check above handles
-			// that). MicroPathSystem advances Head next tick.
-			return markerOp
-		}
-		dist := float32(math.Sqrt(float64(distSq)))
-		invDist := 1 / dist
-		desiredX := diff.X * invDist
-		desiredZ := diff.Z * invDist
-
-		// Phase 14.5 M14.5.2: separation force pulled from the SpatialHash.
-		// Callback receives nearby entries inline - no intermediate slice
-		// allocation. Self is filtered via ent check; alive-check is cheap
-		// here (the hash may carry indices for entities removed since rebuild,
-		// but the world.Alive guard skips dead reads).
-		selfX := float32(w.pos.Chunk.X)*components.ChunkSize + w.pos.Local.X
-		selfZ := float32(w.pos.Chunk.Z)*components.ChunkSize + w.pos.Local.Z
-		var sepX, sepZ float32
-		if hash != nil {
-			hash.ForEachInRadius(selfX, selfZ, separationRadius, func(ent ecs.Entity, dSq float32) {
-				if ent == w.ent || dSq <= 1e-4 {
-					return
-				}
-				// Stale-entity guard: SpatialHash invariant - readers MUST
-				// alive-check every callback target before further work.
-				if !sys.world.Alive(ent) {
-					return
-				}
-				// Recompute dx/dz so the falloff direction is from the live
-				// position (SpatialEntry is a 1-tick stale snapshot, but the
-				// resolution mismatch is <= a few cm at top speed - irrelevant
-				// for separation force direction).
-				np := sys.posMap.Get(ent)
-				if np == nil {
-					return
-				}
-				nx := float32(np.Chunk.X)*components.ChunkSize + np.Local.X
-				nz := float32(np.Chunk.Z)*components.ChunkSize + np.Local.Z
-				dx := selfX - nx
-				dz := selfZ - nz
-				dd := dx*dx + dz*dz
-				if dd <= 1e-4 {
-					return
-				}
-				inv := 1 / dd
-				sepX += dx * inv
-				sepZ += dz * inv
-			})
-		}
-
-		vx := desiredX*maxSpeed + sepX*separationWeight
-		vz := desiredZ*maxSpeed + sepZ*separationWeight
-		desiredSpeed := float32(math.Sqrt(float64(vx*vx + vz*vz)))
-		if desiredSpeed > maxSpeed {
-			inv := maxSpeed / desiredSpeed
-			vx *= inv
-			vz *= inv
-			desiredSpeed = maxSpeed
-		}
-
-		// Phase 15 M15.B.5 - acceleration ramp. Speed approaches the desired
-		// magnitude at most stanceAccel[Stance] m/s^2 per tick instead of
-		// snapping; units visibly spin up out of stop and brake on arrival.
-		accel := stanceAccel[w.stance.Code]
-		maxDelta := accel * dt
-		speed := w.mot.Speed
-		switch {
-		case desiredSpeed > speed+maxDelta:
-			speed += maxDelta
-		case desiredSpeed < speed-maxDelta:
-			speed -= maxDelta
-		default:
-			speed = desiredSpeed
-		}
-		if desiredSpeed > 1e-3 {
-			vx *= speed / desiredSpeed
-			vz *= speed / desiredSpeed
-		} else {
-			vx, vz = 0, 0
-		}
-
-		// Wall sliding (M15.B.3). Velocity slides along the wall tangent when
-		// the predicted XZ step would cross a wall in the unit's 3x3 chunk
-		// window.
-		if walls != nil {
-			vx, vz = reflectAgainstWalls(selfX, selfZ, vx, vz, dt, walls, w.pos.Chunk)
-		}
-
-		// Y lerp toward target. Lets units climb stairs / drop into
-		// bunkers without teleporting; GroundStick then picks the
-		// floor whose Y is closest on the next tick.
-		dy := action.Target.Local.Y - w.pos.Local.Y
-		progress := float32(0)
-		if dist > 0 {
-			progress = dt * speed / dist
-			if progress > 1 {
-				progress = 1
-			}
-		}
-		// Phase 17 M17.B.4 - combat-move: under Alerted/Threatened, the body
-		// faces the threat (so weapons stay on target) while the legs walk
-		// along VelocityYaw. The throttle below also keeps the unit from
-		// running backwards: when the body is > 90 deg off the desired
-		// motion direction and there's still > 3 m to cover, we cut speed
-		// to 0.3x so the turn lands before the sprint.
-		velocityYaw := w.mot.VelocityYaw
-		if speed > 0.01 {
-			velocityYaw = float32(math.Atan2(float64(vx), float64(vz)))
-		}
-		desiredFacingYaw := velocityYaw
-		if w.threat != nil && w.threat.State >= components.ThreatAlerted &&
-			(w.threat.ThreatDir.X != 0 || w.threat.ThreatDir.Z != 0) {
-			desiredFacingYaw = float32(math.Atan2(
-				float64(-w.threat.ThreatDir.X),
-				float64(-w.threat.ThreatDir.Z),
-			))
-		}
-		if dist > 3.0 && speed > 0.5 {
-			bodyDelta := wrapAngle(velocityYaw - w.mot.Yaw)
-			if bodyDelta > math.Pi/2 || bodyDelta < -math.Pi/2 {
-				speed *= 0.3
-				if desiredSpeed > 1e-3 {
-					rescale := speed / desiredSpeed
-					vx *= rescale
-					vz *= rescale
-				}
-			}
-		}
-
-		move := rl.Vector3{X: vx * dt, Y: dy * progress, Z: vz * dt}
-		*w.pos = w.pos.Add(move)
-		w.mot.Speed = speed
-		w.mot.VelocityYaw = velocityYaw
-
-		// Phase 15 M15.B.5 - cap yaw rate so units don't snap-spin. Wrap the
-		// delta into [-pi, pi] before clamping so a 350 deg desired turn
-		// folds into -10 deg the short way around.
-		delta := wrapAngle(desiredFacingYaw - w.mot.Yaw)
-		maxYawDelta := maxYawRate * dt
-		if delta > maxYawDelta {
-			delta = maxYawDelta
-		} else if delta < -maxYawDelta {
-			delta = -maxYawDelta
-		}
-		w.mot.Yaw += delta
-
-	case components.ActionStop:
-		w.mot.Speed = 0
-		if w.queue.StopUntil == 0 {
-			w.queue.StopUntil = sys.elapsed + stopDuration
-		} else if sys.elapsed >= w.queue.StopUntil {
-			w.queue.StopUntil = 0
-			popAction(w.queue)
-		}
-
-	case components.ActionStance:
-		w.stance.Code = components.StanceCode(action.Target.Local.Y)
-		popAction(w.queue)
-	}
-	return markerOp
-}
-
-// popAction advances the queue head past the current action.
-// wrapAngle folds an angle in radians into [-pi, pi]. Used by yaw delta
-// math so a 350 deg "desired" turn becomes a -10 deg short-way turn.
-func wrapAngle(a float32) float32 {
-	for a > math.Pi {
-		a -= 2 * math.Pi
-	}
-	for a < -math.Pi {
-		a += 2 * math.Pi
-	}
-	return a
-}
-
-func popAction(q *components.ActionQueue) {
-	if q.Count == 0 {
-		return
-	}
-	q.Actions[q.Head] = components.Action{}
-	q.Head = (q.Head + 1) % components.ActionQueueSize
-	q.Count--
-	q.StopUntil = 0
-}
-
-// PushAction appends an action to the queue. If the queue is full, the oldest
-// entry is dropped to make room (preserves the most recent intent). Exposed
-// so main.go can wire orders without re-implementing the ring-buffer math.
-func PushAction(q *components.ActionQueue, a components.Action) {
-	if q.Count == components.ActionQueueSize {
-		// Drop oldest.
-		q.Head = (q.Head + 1) % components.ActionQueueSize
-		q.Count--
-	}
-	q.Actions[q.Tail] = a
-	q.Tail = (q.Tail + 1) % components.ActionQueueSize
-	q.Count++
-}
-
-// ClearActions resets the queue to empty. Used by RMB immediate override.
-func ClearActions(q *components.ActionQueue) {
-	for i := range q.Actions {
-		q.Actions[i] = components.Action{}
-	}
-	q.Head = 0
-	q.Tail = 0
-	q.Count = 0
-	q.StopUntil = 0
-}
-
-// colWall is the movement-collision view of a WallSegment. Windows block
-// movement (separate from LOS - losWall flips openingTransparent for windows
-// too), open doors allow passage through the opening range, closed doors and
-// plain walls fully block. World coords; trig pre-computed.
-type colWall struct {
-	fromX, fromZ       float32
-	sa, ca             float32
-	length             float32
-	hasOpening         bool
-	openPassable       bool // true <-> open door (window opening still blocks movement)
-	openStart, openEnd float32
-}
-
-func makeColWall(pos components.WorldPos, w components.WallSegment, doorState components.DoorState) colWall {
-	baseX := float32(pos.Chunk.X) * components.ChunkSize
-	baseZ := float32(pos.Chunk.Z) * components.ChunkSize
-	sa := float32(math.Sin(float64(w.Yaw)))
-	ca := float32(math.Cos(float64(w.Yaw)))
-	cw := colWall{
-		fromX:      baseX + pos.Local.X,
-		fromZ:      baseZ + pos.Local.Z,
-		sa:         sa,
-		ca:         ca,
-		length:     w.Length,
-		hasOpening: w.OpeningKind != components.OpeningNone,
-		openStart:  w.OpeningCenterT*w.Length - w.OpeningWidth*0.5,
-		openEnd:    w.OpeningCenterT*w.Length + w.OpeningWidth*0.5,
-	}
-	if w.OpeningKind == components.OpeningDoor && doorState == components.DoorOpen {
-		cw.openPassable = true
-	}
-	return cw
-}
-
-// reflectAgainstWalls runs an XZ ray cast from `(curX, curZ)` along velocity
-// `(velX, velZ) * dt` and adjusts the velocity vector to glide along the
-// normal of every wall the predicted segment would cross this tick. Walls in
-// the 3x3 chunk window around `home` are considered; open-door openings pass
-// through.
-//
-// Phase 15 M15.B.3 - velocity adjustment switched from full reflection
-// (v - 2*(v.n)*n, bouncy) to projection along the wall (v - (v.n)*n, slide).
-// Steep impacts now stop perpendicular to the wall while keeping any tangent
-// component, so units brush past corners and glide along corridor walls
-// instead of zig-zagging. Multiple wall hits chain: the first slide updates
-// the prediction, the next wall is tested against the new direction. Bound
-// the loop at 4 passes to avoid pathological corners (two walls meeting at
-// an acute angle).
-func reflectAgainstWalls(curX, curZ, velX, velZ, dt float32,
-	walls map[components.ChunkCoord][]colWall, home components.ChunkCoord,
-) (float32, float32) {
-	if velX*velX+velZ*velZ < 1e-6 {
-		return velX, velZ
-	}
-	rvx, rvz := velX, velZ
-	for pass := 0; pass < 4; pass++ {
-		predX := curX + rvx*dt
-		predZ := curZ + rvz*dt
-		hit := false
-		for dcZ := int32(-1); dcZ <= 1; dcZ++ {
-			for dcX := int32(-1); dcX <= 1; dcX++ {
-				cc := components.ChunkCoord{X: home.X + dcX, Z: home.Z + dcZ}
-				bucket := walls[cc]
-				for i := range bucket {
-					w := &bucket[i]
-					toX := w.fromX + w.sa*w.length
-					toZ := w.fromZ + w.ca*w.length
-					t1, t2, ok := segmentSegmentIntersect2D(curX, curZ, predX, predZ,
-						w.fromX, w.fromZ, toX, toZ)
-					if !ok || t1 < 0 || t1 > 1 || t2 < 0 || t2 > 1 {
-						continue
-					}
-					if w.hasOpening && w.openPassable {
-						wallT := t2 * w.length
-						if wallT >= w.openStart && wallT <= w.openEnd {
-							continue // pass through open door
-						}
-					}
-					// Wall direction (sa, ca); normal perpendicular = (ca, -sa)
-					// or its negation, whichever points toward the moving unit.
-					nx, nz := w.ca, -w.sa
-					if rvx*nx+rvz*nz > 0 {
-						nx, nz = -nx, -nz
-					}
-					// Sliding: remove only the component of velocity that
-					// points into the wall. Tangent component survives so the
-					// unit keeps moving along the wall.
-					dot := rvx*nx + rvz*nz
-					rvx -= dot * nx
-					rvz -= dot * nz
-					hit = true
-					break
-				}
-				if hit {
-					break
-				}
-			}
-			if hit {
-				break
-			}
-		}
-		if !hit {
-			return rvx, rvz
-		}
-	}
-	return rvx, rvz
 }

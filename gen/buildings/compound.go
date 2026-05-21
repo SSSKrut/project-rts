@@ -1,4 +1,4 @@
-package building_gen
+package buildings
 
 import (
 	"rts-go/components"
