@@ -34,4 +34,12 @@ go.work.sum
 
 # Persisted world data (chunk deltas)
 /save/
-rts-go
+
+# Compiled binaries. Convention: build into bin/ via `go build -o
+# bin/<name> ./...` so a single ignore rule covers every target
+# (rts, particle_sandbox, future sandboxes). Legacy root-level names
+# kept here too in case someone still drops a binary at the repo root.
+/bin/
+/rts
+/rts-go
+/particle_sandbox
