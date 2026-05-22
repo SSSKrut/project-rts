@@ -102,6 +102,32 @@ func PanelBackground(p Panel, fill rl.Color) {
 	rl.DrawRectangleRec(ContentRect(p), fill)
 }
 
+// PanelChromePadding returns the (top, sides) chrome inset thicknesses so
+// callers outside the package can size around it without hardcoding values.
+// top = title bar + border; sides = border on each edge.
+func PanelChromePadding() (top, sides float32) {
+	return float32(titleBarHeight) + 1, 1
+}
+
+// ContentToPanel is the inverse of ContentRect: given a content rectangle
+// it returns a Panel whose ContentRect(panel) recovers that exact area.
+// Used when a widget that normally draws into a workspace leaf has to draw
+// into a floating panel's interior - the floating panel handles its own
+// chrome, so we pass the widget a synthetic Panel whose Bounds extend just
+// far enough to absorb the chrome offsets the widget will subtract.
+func ContentToPanel(content rl.Rectangle, title string, id PanelID) Panel {
+	return Panel{
+		ID:    id,
+		Title: title,
+		Bounds: rl.Rectangle{
+			X:      content.X - 1,
+			Y:      content.Y - 1 - float32(titleBarHeight),
+			Width:  content.Width + 2,
+			Height: content.Height + 2 + float32(titleBarHeight),
+		},
+	}
+}
+
 // Scrollbar visual constants (Phase 13.5 M13.5.3).
 const (
 	scrollbarTrackWidth float32 = 8

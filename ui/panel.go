@@ -36,12 +36,13 @@ const (
 type PanelID string
 
 const (
-	Panel3D       PanelID = "3d"
-	PanelMap      PanelID = "map"
-	PanelInspect  PanelID = "inspector"
-	PanelTopBar   PanelID = "topbar"
-	PanelTimeline PanelID = "timeline"
-	PanelNone     PanelID = ""
+	Panel3D        PanelID = "3d"
+	PanelMap       PanelID = "map"
+	PanelInspect   PanelID = "inspector"
+	PanelTopBar    PanelID = "topbar"
+	PanelTimeline  PanelID = "timeline"
+	PanelFormation PanelID = "formation"
+	PanelNone      PanelID = ""
 )
 
 // Panel is the screen-space rectangle handed back to draw callers. ID

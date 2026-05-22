@@ -747,7 +747,8 @@ func main() {
 	// interaction doesn't double-fire into the world below.
 	chromeBusy := func() bool {
 		return panelMgr.IsDragging() || panelMgr.IsCornerDragging() ||
-			chevronMenu.Open || floating.IsBusy(rl.GetMousePosition())
+			chevronMenu.Open || floating.IsBusy(rl.GetMousePosition()) ||
+			floating.SwitchMenuOpen()
 	}
 
 	isSelected := func(e ecs.Entity) int {
@@ -768,6 +769,127 @@ func main() {
 
 	squadCenter := func(world *ecs.World, roster *components.CommandRoster) (components.WorldPos, bool) {
 		return systems.SquadCenter(world, roster, posMap)
+	}
+
+	// Shared FormationEditorCtx + singleton editor instance. Both the
+	// floating-panel form (E hotkey) and the workspace-panel form
+	// (PanelFormation in the leaf tree) read state through the same
+	// pointer, so changes (zoom, kind, custom slots) survive a re-dock
+	// and the editor always tracks the currently selected squad through
+	// SelectionFn.
+	formationEditorCtx := ui.FormationEditorCtx{
+		World:          app.World,
+		RosterMap:      rosterMap,
+		FormationMap:   formationDataMap,
+		OrientMap:      formationOrientMap,
+		CustomSlotsMap: formationCustomSlotsMap,
+		RoleMap:        roleMap,
+		PosMap:         posMap,
+		SquadColor:     squadColor,
+		Presets:        &formationPresets,
+		SelectionFn: func() ecs.Entity {
+			if cs, homo := groupSelected(selected, squadMemberMap); homo {
+				return cs
+			}
+			return ecs.Entity{}
+		},
+	}
+	formationEditor := ui.NewFormationEditor(ecs.Entity{}, formationEditorCtx)
+
+	// renderFloatingWidget paints any workspace widget into a floating
+	// panel's content rect. ContentToPanel synthesises a Panel whose
+	// ContentRect recovers `content`, so each widget's existing chrome-
+	// aware draw code (which subtracts a title bar + border) lands in the
+	// right place. Panel3D is intentionally a no-op: the scene RT is
+	// sized to the workspace 3D leaf and detaching would need a second
+	// render texture - skipped for the first iteration of Float pane.
+	renderFloatingWidget := func(id ui.PanelID, content rl.Rectangle,
+		cursor rl.Vector2, font rl.Font, lmbPress bool) bool {
+		syn := func(title string) ui.Panel { return ui.ContentToPanel(content, title, id) }
+		switch id {
+		case ui.PanelFormation:
+			formationEditor.DrawPanel(syn("Formation"), font, cursor, lmbPress)
+		case ui.PanelMap:
+			ui.DrawMap(syn("Map"), ui.MapRenderCtx{
+				World:            app.World,
+				Cam:              mapCam,
+				Underlay:         &underlay,
+				AnchorPos:        *posMap.Get(anchor),
+				Selected:         selected,
+				Hovered:          hovered,
+				PosMap:           posMap,
+				RosterMap:        rosterMap,
+				SquadMemberMap:   squadMemberMap,
+				SquadFilter:      squadFilter,
+				SquadCenter:      squadCenter,
+				SquadColor:       squadColor,
+				RoadGraph:        &roadGraph,
+				Rivers:           &rivers,
+				Buildings:        &buildingPlans,
+				ShowDebugLayers:  showMapDebugLy,
+				OrderQueueMap:    orderQueueMap,
+				OrderKindMap:     orderKindMap,
+				OrderTargetMap:   orderTargetMap,
+				OrderChainMap:    orderChainMap,
+				SmoothedSquadPos: smoothedSquadPos,
+				MapMarkerCache:   &mapMarkerCache,
+				RoleMap:          roleMap,
+				Font:             font,
+				MapPingFilter:    mapPingFilter,
+				Clock:            squadService.Clock(),
+			})
+		case ui.PanelInspect:
+			ui.DrawInspector(syn("Inspector"), ui.InspectorCtx{
+				InspectorMaps: inspectorMaps,
+				World:         app.World,
+				Selected:      selected,
+				Hovered:       hovered,
+				Font:          font,
+				EventLog:      eventLog,
+				Cursor:        cursor,
+				LMBPressed:    lmbPress,
+				PanelFocused:  true,
+				Scroll:        nil,
+				SquadColor:    squadColor,
+			})
+		case ui.PanelTimeline:
+			ui.DrawTimelinePanel(syn("Timeline"), font, timelineData, &timelineView)
+		case ui.Panel3D:
+			// Not floatable yet - see comment above. The chevron menu
+			// disables Float pane for the 3D leaf so this branch is
+			// unreachable in practice.
+		}
+		return false
+	}
+
+	// makeFloatingRender packs renderFloatingWidget into a closure for a
+	// specific PanelID. Used both by floatSpawn (chevron Float pane) and
+	// the E-hotkey, so a floater opened either way is uniformly
+	// switchable via the title-bar chevron button.
+	makeFloatingRender := func(id ui.PanelID) ui.FloatingRenderFn {
+		return func(c rl.Rectangle, cu rl.Vector2, f rl.Font, l bool) bool {
+			return renderFloatingWidget(id, c, cu, f, l)
+		}
+	}
+
+	floatSpawn := func(id ui.PanelID, title string, bounds rl.Rectangle) {
+		// Use the leaf's previous bounds as the initial floater rect so
+		// the panel materialises in place rather than snapping to the
+		// top-left default. Clamp to a sensible minimum so a tiny pane
+		// doesn't yield an unusable floater.
+		if bounds.Width < 240 {
+			bounds.Width = 360
+		}
+		if bounds.Height < 160 {
+			bounds.Height = 280
+		}
+		floating.Open(&ui.FloatingPanel{
+			ID:        "float:" + string(id),
+			Title:     title,
+			Bounds:    bounds,
+			PanelID:   id,
+			RenderFor: makeFloatingRender,
+		})
 	}
 
 	for !rl.WindowShouldClose() {
@@ -829,7 +951,11 @@ func main() {
 		case panelMgr.IsCornerDragging():
 			rl.SetMouseCursor(rl.MouseCursorResizeAll)
 		case floating.IsResizing() || floating.ResizeHover(cursor):
-			rl.SetMouseCursor(rl.MouseCursorResizeNWSE)
+			if c, ok := floating.ResizeCursorAt(cursor); ok {
+				rl.SetMouseCursor(c)
+			} else {
+				rl.SetMouseCursor(rl.MouseCursorResizeNWSE)
+			}
 		case splitterHover != nil:
 			if splitterHover.Orient == ui.SplitVertical {
 				rl.SetMouseCursor(rl.MouseCursorResizeEW)
@@ -866,7 +992,7 @@ func main() {
 			if idx := chevronMenu.HitItem(hudFont, cursor); idx >= 0 {
 				it := chevronMenu.Items[idx]
 				if !it.Disabled {
-					handleMenuItem(panelMgr, &chevronMenu, it)
+					handleMenuItem(panelMgr, &chevronMenu, it, floatSpawn)
 					saveLayout(panelMgr)
 				}
 				chevronMenu.Close()
@@ -990,8 +1116,11 @@ func main() {
 		// zoom pivots align with what the player sees.
 		panelMapContent := ui.ContentRect(panelMap)
 
-		// -- Map pan / zoom (only when map focused) --
-		if focused == ui.PanelMap {
+		// -- Map pan / zoom (only when map focused, no chrome busy) --
+		// chromeBusy includes "cursor over a floating panel", so wheel /
+		// pan / click stay locked to the floater chrome above and don't
+		// bleed through to the underlying map.
+		if focused == ui.PanelMap && !chromeBusy() {
 			if rl.IsMouseButtonPressed(rl.MouseButtonMiddle) {
 				mapPanning = true
 				mapPanCursor = cursor
@@ -1286,7 +1415,7 @@ func main() {
 		// the press inside Panel3D too - fine, the camera doesn't spin during
 		// the menu interaction. After menu release, RMB is no longer held and
 		// the orbit doesn't catch the trailing frame either.
-		if rl.IsMouseButtonPressed(rl.MouseButtonRight) {
+		if rl.IsMouseButtonPressed(rl.MouseButtonRight) && !floating.IsBusy(cursor) {
 			var (
 				pressTarget components.WorldPos
 				targetOK    bool
@@ -1512,32 +1641,21 @@ func main() {
 			}
 		}
 
-		// -- E -> toggle formation editor floating panel for the selected
-		//        squad. Phase 18 floating-panels demo + concentric-rings UI.
+		// -- E -> toggle formation editor floating panel. Pinned to the
+		//        squad active when the panel is opened; afterwards
+		//        SelectionFn keeps it in sync as selection changes.
 		//        (F is taken by FloorNavGrid debug hold-overlay.)
-		if rl.IsKeyPressed(rl.KeyE) && len(selected) > 0 {
-			if commonSquad, homo := groupSelected(selected, squadMemberMap); homo && commonSquad != (ecs.Entity{}) && app.World.Alive(commonSquad) {
-				if floating.IsOpen("formation-editor") {
-					floating.Close("formation-editor")
-				} else {
-					editor := ui.NewFormationEditor(commonSquad, ui.FormationEditorCtx{
-						World:          app.World,
-						RosterMap:      rosterMap,
-						FormationMap:   formationDataMap,
-						OrientMap:      formationOrientMap,
-						CustomSlotsMap: formationCustomSlotsMap,
-						RoleMap:        roleMap,
-						PosMap:         posMap,
-						SquadColor:     squadColor,
-						Presets:        &formationPresets,
-					})
-					floating.Open(&ui.FloatingPanel{
-						ID:     "formation-editor",
-						Title:  "Squad formation",
-						Bounds: rl.Rectangle{X: 220, Y: 80, Width: 360, Height: 400},
-						Render: editor.Render,
-					})
-				}
+		if rl.IsKeyPressed(rl.KeyE) {
+			if floating.IsOpen("formation-editor") {
+				floating.Close("formation-editor")
+			} else {
+				floating.Open(&ui.FloatingPanel{
+					ID:        "formation-editor",
+					Title:     ui.WidgetTitle(ui.PanelFormation),
+					Bounds:    rl.Rectangle{X: 220, Y: 80, Width: 360, Height: 400},
+					PanelID:   ui.PanelFormation,
+					RenderFor: makeFloatingRender,
+				})
 			}
 		}
 
@@ -1766,9 +1884,12 @@ func main() {
 		// when the map panel is focused belong to the map's own zoom; RMB held
 		// while drawing a map marquee shouldn't spin the field camera. Also
 		// suppress while pie menu is active so the camera doesn't drift as the
-		// player sweeps cursor to pick a segment.
+		// player sweeps cursor to pick a segment, and while a floating panel
+		// owns the cursor (so wheel-zoom of the formation editor doesn't also
+		// dolly the field camera underneath).
 		systems.OrbitInputEnabled = (focused == ui.Panel3D || focused == ui.PanelNone) &&
-			!pieMenu.IsActive() && pieMenu.SourcePanel == ui.PanelNone
+			!pieMenu.IsActive() && pieMenu.SourcePanel == ui.PanelNone &&
+			!floating.IsBusy(cursor)
 
 		app.Tick(dtReal)
 
@@ -2282,6 +2403,18 @@ func main() {
 			ui.DrawTimelineTooltip(hudFont, cursor, timelineHoverBlk)
 		}
 
+		// Formation editor as a workspace panel - the chevron menu can place
+		// it in any leaf. lmbPress is gated by chromeBusy so a press inside
+		// the editor's chrome (kind dropdown, dot drag) doesn't double-fire
+		// into the world below.
+		if leaf := panelMgr.LeafFor(ui.PanelFormation); leaf != nil {
+			formationLMB := !chromeBusy() && !scrollDragging &&
+				panelMgr.FocusedAt(cursor) == ui.PanelFormation &&
+				rl.IsMouseButtonPressed(rl.MouseButtonLeft)
+			formationEditor.DrawPanel(panelMgr.Get(ui.PanelFormation),
+				hudFont, cursor, formationLMB)
+		}
+
 		// 3D RT composite into Panel3D bounds.
 		scene3DRT.Composite(panel3D)
 
@@ -2369,6 +2502,9 @@ func main() {
 		// Drawn after chevron menu so floaters sit above it; rendered
 		// before pie menu so RMB pie still wins as top overlay.
 		floating.DrawAll(hudFont, cursor, rl.IsMouseButtonPressed(rl.MouseButtonLeft))
+		// Switch-content popup is drawn last so it sits over every
+		// floater's chrome.
+		floating.DrawSwitchMenu(hudFont, cursor)
 
 		// Pie menu (RMB-hold overlay, M11.6). Drawn after chrome so it sits
 		// above every panel.
@@ -2512,8 +2648,12 @@ func chevronLeafAt(panelMgr *ui.PanelManager, cursor rl.Vector2) *ui.LayoutNode 
 
 // handleMenuItem dispatches a chevron-menu selection: switch the leaf to
 // a different widget (swapping with the existing host if it's already in
-// the tree) or merge the leaf into its sibling (close pane).
-func handleMenuItem(panelMgr *ui.PanelManager, menu *ui.ChevronMenu, it ui.MenuItem) {
+// the tree), merge the leaf into its sibling (close pane), or detach the
+// widget into a floating panel via the supplied floatSpawn callback (the
+// callback owns the FloatingState + per-widget render closures since
+// those live in main's scope).
+func handleMenuItem(panelMgr *ui.PanelManager, menu *ui.ChevronMenu, it ui.MenuItem,
+	floatSpawn func(id ui.PanelID, title string, bounds rl.Rectangle)) {
 	leaf := menu.Leaf
 	if leaf == nil {
 		return
@@ -2540,6 +2680,20 @@ func handleMenuItem(panelMgr *ui.PanelManager, menu *ui.ChevronMenu, it ui.MenuI
 		if wasRootChild && sib != nil {
 			panelMgr.SetWorkspace(sib)
 		}
+	case ui.MenuItemFloat:
+		if leaf.Parent == nil || floatSpawn == nil {
+			return
+		}
+		// Snapshot leaf state before we tear it out of the tree.
+		id := leaf.Panel
+		title := leaf.Title
+		bounds := leaf.Bounds
+		wasRootChild := leaf.Parent == panelMgr.Workspace
+		sib := ui.MergeIntoSibling(leaf)
+		if wasRootChild && sib != nil {
+			panelMgr.SetWorkspace(sib)
+		}
+		floatSpawn(id, title, bounds)
 	}
 	panelMgr.Recompute(int32(rl.GetScreenWidth()), int32(rl.GetScreenHeight()))
 }

@@ -14,6 +14,19 @@ import (
 // Built once at startup; passed by value to NewFormationEditor. Presets is
 // a pointer to the global FormationPresets resource so Save / Apply
 // share state with every other open editor.
+//
+// Tuning fields (zero = use built-in defaults):
+//
+//   - MinPxPerM / MaxPxPerM bound the wheel-zoom range. Lower MinPxPerM
+//     lets the user zoom out to fit huge custom formations; higher
+//     MaxPxPerM lets fine drags at half-metre precision.
+//   - SnapMeters is the drag-snap step; default 0.5 m. Set to 0 to disable
+//     snapping (free placement).
+//   - SelectionFn (optional) returns the currently selected squad each
+//     frame. When set, the editor re-binds to it so the floating /
+//     docked widget follows the player's selection instead of staying
+//     pinned to the squad alive at open time. Returning a zero entity
+//     leaves the previous bind alone (avoids flicker between selections).
 type FormationEditorCtx struct {
 	World          *ecs.World
 	RosterMap      *ecs.Map[components.CommandRoster]
@@ -24,6 +37,11 @@ type FormationEditorCtx struct {
 	PosMap         *ecs.Map[components.WorldPos]
 	SquadColor     func(ent ecs.Entity) rl.Color
 	Presets        *components.FormationPresets
+
+	MinPxPerM   float32
+	MaxPxPerM   float32
+	SnapMeters  float32
+	SelectionFn func() ecs.Entity
 }
 
 // FormationEditor renders the concentric-rings UI for one squad. Owns its
@@ -56,9 +74,13 @@ const (
 	feDotPickRadius float32 = 12
 	feSnapMeters    float32 = 0.5
 	feCompassPad    float32 = 18
-	fePxPerMMin     float32 = 8
-	fePxPerMMax     float32 = 120
-	feZoomStep      float32 = 1.15
+	// Wheel-zoom range. Built-in defaults; FormationEditorCtx can override.
+	// Lower bound = 2 px/m (~half-screen radius of 60+ m) so the user can
+	// lay out wide loose / vehicle formations without clipping members at
+	// the edge. Upper bound = 200 px/m for half-metre dot-snap precision.
+	fePxPerMMin float32 = 2
+	fePxPerMMax float32 = 200
+	feZoomStep  float32 = 1.15
 )
 
 var (
@@ -79,18 +101,56 @@ var (
 	feBtnBorder     = rl.Color{R: 80, G: 90, B: 105, A: 255}
 )
 
+// DrawPanel renders the editor inside a workspace panel. Mirrors the
+// DrawInspector / DrawTimelinePanel signature so main.go can dispatch on
+// PanelID. lmbPress mirrors main.go's `chromeBusy()`-gated press edge.
+// Workspace flavour ignores the editor's close-request (Render's return
+// value) because the chevron "Close pane" already covers panel teardown.
+func (e *FormationEditor) DrawPanel(panel Panel, font rl.Font, cursor rl.Vector2, lmbPress bool) {
+	content := ContentRect(panel)
+	rl.DrawRectangleRec(content, feCanvasBG)
+	rl.BeginScissorMode(int32(content.X), int32(content.Y), int32(content.Width), int32(content.Height))
+	defer rl.EndScissorMode()
+	_ = e.Render(content, cursor, font, lmbPress)
+}
+
 // Render is the FloatingRenderFn entry point. Returns true when the editor
-// wants to close itself (squad no longer alive).
+// wants to close itself (squad no longer alive, AND the editor is hosted
+// as a floating panel - workspace embedding ignores the return).
 func (e *FormationEditor) Render(content rl.Rectangle, cursor rl.Vector2, font rl.Font, lmbPress bool) bool {
 	if e == nil || e.Ctx.World == nil {
 		return true
 	}
+	// Follow the active selection when the host wired a SelectionFn -
+	// rebinding here keeps the floating + workspace editor in sync with
+	// the player's current squad rather than the one alive at open-time.
+	// Returning a zero squad means "keep what you have" so the panel
+	// doesn't flicker between selections.
+	if e.Ctx.SelectionFn != nil {
+		if s := e.Ctx.SelectionFn(); s != (ecs.Entity{}) && e.Ctx.World.Alive(s) && s != e.Squad {
+			e.Squad = s
+			e.draggedSlot = -1
+			e.kindMenuOpen = false
+		}
+	}
 	if e.Squad == (ecs.Entity{}) || !e.Ctx.World.Alive(e.Squad) {
+		// Workspace host calls e.RenderEmbedded which short-circuits this
+		// branch before we get here; floating host treats true as "close
+		// the panel". When wired with SelectionFn the editor instead shows
+		// a placeholder until a new selection arrives.
+		if e.Ctx.SelectionFn != nil {
+			e.drawEmpty(content, font)
+			return false
+		}
 		return true
 	}
 	roster := e.Ctx.RosterMap.Get(e.Squad)
 	fd := e.Ctx.FormationMap.Get(e.Squad)
 	if roster == nil || fd == nil {
+		if e.Ctx.SelectionFn != nil {
+			e.drawEmpty(content, font)
+			return false
+		}
 		return true
 	}
 
@@ -210,6 +270,7 @@ func (e *FormationEditor) drawCanvas(canvas rl.Rectangle, cursor rl.Vector2,
 		e.PxPerM = halfPx / 6
 	}
 	// Wheel zoom while cursor inside canvas (and no drag in progress).
+	minPx, maxPx := e.zoomRange()
 	if pointInRect(cursor, canvas) && e.draggedSlot < 0 {
 		if w := rl.GetMouseWheelMove(); w != 0 {
 			factor := feZoomStep
@@ -219,11 +280,11 @@ func (e *FormationEditor) drawCanvas(canvas rl.Rectangle, cursor rl.Vector2,
 			for steps := int(absF32(w)); steps > 0; steps-- {
 				e.PxPerM *= factor
 			}
-			if e.PxPerM < fePxPerMMin {
-				e.PxPerM = fePxPerMMin
+			if e.PxPerM < minPx {
+				e.PxPerM = minPx
 			}
-			if e.PxPerM > fePxPerMMax {
-				e.PxPerM = fePxPerMMax
+			if e.PxPerM > maxPx {
+				e.PxPerM = maxPx
 			}
 		}
 	}
@@ -263,8 +324,9 @@ func (e *FormationEditor) drawCanvas(canvas rl.Rectangle, cursor rl.Vector2,
 		} else if int(e.draggedSlot) < int(roster.Count) {
 			localX := (cursor.X - cx) / pxPerM
 			localY := -(cursor.Y - cy) / pxPerM
-			localX = snapTo(localX, feSnapMeters)
-			localY = snapTo(localY, feSnapMeters)
+			snap := e.snapStep()
+			localX = snapTo(localX, snap)
+			localY = snapTo(localY, snap)
 			if localX > maxMeters {
 				localX = maxMeters
 			}
@@ -696,15 +758,59 @@ func snapTo(v, step float32) float32 {
 
 // chooseRingStep returns the ring spacing (metres) such that the canvas
 // shows ~5-9 rings total. Stops scale with the visible maximum so a heavy
-// zoom-in shows 0.5m rings, zoom-out goes to 2-5m.
+// zoom-in shows 0.5m rings, zoom-out goes to 2-5m, deep zoom-out adds
+// 25 / 50 m so 100+ m formations stay readable without 30 rings.
 func chooseRingStep(maxMeters float32) float32 {
-	steps := []float32{0.5, 1, 2, 5, 10}
+	steps := []float32{0.5, 1, 2, 5, 10, 25, 50}
 	for _, s := range steps {
 		if maxMeters/s <= 9 {
 			return s
 		}
 	}
 	return steps[len(steps)-1]
+}
+
+// zoomRange returns the effective min/max PxPerM, preferring overrides on
+// the ctx when set so a host can widen or narrow the range without
+// touching the package-level defaults.
+func (e *FormationEditor) zoomRange() (float32, float32) {
+	minPx := e.Ctx.MinPxPerM
+	if minPx <= 0 {
+		minPx = fePxPerMMin
+	}
+	maxPx := e.Ctx.MaxPxPerM
+	if maxPx <= 0 {
+		maxPx = fePxPerMMax
+	}
+	if maxPx < minPx {
+		maxPx = minPx
+	}
+	return minPx, maxPx
+}
+
+// snapStep returns the metric drag snap; negative ctx value disables
+// snapping entirely (free placement).
+func (e *FormationEditor) snapStep() float32 {
+	if e.Ctx.SnapMeters < 0 {
+		return 0
+	}
+	if e.Ctx.SnapMeters > 0 {
+		return e.Ctx.SnapMeters
+	}
+	return feSnapMeters
+}
+
+// drawEmpty paints a "select a squad" placeholder for the selection-aware
+// flavour (workspace panel, follow-selection floating). Centred dim text;
+// no chrome. Cheap enough to call every frame.
+func (e *FormationEditor) drawEmpty(r rl.Rectangle, font rl.Font) {
+	rl.DrawRectangleRec(r, feCanvasBG)
+	const sz int32 = 13
+	msg := "Select a squad to edit its formation"
+	w := rl.MeasureTextEx(font, msg, float32(sz), 1.0).X
+	rl.DrawTextEx(font, msg,
+		rl.Vector2{X: r.X + (r.Width-w)*0.5, Y: r.Y + r.Height*0.5 - float32(sz)*0.5},
+		float32(sz), 1.0, feTextDim)
 }
 
 func absF32(v float32) float32 {

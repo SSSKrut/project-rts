@@ -16,6 +16,10 @@ type MenuItemKind uint8
 const (
 	MenuItemSwitch MenuItemKind = iota
 	MenuItemClose
+	// MenuItemFloat detaches the leaf's current widget into a floating
+	// panel and removes the leaf from the workspace tree. The host wires
+	// the actual spawn in handleMenuItem - menu.go just signals intent.
+	MenuItemFloat
 )
 
 // MenuItem is one row in the chevron menu.
@@ -77,6 +81,14 @@ func (m *ChevronMenu) OpenAt(leaf *LayoutNode, chevron rl.Rectangle, isRoot bool
 		}
 		m.Items = append(m.Items, it)
 	}
+	// Float pane is disabled for the root leaf (no sibling to merge into)
+	// and for Panel3D (the scene render texture is sized to the workspace
+	// leaf - detaching would need a second RT, deferred work).
+	m.Items = append(m.Items, MenuItem{
+		Kind:     MenuItemFloat,
+		Label:    "Float pane",
+		Disabled: isRoot || leaf.Panel == Panel3D,
+	})
 	m.Items = append(m.Items, MenuItem{
 		Kind:     MenuItemClose,
 		Label:    "Close pane",
@@ -166,8 +178,8 @@ func (m *ChevronMenu) Draw(font rl.Font, cursor rl.Vector2) {
 	for i, it := range m.Items {
 		rowY := r.Y + menuPad + float32(i)*menuItemH
 		rowRect := rl.Rectangle{X: r.X + 1, Y: rowY, Width: r.Width - 2, Height: menuItemH}
-		// Separator between switch items and Close pane.
-		if it.Kind == MenuItemClose {
+		// Separator before the action group (Float / Close pane).
+		if it.Kind == MenuItemFloat {
 			sepY := rowY - 1
 			rl.DrawLine(int32(r.X+menuPad), int32(sepY), int32(r.X+r.Width-menuPad), int32(sepY), menuSep)
 		}
