@@ -111,6 +111,45 @@ func (sys *OrderResolverSystem) evaluateCompletion(
 		}
 		return completionPending
 
+	case components.CompletionClearBuilding:
+		// Phase 17.6 M17.6.5 - ClearBuilding. Completes when no hostile unit
+		// sits inside the footprint AND >= 1 friendly is inside. Squad
+		// wipeout (no live members) -> Failed. Auto-chain to OccupyBuilding
+		// is handled in Update's advance loop on Done transition.
+		if target.Entity == (ecs.Entity{}) || !sys.squadService.world.Alive(target.Entity) {
+			return completionPending
+		}
+		bld := sys.buildingMap.Get(target.Entity)
+		if bld == nil {
+			r := spec.ArrivalRadius
+			if r <= 0 {
+				r = 2.5
+			}
+			if centerXZDistSq(center, target.Pos) < r*r {
+				return completionDone
+			}
+			return completionPending
+		}
+		alive, inside := sys.countInsideBuilding(roster, bld.Footprint)
+		if alive == 0 {
+			return completionFailed
+		}
+		// Determine the squad's faction so hostiles are everyone else.
+		var ownFaction uint8
+		if f := sys.factionMap.Get(squad); f != nil {
+			ownFaction = f.ID
+		}
+		hostiles := sys.countHostilesInBuilding(bld.Footprint, ownFaction)
+		if pr := sys.orderProgressMap.Get(ord); pr != nil {
+			// Progress reflects entry pressure while clearing; once inside
+			// >= 1 the value is mostly diagnostic.
+			pr.Value = float32(inside) / float32(alive)
+		}
+		if hostiles == 0 && inside >= 1 {
+			return completionDone
+		}
+		return completionPending
+
 	case components.CompletionArrivalRadius:
 		// MoveTo / Patrol / OccupyTrench. Garrison moved to a dedicated arm
 		// (CompletionEveryMemberOnFloor); the AABB short-circuit there is the

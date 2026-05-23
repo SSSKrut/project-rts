@@ -36,6 +36,11 @@ const (
 	// inside the footprint AABB AND on a Floor entity. 100% of roster; later
 	// tactical doctrines may loosen to a fraction.
 	CompletionEveryMemberOnFloor
+	// CompletionClearBuilding (Phase 17.6 M17.6.5) - ClearBuilding. Completes
+	// when no hostile unit sits inside the footprint AND at least one
+	// friendly is inside. OrderResolverSystem chains an OccupyBuilding on
+	// the same building when this fires (rest after fight).
+	CompletionClearBuilding
 )
 
 // OrderKindSpec is the per-kind metadata row. Fields cover every site that
@@ -81,7 +86,7 @@ type OrderKindSpec struct {
 
 // OrderKindCount is the count of enum values. Update when a new OrderKindCode
 // is appended; the compile-time guard below catches misses.
-const OrderKindCount OrderKindCode = OrderKindSuppressFire + 1
+const OrderKindCount OrderKindCode = OrderKindClearBuilding + 1
 
 // OrderKindSpecs - canonical metadata table. Index by OrderKindCode. When
 // adding a new value, also append a row here and bump OrderKindCount.
@@ -141,6 +146,26 @@ var OrderKindSpecs = [OrderKindCount]OrderKindSpec{
 		DrivesMacroPath:   false,
 		Completion:        CompletionTimer,
 		DurationSeconds:   30.0,
+	},
+	OrderKindOccupyBuilding: {
+		Code: OrderKindOccupyBuilding, Name: "Occupy", MapIconGlyph: 'O',
+		// Phase 17.6: pie menu deprecated, this kind never appears in pie.
+		// Triggered by RMB-tap on a building (default hit-test result).
+		NeedsEntity:     true,
+		DrivesMacroPath: true,
+		// Same completion as Garrison: every live member must be inside the
+		// footprint AND on a Floor entity. ArrivalRadius is a defensive
+		// fallback when Building lookup misses.
+		Completion: CompletionEveryMemberOnFloor, ArrivalRadius: 4.0,
+	},
+	OrderKindClearBuilding: {
+		Code: OrderKindClearBuilding, Name: "Clear", MapIconGlyph: 'C',
+		// Phase 17.6 M17.6.5: triggered by building popup item "Clear and
+		// occupy". OrderResolverSystem auto-chains an OccupyBuilding on Done.
+		NeedsEntity:       true,
+		DrivesMacroPath:   true,
+		OverridesHoldFire: true, // hostiles inside must be engaged
+		Completion:        CompletionClearBuilding, ArrivalRadius: 4.0,
 	},
 }
 

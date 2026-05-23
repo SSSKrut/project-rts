@@ -23,7 +23,11 @@ func (sys *OrderResolverSystem) resolveTargetPos(kind components.OrderKindCode, 
 		return
 	}
 	switch kind {
-	case components.OrderKindGarrison:
+	case components.OrderKindGarrison, components.OrderKindOccupyBuilding, components.OrderKindClearBuilding:
+		// Phase 17.6: Occupy / Clear share Garrison's target resolution —
+		// anchor on the lowest Floor NavNode so A* routes through a Door
+		// TransitionEdge. Distribution (per-floor equal-spread for Occupy)
+		// lands in M17.6.6 via Floor-anchored IndividualPosition.
 		if b := sys.buildingMap.Get(target.Entity); b != nil {
 			// Phase 14.6 followup - prefer the ground-floor (lowest Level)
 			// child's WorldPos. NavService.resolveNode matches it as a
@@ -211,6 +215,38 @@ func (sys *OrderResolverSystem) memberOnFloor(pos *components.WorldPos) bool {
 		}
 	}
 	return false
+}
+
+// countHostilesInBuilding tallies live Units whose Faction differs from
+// `ownFaction` and whose XZ position lies inside `footprint`. Phase 17.6
+// M17.6.5: ClearBuilding completion gates on this returning 0 (no hostiles
+// left) plus at least one friendly inside.
+//
+// Walks the unit filter rather than the roster — clearing must consider
+// every live unit in the building, not just members of the issuing squad.
+func (sys *OrderResolverSystem) countHostilesInBuilding(
+	footprint components.AABB2D, ownFaction uint8,
+) uint8 {
+	q := sys.unitFilter.Query()
+	var hostiles uint8
+	for q.Next() {
+		_, pos := q.Get()
+		ent := q.Entity()
+		f := sys.factionMap.Get(ent)
+		if f == nil || f.ID == ownFaction {
+			continue
+		}
+		mx := float32(pos.Chunk.X)*components.ChunkSize + pos.Local.X
+		mz := float32(pos.Chunk.Z)*components.ChunkSize + pos.Local.Z
+		if mx < footprint.MinX || mx > footprint.MaxX || mz < footprint.MinZ || mz > footprint.MaxZ {
+			continue
+		}
+		hostiles++
+		if hostiles == 255 {
+			break // saturate; the completion only cares about == 0
+		}
+	}
+	return hostiles
 }
 
 // pointNearPolyline returns true when p is within `radius` of any segment of

@@ -66,6 +66,12 @@ type OrderResolverSystem struct {
 	// inside the footprint AABB).
 	floorFilter *ecs.Filter2[components.WorldPos, components.Floor]
 
+	// Phase 17.6 M17.6.5 - ClearBuilding completion counts hostile Units
+	// inside the footprint AABB. unitFilter walks every live unit; factionMap
+	// resolves friend/foe relative to the issuing squad's Faction.
+	unitFilter *ecs.Filter2[components.Unit, components.WorldPos]
+	factionMap *ecs.Map[components.Faction]
+
 	// Phase 14.6 followup - Garrison target.Pos points at a Floor entity's
 	// WorldPos (NodeLevel in the multi-graph A*) so NavService.FindPath can
 	// route through a Door TransitionEdge. Surface-inside-footprint cells are
@@ -116,6 +122,8 @@ func (sys *OrderResolverSystem) InitUI(w *ecs.World) {
 	sys.buildingChildIndex = ecs.NewResource[BuildingChildIndex](w)
 	sys.floorComponentMap = ecs.NewMap[components.Floor](w)
 	sys.eventLogRes = ecs.NewResource[components.EventLog](w)
+	sys.unitFilter = ecs.NewFilter2[components.Unit, components.WorldPos](w)
+	sys.factionMap = ecs.NewMap[components.Faction](w)
 }
 
 // pushOrderEvent records an order-lifecycle event into the global log.
@@ -254,6 +262,19 @@ func (sys *OrderResolverSystem) Update(ctx core.UpdateContext) {
 					adv.reissueEntity = target.Entity
 				}
 			}
+			// Phase 17.6 M17.6.5: ClearBuilding auto-chains an OccupyBuilding
+			// on Done so the squad rests inside the cleared building. Same
+			// "reissue at head" mechanism as Patrol Loop — newHead must be
+			// empty (no explicit queued order), otherwise the player's chain
+			// wins.
+			if state.Code == components.OrderStateCompleted &&
+				kind.Code == components.OrderKindClearBuilding &&
+				adv.newHead == (ecs.Entity{}) {
+				adv.reissue = true
+				adv.reissueKind = components.OrderKindOccupyBuilding
+				adv.reissueTarget = target.Pos
+				adv.reissueEntity = target.Entity
+			}
 			advances = append(advances, adv)
 		}
 	}
@@ -270,10 +291,15 @@ func (sys *OrderResolverSystem) Update(ctx core.UpdateContext) {
 		}
 		if a.reissue {
 			// Re-issue at the tail of the (empty) queue. SquadService.IssueOrder
-			// handles the head-empty branch.
+			// handles the head-empty branch. Per-kind params: Patrol carries
+			// PatrolLoop, ClearBuilding auto-chains a plain OccupyBuilding.
 			head.First = ecs.Entity{}
+			params := OrderParams{}
+			if a.reissueKind == components.OrderKindPatrol {
+				params.PatrolLoop = true
+			}
 			sys.squadService.IssueOrder(a.squad, a.reissueKind, a.reissueTarget, a.reissueEntity,
-				false, OrderParams{PatrolLoop: true})
+				false, params)
 			continue
 		}
 		head.First = a.newHead

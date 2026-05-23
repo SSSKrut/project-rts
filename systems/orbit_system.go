@@ -12,9 +12,11 @@ import (
 
 // OrbitInputEnabled is the per-frame gate for mouse-driven camera orbit.
 // Phase 10 main.go sets this to true only when the 3D panel is focused (or
-// nothing is focused), so RMB-drag / wheel inside the map / inspector / time
-// panels don't bleed into the 3D camera. Default true preserves pre-Phase-10
-// behaviour for any caller that forgets to set it.
+// nothing is focused), so MMB-drag / wheel inside the map / inspector / time
+// panels don't bleed into the 3D camera. Phase 17.6: orbit moved from RMB to
+// MMB so RMB can host order popups without drag-disambig with the camera.
+// Default true preserves pre-Phase-10 behaviour for any caller that forgets
+// to set it.
 var OrbitInputEnabled = true
 
 // OrbitSystem updates camera position from OrbitController + mouse input.
@@ -41,11 +43,11 @@ func (sys OrbitSystem) Update(ctx core.UpdateContext) {
 
 	var mouseDelta rl.Vector2
 	var wheel float32
-	var rightDown bool
+	var middleDown bool
 	if OrbitInputEnabled {
 		mouseDelta = rl.GetMouseDelta()
 		wheel = rl.GetMouseWheelMove()
-		rightDown = rl.IsMouseButtonDown(rl.MouseButtonRight)
+		middleDown = rl.IsMouseButtonDown(rl.MouseButtonMiddle)
 	}
 
 	q := sys.filter.Query()
@@ -63,7 +65,7 @@ func (sys OrbitSystem) Update(ctx core.UpdateContext) {
 			}
 		}
 
-		if rightDown {
+		if middleDown {
 			orbit.Yaw -= mouseDelta.X * orbit.SensitivityYaw
 			orbit.Pitch += mouseDelta.Y * orbit.SensitivityPitch
 		}

@@ -3,8 +3,11 @@ package main
 import (
 	"fmt"
 
+	rl "github.com/gen2brain/raylib-go/raylib"
+
 	"rts-go/components"
 	"rts-go/systems"
+	"rts-go/ui"
 
 	"github.com/mlange-42/ark/ecs"
 )
@@ -171,7 +174,7 @@ func resolveTargetIntoOrder(hit HitTestResult, kindOverride *components.OrderKin
 	hitIsEntity := hit.Kind == HitBuilding || hit.Kind == HitTrench || hit.Kind == HitUnit
 	hitMatchesKind := func(k components.OrderKindCode) bool {
 		switch k {
-		case components.OrderKindGarrison:
+		case components.OrderKindGarrison, components.OrderKindOccupyBuilding:
 			return hit.Kind == HitBuilding
 		case components.OrderKindOccupyTrench:
 			return hit.Kind == HitTrench
@@ -196,11 +199,12 @@ func resolveTargetIntoOrder(hit HitTestResult, kindOverride *components.OrderKin
 		// implies "use the cursor Pos verbatim".
 		return *kindOverride, ecs.Entity{}
 	}
-	// No override: hit-test classifies the kind. Building -> Garrison, Trench
-	// -> OccupyTrench, hostile unit -> AttackTarget, else MoveTo.
+	// No override: hit-test classifies the kind. Building -> OccupyBuilding
+	// (Phase 17.6 default; Garrison reached via popup), Trench -> OccupyTrench,
+	// hostile unit -> AttackTarget, else MoveTo.
 	switch hit.Kind {
 	case HitBuilding:
-		return components.OrderKindGarrison, hit.Entity
+		return components.OrderKindOccupyBuilding, hit.Entity
 	case HitTrench:
 		return components.OrderKindOccupyTrench, hit.Entity
 	case HitUnit:
@@ -256,6 +260,241 @@ func rmbModifiersFromPress(ctrl, alt, double bool) RMBModifiers {
 		Sneak:      ctrl,
 		Sprint:     double,
 		AttackMove: alt,
+	}
+}
+
+// buildBuildingPopupSections constructs the building right-click popup items
+// for Phase 17.6 M17.6.4. Layout:
+//
+//	─ Атака ─────────────
+//	  Зачистить и занять           [disabled until M17.6.5]
+//	  Подавлять огонь              [disabled — Phase 14.8 per-window]
+//	─ Взаимодействие ────
+//	  Атакующая позиция у окон     → OrderKindGarrison
+//	  Закрытая позиция             → OccupyBuilding + Crouch/HoldFire preset
+//	  Занять L0                    → MoveTo on Level entity (dynamic per level)
+//	  Занять L1
+//	  …
+//
+// `building` must be a live Building entity. Level entities are pulled from
+// buildingPlanIndex.Levels[building] in DisplayOrder ascending. If the
+// building has 0 or 1 level, no L-picker items are emitted (Garrison /
+// Crouch presets already cover the trivial case).
+func buildBuildingPopupSections(
+	building ecs.Entity,
+	planIndex *systems.BuildingPlanIndex,
+	levelMap *ecs.Map[components.Level],
+) []ui.ContextMenuSection {
+	// Phase 17.6 note: labels are English-only because the bundled raylib
+	// font has no Cyrillic glyphs. Localisation pass (when added) will swap
+	// strings via a lookup table; designing for it now would be premature.
+	atk := ui.ContextMenuSection{
+		Header: "Attack",
+		Items: []ui.ContextMenuItem{
+			{
+				Label:   "Clear and occupy",
+				Tooltip: "Enter, destroy enemies inside, hold the building",
+				Glyph:   'C',
+				Kind:    components.OrderKindClearBuilding,
+				Enabled: true, // M17.6.5: ClearBuilding wired + auto-chains Occupy on Done
+			},
+			{
+				Label:   "Suppress fire",
+				Tooltip: "Fire on the building to suppress its garrison",
+				Glyph:   'S',
+				Kind:    components.OrderKindSuppressFire,
+				Enabled: false, // Phase 14.8 / 21 per-window
+			},
+		},
+	}
+	inter := ui.ContextMenuSection{
+		Header: "Interact",
+		Items: []ui.ContextMenuItem{
+			{
+				Label:   "Attacking position at windows",
+				Tooltip: "Spread across windows with shooting arcs",
+				Glyph:   'G',
+				Kind:    components.OrderKindGarrison,
+				Enabled: true,
+			},
+			{
+				Label:                "Hidden position",
+				Tooltip:              "Enter quietly, stay crouched, hold fire",
+				Glyph:                'H',
+				Kind:                 components.OrderKindOccupyBuilding,
+				HoldFireCrouchPreset: true,
+				Enabled:              true,
+			},
+		},
+	}
+
+	// Dynamic floor pickers — one MenuItem per Level entity. Sorted by
+	// DisplayOrder ascending. Single-storey buildings skip this (Garrison /
+	// Crouch already cover the trivial case).
+	if planIndex != nil && levelMap != nil {
+		levels := planIndex.Levels[building]
+		if len(levels) >= 2 {
+			type lvlInfo struct {
+				entity ecs.Entity
+				name   string
+				order  uint8
+			}
+			var arr []lvlInfo
+			for _, lvl := range levels {
+				if l := levelMap.Get(lvl); l != nil {
+					name := l.Name
+					if name == "" {
+						name = fmt.Sprintf("L%d", l.DisplayOrder)
+					}
+					arr = append(arr, lvlInfo{entity: lvl, name: name, order: l.DisplayOrder})
+				}
+			}
+			for i := 1; i < len(arr); i++ {
+				for j := i; j > 0 && arr[j-1].order > arr[j].order; j-- {
+					arr[j-1], arr[j] = arr[j], arr[j-1]
+				}
+			}
+			for _, l := range arr {
+				inter.Items = append(inter.Items, ui.ContextMenuItem{
+					Label:       fmt.Sprintf("Occupy %s", l.name),
+					Tooltip:     "Enter this level via the nearest stairs",
+					Glyph:       '-',
+					Kind:        components.OrderKindMoveTo,
+					LevelEntity: l.entity,
+					Enabled:     true,
+				})
+			}
+		}
+	}
+	return []ui.ContextMenuSection{atk, inter}
+}
+
+// issueBuildingPopupOrder is the M17.6.4 commit path for a building-popup
+// item. Bypasses the hit-test resolver because the popup already knows the
+// kind / entity — we just need to dispatch IssueOrder per squad. Per-kind
+// dispatch:
+//   - LevelEntity != zero (floor picker) → MoveTo, target = Level.AABB.Center,
+//     entity = Level entity. NavService routes through nearest stairs via
+//     TransitionRegistry.
+//   - HoldFireCrouchPreset → OccupyBuilding + MovementProfile preset
+//     (PresetStealth: Walk + Crouch + Quiet + RoadAvoid). HoldFire RoE
+//     override is M17.6.6 work.
+//   - Default → item.Kind on the popup's building entity, with the same
+//     pressTarget. Resolver's resolveTargetPos refines Pos at runtime.
+//
+// `building` is the popup's target. `levelMap` resolves LevelEntity into a
+// concrete AABB.Center WorldPos.
+func issueBuildingPopupOrder(
+	selected []ecs.Entity,
+	item ui.ContextMenuItem,
+	building ecs.Entity,
+	pressTarget components.WorldPos,
+	shiftHeld bool,
+	squadService *systems.SquadService,
+	navService *systems.NavService,
+	squadMemberMap *ecs.Map[components.SquadMember],
+	posMap *ecs.Map[components.WorldPos],
+	actionQueueMap *ecs.Map[components.ActionQueue],
+	levelMap *ecs.Map[components.Level],
+) {
+	params := systems.OrderParams{}
+	target := pressTarget
+	entity := building
+	kind := item.Kind
+
+	if item.LevelEntity != (ecs.Entity{}) && levelMap != nil {
+		if lvl := levelMap.Get(item.LevelEntity); lvl != nil {
+			wx := lvl.AABB.CenterX()
+			wz := lvl.AABB.CenterZ()
+			cx := int32(wx) / int32(components.ChunkSize)
+			cz := int32(wz) / int32(components.ChunkSize)
+			if wx < 0 {
+				cx--
+			}
+			if wz < 0 {
+				cz--
+			}
+			target = components.WorldPos{
+				Chunk: components.ChunkCoord{X: cx, Z: cz},
+				Local: rl.Vector3{
+					X: wx - float32(cx)*components.ChunkSize,
+					Y: lvl.AABB.MinY,
+					Z: wz - float32(cz)*components.ChunkSize,
+				},
+			}
+			entity = item.LevelEntity
+			kind = components.OrderKindMoveTo
+		}
+	}
+
+	if item.HoldFireCrouchPreset {
+		preset := components.ApplyPreset(components.PresetStealth)
+		params.MovementOverride = &preset
+		// M17.6.6: override RoE to HoldFire so the squad sits quietly. The
+		// override component lives on the order entity; WeaponSystem.shouldFire
+		// reads it in addition to the squad's standing EngagementRules.Mode.
+		holdFire := components.HoldFire
+		params.EngagementOverride = &holdFire
+	}
+
+	fmt.Printf("[rmb-popup] item=%q kind=%d holdFireCrouch=%v level=%v target=(%.1f,%.1f)\n",
+		item.Label, kind, item.HoldFireCrouchPreset, item.LevelEntity != (ecs.Entity{}),
+		target.Local.X+float32(target.Chunk.X)*components.ChunkSize,
+		target.Local.Z+float32(target.Chunk.Z)*components.ChunkSize)
+
+	issueDirectOrder(selected, kind, target, entity, shiftHeld, params,
+		squadService, navService, squadMemberMap, posMap, actionQueueMap)
+}
+
+// issueDirectOrder dispatches an order to every selected squad / soloist
+// without running the hit-test resolver. Used by the building popup where
+// the kind / entity / target are already explicit (popup item commit).
+//
+// Mirrors resolveRMBOrderWithParams' squad-vs-soloist split (PHASE-11.md P9)
+// but skips HitTester.HitTest and resolveTargetIntoOrder.
+func issueDirectOrder(
+	selected []ecs.Entity,
+	kind components.OrderKindCode,
+	target components.WorldPos,
+	entity ecs.Entity,
+	shiftHeld bool,
+	params systems.OrderParams,
+	squadService *systems.SquadService,
+	navService *systems.NavService,
+	squadMemberMap *ecs.Map[components.SquadMember],
+	posMap *ecs.Map[components.WorldPos],
+	actionQueueMap *ecs.Map[components.ActionQueue],
+) {
+	if len(selected) == 0 {
+		return
+	}
+	groups := groupSelectionByOwner(selected, squadMemberMap)
+	for _, s := range groups.SquadsToOrder {
+		squadService.IssueOrder(s, kind, target, entity, shiftHeld, params)
+	}
+	for _, e := range groups.Soloists {
+		aq := actionQueueMap.Get(e)
+		pos := posMap.Get(e)
+		if aq == nil || pos == nil {
+			continue
+		}
+		if !shiftHeld {
+			systems.ClearActions(aq)
+		}
+		path := navService.FindPath(*pos, target, systems.NavOpts{
+			Locomotion: components.LocomotionFoot,
+		})
+		if len(path) == 0 {
+			systems.PushAction(aq, components.Action{
+				Kind: components.ActionMoveTo, Target: target,
+			})
+		} else {
+			for _, wp := range path {
+				systems.PushAction(aq, components.Action{
+					Kind: components.ActionMoveTo, Target: wp,
+				})
+			}
+		}
 	}
 }
 

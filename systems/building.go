@@ -98,6 +98,7 @@ func (BuildingSystem) LODPolicy() core.LODPolicy {
 type buildingRec struct {
 	root      ecs.Entity
 	b         components.Building
+	rootPos   components.WorldPos
 	rootChunk components.ChunkCoord
 }
 
@@ -138,6 +139,7 @@ func (sys *BuildingSystem) Update(ctx core.UpdateContext) {
 				byChunk[cc] = append(byChunk[cc], buildingRec{
 					root:      root,
 					b:         *b,
+					rootPos:   *pos,
 					rootChunk: pos.Chunk,
 				})
 			}
@@ -152,10 +154,21 @@ func (sys *BuildingSystem) Update(ctx core.UpdateContext) {
 		ccVal := *cc
 		if recs, ok := byChunk[ccVal]; ok {
 			for _, r := range recs {
-				if r.b.Kind != components.BuildingBunker {
+				if r.b.Kind == components.BuildingBunker {
+					// Bunker: sunken plate (deep cut, wider skirt).
+					sys.stamper.RectCut(ccVal, r.b.Footprint,
+						components.BunkerDepth, components.BunkerFalloffWidth)
 					continue
 				}
-				sys.stamper.RectCut(ccVal, r.b.Footprint, components.BunkerDepth, components.BunkerFalloffWidth)
+				// Phase 17.6 follow-up: surface buildings — level the
+				// heightmap a touch below the root's WorldPos.Y (5 cm)
+				// so door thresholds remain reachable while the grass /
+				// terrain mesh doesn't Z-fight the concrete floor where
+				// their Ys would otherwise coincide. 1 m cosine skirt
+				// outside blends back to natural terrain.
+				rootY := r.rootPos.Local.Y - components.BuildingLevelingDepthOffset
+				sys.stamper.LevelTo(ccVal, r.b.Footprint, rootY,
+					components.BuildingLevelingSkirtWidth)
 			}
 		}
 		terrainDone = append(terrainDone, processedEnt{qT.Entity()})

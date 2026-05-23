@@ -35,6 +35,11 @@ type OrderParams struct {
 	// Phase 14 M14.4: when non-nil, attach an OrderParamSuppress to the
 	// spawned SuppressFire order. Other kinds ignore the field.
 	Suppress *components.OrderParamSuppress
+	// Phase 17.6 M17.6.6: when non-nil, attach an OrderParamEngagementOverride.
+	// WeaponSystem reads it in shouldFire to override the squad's standing
+	// EngagementRules.Mode for this order's duration. Used by the "Hidden
+	// position" popup preset (Mode=HoldFire).
+	EngagementOverride *components.EngagementMode
 }
 
 // IssueOrder spawns a new Order entity owned by `squad`. If append=false the
@@ -100,6 +105,11 @@ func (s *SquadService) IssueOrder(
 		// formation". Wipe any hand-placed positions so the squad's macro path
 		// doesn't drag stragglers parked behind cover.
 		s.clearIndividualPositions(squad)
+	}
+	if params.EngagementOverride != nil {
+		s.orderEngagementOverrideMap.Add(ord, &components.OrderParamEngagementOverride{
+			Mode: *params.EngagementOverride,
+		})
 	}
 	// Phase 14.5 M14.5.0 (Issue #10): orders whose spec carries a max
 	// out-of-range window get the tracker installed up-front. Resolver reads

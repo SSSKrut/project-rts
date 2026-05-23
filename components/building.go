@@ -15,6 +15,18 @@ const (
 	BunkerFalloffWidth float32 = 4.0
 	StairsLength       float32 = 3.0
 	StairsWidth        float32 = 1.5
+	// BuildingLevelingSkirtWidth (Phase 17.6 follow-up): cosine-blend
+	// distance (metres) outside a surface building's footprint where the
+	// heightmap fades from the building's floor Y back to the natural
+	// terrain. Keeps door thresholds flush with ground so units can walk in
+	// without clipping the wall.
+	BuildingLevelingSkirtWidth float32 = 1.0
+	// BuildingLevelingDepthOffset (Phase 17.6 follow-up): how far below the
+	// building's floor Y the leveled terrain plate sits. Prevents Z-fighting
+	// between the grass/terrain mesh and the concrete floor when their Ys
+	// would otherwise coincide. ~5 cm is below any realistic camera distance
+	// at which Z-fighting becomes visible.
+	BuildingLevelingDepthOffset float32 = 0.05
 )
 
 // BuildingKind drives layout (Bunker is sunken, House is surface) and

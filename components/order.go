@@ -23,6 +23,20 @@ const (
 	// OrderKindSuppressFire: drench a terrain sector with fire on a timer.
 	// Resolved via pie-menu on terrain.
 	OrderKindSuppressFire
+	// OrderKindOccupyBuilding (Phase 17.6): "go inside and stay" — squad
+	// enters a Building through the nearest door and spreads via NavGrid
+	// across the lowest floor. Distinct from Garrison ("attacking position
+	// at windows") in intent: Occupy is the new default RMB-tap action on a
+	// building, Garrison is reached only via the building popup. Both use
+	// CompletionEveryMemberOnFloor; per-floor equal-spread via Floor-anchored
+	// IndividualPosition lands in M17.6.6.
+	OrderKindOccupyBuilding
+	// OrderKindClearBuilding (Phase 17.6 M17.6.5): "go in, kill hostiles
+	// inside, hold". Composite intent — completion gates on no-hostiles-
+	// inside-footprint + at-least-one-friendly-inside; OrderResolverSystem
+	// auto-chains an OccupyBuilding onto the same building entity on Done so
+	// the squad transitions from clearing into resting after the fight.
+	OrderKindClearBuilding
 )
 
 // OrderKind on the order entity. Wraps the code so the filter-target is one
@@ -87,6 +101,15 @@ type OrderParamFacing struct {
 // waypoint is reached.
 type OrderParamPatrol struct {
 	Loop bool
+}
+
+// OrderParamEngagementOverride is optional (Phase 17.6 M17.6.6). When
+// present on the head order, WeaponSystem.shouldFire reads `Mode` in place
+// of the squad's standing EngagementRules.Mode for the order's duration.
+// Used by the "Hidden position" popup preset (Mode=HoldFire) so the squad
+// holds fire while occupying without disturbing standing RoE state.
+type OrderParamEngagementOverride struct {
+	Mode EngagementMode
 }
 
 // OrderChain links an order to the next queued order belonging to the same

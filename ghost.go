@@ -40,11 +40,14 @@ type ghostContext struct {
 	movementMap      *ecs.Map[components.MovementProfile]
 	squadMemberMap   *ecs.Map[components.SquadMember]
 
-	// Phase 13.6 M13.6.3: per-kind ghost placement.
+	// Phase 13.6 M13.6.3 / 17.6 M17.6.2: per-kind ghost placement.
 	hitTester     *HitTester
 	buildingIndex *systems.BuildingChildIndex
 	wallMap       *ecs.Map[components.WallSegment]
 	windowMap     *ecs.Map[components.Window]
+	// Phase 17.6: floor-based ghost for OccupyBuilding (new default on
+	// HitBuilding) — distribute roster across storeys instead of windows.
+	floorMap      *ecs.Map[components.Floor]
 	trenches      *components.TrenchNetwork
 	trenchRootMap *ecs.Map[components.TrenchRoot]
 	// Phase 14 M14.6: faction-aware colour picker for the DefendPosition
@@ -118,7 +121,9 @@ func drawSelectionGhost(
 	cursorTarget components.WorldPos,
 	targetOK bool,
 	dragFacing *float32,
-	pieHovering *components.OrderKindCode,
+	popupKind *components.OrderKindCode,
+	popupLevel ecs.Entity,
+	levelMap *ecs.Map[components.Level],
 ) {
 	if !cursorOver3D || !targetOK || g == nil {
 		return
@@ -159,13 +164,38 @@ func drawSelectionGhost(
 
 	// Phase 13.6 M13.6.5: pie menu hover overrides hit-test placement so the
 	// player can preview a non-default order kind (DefendPosition arc) before
-	// committing. Garrison / OccupyTrench in the pie menu still fall through
-	// to the hit-test path because their placement comes from the world entity
-	// the cursor is over, not from the pie choice alone.
-	if pieHovering != nil && *pieHovering == components.OrderKindDefendPosition {
+	// committing.
+	if popupKind != nil && *popupKind == components.OrderKindDefendPosition {
 		drawGhostFormation(cursorTarget, fd.Type, fd.Spacing, roster.Count, forward, stance)
 		drawDefendPositionArc(cursorTarget, forward, squad, g.squadColor)
 		return
+	}
+
+	// Phase 17.6 M17.6.9: popup-hover floor picker — ghost dots on the
+	// specific Level's centre, concentrated (no per-floor split).
+	if popupLevel != (ecs.Entity{}) && levelMap != nil {
+		if lvl := levelMap.Get(popupLevel); lvl != nil {
+			cWP := components.WorldPos{}
+			cWP = cWP.Add(rl.Vector3{X: lvl.AABB.CenterX(), Y: lvl.AABB.MinY, Z: lvl.AABB.CenterZ()})
+			drawGhostFormation(cWP, components.FormationLoose, 1.6, roster.Count, forward, stance)
+			return
+		}
+	}
+
+	// Phase 17.6 M17.6.9: popup-hover "Attacking position at windows" →
+	// window-attached ghost (legacy Garrison preview). Other building-target
+	// kinds (OccupyBuilding default / ClearBuilding / Hidden) keep the
+	// floor-spread preview.
+	if popupKind != nil && *popupKind == components.OrderKindGarrison {
+		hit := HitTestResult{Kind: HitTerrain}
+		if g.hitTester != nil {
+			hit = g.hitTester.HitTest(cursorTarget)
+		}
+		if hit.Kind == HitBuilding {
+			if drawGhostAtWindows(g, hit.Entity, roster.Count, stance) {
+				return
+			}
+		}
 	}
 
 	// Phase 13.6 M13.6.3: per-kind ghost placement. HitTester classifies the
@@ -187,6 +217,46 @@ func drawSelectionGhost(
 	}
 	// Terrain default - standard formation around cursor.
 	drawGhostFormation(cursorTarget, fd.Type, fd.Spacing, roster.Count, forward, stance)
+}
+
+// drawGhostAtWindows places ghost cubes at the first N windows of `building`
+// (greedy-first-N, no threat-aware ranking). Phase 17.6 M17.6.9: restored
+// from the pre-M17.6.2 drawGhostInBuilding so the building popup's
+// "Attacking position at windows" item previews the actual Garrison
+// distribution. Returns true if at least one ghost was placed.
+func drawGhostAtWindows(g *ghostContext, building ecs.Entity, count uint8, stance components.Stance) bool {
+	if g.buildingIndex == nil || g.windowMap == nil || g.wallMap == nil {
+		return false
+	}
+	children, ok := g.buildingIndex.Loaded[building]
+	if !ok || len(children) == 0 {
+		return false
+	}
+	placed := uint8(0)
+	for _, ch := range children {
+		if placed >= count {
+			break
+		}
+		if !g.world.Alive(ch) {
+			continue
+		}
+		if g.windowMap.Get(ch) == nil {
+			continue
+		}
+		wall := g.wallMap.Get(ch)
+		wPos := g.posMap.Get(ch)
+		if wall == nil || wPos == nil {
+			continue
+		}
+		offsetAlong := wall.OpeningCenterT * wall.Length
+		dx := offsetAlong * float32(math.Sin(float64(wall.Yaw)))
+		dz := offsetAlong * float32(math.Cos(float64(wall.Yaw)))
+		ghostWP := wPos.Add(rl.Vector3{X: dx, Y: 0, Z: dz})
+		ghostRender := ghostWP.ToRenderSpace(systems.CurrentOriginChunk)
+		drawGhostUnit(ghostRender, stance, ghostBodyAlpha)
+		placed++
+	}
+	return placed > 0
 }
 
 // drawDefendPositionArc draws a wedge-shaped sector indicator at the cursor
@@ -214,53 +284,87 @@ func drawDefendPositionArc(target components.WorldPos, forward rl.Vector3, squad
 	drawGhostArc(center, yaw, halfAngle, length, fill)
 }
 
-// drawGhostInBuilding places ghost cubes at the first N windows of `building`
-// (P8 greedy-first-N). Returns true if at least one ghost was placed - false
-// on missing index / no windows, so caller falls back to standard formation.
+// drawGhostInBuilding places ghost cubes at floor centres of `building`,
+// splitting the roster across storeys (Phase 17.6: matches the new default
+// OccupyBuilding behaviour — "go in and spread by floors", not Garrison's
+// "post at windows"). Returns true if at least one ghost was placed; false
+// on missing index / no floors, so caller falls back to standard formation.
 //
-// Phase 13.6 simplification: no threat-aware ranking (Phase 15 SurvivalInstinct
-// will read window.CoverDirection vs threatDir for real ranking). Window order
-// is whatever `BuildingChildIndex` returns, which is insertion-order from
-// BuildingSystem.spawnBuilding - deterministic per building.
+// Distribution: roster of N units across M floors gets
+// ceil(N/M) units per floor (last floor takes the remainder). Inside one
+// floor, ghosts arrange around the floor centre with a Loose-formation
+// spacing — same FormationOffset the runtime uses, so the preview matches
+// the eventual rest position.
+//
+// Garrison-style window-attached preview is retained as `drawGhostAtWindows`
+// for the popup "Attacking position" item (M17.6.9 popup-hover swap).
 func drawGhostInBuilding(g *ghostContext, building ecs.Entity, count uint8, stance components.Stance) bool {
-	if g.buildingIndex == nil || g.windowMap == nil || g.wallMap == nil {
+	if g.buildingIndex == nil || g.floorMap == nil || count == 0 {
 		return false
 	}
 	children, ok := g.buildingIndex.Loaded[building]
 	if !ok || len(children) == 0 {
 		return false
 	}
-	placed := uint8(0)
+	// Collect Floor children (one entity per storey). Sort by level ascending
+	// so distribution is deterministic across frames and matches the
+	// generator's level numbering.
+	type floorCentre struct {
+		pos   components.WorldPos
+		level uint8
+	}
+	var floors []floorCentre
 	for _, ch := range children {
-		if placed >= count {
-			break
-		}
 		if !g.world.Alive(ch) {
 			continue
 		}
-		// Window walls only - Door walls would dump units on the threshold.
-		if g.windowMap.Get(ch) == nil {
+		f := g.floorMap.Get(ch)
+		if f == nil {
 			continue
 		}
-		wall := g.wallMap.Get(ch)
-		wPos := g.posMap.Get(ch)
-		if wall == nil || wPos == nil {
+		fp := g.posMap.Get(ch)
+		if fp == nil {
 			continue
 		}
-		// Compute opening centre in world space. WallSegment lays the wall
-		// along its local +Z axis rotated by Yaw; opening centre sits at
-		// OpeningCenterT x Length along that axis. WorldPos is the "from"
-		// endpoint, so add (sin(Yaw), cos(Yaw)) x offset to reach the centre.
-		// (Same axis convention as drawBuildingWall in render_world.go.)
-		offsetAlong := wall.OpeningCenterT * wall.Length
-		dx := offsetAlong * float32(math.Sin(float64(wall.Yaw)))
-		dz := offsetAlong * float32(math.Cos(float64(wall.Yaw)))
-		ghostWP := wPos.Add(rl.Vector3{X: dx, Y: 0, Z: dz})
-		ghostRender := ghostWP.ToRenderSpace(systems.CurrentOriginChunk)
-		drawGhostUnit(ghostRender, stance, ghostBodyAlpha)
-		placed++
+		// Floor.WorldPos is the corner; centre = corner + (SizeX/2, 0, SizeZ/2).
+		centre := fp.Add(rl.Vector3{X: f.SizeX * 0.5, Y: 0, Z: f.SizeZ * 0.5})
+		floors = append(floors, floorCentre{pos: centre, level: f.Level})
 	}
-	return placed > 0
+	if len(floors) == 0 {
+		return false
+	}
+	// Insertion sort by level — tiny N (1..5).
+	for i := 1; i < len(floors); i++ {
+		for j := i; j > 0 && floors[j-1].level > floors[j].level; j-- {
+			floors[j-1], floors[j] = floors[j], floors[j-1]
+		}
+	}
+	// Split count across floors: ceil(count/M) per floor, last floor takes
+	// the remainder. ceil(N/M) = (N + M - 1) / M.
+	m := uint8(len(floors))
+	perFloor := (count + m - 1) / m
+	if perFloor == 0 {
+		perFloor = 1
+	}
+	remaining := count
+	const ghostFloorSpacing float32 = 1.6 // Loose-formation typical
+	// Forward vector for FormationOffset — Loose layout is mostly radial, but
+	// FormationOffset still needs a direction. Use +Z (north) as the canonical
+	// fallback; floors are tight enough that orientation barely shows.
+	forward := rl.Vector3{X: 0, Y: 0, Z: 1}
+	for _, fl := range floors {
+		if remaining == 0 {
+			break
+		}
+		take := perFloor
+		if take > remaining {
+			take = remaining
+		}
+		drawGhostFormation(fl.pos, components.FormationLoose,
+			ghostFloorSpacing, take, forward, stance)
+		remaining -= take
+	}
+	return remaining < count
 }
 
 // drawGhostAlongTrench places ghost cubes equal-spaced along the polyline of

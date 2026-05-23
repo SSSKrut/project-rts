@@ -61,6 +61,12 @@ func (sys *WeaponSystem) shouldFire(shooter ecs.Entity, motionSpeed float32,
 					overridesHoldFire = true
 				}
 			}
+			// Phase 17.6 M17.6.6 - per-order EngagementMode override
+			// (Hidden position preset). Swaps Mode only; FireOn* / Sector
+			// remain the standing rules.
+			if override := sys.orderEngagementOverrideMap.Get(head.First); override != nil {
+				rules.Mode = override.Mode
+			}
 		}
 	}
 

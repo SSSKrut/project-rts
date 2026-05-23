@@ -1,11 +1,211 @@
 package main
 
 import (
+	"math"
+
 	rl "github.com/gen2brain/raylib-go/raylib"
+	"github.com/mlange-42/ark/ecs"
 
 	"rts-go/components"
 	"rts-go/systems"
 )
+
+// orderMarkerCtx bundles the per-frame handles drawOrderMarkers3D needs.
+// Built once in main.go (alongside ghostCtx) and reused per frame.
+type orderMarkerCtx struct {
+	world          *ecs.World
+	posMap         *ecs.Map[components.WorldPos]
+	rosterMap      *ecs.Map[components.CommandRoster]
+	squadMemberMap *ecs.Map[components.SquadMember]
+	orderQueueMap  *ecs.Map[components.OrderQueueHead]
+	orderKindMap   *ecs.Map[components.OrderKind]
+	orderTargetMap *ecs.Map[components.OrderTarget]
+	orderChainMap  *ecs.Map[components.OrderChain]
+	orderFacingMap *ecs.Map[components.OrderParamFacing]
+	squadColor     func(ecs.Entity) rl.Color
+}
+
+// drawOrderMarkers3D paints a cube + connector line for every order in the
+// queue of each selected squad. Phase 17.6 M17.6.7: depth-test is disabled so
+// markers are visible through walls / hills — standard RTS convention.
+//
+// Marker shape:
+//   - Active (head) order: 0.5 m solid cube + wire outline at +1.0 alpha
+//   - Queued: 0.35 m cube at +0.5 alpha
+//   - DefendPosition: extra 90° sector arc oriented by OrderParamFacing
+//   - Connector line: squad center → head marker; previous → next for chain
+//
+// Caller must invoke between BeginMode3D and EndMode3D, after the scene's
+// real geometry, so marker depth-disable doesn't bleed into terrain depth.
+func drawOrderMarkers3D(ctx orderMarkerCtx, selected []ecs.Entity) {
+	if len(selected) == 0 || ctx.orderQueueMap == nil {
+		return
+	}
+	// Collect unique squads touched by selection.
+	seen := make(map[ecs.Entity]struct{}, len(selected))
+	// Disable depth test so markers are always visible — standard RTS
+	// convention for command icons (Wargame / Combat Mission). Re-enable
+	// at function exit so subsequent passes (particles, etc.) keep depth.
+	rl.DisableDepthTest()
+	defer rl.EnableDepthTest()
+	for _, e := range selected {
+		sm := ctx.squadMemberMap.Get(e)
+		if sm == nil || sm.Squad == (ecs.Entity{}) {
+			continue
+		}
+		squad := sm.Squad
+		if _, dup := seen[squad]; dup {
+			continue
+		}
+		seen[squad] = struct{}{}
+		if !ctx.world.Alive(squad) {
+			continue
+		}
+		head := ctx.orderQueueMap.Get(squad)
+		if head == nil || head.First == (ecs.Entity{}) {
+			continue
+		}
+		roster := ctx.rosterMap.Get(squad)
+		if roster == nil {
+			continue
+		}
+		center, ok := systems.SquadCenter(ctx.world, roster, ctx.posMap)
+		if !ok {
+			continue
+		}
+		startRender := center.ToRenderSpace(systems.CurrentOriginChunk)
+		startRender.Y += 0.5
+		col := rl.Color{R: 200, G: 220, B: 240, A: 230}
+		if ctx.squadColor != nil {
+			col = ctx.squadColor(squad)
+		}
+		drawOrderChainMarkers(ctx, head.First, startRender, col)
+	}
+}
+
+// drawOrderChainMarkers walks the OrderChain starting at `ord`, drawing each
+// marker + connector. Head marker (the first call) is the "active" style;
+// every subsequent marker is the "queued" style.
+func drawOrderChainMarkers(ctx orderMarkerCtx, ord ecs.Entity, prevRender rl.Vector3, col rl.Color) {
+	active := true
+	cur := ord
+	guard := 0
+	for cur != (ecs.Entity{}) && guard < 16 {
+		guard++
+		if !ctx.world.Alive(cur) {
+			return
+		}
+		target := ctx.orderTargetMap.Get(cur)
+		if target == nil {
+			return
+		}
+		markerRender := target.Pos.ToRenderSpace(systems.CurrentOriginChunk)
+		markerRender.Y += 0.6
+
+		// Connector line previous → current marker. Slight Y offset keeps
+		// the line above ground without intersecting the cube.
+		rl.DrawLine3D(prevRender, markerRender, rl.Color{R: col.R, G: col.G, B: col.B, A: 180})
+
+		// Marker cube + outline. Active style is bigger + brighter.
+		size := float32(0.35)
+		alpha := uint8(140)
+		if active {
+			size = 0.5
+			alpha = 220
+		}
+		cubeCol := rl.Color{R: col.R, G: col.G, B: col.B, A: alpha}
+		rl.DrawCubeV(markerRender, rl.Vector3{X: size, Y: size, Z: size}, cubeCol)
+		rl.DrawCubeWiresV(markerRender, rl.Vector3{X: size, Y: size, Z: size},
+			rl.Color{R: col.R, G: col.G, B: col.B, A: 240})
+
+		// DefendPosition arc: orient via OrderParamFacing if present.
+		if kind := ctx.orderKindMap.Get(cur); kind != nil && kind.Code == components.OrderKindDefendPosition {
+			yaw := float32(0)
+			if facing := ctx.orderFacingMap.Get(cur); facing != nil {
+				yaw = facing.YawRad
+			}
+			arcCol := rl.Color{R: col.R, G: col.G, B: col.B, A: 80}
+			drawGhostArc(markerRender, yaw, math.Pi/4, 8, arcCol)
+		}
+
+		prevRender = markerRender
+		active = false
+		if ch := ctx.orderChainMap.Get(cur); ch != nil {
+			cur = ch.Next
+		} else {
+			cur = ecs.Entity{}
+		}
+	}
+}
+
+// aabbToRenderBox converts a world-space AABB3D into a render-space
+// rl.BoundingBox using the current origin chunk. Phase 17.6 M17.6.8:
+// shared by ray-vs-floor pick + per-level outline draw so both use the
+// same coordinate frame.
+func aabbToRenderBox(aabb components.AABB3D) rl.BoundingBox {
+	offX := float32(systems.CurrentOriginChunk.X) * components.ChunkSize
+	offZ := float32(systems.CurrentOriginChunk.Z) * components.ChunkSize
+	return rl.BoundingBox{
+		Min: rl.Vector3{X: aabb.MinX - offX, Y: aabb.MinY, Z: aabb.MinZ - offZ},
+		Max: rl.Vector3{X: aabb.MaxX - offX, Y: aabb.MaxY, Z: aabb.MaxZ - offZ},
+	}
+}
+
+// drawLevelOutline paints a wire-box around `lvl.AABB` in `color`. Phase
+// 17.6 M17.6.8: per-floor highlight when the cursor's ray hits a specific
+// storey of a building. Caller invokes inside BeginMode3D.
+func drawLevelOutline(lvl *components.Level, color rl.Color) {
+	if lvl == nil {
+		return
+	}
+	const pad float32 = 0.10
+	box := aabbToRenderBox(lvl.AABB)
+	cx := (box.Min.X + box.Max.X) * 0.5
+	cy := (box.Min.Y + box.Max.Y) * 0.5
+	cz := (box.Min.Z + box.Max.Z) * 0.5
+	sx := (box.Max.X - box.Min.X) + 2*pad
+	sy := (box.Max.Y - box.Min.Y) + 2*pad
+	sz := (box.Max.Z - box.Min.Z) + 2*pad
+	rl.DrawCubeWires(rl.Vector3{X: cx, Y: cy, Z: cz}, sx, sy, sz, color)
+}
+
+// pickLevelUnderRay finds the topmost Level entity of `building` that the
+// ray hits — "topmost" by closest hit distance (ray nearest-first). Returns
+// (entity, true) on hit; (zero, false) if the building has no levels or
+// the ray misses all level boxes. Phase 17.6 M17.6.8: routes the floor
+// outline + future popup defaults at the level the cursor is visually on.
+func pickLevelUnderRay(
+	ray rl.Ray,
+	building ecs.Entity,
+	planIndex *systems.BuildingPlanIndex,
+	levelMap *ecs.Map[components.Level],
+) (ecs.Entity, bool) {
+	if planIndex == nil || levelMap == nil || building == (ecs.Entity{}) {
+		return ecs.Entity{}, false
+	}
+	levels := planIndex.Levels[building]
+	if len(levels) == 0 {
+		return ecs.Entity{}, false
+	}
+	var best ecs.Entity
+	bestDist := float32(math.MaxFloat32)
+	for _, l := range levels {
+		lvl := levelMap.Get(l)
+		if lvl == nil {
+			continue
+		}
+		box := aabbToRenderBox(lvl.AABB)
+		col := rl.GetRayCollisionBox(ray, box)
+		if !col.Hit {
+			continue
+		}
+		if col.Distance < bestDist {
+			bestDist = col.Distance
+			best = l
+		}
+	}
+	return best, best != (ecs.Entity{})
+}
 
 // drawNavPath renders the path from the anchor through every remaining
 // waypoint. Empty/nil paths render nothing. Lifted slightly so the line is

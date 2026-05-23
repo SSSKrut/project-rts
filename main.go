@@ -627,6 +627,7 @@ func main() {
 	// spaced along the polyline.
 	ghostWallMap := ecs.NewMap[components.WallSegment](app.World)
 	ghostWindowMap := ecs.NewMap[components.Window](app.World)
+	ghostFloorMap := ecs.NewMap[components.Floor](app.World)
 	ghostCtx := &ghostContext{
 		world:            app.World,
 		posMap:           posMap,
@@ -639,9 +640,25 @@ func main() {
 		buildingIndex:    &buildingIndex,
 		wallMap:          ghostWallMap,
 		windowMap:        ghostWindowMap,
+		floorMap:         ghostFloorMap,
 		trenches:         &trenches,
 		trenchRootMap:    trenchRootMap,
 		squadColor:       squadColor,
+	}
+
+	// Phase 17.6 M17.6.7: 3D order-marker context — handles drawOrderMarkers3D
+	// needs to walk OrderQueueHead + OrderChain for every selected squad.
+	orderMarkerRenderCtx := orderMarkerCtx{
+		world:          app.World,
+		posMap:         posMap,
+		rosterMap:      rosterMap,
+		squadMemberMap: squadMemberMap,
+		orderQueueMap:  orderQueueMap,
+		orderKindMap:   orderKindMap,
+		orderTargetMap: orderTargetMap,
+		orderChainMap:  orderChainMap,
+		orderFacingMap: ecs.NewMap[components.OrderParamFacing](app.World),
+		squadColor:     squadColor,
 	}
 
 	// Phase 14.5 M14.5.4: ParticleRenderCtx - handles for drawParticles.
@@ -678,19 +695,27 @@ func main() {
 	mapCam := ui.NewMapCamera()
 	var mapPanning bool
 	var mapPanCursor rl.Vector2
-	var pieMenu ui.PieMenu
-	// Phase 13 M13.5: RMB modifier capture. Ctrl+RMB / Double-RMB / Alt+RMB
-	// set the order's MovementProfile override (Stealth / Sprint) or attach
-	// the AttackMove flag. We snapshot the modifier state at press-time so a
-	// release after the player lets go of Ctrl still applies the intended
-	// override.
-	var (
-		rmbPressCtrl           bool
-		rmbPressAlt            bool
-		rmbPressDouble         bool
-		rmbPressTargetIsBuilding bool
-		lastRMBPressAt float32 // session-time of the previous press
-	)
+	// Phase 17.6 M17.6.4: ContextMenu replaces PieMenu for object-specific
+	// popups. PieMenu type still exists in ui/pie_menu.go for future radial
+	// revivals but is no longer driven from this flow.
+	var ctxMenu ui.ContextMenu
+	// rmbState bundles the per-frame state of an RMB-hold session. Replaces
+	// pieMenu fields. Active is set on press, cleared on release.
+	// PressOrigin / PressTarget capture press-time anchors so release
+	// commits don't drift with the cursor.
+	var rmbState struct {
+		Active       bool
+		SourcePanel  ui.PanelID
+		PressOrigin  rl.Vector2
+		PressTarget  components.WorldPos
+		PressTimeSec float32 // session-time at press
+		HoveredBldg  ecs.Entity
+		HasSelection bool
+		FacingActive bool // > 8 px drag committed to facing-drag
+		Ctrl, Alt    bool
+		Double       bool
+	}
+	var lastRMBPressAt float32 // session-time of the previous press
 	// Window for treating consecutive RMB presses as a double-click. PHASE-13.md
 	// заметка про Double-RMB: 300 ms is empirical - wide enough for relaxed
 	// chains, narrow enough that two deliberate sequential clicks don't fuse.
@@ -717,8 +742,9 @@ func main() {
 		navPath          []components.WorldPos
 		selected         []ecs.Entity
 		hovered          ecs.Entity
-		hoveredBuilding  ecs.Entity                  // Phase 16.C.1
-		selectedBuilding ecs.Entity                  // Phase 16.C.1 - sticky
+		hoveredBuilding  ecs.Entity // Phase 16.C.1
+		hoveredLevel     ecs.Entity // Phase 17.6 M17.6.8 — level under ray
+		selectedBuilding ecs.Entity // Phase 16.C.1 - sticky
 		buildingWidget   *ui.BuildingWidgetLayout    // Phase 16.C.1 (per frame)
 		marqueeStart     rl.Vector2                  // screen coords
 		marqueeActive    bool
@@ -1407,14 +1433,18 @@ func main() {
 			marqueeActive = false
 		}
 
-		// -- RMB orders (3D or map). Two paths:
-		//   - Tap: PieMenu stays inactive, hit-test resolver runs at release.
-		//   - Hold > 200 ms: PieMenu activates, sweep cursor for kind, commit
-		//     on release. Kind override overrides hit-test mapping.
-		// Note: PieMenu suppresses OrbitSystem's RMB-orbit because it captures
-		// the press inside Panel3D too - fine, the camera doesn't spin during
-		// the menu interaction. After menu release, RMB is no longer held and
-		// the orbit doesn't catch the trailing frame either.
+		// -- RMB orders (Phase 17.6 rewrite). Flow:
+		//   - Press: snapshot target / modifiers / hovered building. Start
+		//     an RMB session (rmbState.Active = true).
+		//   - While held + no popup + no facing-drag:
+		//       drag > 8 px → facing-drag mode (yaw from cursor delta).
+		//       hold >= 200 ms over a building → open ContextMenu popup.
+		//   - Release:
+		//       popup active → commit hovered item (or cancel).
+		//       facing-drag active → commit order with arrived-facing yaw.
+		//       neither → tap commit (default hit-test action).
+		//   - ESC closes the popup at any time.
+		// Camera (MMB) is independent — no orbit-suppression needed.
 		if rl.IsMouseButtonPressed(rl.MouseButtonRight) && !floating.IsBusy(cursor) {
 			var (
 				pressTarget components.WorldPos
@@ -1425,12 +1455,11 @@ func main() {
 				pressTarget, targetOK = mouseTargetWorldPos(systems.CurrentCamera,
 					anchorPos.ToRenderSpace(systems.CurrentOriginChunk),
 					panel3DLocal, panel3DW, panel3DH)
-				// Phase 16.B.1.b UX: if the cursor is hovering a building,
-				// the ground-raycast can land just outside the wall (camera
-				// angle). Snap target to that building's ground-floor Level
-				// centre so the path planner resolves to NodeLevel and
-				// routes through the door instead of bumping the wall.
-				rmbPressTargetIsBuilding = false
+				// Phase 16.B.1.b / 17.6 UX: cursor visually over a building
+				// but raycast lands just outside the footprint → snap target
+				// to the ground-floor centre so hit-test classifies as
+				// HitBuilding (Footprint.Contains succeeds) → OccupyBuilding
+				// resolves through the nearest door.
 				if targetOK && hoveredBuilding != (ecs.Entity{}) {
 					if levels := buildingPlanIndex.Levels[hoveredBuilding]; len(levels) > 0 {
 						if lvl := levelMap.Get(levels[0]); lvl != nil {
@@ -1446,7 +1475,6 @@ func main() {
 									Z: wz - float32(cz)*components.ChunkSize,
 								},
 							}
-							rmbPressTargetIsBuilding = true
 						}
 					}
 				}
@@ -1455,106 +1483,115 @@ func main() {
 				targetOK = true
 			}
 			if targetOK && len(selected) > 0 && (focused == ui.Panel3D || focused == ui.PanelMap) {
-				// Phase 13 M13.5: snapshot modifiers + double-click decision
-				// at the moment of press. Held key state may change before the
-				// release that commits the order, so we lock it now.
 				now := float32(app.Elapsed().Seconds())
-				rmbPressCtrl = ctrlHeld
-				rmbPressAlt = altHeld
-				rmbPressDouble = (now - lastRMBPressAt) <= rmbDoubleWindow
+				rmbState.Active = true
+				rmbState.SourcePanel = focused
+				rmbState.PressOrigin = cursor
+				rmbState.PressTarget = pressTarget
+				rmbState.PressTimeSec = now
+				rmbState.HoveredBldg = hoveredBuilding
+				rmbState.HasSelection = true
+				rmbState.FacingActive = false
+				rmbState.Ctrl = ctrlHeld
+				rmbState.Alt = altHeld
+				rmbState.Double = (now - lastRMBPressAt) <= rmbDoubleWindow
 				lastRMBPressAt = now
-				fmt.Printf("[rmb] press snapped=%v hovered=%v target=(%.1f,%.1f) selected=%d focused=%s\n",
-					rmbPressTargetIsBuilding,
+				fmt.Printf("[rmb] press hovered=%v target=(%.1f,%.1f) selected=%d focused=%s\n",
 					hoveredBuilding != (ecs.Entity{}),
 					pressTarget.Local.X+float32(pressTarget.Chunk.X)*components.ChunkSize,
 					pressTarget.Local.Z+float32(pressTarget.Chunk.Z)*components.ChunkSize,
 					len(selected), focused)
-				// Phase 13.6 M13.6.4: capture selection state at press-time so
-				// Tick can disambiguate facing-drag (squad selected) from
-				// camera-orbit drag (no selection).
-				pieMenu.Begin(cursor, pressTarget, focused, len(selected) > 0)
 			}
 		}
 
-		// While RMB is held the menu may activate, get drag-cancelled, or
-		// commit on release. Tick returns one of three outcomes; only commit
-		// and tap issue orders.
-		if pieMenu.SourcePanel != ui.PanelNone {
+		// While RMB session is active, decide between facing-drag and
+		// popup-open. Popup, once opened, persists until release / ESC.
+		if rmbState.Active {
 			rmbDown := rl.IsMouseButtonDown(rl.MouseButtonRight)
 			rmbReleased := rl.IsMouseButtonReleased(rl.MouseButtonRight)
-			res := pieMenu.Tick(cursor, rmbDown, rmbReleased)
-			switch {
-			case res.ReleasedAsCommit:
-				k := res.Kind
-				mods := rmbModifiersFromPress(rmbPressCtrl, rmbPressAlt, rmbPressDouble)
-				params := applyModifiersToParams(systems.OrderParams{}, mods)
-				// Phase 13.6 M13.6.5: DefendPosition pie commit attaches the
-				// hover-derived facing (squad center -> press target) so the
-				// arrived sector matches the ghost-arc the player just saw.
-				// Other kinds keep no facing - Phase 14 may add Garrison/
-				// OccupyTrench facing once cover-slot orientation is wired.
-				if k == components.OrderKindDefendPosition {
-					if yaw, ok := facingFromSquadToTarget(ghostCtx, selected, pieMenu.Target); ok {
-						params.HasFacing = true
-						params.FacingYawRad = yaw
+
+			// While held, no popup yet, no facing yet — check both triggers.
+			if rmbDown && !ctxMenu.IsActive() && !rmbState.FacingActive {
+				dx := cursor.X - rmbState.PressOrigin.X
+				dy := cursor.Y - rmbState.PressOrigin.Y
+				if dx*dx+dy*dy > 8*8 {
+					rmbState.FacingActive = true
+				} else {
+					now := float32(app.Elapsed().Seconds())
+					if (now-rmbState.PressTimeSec) >= 0.200 &&
+						rmbState.HoveredBldg != (ecs.Entity{}) &&
+						rmbState.SourcePanel == ui.Panel3D {
+						sections := buildBuildingPopupSections(rmbState.HoveredBldg, &buildingPlanIndex, levelMap)
+						ctxMenu.Begin(cursor, sections, rmbState.SourcePanel, panel3DContent)
 					}
 				}
-				resolveRMBOrderWithParams(selected, pieMenu.Target, shiftHeld, &k, params, hitTester,
-					squadService, navService, squadMemberMap, posMap, actionQueueMap)
-				pieMenu.SourcePanel = ui.PanelNone
-			case res.ReleasedAsTap:
-				// Phase 15 M15.B.1 - Shift+RMB on a subset of a squad places
-				// IndividualPosition on each selected member instead of
-				// appending a squad-wide waypoint. Whole-squad / multi-squad /
-				// soloist selections keep the existing append path.
-				placed := false
-				if shiftHeld {
-					if _, ok := detectSubsetOfSquad(selected, squadMemberMap, rosterMap); ok {
-						placeIndividualPositions(app.World, selected, pieMenu.Target,
-							individualPosMap, float32(app.Elapsed().Seconds()))
-						placed = true
+			}
+
+			// Popup-active path: read LMB / ESC. RMB release also commits
+			// the hovered item in single-gesture style.
+			if ctxMenu.IsActive() {
+				escPressed := rl.IsKeyPressed(rl.KeyEscape)
+				lmbPressedForMenu := rl.IsMouseButtonPressed(rl.MouseButtonLeft)
+				res := ctxMenu.Tick(cursor, lmbPressedForMenu, escPressed)
+				switch {
+				case rmbReleased && ctxMenu.IsActive():
+					// Single-gesture release: commit hovered item if any.
+					if item, ok := ctxMenu.HoveredItemDetails(); ok && item.Enabled {
+						ctxMenu.Reset()
+						issueBuildingPopupOrder(selected, item, rmbState.HoveredBldg,
+							rmbState.PressTarget, shiftHeld,
+							squadService, navService, squadMemberMap, posMap, actionQueueMap, levelMap)
+					} else {
+						ctxMenu.Reset()
 					}
+				case res.Committed:
+					issueBuildingPopupOrder(selected, res.Item, rmbState.HoveredBldg,
+						rmbState.PressTarget, shiftHeld,
+						squadService, navService, squadMemberMap, posMap, actionQueueMap, levelMap)
 				}
-				if !placed {
-					mods := rmbModifiersFromPress(rmbPressCtrl, rmbPressAlt, rmbPressDouble)
-					var kindOverride *components.OrderKindCode
-					if rmbPressTargetIsBuilding {
-						// Phase 16.B.1.b UX: RMB-snapped-to-building target
-						// means "move inside through the door", not Garrison
-						// (which is the default hit-test interpretation for
-						// any pos inside footprint). Force MoveTo.
-						k := components.OrderKindMoveTo
-						kindOverride = &k
-					}
-					overrideStr := "nil"
-					if kindOverride != nil {
-						overrideStr = fmt.Sprintf("%d", *kindOverride)
-					}
-					fmt.Printf("[rmb] tap commit override=%s target=(%.1f,%.1f) selected=%d\n",
-						overrideStr,
-						pieMenu.Target.Local.X+float32(pieMenu.Target.Chunk.X)*components.ChunkSize,
-						pieMenu.Target.Local.Z+float32(pieMenu.Target.Chunk.Z)*components.ChunkSize,
-						len(selected))
-					resolveRMBOrder(selected, pieMenu.Target, shiftHeld, kindOverride, mods, hitTester,
+				// res.Cancelled or still-active — nothing else to do.
+			}
+
+			// Release handling for paths that don't involve popup.
+			if rmbReleased && !ctxMenu.IsActive() {
+				switch {
+				case rmbState.FacingActive:
+					dx := cursor.X - rmbState.PressOrigin.X
+					dy := cursor.Y - rmbState.PressOrigin.Y
+					yaw := float32(math.Atan2(float64(dx), float64(-dy)))
+					mods := rmbModifiersFromPress(rmbState.Ctrl, rmbState.Alt, rmbState.Double)
+					params := applyModifiersToParams(systems.OrderParams{
+						HasFacing:    true,
+						FacingYawRad: yaw,
+					}, mods)
+					resolveRMBOrderWithParams(selected, rmbState.PressTarget, shiftHeld, nil, params, hitTester,
 						squadService, navService, squadMemberMap, posMap, actionQueueMap)
+				default:
+					// Tap commit. Shift+RMB on subset → IndividualPosition path.
+					placed := false
+					if shiftHeld {
+						if _, ok := detectSubsetOfSquad(selected, squadMemberMap, rosterMap); ok {
+							placeIndividualPositions(app.World, selected, rmbState.PressTarget,
+								individualPosMap, float32(app.Elapsed().Seconds()))
+							placed = true
+						}
+					}
+					if !placed {
+						mods := rmbModifiersFromPress(rmbState.Ctrl, rmbState.Alt, rmbState.Double)
+						fmt.Printf("[rmb] tap commit target=(%.1f,%.1f) selected=%d\n",
+							rmbState.PressTarget.Local.X+float32(rmbState.PressTarget.Chunk.X)*components.ChunkSize,
+							rmbState.PressTarget.Local.Z+float32(rmbState.PressTarget.Chunk.Z)*components.ChunkSize,
+							len(selected))
+						resolveRMBOrder(selected, rmbState.PressTarget, shiftHeld, nil, mods, hitTester,
+							squadService, navService, squadMemberMap, posMap, actionQueueMap)
+					}
 				}
-				pieMenu.SourcePanel = ui.PanelNone
-			case res.ReleasedAsFacingDrag:
-				// Phase 13.6 M13.6.4: facing-drag commit. Default order kind
-				// from hit-test (MoveTo / Garrison / OccupyTrench); facing yaw
-				// attaches via OrderParams.HasFacing. UnitMovement-side reads
-				// it through OrderResolverSystem.applyArrivedFacing on order
-				// completion.
-				mods := rmbModifiersFromPress(rmbPressCtrl, rmbPressAlt, rmbPressDouble)
-				params := applyModifiersToParams(systems.OrderParams{
-					HasFacing:    true,
-					FacingYawRad: res.FacingYaw,
-				}, mods)
-				resolveRMBOrderWithParams(selected, pieMenu.Target, shiftHeld, nil, params, hitTester,
-					squadService, navService, squadMemberMap, posMap, actionQueueMap)
-				pieMenu.SourcePanel = ui.PanelNone
-			case res.Cancelled, res.ReleasedAsDrag:
-				pieMenu.SourcePanel = ui.PanelNone
+			}
+
+			// Close session on release regardless of outcome.
+			if rmbReleased {
+				rmbState.Active = false
+				rmbState.FacingActive = false
 			}
 		}
 
@@ -1824,6 +1861,7 @@ func main() {
 		// Building.Footprint surfaces that building as hoverable. Used both
 		// to gate the chip widget and to claim LMB clicks on it.
 		hoveredBuilding = ecs.Entity{}
+		hoveredLevel = ecs.Entity{}
 		if focused == ui.Panel3D && ghostTargetOK {
 			gtX := ghostTarget.Local.X + float32(ghostTarget.Chunk.X)*components.ChunkSize
 			gtZ := ghostTarget.Local.Z + float32(ghostTarget.Chunk.Z)*components.ChunkSize
@@ -1834,6 +1872,16 @@ func main() {
 					hoveredBuilding = qbf.Entity()
 					qbf.Close()
 					break
+				}
+			}
+			// Phase 17.6 M17.6.8 — narrow the outline to the storey the
+			// cursor's ray actually pierces. Falls back to whole-building
+			// outline if no Level box catches the ray (ray near floor
+			// plane, multi-floor building viewed from above, etc.).
+			if hoveredBuilding != (ecs.Entity{}) {
+				ray := rl.GetScreenToWorldRayEx(panel3DLocal, systems.CurrentCamera, panel3DW, panel3DH)
+				if lvl, ok := pickLevelUnderRay(ray, hoveredBuilding, &buildingPlanIndex, levelMap); ok {
+					hoveredLevel = lvl
 				}
 			}
 		}
@@ -1881,14 +1929,14 @@ func main() {
 		}
 
 		// Gate the 3D camera's orbit / wheel zoom by panel focus. Wheel events
-		// when the map panel is focused belong to the map's own zoom; RMB held
-		// while drawing a map marquee shouldn't spin the field camera. Also
-		// suppress while pie menu is active so the camera doesn't drift as the
-		// player sweeps cursor to pick a segment, and while a floating panel
-		// owns the cursor (so wheel-zoom of the formation editor doesn't also
-		// dolly the field camera underneath).
+		// when the map panel is focused belong to the map's own zoom; MMB held
+		// inside the map panel should pan the map, not spin the field camera.
+		// Also suppress while a floating panel owns the cursor (so wheel-zoom
+		// of the formation editor doesn't also dolly the field camera
+		// underneath). Phase 17.6: orbit moved to MMB so RMB is free for order
+		// popups - pieMenu suppressors removed since pie no longer captures
+		// RMB anyway (it'll be torn out of the RMB flow in M17.6.4).
 		systems.OrbitInputEnabled = (focused == ui.Panel3D || focused == ui.PanelNone) &&
-			!pieMenu.IsActive() && pieMenu.SourcePanel == ui.PanelNone &&
 			!floating.IsBusy(cursor)
 
 		app.Tick(dtReal)
@@ -2100,7 +2148,18 @@ func main() {
 			rl.DrawCubeWires(rp, sizeX, height, sizeZ, color)
 		}
 		if hoveredBuilding != (ecs.Entity{}) && hoveredBuilding != selectedBuilding {
-			drawBuildingOutline(hoveredBuilding, rl.Color{R: 255, G: 220, B: 60, A: 200})
+			yellow := rl.Color{R: 255, G: 220, B: 60, A: 200}
+			// Phase 17.6 M17.6.8 — outline the storey under the ray if we
+			// have one; otherwise fall back to the whole-building wireframe.
+			if hoveredLevel != (ecs.Entity{}) {
+				if lvl := levelMap.Get(hoveredLevel); lvl != nil {
+					drawLevelOutline(lvl, yellow)
+				} else {
+					drawBuildingOutline(hoveredBuilding, yellow)
+				}
+			} else {
+				drawBuildingOutline(hoveredBuilding, yellow)
+			}
 		}
 		if selectedBuilding != (ecs.Entity{}) {
 			drawBuildingOutline(selectedBuilding, rl.Color{R: 90, G: 200, B: 240, A: 230})
@@ -2280,34 +2339,43 @@ func main() {
 		// drag-derived yaw so the orientation preview is honest about what
 		// release will commit to.
 		var ghostDragFacing *float32
-		if pieMenu.InFacingDrag {
-			// Recompute the current yaw - pieMenu.Tick only writes FacingYaw
-			// on release. We mirror the same screen-space formula here so the
-			// preview matches the eventual commit value exactly.
-			dx := cursor.X - pieMenu.Origin.X
-			dy := cursor.Y - pieMenu.Origin.Y
+		if rmbState.Active && rmbState.FacingActive {
+			// Recompute the current yaw — release commits the same screen-space
+			// formula. Pin the ghost to press-time target so the formation
+			// orientation rotates around a stable anchor while dragging.
+			dx := cursor.X - rmbState.PressOrigin.X
+			dy := cursor.Y - rmbState.PressOrigin.Y
 			yaw := float32(math.Atan2(float64(dx), float64(-dy)))
 			ghostDragFacing = &yaw
-			// Pin the ghost to the cursor's press-time target while dragging
-			// so the formation orientation rotates around a stable anchor.
-			ghostTarget = pieMenu.Target
+			ghostTarget = rmbState.PressTarget
 			ghostTargetOK = true
 		}
-		// Phase 13.6 M13.6.5: when the pie menu is open and the cursor is
-		// hovering a segment, expose the kind to ghost rendering so it can
-		// preview the segment-specific visualisation (DefendPosition arc,
-		// future Patrol waypoint chain, etc.).
-		var ghostPieHover *components.OrderKindCode
-		if pieMenu.IsActive() && pieMenu.HoveringValid {
-			k := pieMenu.HoveringKind
-			ghostPieHover = &k
-			// Anchor the ghost at the press-time target while the menu is open
-			// - the player is choosing a kind for that point, not for whatever
-			// is under the cursor now (cursor lives on the segment ring).
-			ghostTarget = pieMenu.Target
+		// Phase 17.6 M17.6.4: when ContextMenu is open and hovering an item,
+		// expose the kind so the ghost render swaps preview placement (Garrison
+		// = at-windows, OccupyBuilding = by-floors, etc — full per-kind swap is
+		// M17.6.9).
+		var ghostPopupKind *components.OrderKindCode
+		var ghostPopupLevel ecs.Entity
+		if ctxMenu.IsActive() {
+			if item, ok := ctxMenu.HoveredItemDetails(); ok {
+				k := item.Kind
+				ghostPopupKind = &k
+				ghostPopupLevel = item.LevelEntity
+			}
+			// Anchor at press-time target while the popup is open — player
+			// is choosing for that point, not for whatever's under the cursor
+			// (which is on a menu item).
+			ghostTarget = rmbState.PressTarget
 			ghostTargetOK = true
 		}
-		drawSelectionGhost(ghostCtx, selected, focused == ui.Panel3D, ghostTarget, ghostTargetOK, ghostDragFacing, ghostPieHover)
+		drawSelectionGhost(ghostCtx, selected, focused == ui.Panel3D, ghostTarget, ghostTargetOK,
+			ghostDragFacing, ghostPopupKind, ghostPopupLevel, levelMap)
+
+		// Phase 17.6 M17.6.7: 3D order markers for every selected squad —
+		// cube + connector lines per Order. Depth-test disabled so markers
+		// stay visible through walls. Drawn after ghost so the active head
+		// marker sits on top of any overlapping ghost dot.
+		drawOrderMarkers3D(orderMarkerRenderCtx, selected)
 
 		// Phase 14.5 M14.5.4: ECS-particle render walks the Particle filter.
 		// Per-kind dispatch (tracer line / impact sphere / smoke / dust /
@@ -2506,9 +2574,11 @@ func main() {
 		// floater's chrome.
 		floating.DrawSwitchMenu(hudFont, cursor)
 
-		// Pie menu (RMB-hold overlay, M11.6). Drawn after chrome so it sits
-		// above every panel.
-		pieMenu.Draw(hudFont, cursor)
+		// Phase 17.6 M17.6.4: context menu (RMB-hold-on-building popup).
+		// Drawn after chrome + switch menu so it sits above every panel.
+		// Pie menu (legacy) is no longer in the RMB flow but kept in
+		// ui/pie_menu.go for future radial revivals.
+		ctxMenu.Draw(hudFont, cursor)
 
 		// HUD hotkey hints moved into expanded profiler HUD (toggle with P).
 		// Phase 10: drawing them over the panel chrome on every frame conflicts
@@ -2807,14 +2877,16 @@ func buildTimelineData(
 func estimateOrderDuration(kind components.OrderKindCode, from, to components.WorldPos) float32 {
 	var moveTime float32
 	switch kind {
-	case components.OrderKindMoveTo, components.OrderKindGarrison, components.OrderKindOccupyTrench:
+	case components.OrderKindMoveTo, components.OrderKindGarrison,
+		components.OrderKindOccupyBuilding, components.OrderKindClearBuilding,
+		components.OrderKindOccupyTrench:
 		moveTime = components.Distance(from, to) / ui.TimelineMoveSpeedMps
 	}
 	var est float32
 	switch kind {
 	case components.OrderKindMoveTo:
 		est = moveTime
-	case components.OrderKindGarrison:
+	case components.OrderKindGarrison, components.OrderKindOccupyBuilding, components.OrderKindClearBuilding:
 		est = moveTime + ui.TimelineGarrisonDurationSec
 	case components.OrderKindOccupyTrench:
 		est = moveTime + ui.TimelineDefendDurationSec

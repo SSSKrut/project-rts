@@ -216,13 +216,14 @@ func (s *Stamper) cutAlongPolyline(cc components.ChunkCoord, polyline []componen
 	}
 }
 
-// RectCut blends the chunk's heightmap toward a flat target plate inside an
-// AABB footprint, with a cosine-falloff skirt of falloffWidth metres outside
-// the footprint blending back to the original. Used to sink bunker pads into
-// the surface. targetY is referenceY - depth where referenceY is the procgen
-// surface at the footprint centre - gives a flat floor regardless of natural
-// slope under the building. Does NOT set Modified.
-func (s *Stamper) RectCut(cc components.ChunkCoord, footprint components.AABB2D, depth, falloffWidth float32) {
+// LevelTo flattens the chunk's heightmap to `targetY` inside the footprint
+// and cosine-blends back to the natural terrain over `falloffWidth` metres
+// outside. Does NOT set Modified — pristine chunks re-apply on respawn.
+//
+// Phase 17.6 follow-up: surface buildings call this with their root WorldPos.Y
+// as targetY so door thresholds are flush with the leveled plate. Bunker
+// pads delegate through RectCut which computes targetY = surface − depth.
+func (s *Stamper) LevelTo(cc components.ChunkCoord, footprint components.AABB2D, targetY, falloffWidth float32) {
 	if falloffWidth < 0 {
 		falloffWidth = 0
 	}
@@ -242,8 +243,6 @@ func (s *Stamper) RectCut(cc components.ChunkCoord, footprint components.AABB2D,
 	step := components.ChunkSize / float32(components.ChunkResolution-1)
 	baseX := float32(cc.X) * components.ChunkSize
 	baseZ := float32(cc.Z) * components.ChunkSize
-	referenceY := GroundHeight(footprint.CenterX(), footprint.CenterZ())
-	targetY := referenceY - depth
 
 	touched := false
 	for j := 0; j < components.ChunkResolution; j++ {
@@ -270,6 +269,15 @@ func (s *Stamper) RectCut(cc components.ChunkCoord, footprint components.AABB2D,
 	if touched && !s.meshDirtyMap.Has(ent) {
 		s.meshDirtyMap.Add(ent, &components.MeshDirty{})
 	}
+}
+
+// RectCut sinks a bunker pad into the surface — flat plate at
+// (surface_at_centre − depth) inside the footprint, cosine-falloff skirt
+// outside. Wraps LevelTo with the bunker-specific targetY derivation.
+// Does NOT set Modified.
+func (s *Stamper) RectCut(cc components.ChunkCoord, footprint components.AABB2D, depth, falloffWidth float32) {
+	referenceY := GroundHeight(footprint.CenterX(), footprint.CenterZ())
+	s.LevelTo(cc, footprint, referenceY-depth, falloffWidth)
 }
 
 // RoadFlatten blends the chunk's heightmap toward a linear road profile

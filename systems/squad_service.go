@@ -64,6 +64,9 @@ type SquadService struct {
 	orderAttackMoveMap *ecs.Map[components.OrderParamAttackMove]
 	// Phase 14 M14.4: optional Suppress params on SuppressFire orders.
 	orderSuppressMap *ecs.Map[components.OrderParamSuppress]
+	// Phase 17.6 M17.6.6: per-order EngagementMode override (Hidden position
+	// = HoldFire, attaches via OrderParams.EngagementOverride).
+	orderEngagementOverrideMap *ecs.Map[components.OrderParamEngagementOverride]
 	// Phase 14.5 M14.5.0: Issue #10 out-of-range tracker for AttackTarget.
 	orderOutOfRangeMap *ecs.Map[components.OrderOutOfRangeTracker]
 	// Phase 14 M14.1: Faction handle. CreateFromTemplate stamps each spawned
@@ -115,7 +118,8 @@ func NewSquadService(w *ecs.World) *SquadService {
 		behaviorRulesMap:         ecs.NewMap[components.BehaviorRules](w),
 		orderMovementOverrideMap: ecs.NewMap[components.OrderParamMovementProfile](w),
 		orderAttackMoveMap:       ecs.NewMap[components.OrderParamAttackMove](w),
-		orderSuppressMap:         ecs.NewMap[components.OrderParamSuppress](w),
+		orderSuppressMap:           ecs.NewMap[components.OrderParamSuppress](w),
+		orderEngagementOverrideMap: ecs.NewMap[components.OrderParamEngagementOverride](w),
 		orderOutOfRangeMap:       ecs.NewMap[components.OrderOutOfRangeTracker](w),
 		factionMap:               ecs.NewMap[components.Faction](w),
 		tacticalOverrideMap:      ecs.NewMap[components.TacticalOverride](w),
