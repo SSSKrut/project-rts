@@ -1,40 +1,10 @@
-// Particle sandbox - standalone visual harness for ParticleSystem.
+// Particle sandbox - standalone visual harness for ParticleSystem. Boots in
+// <1 s with a flat ground plane + the same ParticleSystem +
+// SpawnParticleHandles the real game uses, so tracer fades / debris arcs can
+// be eyeballed without spinning up terrain / units / squads.
 //
-// Build & run:
-//
-//	go build -o /tmp/particle_sandbox ./cmd/particle_sandbox && /tmp/particle_sandbox
-//	# or:
-//	go run ./cmd/particle_sandbox
-//
-// Controls:
-//
-//	1..6      - spawn N particles of kind {Tracer, Impact, MuzzleFlash, Smoke, Dust, Debris}
-//	Space     - fire all six kinds at once (firefight-style burst)
-//	A         - toggle auto-emit (continuous burst every 0.15 s)
-//	R         - reset (despawn every live particle)
-//	Mouse RMB - orbit camera; wheel - zoom
-//	Esc       - quit
-//
-// Purpose. The full game scene needs terrain / units / squads / orders to
-// even start; that's three minutes of compile-then-load every time you
-// want to eyeball a tracer fade or check that debris cubes fall sensibly.
-// This sandbox boots in <1 second with nothing but a flat ground plane +
-// the same `ParticleSystem` + `SpawnParticleHandles` the real game uses.
-//
-// What it validates:
-//   - Per-kind render dispatch in `render_world.drawParticles` (tracer
-//     line, impact sphere, muzzle-flash sphere, smoke sphere, dust
-//     sphere, debris cube). Sandbox re-implements draw inline so this
-//     file owns zero render-side code from the game proper.
-//   - `ParticleSystem.Update` lifecycle: aging, velocity integration,
-//     per-kind gravity (smoke rises, debris falls, dust settles), TTL
-//     expiry, soft-cap eviction.
-//   - `SpawnParticleHandles` writers: tracer with end-point, impact /
-//     muzzle / smoke / dust / debris with velocity hints.
-//
-// What it does NOT validate. SpatialHash readers (no units in the scene),
-// WeaponSystem.serial post-pass plumbing (no shots), Damage / Suppression
-// propagation. Those require the full pipeline and are tested elsewhere.
+// Controls: 1..6 spawn one of each kind, Space = full burst, A = auto-emit,
+// R = reset, RMB = orbit, wheel = zoom, Esc = quit.
 
 package main
 
@@ -61,7 +31,6 @@ func main() {
 	defer rl.CloseWindow()
 	rl.SetTargetFPS(60)
 
-	// Minimal ECS world: ParticleSystem + a single emitter at origin.
 	app := core.NewApp()
 
 	handles := systems.NewSpawnHandles(app.World)
@@ -69,8 +38,8 @@ func main() {
 	particleSys.InitUI(app.World)
 	app.AddSystem(particleSys)
 
-	// Walk the Particle filter for render. ParticleSystem owns lifecycle;
-	// rendering lives here in the sandbox so the sandbox is self-contained.
+	// Render lives here in the sandbox so it's self-contained — ParticleSystem
+	// owns only lifecycle.
 	particleFilter := ecs.NewFilter3[components.Particle, components.WorldPos, components.ParticleVisual](app.World)
 	endMap := ecs.NewMap[components.ParticleEnd](app.World)
 
@@ -81,8 +50,6 @@ func main() {
 		Fovy:       60,
 		Projection: rl.CameraPerspective,
 	}
-	// Spherical orbit state - RMB drag + wheel zoom mimic the main game's
-	// OrbitSystem so the sandbox feels like the real product.
 	yaw := float32(math.Pi / 4)
 	pitch := float32(math.Pi / 6)
 	dist := float32(12)
@@ -102,7 +69,6 @@ func main() {
 		lastTick = now
 		frame++
 
-		// Camera orbit input.
 		if rl.IsMouseButtonDown(rl.MouseButtonRight) {
 			delta := rl.GetMouseDelta()
 			yaw -= delta.X * 0.005
@@ -127,7 +93,6 @@ func main() {
 			Z: dist * float32(math.Cos(float64(pitch))*math.Cos(float64(yaw))),
 		}
 
-		// Spawn input.
 		spawnTime := float32(rl.GetTime())
 		if rl.IsKeyPressed(rl.KeyOne) {
 			emitTracers(handles, spawnTime, 1)
@@ -165,12 +130,8 @@ func main() {
 			}
 		}
 
-		// Drive ParticleSystem.Update with the real Tick path. The
-		// sandbox uses delta-second wall-clock; the real game uses
-		// scaled-dt via App.Tick.
 		app.Tick(time.Duration(dt * float32(time.Second)))
 
-		// Render.
 		rl.BeginDrawing()
 		rl.ClearBackground(rl.Color{R: 18, G: 22, B: 30, A: 255})
 
@@ -185,8 +146,6 @@ func main() {
 	}
 }
 
-// emitTracers spawns N line-particles diverging from origin in a fan. Each
-// tracer is short so it visually reads as a single shot.
 func emitTracers(h *systems.SpawnParticleHandles, now float32, count int) {
 	for i := 0; i < count; i++ {
 		angle := float32(i) * 0.5
@@ -202,7 +161,6 @@ func emitTracers(h *systems.SpawnParticleHandles, now float32, count int) {
 
 func emitImpacts(h *systems.SpawnParticleHandles, now float32, count int) {
 	for i := 0; i < count; i++ {
-		// Land impacts on a small ring so multiple presses cluster visibly.
 		angle := float64(i) * 0.7
 		pos := rl.Vector3{
 			X: 2.5 * float32(math.Cos(angle)),
@@ -250,8 +208,6 @@ func emitDebris(h *systems.SpawnParticleHandles, now float32, count int) {
 	}
 }
 
-// emitFullBurst fires one of each kind - visual sanity check for cohabiting
-// kinds (do debris fall through smoke? do tracers occlude impacts?).
 func emitFullBurst(h *systems.SpawnParticleHandles, now float32) {
 	emitTracers(h, now, 1)
 	emitImpacts(h, now, 1)
@@ -261,8 +217,6 @@ func emitFullBurst(h *systems.SpawnParticleHandles, now float32) {
 	emitDebris(h, now, 8)
 }
 
-// resetAll despawns every Particle entity. Cleaner than waiting for TTL
-// when the test starts to accumulate visual junk.
 func resetAll(world *ecs.World, f *ecs.Filter3[components.Particle, components.WorldPos, components.ParticleVisual]) {
 	var doomed []ecs.Entity
 	q := f.Query()
@@ -276,9 +230,9 @@ func resetAll(world *ecs.World, f *ecs.Filter3[components.Particle, components.W
 	}
 }
 
-// drawParticlesSandbox is a self-contained mirror of the main game's
-// drawParticles. Keeps the sandbox decoupled from `render_world.go` (which
-// pulls in the global render-origin chunk, units, ghosts, etc.).
+// drawParticlesSandbox mirrors the main game's drawParticles. Inlined here so
+// the sandbox stays decoupled from render_world.go (which pulls in the global
+// render-origin chunk, units, ghosts, etc.).
 func drawParticlesSandbox(
 	f *ecs.Filter3[components.Particle, components.WorldPos, components.ParticleVisual],
 	endMap *ecs.Map[components.ParticleEnd],
@@ -329,7 +283,6 @@ func drawAxes() {
 }
 
 func drawHUD(f *ecs.Filter3[components.Particle, components.WorldPos, components.ParticleVisual], autoEmit bool) {
-	// Live particle count.
 	var live int
 	q := f.Query()
 	for q.Next() {
@@ -355,8 +308,8 @@ func drawHUD(f *ecs.Filter3[components.Particle, components.WorldPos, components
 		16, 154, 12, rl.LightGray)
 }
 
-// pseudoRand returns a deterministic uniform [0, 1) value from a seed and
-// advances the seed in place. Avoids math/rand for zero-alloc semantics.
+// pseudoRand: deterministic uniform [0, 1) from a seed, advances seed in
+// place. Avoids math/rand for zero-alloc semantics.
 func pseudoRand(seed *uint64) float32 {
 	*seed += 0x9e3779b97f4a7c15
 	z := *seed

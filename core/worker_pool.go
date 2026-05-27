@@ -5,17 +5,10 @@ import (
 	"sync"
 )
 
-// WorkerPool is a fixed-size goroutine pool used by simulation systems for
-// data-parallel hot loops. Lifecycle is owned by main: NewWorkerPool spins
-// workers; Stop joins them on shutdown.
-//
-// ParallelFor splits [0, total) into roughly even ranges, dispatches each
-// as a job, and blocks until all complete. fn must be race-safe over its
-// own range - no shared writes, no raylib calls (raylib-go isn't thread-safe;
-// all draw / upload happens on the main goroutine).
-//
-// ParallelForIndexed also passes a chunk index so callers can keep
-// per-worker scratch buffers.
+// WorkerPool is a fixed-size goroutine pool for data-parallel hot loops.
+// fn must be race-safe over its own range - no shared writes, no raylib
+// calls (raylib-go isn't thread-safe; all draw / upload happens on the
+// main goroutine).
 type WorkerPool struct {
 	workers int
 	jobs    chan workerJob
@@ -32,13 +25,11 @@ type workerJob struct {
 	done     *sync.WaitGroup
 }
 
-// SerialThresholdHint: when total is below this, ParallelFor / ParallelForIndexed
-// skip the worker dispatch and run the whole range inline. Channel send +
-// wait group + scheduler hops cost ~5-10 us; below this threshold the
-// parallel gain doesn't cover it.
+// SerialThresholdHint: below this total, ParallelFor* skip the worker
+// dispatch and run inline. Channel send + wait group + scheduler hops
+// cost ~5-10 us; below this threshold the parallel gain doesn't cover it.
 const SerialThresholdHint = 64
 
-// NewWorkerPool spawns n workers. n is clamped to >= 1.
 func NewWorkerPool(n int) *WorkerPool {
 	if n < 1 {
 		n = 1
@@ -83,8 +74,8 @@ func (p *WorkerPool) Workers() int {
 }
 
 // ParallelFor splits [0, total) into p.workers contiguous ranges and runs
-// fn in parallel. Falls back to a serial inline call when p is nil / has
-// one worker / total <= SerialThresholdHint.
+// fn in parallel. Falls back to inline when p is nil / has one worker /
+// total <= SerialThresholdHint.
 func (p *WorkerPool) ParallelFor(total int, fn func(start, end int)) {
 	if total <= 0 || fn == nil {
 		return
@@ -115,9 +106,9 @@ func (p *WorkerPool) ParallelFor(total int, fn func(start, end int)) {
 }
 
 // ParallelForIndexed is ParallelFor that also hands fn the chunk index
-// (0..workers-1). Useful for per-worker scratch buffers. Same fallback rules;
-// in the serial-fallback case chunkIdx is always 0, so per-worker buffers
-// should be sized to at least 1.
+// (0..workers-1) for per-worker scratch buffers. In the serial-fallback
+// case chunkIdx is always 0, so per-worker buffers should be sized to at
+// least 1.
 func (p *WorkerPool) ParallelForIndexed(total int, fn func(chunkIdx, start, end int)) {
 	if total <= 0 || fn == nil {
 		return
@@ -147,8 +138,8 @@ func (p *WorkerPool) ParallelForIndexed(total int, fn func(chunkIdx, start, end 
 	done.Wait()
 }
 
-// Resize is a stub. Actual implementation lands when the in-game settings
-// panel needs hot-tuning.
+// Resize is a stub. TODO: implement when the in-game settings panel needs
+// hot-tuning.
 func (p *WorkerPool) Resize(n int) {
 	log.Printf("worker pool: Resize(%d) requested but not implemented", n)
 }

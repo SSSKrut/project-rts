@@ -11,17 +11,9 @@ import (
 	"rts-go/core"
 )
 
-// ThreatSystem - Phase 17 M17.0 per-unit Threat aggregator. Each tick:
-//
-//  1. Decay every Threat channel by its ThreatSpec rate * dt.
-//  2. Drain the unit's DangerBuffer - per event read the spec, add Strength
-//     to the named channel, accumulate Pos into a strength-weighted ThreatDir.
-//  3. Clamp each channel to [0, 1], recompute Total + State.
-//  4. Reset Head/Count so producers start the next tick with an empty ring.
-//
-// Phase 14 producer (propagateSuppression direct write into Threat.Suppression)
-// is replaced in M17.0.2 by DangerBulletImpact events; future kinds plug into
-// the same drain via threatSpecs.
+// ThreatSystem is the per-unit Threat aggregator. Each tick: decay every
+// channel, drain DangerBuffer (Strength → channel + weighted ThreatDir),
+// clamp to [0, 1], recompute Total + State, reset ring for next tick.
 type ThreatSystem struct {
 	filter   *ecs.Filter4[components.Unit, components.Threat, components.DangerBuffer, components.WorldPos]
 	elapsed  float32
@@ -63,24 +55,19 @@ func (sys *ThreatSystem) Update(ctx core.UpdateContext) {
 }
 
 // tickThreat applies the per-unit decay + drain + classify pipeline. Pulled
-// out as a free function so M17.0.4 can table-test it without spinning an
-// ECS world.
+// out as a free function so it can be table-tested without an ECS world.
 func tickThreat(threat *components.Threat, buf *components.DangerBuffer, pos *components.WorldPos, dt float32) {
-	// 1. Decay every channel by its per-second rate. ChannelDecayRates is a
-	//    4-entry table indexed by ThreatChannel.
 	threat.Suppression = decayValue(threat.Suppression, dt, components.ChannelDecayRates[components.ThreatChannelSuppression])
 	threat.ShotsFired = decayValue(threat.ShotsFired, dt, components.ChannelDecayRates[components.ThreatChannelShotsFired])
 	threat.Endangered = decayValue(threat.Endangered, dt, components.ChannelDecayRates[components.ThreatChannelEndangered])
 	threat.Injury = decayValue(threat.Injury, dt, components.ChannelDecayRates[components.ThreatChannelInjury])
 
-	// 2. Drain the buffer. Each event contributes Strength to its channel
-	//    and a weighted vote toward the new ThreatDir. Weight is the event
-	//    Strength itself - per-tick drain means every event in the ring is
-	//    "fresh" (same recency), so recency*strength reduces to strength.
+	// Drain the buffer: each event contributes Strength to its channel and
+	// a weighted vote toward ThreatDir. Per-tick drain means recency*strength
+	// collapses to strength.
 	if buf.Count > 0 {
 		var tx, tz, totalWeight float32
-		// Walk Count entries ending at Head (oldest first). Head points at
-		// the next write slot; the oldest entry sits Count slots behind it.
+		// Walk Count entries ending at Head (oldest first).
 		start := int(buf.Head) - int(buf.Count)
 		if start < 0 {
 			start += components.DangerBufferSize
@@ -102,8 +89,7 @@ func tickThreat(threat *components.Threat, buf *components.DangerBuffer, pos *co
 				continue
 			}
 			// ThreatDir vote: vector from event location toward the unit,
-			// weighted by Strength. Per-tick drain means all events are
-			// "fresh", so recency*strength collapses to strength.
+			// weighted by Strength.
 			delta := pos.Sub(ev.Pos)
 			dx, dz := delta.X, delta.Z
 			d := float32(math.Sqrt(float64(dx*dx + dz*dz)))
@@ -123,13 +109,11 @@ func tickThreat(threat *components.Threat, buf *components.DangerBuffer, pos *co
 		buf.Count = 0
 	}
 
-	// 3. Clamp channels.
 	threat.Suppression = clamp01(threat.Suppression)
 	threat.ShotsFired = clamp01(threat.ShotsFired)
 	threat.Endangered = clamp01(threat.Endangered)
 	threat.Injury = clamp01(threat.Injury)
 
-	// 4. Total + State.
 	total := threat.Suppression + threat.ShotsFired + threat.Endangered + threat.Injury
 	if total > 1 {
 		total = 1
@@ -138,7 +122,7 @@ func tickThreat(threat *components.Threat, buf *components.DangerBuffer, pos *co
 	threat.State = components.ClassifyThreat(total)
 }
 
-// decayValue applies a per-second linear drop, clamped at 0.
+// decayValue applies a per-second linear drop clamped at 0.
 func decayValue(value, dt, rate float32) float32 {
 	if value <= 0 || rate <= 0 {
 		return value

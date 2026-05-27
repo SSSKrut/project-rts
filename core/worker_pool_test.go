@@ -38,7 +38,7 @@ func TestWorkerPoolNilSafe(t *testing.T) {
 func TestWorkerPoolStopIdempotent(t *testing.T) {
 	pool := NewWorkerPool(2)
 	pool.Stop()
-	pool.Stop() // second call must not panic.
+	pool.Stop()
 }
 
 func TestWorkerPoolZeroTotal(t *testing.T) {
@@ -51,16 +51,14 @@ func TestWorkerPoolZeroTotal(t *testing.T) {
 	}
 }
 
-// TestParallelForRaceSafe mirrors the hot-path systems' usage: each worker
-// writes to a disjoint range of a shared output slice. Combined with
-// `go test -race ./core/` this is a smoke check that ParallelFor doesn't
-// have hidden shared writes inside the dispatcher.
+// TestParallelForRaceSafe mirrors hot-path usage: each worker writes to a
+// disjoint range of a shared output slice. Combined with `go test -race`
+// this checks ParallelFor doesn't have hidden shared writes.
 func TestParallelForRaceSafe(t *testing.T) {
 	pool := NewWorkerPool(4)
 	defer pool.Stop()
 
-	// Total chosen above SerialThresholdHint so the workers actually run in
-	// parallel - otherwise the test degenerates to serial inline.
+	// Above SerialThresholdHint so workers actually run in parallel.
 	const total = SerialThresholdHint * 4
 	out := make([]int32, total)
 	pool.ParallelFor(total, func(start, end int) {
@@ -77,9 +75,8 @@ func TestParallelForRaceSafe(t *testing.T) {
 }
 
 // TestParallelForIndexedPerWorkerBuf exercises the per-worker scratch-buffer
-// pattern from FormationSystem.workerLeaveBufs: each worker pushes to its
-// own buffer, then a serial post-pass merges them. Race-safe because each
-// worker owns its slice header.
+// pattern: each worker pushes to its own buffer, then a serial post-pass
+// merges them. Race-safe because each worker owns its slice header.
 func TestParallelForIndexedPerWorkerBuf(t *testing.T) {
 	pool := NewWorkerPool(4)
 	defer pool.Stop()
@@ -106,9 +103,8 @@ func TestParallelForIndexedPerWorkerBuf(t *testing.T) {
 	}
 }
 
-// TestParallelForSerialFallback verifies that small workloads (<=
-// SerialThresholdHint) skip the dispatcher and run inline. We detect this by
-// checking that fn is invoked exactly once with the full range.
+// TestParallelForSerialFallback verifies that workloads <= SerialThresholdHint
+// skip the dispatcher: fn invoked exactly once with the full range.
 func TestParallelForSerialFallback(t *testing.T) {
 	pool := NewWorkerPool(4)
 	defer pool.Stop()

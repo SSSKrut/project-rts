@@ -9,10 +9,8 @@ import (
 	"rts-go/components"
 )
 
-// drawInspectorOrderSection renders the squad's current Order + up to 2
-// queued orders as an inline timeline: each row carries a progress bar +
-// kind / state / target text + optional AT pill. Returns the y-coord after
-// the section. Phase 15 M15.C.5 reformat.
+// drawInspectorOrderSection renders the head order + up to 2 queued
+// orders as an inline timeline.
 func drawInspectorOrderSection(ctx InspectorCtx, squad ecs.Entity, x, y, width int32) int32 {
 	drawText(ctx.Font, "Orders:", x, y, inspectorFontSize, inspectorTextDim)
 	y += inspectorRowH
@@ -28,9 +26,7 @@ func drawInspectorOrderSection(ctx InspectorCtx, squad ecs.Entity, x, y, width i
 		return y + inspectorRowH
 	}
 
-	// Read squad's RoE so each row can flag AttackMove that the engagement
-	// mode silently overrides (M15.C.4). HoldFire blocks opportunistic fire
-	// even when the order carries the AttackMove flag.
+	// HoldFire silently blocks AttackMove; the per-row pill flags it.
 	eMode := components.HoldFire
 	if ctx.EngagementRulesMap != nil {
 		if er := ctx.EngagementRulesMap.Get(squad); er != nil {
@@ -54,11 +50,9 @@ func drawInspectorOrderSection(ctx InspectorCtx, squad ecs.Entity, x, y, width i
 	return y
 }
 
-// drawOrderRow renders one timeline row: progress bar + kind / state /
-// target. `active` highlights the head order's row background. When the
-// order carries OrderParamAttackMove an "AT" pill is appended on the right;
-// HoldFire RoE strikes the pill through and adds a warning sub-row. Returns
-// the new y.
+// drawOrderRow appends an "AT" pill when the order carries
+// OrderParamAttackMove. HoldFire RoE strikes the pill through and adds
+// a warning sub-row.
 func drawOrderRow(ctx InspectorCtx, ord ecs.Entity, active bool, x, y, width int32, eMode components.EngagementMode) int32 {
 	kind := ctx.OrderKindMap.Get(ord)
 	target := ctx.OrderTargetMap.Get(ord)
@@ -104,10 +98,6 @@ func drawOrderRow(ctx InspectorCtx, ord ecs.Entity, active bool, x, y, width int
 	return y + inspectorRowH
 }
 
-// drawOrderProgressBar paints the row's progress bar underlay - a thin
-// filled rectangle behind the text that visualises OrderProgress.Value. The
-// active head order gets a brighter fill; queued rows get a dimmer track.
-// State-driven colour (blocked / failed render in warning orange).
 func drawOrderProgressBar(rowX, rowY, width int32, active bool, stateCode components.OrderStateCode, progress float32) {
 	const padY int32 = 1
 	track := rl.Color{R: 30, G: 35, B: 44, A: 255}
@@ -136,9 +126,7 @@ func drawOrderProgressBar(rowX, rowY, width int32, active bool, stateCode compon
 	}
 }
 
-// drawAttackMovePill renders a small "AT" pill at the right edge of the row.
-// When `blocked` is true, the pill background is dimmed and a strike-through
-// line runs across it; the caller adds an explanatory sub-row below.
+// drawAttackMovePill: when blocked, dims background and strikes through.
 func drawAttackMovePill(font rl.Font, rowX, rowY, width int32, blocked bool) {
 	const pillW int32 = 24
 	const pillPadY int32 = 2
@@ -167,8 +155,6 @@ func drawAttackMovePill(font rl.Font, rowX, rowY, width int32, blocked bool) {
 	}
 }
 
-// orderKindLabel reads the spec table's Name. Phase 14.5 M14.5.0 - old
-// hand-maintained switch replaced.
 func orderKindLabel(k components.OrderKindCode) string {
 	if spec := components.SpecForOrderKind(k); spec.Name != "" {
 		return spec.Name
@@ -194,9 +180,6 @@ func orderStateLabel(s components.OrderStateCode) string {
 	return "?"
 }
 
-// orderTargetLabel produces a short string identifying the order's target -
-// "@ (x, z)" for Pos targets, "@ Building #X" / "@ Trench #N" for entity
-// targets. Avoids floats with sub-metre noise.
 func orderTargetLabel(ctx InspectorCtx, kind components.OrderKindCode, t *components.OrderTarget) string {
 	if t.Entity != (ecs.Entity{}) {
 		switch kind {

@@ -5,11 +5,9 @@ package components
 type SquadStateCode uint8
 
 const (
-	// SquadStateIdle - no active engagement signal. Default for newly spawned
-	// squads.
 	SquadStateIdle SquadStateCode = iota
 	// SquadStateEngaged - the squad is taking or returning fire but has not
-	// scrambled. Inspector readers may surface this with no per-unit reasons.
+	// scrambled.
 	SquadStateEngaged
 	// SquadStateScrambling - a recent suppression spike has triggered cover
 	// search across every live member; FormationSystem yields all slots until
@@ -22,8 +20,7 @@ const (
 const SquadSuppressionWindow = 12
 
 // SquadState carries the suppression-history ring buffer and the current
-// state-machine code. Lives on the abstract squad entity alongside
-// CommandRoster / FormationData.
+// state-machine code.
 //
 // SuppHistory records the squad-average Suppression.Level captured at each
 // ScatterProtocol tick. HistHead is the next write slot; HistCount grows up

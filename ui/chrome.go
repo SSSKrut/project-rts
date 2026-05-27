@@ -4,10 +4,6 @@ import (
 	rl "github.com/gen2brain/raylib-go/raylib"
 )
 
-// Phase 10 chrome - the visible frame around every panel. One pixel of border
-// + a translucent title bar with the panel's Title. Content is drawn by the
-// caller, inside scissor if needed.
-
 const (
 	titleBarHeight int32 = 24
 )
@@ -18,9 +14,8 @@ var (
 	titleTextColor   = rl.Color{R: 210, G: 220, B: 230, A: 255}
 )
 
-// DrawChrome renders the border + title bar of the panel, including the
-// Phase 18.C chevron button on the right of the title bar. Returns the
-// inner content rectangle (panel minus border + title bar).
+// DrawChrome renders the border + title bar (including the chevron button)
+// and returns the inner content rectangle.
 func DrawChrome(p Panel, font rl.Font, fontSize int32) rl.Rectangle {
 	b := p.Bounds
 	rl.DrawRectangleLinesEx(b, 1, panelBorderColor)
@@ -44,8 +39,6 @@ func DrawChrome(p Panel, font rl.Font, fontSize int32) rl.Rectangle {
 	}
 }
 
-// ChevronRect returns the click target for the panel-switch chevron at the
-// right edge of the title bar.
 func ChevronRect(p Panel) rl.Rectangle {
 	b := p.Bounds
 	const sz float32 = 22
@@ -70,14 +63,10 @@ func drawChevron(r rl.Rectangle, font rl.Font) {
 	rl.DrawTriangle(v1, v3, v2, chevronColor)
 }
 
-// ContentRect returns where panel content draws without re-stamping chrome.
-// Used by code that draws content multiple times per frame (e.g. before
-// chrome to paint background, after chrome to paint scissored overlays).
-// Phase 18.C: clamp width/height to non-negative so panels with zero
-// Bounds (the result of a chevron Close or corner-merge that removed the
-// leaf from the tree) don't pass negative-sized rects to BeginScissorMode
-// — raylib treats those as "scissor disabled" and the panel's draw calls
-// leak across the whole screen, ghosting onto the surviving leaves.
+// ContentRect returns the panel's content area. Clamps width/height to
+// non-negative because raylib treats negative-sized rects as "scissor
+// disabled", which would leak the panel's draw calls across the whole
+// screen when its Bounds collapse (e.g. mid corner-merge).
 func ContentRect(p Panel) rl.Rectangle {
 	b := p.Bounds
 	w := b.Width - 2
@@ -96,25 +85,20 @@ func ContentRect(p Panel) rl.Rectangle {
 	}
 }
 
-// PanelBackground draws a flat colour fill in the panel's content area.
-// Useful as a debug background in M10.1 before each panel has real content.
 func PanelBackground(p Panel, fill rl.Color) {
 	rl.DrawRectangleRec(ContentRect(p), fill)
 }
 
-// PanelChromePadding returns the (top, sides) chrome inset thicknesses so
-// callers outside the package can size around it without hardcoding values.
+// PanelChromePadding returns the (top, sides) chrome inset thicknesses.
 // top = title bar + border; sides = border on each edge.
 func PanelChromePadding() (top, sides float32) {
 	return float32(titleBarHeight) + 1, 1
 }
 
-// ContentToPanel is the inverse of ContentRect: given a content rectangle
-// it returns a Panel whose ContentRect(panel) recovers that exact area.
-// Used when a widget that normally draws into a workspace leaf has to draw
-// into a floating panel's interior - the floating panel handles its own
-// chrome, so we pass the widget a synthetic Panel whose Bounds extend just
-// far enough to absorb the chrome offsets the widget will subtract.
+// ContentToPanel is the inverse of ContentRect: builds a synthetic Panel
+// whose Bounds extend far enough that ContentRect(p) recovers the input
+// area. Used to host workspace widgets inside floating panels (which draw
+// their own chrome).
 func ContentToPanel(content rl.Rectangle, title string, id PanelID) Panel {
 	return Panel{
 		ID:    id,
@@ -128,7 +112,6 @@ func ContentToPanel(content rl.Rectangle, title string, id PanelID) Panel {
 	}
 }
 
-// Scrollbar visual constants (Phase 13.5 M13.5.3).
 const (
 	scrollbarTrackWidth float32 = 8
 	scrollbarThumbMin   float32 = 30
@@ -139,9 +122,8 @@ var (
 	scrollbarThumbColor = rl.Color{R: 80, G: 90, B: 105, A: 220}
 )
 
-// ScrollbarRect returns the on-screen rectangle of the vertical scrollbar
-// track for a panel. Phase 13.5 places it inside the content rect along the
-// right edge so existing content scissor still clips correctly.
+// ScrollbarRect sits inside the content rect along the right edge so the
+// existing content scissor still clips it correctly.
 func ScrollbarRect(p Panel) rl.Rectangle {
 	c := ContentRect(p)
 	return rl.Rectangle{
@@ -152,9 +134,7 @@ func ScrollbarRect(p Panel) rl.Rectangle {
 	}
 }
 
-// ScrollbarThumbRect returns the position + size of the scrollbar thumb based
-// on the panel's content height vs visible height. Returns zero rect when no
-// scroll is needed (content fits).
+// ScrollbarThumbRect returns a zero rect when content fits (no scroll needed).
 func ScrollbarThumbRect(p Panel, scroll *ScrollState) rl.Rectangle {
 	if scroll == nil {
 		return rl.Rectangle{}
@@ -184,9 +164,8 @@ func ScrollbarThumbRect(p Panel, scroll *ScrollState) rl.Rectangle {
 	}
 }
 
-// DrawScrollbar paints the vertical scrollbar track + thumb on the right
-// edge of `p`'s content rect. Skipped silently when content fits (no
-// overflow) - caller doesn't need an "if needed" check.
+// DrawScrollbar is a no-op when content fits, so callers don't need an
+// "if needed" check.
 func DrawScrollbar(p Panel, scroll *ScrollState) {
 	if scroll == nil {
 		return
@@ -200,9 +179,8 @@ func DrawScrollbar(p Panel, scroll *ScrollState) {
 	rl.DrawRectangleRec(thumb, scrollbarThumbColor)
 }
 
-// ClampScrollOffset constrains scroll.OffsetY to a valid range given the
-// current ContentHeight. Called from input handlers + after Recompute so a
-// panel resize that suddenly fits the content doesn't leave a stale offset.
+// ClampScrollOffset must run after Recompute so a panel resize that
+// suddenly fits the content doesn't leave a stale offset.
 func ClampScrollOffset(p Panel, scroll *ScrollState) {
 	if scroll == nil {
 		return

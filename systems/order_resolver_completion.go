@@ -6,9 +6,7 @@ import (
 	"rts-go/components"
 )
 
-// completionOutcome carries the per-tick decision for an in-progress order:
-// pending (keep going), done (transition to Completed), or failed (transition
-// to Failed - Issue #10 for AttackTarget out-of-range).
+// completionOutcome carries the per-tick decision for an in-progress order.
 type completionOutcome uint8
 
 const (
@@ -17,13 +15,12 @@ const (
 	completionFailed
 )
 
-// evaluateCompletion is Phase 14.5 M14.5.0's replacement for the old
-// per-OrderKindCode switch. It dispatches by `Spec.Completion`, which keeps
-// the resolver oblivious to enum identities: a new completion rule is one
-// `case` here, plus the spec row pointing at it.
+// evaluateCompletion dispatches by Spec.Completion so the resolver stays
+// oblivious to OrderKindCode enum identities — a new completion rule is one
+// `case` here plus the spec row pointing at it.
 //
-// `dt` is the current tick's delta (passed through Update). Required by
-// CompletionTargetDeath to advance the out-of-range tracker.
+// `dt` is the current tick's delta, required by CompletionTargetDeath to
+// advance the out-of-range tracker.
 func (sys *OrderResolverSystem) evaluateCompletion(
 	squad, ord ecs.Entity,
 	spec *components.OrderKindSpec,
@@ -41,12 +38,12 @@ func (sys *OrderResolverSystem) evaluateCompletion(
 
 	switch spec.Completion {
 	case components.CompletionNever:
-		// DefendPosition - only Cancelled by the player.
+		// DefendPosition — only Cancelled by the player.
 		return completionPending
 
 	case components.CompletionTargetDeath:
-		// AttackTarget: order ends when target dies. Issue #10 extension:
-		// transition to Failed when out-of-range too long.
+		// AttackTarget: order ends when target dies; Failed when out-of-
+		// range exceeds MaxOutOfRangeSeconds.
 		if target.Entity == (ecs.Entity{}) || !sys.squadService.world.Alive(target.Entity) {
 			return completionDone
 		}
@@ -58,10 +55,9 @@ func (sys *OrderResolverSystem) evaluateCompletion(
 		return completionPending
 
 	case components.CompletionTimer:
-		// SuppressFire (and any future timer-gated kind). Spec.DurationSeconds
-		// is the per-kind cap; OrderParamSuppress.StartTime overrides the
-		// timing anchor when present (so a player Issue-then-pause sequence
-		// uses the original StartTime, not a refreshed one).
+		// OrderParamSuppress.StartTime overrides the timing anchor when
+		// present (Issue-then-pause uses the original StartTime, not a
+		// refreshed one).
 		startTime := float32(0)
 		if sp := sys.orderSuppressMap.Get(ord); sp != nil {
 			startTime = sp.StartTime
@@ -74,18 +70,17 @@ func (sys *OrderResolverSystem) evaluateCompletion(
 		return completionPending
 
 	case components.CompletionEveryMemberOnFloor:
-		// Phase 14.6 M14.6.2 - Garrison. Completes when every live roster
-		// member sits inside the building's Footprint AABB AND stands on a
-		// Floor entity (any storey). Wipeout (no live members) -> Failed.
-		// OrderProgress.Value carries inside/alive so Inspector's progress bar
-		// reflects partial entry without a dedicated component.
+		// Garrison: completes when every live member sits inside the
+		// Footprint AABB AND stands on a Floor entity (any storey).
+		// Wipeout (no live members) → Failed. OrderProgress.Value
+		// carries inside/alive for the Inspector progress bar.
 		if target.Entity == (ecs.Entity{}) || !sys.squadService.world.Alive(target.Entity) {
 			return completionPending
 		}
 		bld := sys.buildingMap.Get(target.Entity)
 		if bld == nil {
-			// Defensive - Garrison target wasn't a Building entity. Fall back
-			// to the arrival-radius gate the old Phase 11 logic used.
+			// Defensive — target wasn't a Building; fall back to arrival
+			// radius.
 			r := spec.ArrivalRadius
 			if r <= 0 {
 				r = 2.5
@@ -112,10 +107,9 @@ func (sys *OrderResolverSystem) evaluateCompletion(
 		return completionPending
 
 	case components.CompletionClearBuilding:
-		// Phase 17.6 M17.6.5 - ClearBuilding. Completes when no hostile unit
-		// sits inside the footprint AND >= 1 friendly is inside. Squad
-		// wipeout (no live members) -> Failed. Auto-chain to OccupyBuilding
-		// is handled in Update's advance loop on Done transition.
+		// ClearBuilding: completes when no hostile sits inside the
+		// footprint AND ≥1 friendly is inside. Wipeout → Failed.
+		// Auto-chain to OccupyBuilding lives in Update's advance loop.
 		if target.Entity == (ecs.Entity{}) || !sys.squadService.world.Alive(target.Entity) {
 			return completionPending
 		}
@@ -134,15 +128,12 @@ func (sys *OrderResolverSystem) evaluateCompletion(
 		if alive == 0 {
 			return completionFailed
 		}
-		// Determine the squad's faction so hostiles are everyone else.
 		var ownFaction uint8
 		if f := sys.factionMap.Get(squad); f != nil {
 			ownFaction = f.ID
 		}
 		hostiles := sys.countHostilesInBuilding(bld.Footprint, ownFaction)
 		if pr := sys.orderProgressMap.Get(ord); pr != nil {
-			// Progress reflects entry pressure while clearing; once inside
-			// >= 1 the value is mostly diagnostic.
 			pr.Value = float32(inside) / float32(alive)
 		}
 		if hostiles == 0 && inside >= 1 {
@@ -151,11 +142,9 @@ func (sys *OrderResolverSystem) evaluateCompletion(
 		return completionPending
 
 	case components.CompletionArrivalRadius:
-		// MoveTo / Patrol / OccupyTrench. Garrison moved to a dedicated arm
-		// (CompletionEveryMemberOnFloor); the AABB short-circuit there is the
-		// authoritative gate. Per-kind shape-aware short-circuits
-		// (OccupyTrench polyline) run first; the radius is the universal
-		// fallback.
+		// MoveTo / Patrol / OccupyTrench. Per-kind shape-aware short-
+		// circuits (OccupyTrench polyline) run first; radius is the
+		// universal fallback.
 		switch spec.Code {
 		case components.OrderKindOccupyTrench:
 			if root := sys.trenchRootMap.Get(target.Entity); root != nil {
@@ -180,10 +169,9 @@ func (sys *OrderResolverSystem) evaluateCompletion(
 	return completionPending
 }
 
-// advanceOutOfRange updates the out-of-range tracker on `ord` and returns the
-// accumulated elapsed seconds. Resets to zero whenever at least one alive
-// roster member sits within the squad's max weapon range of the target. Used
-// by the CompletionTargetDeath arm to enforce Spec.MaxOutOfRangeSeconds.
+// advanceOutOfRange updates the out-of-range tracker and returns accumulated
+// elapsed seconds. Resets when any alive member sits within the squad's max
+// weapon range of the target.
 func (sys *OrderResolverSystem) advanceOutOfRange(
 	squad, ord ecs.Entity,
 	target *components.OrderTarget,
@@ -191,28 +179,21 @@ func (sys *OrderResolverSystem) advanceOutOfRange(
 ) float32 {
 	tracker := sys.orderOutOfRangeMap.Get(ord)
 	if tracker == nil {
-		// Defensive - IssueOrder installs the tracker for any kind whose spec
-		// has MaxOutOfRangeSeconds > 0. If we somehow got here without one,
-		// install lazily so the next tick has a place to write.
 		sys.orderOutOfRangeMap.Add(ord, &components.OrderOutOfRangeTracker{})
 		tracker = sys.orderOutOfRangeMap.Get(ord)
 		if tracker == nil {
 			return 0
 		}
 	}
-	// Phase 14.6 M14.6.0 (Issue #11): if target died this tick, reset the
-	// tracker and let the parent CompletionTargetDeath arm transition to Done
-	// - keep us off any Map.Get against the dead id.
+	// Target died: reset and let the parent arm transition to Done — keep
+	// us off any Map.Get against the dead id.
 	if target.Entity != (ecs.Entity{}) && !sys.squadService.world.Alive(target.Entity) {
 		tracker.Elapsed = 0
 		return 0
 	}
-	// Compute max weapon range across roster.
 	maxRange := sys.maxSquadWeaponRange(squad)
 	if maxRange <= 0 {
-		// No weapons or all dead - treat as in-range so we don't insta-fail.
-		// (Squad with no working weapons can't complete AttackTarget anyway;
-		// Phase 15 SurvivalInstinct will surface this differently.)
+		// No working weapons → treat as in-range so we don't insta-fail.
 		tracker.Elapsed = 0
 		return 0
 	}
@@ -244,8 +225,8 @@ func (sys *OrderResolverSystem) advanceOutOfRange(
 	return tracker.Elapsed
 }
 
-// maxSquadWeaponRange returns the largest Weapon.RangeM across all live
-// roster members' Equipment.Primary. Zero if no weapons.
+// maxSquadWeaponRange returns the largest Weapon.RangeM across live
+// members' Equipment.Primary. Zero if no weapons.
 func (sys *OrderResolverSystem) maxSquadWeaponRange(squad ecs.Entity) float32 {
 	roster := sys.rosterMap.Get(squad)
 	if roster == nil {

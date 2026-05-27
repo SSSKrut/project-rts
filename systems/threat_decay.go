@@ -8,17 +8,7 @@ import (
 )
 
 // ThreatDecaySystem despawns ThreatSource entities whose age exceeds their
-// TTL. Tiny serial pass; the spawn writer is WeaponSystem.serialApply
-// (M14.5), the reader will be Phase 15 SurvivalInstinctSystem.
-//
-// Kept as its own System (rather than inlined into WeaponSystem) so the
-// Phase 15 reader gets a clean contract: "ThreatSource entities are live
-// for up to threatTTL seconds after their spawn - query the cluster, weight
-// by Severity, ignore the rest." The writer / reader / cleaner split
-// matches the same pattern Phase 14 follows for the Suppression field
-// (writer = WeaponSystem.propagateSuppression; reader = Phase 15;
-// cleaner = WeaponSystem.decaySuppression inline because Suppression has
-// no archetype change).
+// TTL. Kept separate so readers get the contract "live within TTL of spawn".
 type ThreatDecaySystem struct {
 	filter    *ecs.Filter1[components.ThreatSource]
 	despawned []ecs.Entity
@@ -37,8 +27,7 @@ func (sys *ThreatDecaySystem) InitUI(w *ecs.World) {
 
 func (ThreatDecaySystem) Name() string { return "threat_decay" }
 
-// Every tick - the work is O(live-threats) which peaks at ~120 entries
-// during a heavy firefight (Phase 14 estimate). Tiny budget.
+// Every tick — O(live-threats) peaks at ~120 entries during heavy firefight.
 func (ThreatDecaySystem) LODPolicy() core.LODPolicy {
 	return core.LODPolicy{
 		ActiveEvery:   0,
@@ -59,8 +48,7 @@ func (sys *ThreatDecaySystem) Update(ctx core.UpdateContext) {
 			sys.despawned = append(sys.despawned, q.Entity())
 		}
 	}
-	// Apply removals after closing the query - Ark forbids archetype
-	// mutation inside a live filter walk.
+	// Remove after closing the query (Ark forbids mid-query archetype mutation).
 	for _, e := range sys.despawned {
 		if ctx.World.Alive(e) {
 			ctx.World.RemoveEntity(e)

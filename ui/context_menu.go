@@ -7,33 +7,21 @@ import (
 	"rts-go/components"
 )
 
-// Phase 17.6 — ContextMenu replaces the radial PieMenu for object-specific
-// order popups. Rectangular, sectioned, tooltipped. Generic enough to host
-// future unit / trench / vehicle popups; M17.6.4 wires only the building
-// popup. The deprecated pie code in ui/pie_menu.go stays in the tree without
-// callers — its primitives may revive for future radial cases.
-
-// ContextMenu holds the per-frame state of an open popup.
 type ContextMenu struct {
 	Active      bool
-	Origin      rl.Vector2 // press point — popup is laid out off this
+	Origin      rl.Vector2
 	PopupRect   rl.Rectangle
 	Sections    []ContextMenuSection
 	HoveredItem int // index into the flat item list, -1 if no hover
 	SourcePanel PanelID
-	// Phase 17.6 M17.6.9 hook: caller reads HoveredItem each frame to swap
-	// the ghost-preview placement to the kind / floor the cursor is on top of.
 }
 
-// ContextMenuSection groups items under a header. Empty Header = no header strip.
+// Empty Header = no header strip.
 type ContextMenuSection struct {
 	Header string
 	Items  []ContextMenuItem
 }
 
-// ContextMenuItem is one clickable row. Glyph is a placeholder icon (single rune)
-// until Phase 17.5 brings real .png atlases. Kind / LevelEntity carry the
-// payload the caller needs to issue the order on Commit.
 type ContextMenuItem struct {
 	Label   string
 	Tooltip string
@@ -41,37 +29,33 @@ type ContextMenuItem struct {
 	Kind    components.OrderKindCode
 	Enabled bool
 	// LevelEntity is set for "Occupy L*N*" items so the caller can target the
-	// specific Floor entity (NavService routes through stairs). Zero entity =
-	// not a floor-picker.
+	// specific Floor entity. Zero = not a floor-picker.
 	LevelEntity ecs.Entity
 	// HoldFireCrouchPreset is the "Hidden position" flag — caller attaches
 	// MovementProfile{Stance: Crouch, ...} + HoldFire RoE override.
 	HoldFireCrouchPreset bool
 }
 
-// ContextMenuResult — what Tick returns on the frame the popup closes.
 type ContextMenuResult struct {
 	Cancelled bool
 	Committed bool
 	Item      ContextMenuItem
 }
 
-// Layout constants. Tunable; M17.6.4 playtest may revisit.
 const (
-	ctxContextMenuItemH        float32 = 30
-	ctxMenuHeaderH      float32 = 20
-	ctxContextMenuItemPadX     float32 = 10
-	ctxMenuGlyphCellW   float32 = 26
-	ctxMenuPopupWidth   float32 = 230
-	ctxContextMenuSectionGap   float32 = 4
-	ctxMenuPopupOffset  float32 = 14 // distance from press point
-	ctxMenuTooltipPad   float32 = 6
-	ctxMenuTooltipMaxW  float32 = 280
+	ctxContextMenuItemH      float32 = 30
+	ctxMenuHeaderH           float32 = 20
+	ctxContextMenuItemPadX   float32 = 10
+	ctxMenuGlyphCellW        float32 = 26
+	ctxMenuPopupWidth        float32 = 230
+	ctxContextMenuSectionGap float32 = 4
+	ctxMenuPopupOffset       float32 = 14
+	ctxMenuTooltipPad        float32 = 6
+	ctxMenuTooltipMaxW       float32 = 280
 )
 
-// Begin opens the popup with the given sections, anchored near origin. The
-// popup auto-flips if it would spill past `bounds` (typically the 3D panel's
-// content rect).
+// Begin opens the popup near `origin`, auto-flipping if it would spill past
+// `bounds`.
 func (m *ContextMenu) Begin(origin rl.Vector2, sections []ContextMenuSection, source PanelID, bounds rl.Rectangle) {
 	m.Origin = origin
 	m.Sections = sections
@@ -81,7 +65,6 @@ func (m *ContextMenu) Begin(origin rl.Vector2, sections []ContextMenuSection, so
 	m.PopupRect = m.layout(origin, bounds)
 }
 
-// Reset clears state. Idempotent.
 func (m *ContextMenu) Reset() {
 	m.Active = false
 	m.HoveredItem = -1
@@ -89,11 +72,8 @@ func (m *ContextMenu) Reset() {
 	m.SourcePanel = PanelNone
 }
 
-// IsActive returns true while the popup is showing.
 func (m *ContextMenu) IsActive() bool { return m.Active }
 
-// Tick handles per-frame input. Returns Committed=true on item click,
-// Cancelled=true on ESC / click outside.
 func (m *ContextMenu) Tick(cursor rl.Vector2, lmbPressed, escPressed bool) ContextMenuResult {
 	if !m.Active {
 		return ContextMenuResult{}
@@ -113,17 +93,13 @@ func (m *ContextMenu) Tick(cursor rl.Vector2, lmbPressed, escPressed bool) Conte
 			}
 			return ContextMenuResult{Cancelled: true}
 		}
-		// LMB outside popup → cancel. LMB on header / gap → also cancel
-		// (no item under cursor).
 		m.Reset()
 		return ContextMenuResult{Cancelled: true}
 	}
 	return ContextMenuResult{}
 }
 
-// HoveredLevel exposes the LevelEntity of the currently-hovered item, or
-// zero if no hover / non-level item. M17.6.9 ghost-swap reads this to
-// anchor the level-specific preview.
+// HoveredLevel returns zero for no hover or a non-level item.
 func (m *ContextMenu) HoveredLevel() ecs.Entity {
 	if !m.Active || m.HoveredItem < 0 {
 		return ecs.Entity{}
@@ -135,8 +111,6 @@ func (m *ContextMenu) HoveredLevel() ecs.Entity {
 	return flat[m.HoveredItem].LevelEntity
 }
 
-// HoveredItemDetails returns the full ContextMenuItem under the cursor.
-// (Item, true) on hover; (zero, false) if no hover or popup inactive.
 func (m *ContextMenu) HoveredItemDetails() (ContextMenuItem, bool) {
 	if !m.Active || m.HoveredItem < 0 {
 		return ContextMenuItem{}, false
@@ -148,9 +122,6 @@ func (m *ContextMenu) HoveredItemDetails() (ContextMenuItem, bool) {
 	return flat[m.HoveredItem], true
 }
 
-// HoveredKind returns the Kind of the currently hovered item plus an OK flag.
-// M17.6.9 ghost-swap reads this to pick floor-spread vs window-attach vs
-// Crouch-hold preview.
 func (m *ContextMenu) HoveredKind() (components.OrderKindCode, bool) {
 	if !m.Active || m.HoveredItem < 0 {
 		return 0, false
@@ -202,8 +173,6 @@ func (m *ContextMenu) itemAt(cursor rl.Vector2) int {
 	return -1
 }
 
-// layout computes the popup rect: starts at origin + offset, flips L/R or
-// up/down if it would clip past bounds.
 func (m *ContextMenu) layout(origin rl.Vector2, bounds rl.Rectangle) rl.Rectangle {
 	h := float32(0)
 	for _, sec := range m.Sections {
@@ -232,19 +201,18 @@ func (m *ContextMenu) layout(origin rl.Vector2, bounds rl.Rectangle) rl.Rectangl
 }
 
 var (
-	ctxMenuBG          = rl.Color{R: 18, G: 22, B: 30, A: 235}
-	ctxMenuBorder      = rl.Color{R: 60, G: 70, B: 90, A: 255}
-	ctxMenuHeaderBG    = rl.Color{R: 30, G: 36, B: 48, A: 255}
-	ctxMenuHeaderText  = rl.Color{R: 140, G: 160, B: 200, A: 255}
+	ctxMenuBG                 = rl.Color{R: 18, G: 22, B: 30, A: 235}
+	ctxMenuBorder             = rl.Color{R: 60, G: 70, B: 90, A: 255}
+	ctxMenuHeaderBG           = rl.Color{R: 30, G: 36, B: 48, A: 255}
+	ctxMenuHeaderText         = rl.Color{R: 140, G: 160, B: 200, A: 255}
 	ctxContextMenuItemText    = rl.Color{R: 220, G: 230, B: 240, A: 255}
 	ctxContextMenuItemDimText = rl.Color{R: 130, G: 140, B: 150, A: 220}
-	ctxMenuHover       = rl.Color{R: 50, G: 90, B: 140, A: 200}
-	ctxMenuGlyphCol    = rl.Color{R: 200, G: 210, B: 230, A: 235}
-	ctxMenuTooltipBG   = rl.Color{R: 14, G: 18, B: 24, A: 240}
+	ctxMenuHover              = rl.Color{R: 50, G: 90, B: 140, A: 200}
+	ctxMenuGlyphCol           = rl.Color{R: 200, G: 210, B: 230, A: 235}
+	ctxMenuTooltipBG          = rl.Color{R: 14, G: 18, B: 24, A: 240}
 )
 
-// Draw paints the popup + optional tooltip. Caller invokes after panel chrome
-// so the popup sits over scene + UI.
+// Draw must run after panel chrome so the popup sits over scene + UI.
 func (m *ContextMenu) Draw(font rl.Font, cursor rl.Vector2) {
 	if !m.Active {
 		return
@@ -306,7 +274,6 @@ func (m *ContextMenu) Draw(font rl.Font, cursor rl.Vector2) {
 		y += ctxContextMenuSectionGap
 	}
 
-	// Tooltip above popup if hovering an item with non-empty tooltip.
 	if m.HoveredItem >= 0 {
 		flat := m.flatItems()
 		if m.HoveredItem < len(flat) {

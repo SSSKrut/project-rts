@@ -18,13 +18,12 @@ const SquadRosterSize = 8
 // CommandRoster - fixed-size unit list, compacted (Leave shifts the tail).
 // Members[0..Count-1] is always the live set; Members[i] for i >= Count is
 // zero. Slot 0 is the commander; the slot index also keys the formation
-// offset, so commander always sits at offset(0).
+// offset.
 type CommandRoster struct {
 	Members [SquadRosterSize]ecs.Entity
 	Count   uint8
 }
 
-// FormationKind picks the offset function applied by FormationSystem.
 type FormationKind uint8
 
 const (
@@ -36,8 +35,7 @@ const (
 
 // FormationData - current formation and pacing. Forward is the unit XZ-vector
 // of the squad's facing, written by SquadMacroPathSystem from the segment
-// (prev -> next waypoint). Spacing is metres between adjacent slots; default
-// per kind is in systems.formationSpacing.
+// (prev -> next waypoint). Spacing is metres between adjacent slots.
 type FormationData struct {
 	Type    FormationKind
 	Forward rl.Vector3
@@ -50,14 +48,12 @@ type FormationData struct {
 const SquadMacroPathSize = 8
 
 // MacroPath - current macro route of the squad center. Waypoints[Head] is
-// the next target. HasGoal=false => idle (FormationSystem stops writing
-// ActionQueue). Setting ReplanAt to 0 forces a replan on the next
-// SquadMacroPathSystem pass - the way new orders trigger immediate planning.
+// the next target. HasGoal=false => idle. Setting ReplanAt to 0 forces a
+// replan on the next SquadMacroPathSystem pass.
 //
-// Phase 15 M15.A.5 - WaitingForStragglers / StragglerCaughtUp / StragglerTotal
-// track the wait-for-stragglers gate: when the roster spread > 2*Spacing,
+// WaitingForStragglers / StragglerCaughtUp / StragglerTotal track the
+// wait-for-stragglers gate: when the roster spread > 2*Spacing,
 // FormationSystem freezes Head advance and SquadMacroPath honours the flag.
-// Caught / Total feed the Inspector "Waiting for stragglers (3/4)" line.
 type MacroPath struct {
 	Waypoints            [SquadMacroPathSize]WorldPos
 	Head                 uint8
@@ -71,18 +67,16 @@ type MacroPath struct {
 	StragglerTotal       uint8
 }
 
-// RadioNetwork - structural scaffold. Real readers land in the Comms phase;
-// CreateFromUnits populates it once with placeholder data.
+// RadioNetwork - structural scaffold. Real readers land in the Comms phase.
 type RadioNetwork struct {
 	Frequency   uint8
 	HasRadioman bool
 	HQReachable bool
 }
 
-// SquadMember - back-reference on each rostered unit. Mirror of
-// BuildingMember. Invariant: for every SquadMember{Squad: s, SlotIndex: i}
-// on entity u, world.Get(s, CommandRoster).Members[i] == u. Maintained by
-// SquadService.
+// SquadMember - back-reference on each rostered unit. Invariant: for every
+// SquadMember{Squad: s, SlotIndex: i} on entity u,
+// world.Get(s, CommandRoster).Members[i] == u. Maintained by SquadService.
 type SquadMember struct {
 	Squad     ecs.Entity
 	SlotIndex uint8
@@ -101,8 +95,6 @@ const (
 )
 
 // FormationOrientation lives on a Squad. Absence == OrientMovement (default).
-// FormationSystem reads this to decide whether to use FormationData.Forward
-// or override it with north.
 type FormationOrientation struct {
 	Mode FormationOrientationMode
 }
@@ -119,9 +111,7 @@ type FormationPreset struct {
 
 // FormationPresets is the singleton ECS resource holding every saved
 // preset. Created at startup; appended to by the editor's "Save current"
-// button; consulted by the editor's dropdown to populate the "Presets"
-// section. Persisted across restarts is out-of-scope for Phase 18 (would
-// live next to layout.json).
+// button; consulted by the editor's dropdown.
 type FormationPresets struct {
 	List []FormationPreset
 }
@@ -130,8 +120,7 @@ type FormationPresets struct {
 // X axis = right of forward (positive = right), Y axis = forward
 // (positive = ahead of commander, negative = behind). When present on a
 // Squad, FormationSystem reads slot offsets from here instead of the
-// kind-based FormationOffset table — letting the formation editor and the
-// "preserve relative positions on merge" path place units freely.
+// kind-based FormationOffset table.
 //
 // Slot 0 (commander) always sits at (0,0).
 type FormationCustomSlots struct {

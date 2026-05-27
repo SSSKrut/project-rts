@@ -7,7 +7,6 @@ type Camera struct {
 	Perspective bool
 }
 
-// ActiveCamera marks the singleton active camera entity.
 type ActiveCamera struct{}
 
 type OrbitController struct {

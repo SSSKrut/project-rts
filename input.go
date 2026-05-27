@@ -12,12 +12,10 @@ import (
 )
 
 // pickUnitFromMouse - single-click selection. Cast a ray through the panel-
-// local cursor (in viewWxviewH viewport space, NOT screen space), intersect
-// with the horizontal plane at the anchor's surface height, then snap to the
-// nearest unit within 1 m XZ. Returns the entity ID when something is hit, or
-// (0, false) otherwise. Phase 10 (M10.3): callers must pass panel-local
-// cursor + the 3D panel's bounds, because raylib's GetScreenToWorldRayEx
-// derives the projection matrix from the supplied viewport size.
+// local cursor (panel-local, NOT screen-space; raylib's GetScreenToWorldRayEx
+// derives the projection matrix from viewport size), intersect the horizontal
+// plane at the anchor's surface height, then snap to the nearest unit within
+// 1 m XZ.
 func pickUnitFromMouse(filter *ecs.Filter3[components.WorldPos, components.Unit, components.Stance],
 	anchor components.WorldPos, localCursor rl.Vector2, viewW, viewH int32) (ecs.Entity, bool) {
 	target, ok := mouseTargetWorldPos(systems.CurrentCamera,
@@ -42,17 +40,13 @@ func pickUnitFromMouse(filter *ecs.Filter3[components.WorldPos, components.Unit,
 	return best, hasHit
 }
 
-// hoverUnitFromMouse is the silent twin of pickUnitFromMouse - no click, just
-// a closest-within-1 m lookup. Used per-frame to refresh the global `hovered`
-// state so the inspector / map can highlight whoever the cursor is over.
+// hoverUnitFromMouse is the silent twin of pickUnitFromMouse - no click.
 func hoverUnitFromMouse(filter *ecs.Filter3[components.WorldPos, components.Unit, components.Stance],
 	anchor components.WorldPos, localCursor rl.Vector2, viewW, viewH int32) (ecs.Entity, bool) {
 	return pickUnitFromMouse(filter, anchor, localCursor, viewW, viewH)
 }
 
-// collectUnitsInRect - marquee selection. Projects every Unit into the panel-
-// local viewport, keeps those whose XY lies inside the rect. minX/Y/maxX/Y
-// are in panel-local coords (cursor.x - panel.Bounds.X, etc.).
+// collectUnitsInRect - marquee selection. minX/Y/maxX/Y are panel-local coords.
 func collectUnitsInRect(filter *ecs.Filter3[components.WorldPos, components.Unit, components.Stance],
 	minX, maxX, minY, maxY float32, viewW, viewH int32) []ecs.Entity {
 	var out []ecs.Entity
@@ -69,12 +63,10 @@ func collectUnitsInRect(filter *ecs.Filter3[components.WorldPos, components.Unit
 	return out
 }
 
-// mouseTargetWorldPos converts the panel-local cursor into a WorldPos by
-// raycasting against a horizontal plane at the anchor's surface height. viewW
-// / viewH are the 3D panel's dimensions - GetScreenToWorldRayEx uses them to
-// derive the projection matrix, so the ray matches what the player sees in
-// the panel even when the panel is smaller than the OS window. Returns
-// (_, false) if the ray is parallel to the plane or points away from it.
+// mouseTargetWorldPos raycasts the panel-local cursor against a horizontal
+// plane at the anchor's surface height. viewW/viewH must be the 3D panel's
+// dimensions (raylib's GetScreenToWorldRayEx uses them to derive the
+// projection matrix). Returns (_, false) on parallel / backward-facing ray.
 func mouseTargetWorldPos(cam rl.Camera3D, anchorRender rl.Vector3,
 	localCursor rl.Vector2, viewW, viewH int32) (components.WorldPos, bool) {
 	ray := rl.GetScreenToWorldRayEx(localCursor, cam, viewW, viewH)
@@ -95,28 +87,23 @@ func mouseTargetWorldPos(cam rl.Camera3D, anchorRender rl.Vector3,
 }
 
 // bindEntry stores one slot of the Ctrl+1..5 / 1..5 selection-recall ring.
-// If Squad is non-zero, the slot is tied to a live squad - recall expands it
-// to whoever is currently in the roster, so binding a squad and then losing
-// members still works. If Squad is zero, Units is the ad-hoc snapshot taken at
-// bind time (Phase 7-style selection memory).
+// If Squad is non-zero, recall expands to whoever is currently in the roster
+// (binding a squad and then losing members still works). Squad == zero ⇒
+// Units is the ad-hoc snapshot taken at bind time.
 type bindEntry struct {
 	Squad ecs.Entity
 	Units []ecs.Entity
 }
 
 // SelectionGroups splits a mixed selection into the unique squads to issue
-// orders against and the soloists (units with no SquadMember). PHASE-11.md P9
-// - replaces the homogeneous-squad-only routing from Phase 9 / 10 and
-// prevents the Leave() chain that dissolved multi-squad selections (ISSUES #3).
+// orders against and the soloists (units with no SquadMember).
 type SelectionGroups struct {
 	SquadsToOrder []ecs.Entity
 	Soloists      []ecs.Entity
 }
 
 // groupSelectionByOwner walks `selected`, collects the distinct squads any
-// member belongs to, and aggregates the rest as soloists. Allocation: O(N)
-// for the temporary set; Phase 11 selections fit in a handful of entities,
-// so the cost is negligible.
+// member belongs to, and aggregates the rest as soloists.
 func groupSelectionByOwner(selected []ecs.Entity,
 	squadMemberMap *ecs.Map[components.SquadMember]) SelectionGroups {
 	var groups SelectionGroups
@@ -138,13 +125,8 @@ func groupSelectionByOwner(selected []ecs.Entity,
 
 // detectSubsetOfSquad returns (squad, true) when every entity in `selected`
 // belongs to the same squad AND the selection is a *proper* subset of that
-// squad's roster (the player marqueed some - not all - members). Used by the
-// Shift+RMB handler to switch from "append squad waypoint" to "place
-// IndividualPosition on each selected unit" (M15.B.1).
-//
-// Empty selection, soloists, multi-squad selections, and whole-squad
-// selections all return ecs.Entity{}, false - those flow through the existing
-// resolveRMBOrder path.
+// squad's roster. Empty / soloist / multi-squad / whole-squad selections
+// return ecs.Entity{}, false.
 func detectSubsetOfSquad(
 	selected []ecs.Entity,
 	squadMemberMap *ecs.Map[components.SquadMember],
@@ -175,10 +157,7 @@ func detectSubsetOfSquad(
 }
 
 // placeIndividualPositions stamps IndividualPosition{Absolute, target} on
-// every live unit in `selected`. Existing markers are overwritten so a second
-// Shift+RMB moves the unit's parked position. Phase 15 M15.B.1 skeleton: all
-// selected units share the same target; per-click distribution across units
-// is deferred to a polish pass.
+// every live unit in `selected`. Existing markers are overwritten.
 func placeIndividualPositions(
 	world *ecs.World,
 	selected []ecs.Entity,
@@ -203,11 +182,9 @@ func placeIndividualPositions(
 	}
 }
 
-// groupSelected inspects the SquadMember of every entity in `selected` and
-// returns (commonSquad, true) when every selected unit belongs to the *same*
-// squad. The common Squad entity is zero when every selected unit is a
-// soloist (which still counts as homogeneous - the caller checks the zero
-// value before routing the order through SquadService).
+// groupSelected returns (commonSquad, true) when every selected unit belongs
+// to the same squad. commonSquad is zero when every unit is a soloist (still
+// homogeneous — caller checks the zero value before routing through SquadService).
 func groupSelected(selected []ecs.Entity,
 	squadMemberMap *ecs.Map[components.SquadMember]) (ecs.Entity, bool) {
 	if len(selected) == 0 {
@@ -232,19 +209,15 @@ func groupSelected(selected []ecs.Entity,
 	return common, true
 }
 
-// stepAlongPath moves the anchor toward path[0] by up to step metres, popping
-// the waypoint when the agent enters its arrival radius. Y is lerped toward
-// the waypoint's Y so the anchor can climb stairs / enter sunken bunkers -
-// the chunk GroundStick clamps it back to either the surface or the covering
-// floor depending on which is closer next tick.
+// stepAlongPath moves the anchor toward path[0] by up to step metres,
+// popping waypoints when reached. Y is lerped toward the waypoint's Y so the
+// anchor can climb stairs / enter sunken bunkers; GroundStick clamps next tick.
 func stepAlongPath(anchorPos *components.WorldPos, path []components.WorldPos, step float32) []components.WorldPos {
 	for len(path) > 0 && step > 0 {
 		target := path[0]
 		diff := target.Sub(*anchorPos)
 		dist := float32(math.Sqrt(float64(diff.X*diff.X + diff.Z*diff.Z)))
 		if dist <= 0.5 {
-			// Snap Y to the waypoint when we pop - this is where multi-floor
-			// transitions take effect, so GroundStick picks the new floor.
 			anchorPos.Local.Y = target.Local.Y
 			path = path[1:]
 			continue
@@ -253,8 +226,6 @@ func stepAlongPath(anchorPos *components.WorldPos, path []components.WorldPos, s
 		if take > dist {
 			take = dist
 		}
-		// Vertical climb: lerp Y proportionally so a path crossing a stairs
-		// transition slides instead of teleporting.
 		dy := target.Local.Y - anchorPos.Local.Y
 		yStep := dy * (take / dist)
 		*anchorPos = anchorPos.Add(rl.Vector3{

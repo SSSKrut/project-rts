@@ -3,10 +3,7 @@ package components
 import "github.com/mlange-42/ark/ecs"
 
 // TacticalOverrideReason names the AI driver that pulled the unit out of its
-// formation slot. UnderFire is the only one a Phase 15 writer sets; the rest
-// are placeholders for systems that land later (LostLOS in Phase 17 Vision
-// extensions, Reloading / OutOfAmmo in Phase 18 weapon rework, NoPath /
-// BlockedByContact in Phase 16 buildings + Phase 18 traffic).
+// formation slot.
 //
 // Inspector reads ReasonLabel / ReasonDetail / ReasonResume off the active
 // reason to render the State / Override / Reason / Resume block.
@@ -22,8 +19,6 @@ const (
 	TacticalOverrideBlockedByContact
 )
 
-// ReasonLabel returns the short headline shown on the Inspector's Override
-// row, e.g. "Taking cover under fire".
 func ReasonLabel(r TacticalOverrideReason) string {
 	switch r {
 	case TacticalOverrideUnderFire:
@@ -43,8 +38,7 @@ func ReasonLabel(r TacticalOverrideReason) string {
 }
 
 // ReasonResume returns the human-readable template describing what condition
-// will clear the override. Phase 15 keeps these as static strings; future
-// passes can interpolate live thresholds.
+// will clear the override.
 func ReasonResume(r TacticalOverrideReason) string {
 	switch r {
 	case TacticalOverrideUnderFire:
@@ -70,14 +64,12 @@ func ReasonResume(r TacticalOverrideReason) string {
 // player issues a new order, or the safety Until timer expires.
 //
 // LowSuppSince is the session-time the unit's Threat.Suppression first
-// dropped below the clear threshold; 0 while still above. Resets to 0
-// whenever it climbs back up. The clear path waits for a sustained
-// low-suppression window (clearLowDuration) before removing the marker -
+// dropped below the clear threshold; 0 while still above. The clear path
+// waits for a sustained low-suppression window before removing the marker -
 // hysteresis against jitter.
 //
 // AssignedSlot is the cover slot the unit moves toward. Stored so the next
-// pass can recognise the unit's claim (occupancy penalty) and a future Phase
-// 17 reader can label "going to that bush" in the Inspector.
+// pass can recognise the unit's claim (occupancy penalty).
 type TacticalOverride struct {
 	Reason       TacticalOverrideReason
 	Until        float32

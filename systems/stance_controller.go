@@ -9,31 +9,20 @@ import (
 	"rts-go/core"
 )
 
-// stanceAnimLock - minimum gap (s) between autonomous stance changes. Keeps
-// the controller from flapping Prone <-> Stand when Threat.Total hovers near
-// a band edge.
+// Minimum gap (s) between autonomous stance changes — keeps the controller
+// from flapping Prone↔Stand when Threat.Total hovers near a band edge.
 const stanceAnimLock float32 = 0.5
 
-// stanceProneSpeedCap - desired speed above this disallows Prone (the prone
-// MaxSpeed in StanceSpec is 1.5 m/s; trying to move faster while prone
-// would just clamp speed). Matches the design budget in plan C.2.
+// Desired speed above this disallows Prone (prone MaxSpeed = 1.5 m/s).
 const stanceProneSpeedCap float32 = 1.5
 
-// StanceControllerSystem is Phase 17 M17.C autonomy. Each tick maps the
-// unit's Threat.State into a target stance band and writes Stance.Code (with
-// an animation-lock gate) when:
+// StanceControllerSystem maps Threat.State to a target stance band and
+// writes Stance.Code under animation lock. Gates:
+//   - BehaviorRules.AllowAutoStance (off for sniper / ATGunner).
+//   - No active StanceOverride (player Z/X/C wins).
+//   - sys.elapsed ≥ Stance.LockUntil.
 //
-//   - BehaviorRules.AllowAutoStance is true (player can lock it off per
-//     doctrine - sniper / ATGunner who stays prone regardless of threat).
-//   - StanceOverride is absent / expired (player Z/X/C wins).
-//   - sys.elapsed >= Stance.LockUntil (anim lock against per-tick flap).
-//
-// Movement gate: when the unit's current Motion.Speed is above
-// stanceProneSpeedCap, target is clamped to Crouch even if Threat.State
-// asks for Prone (prone immobilises - design plan C.2).
-//
-// Runs serial; mutations are scalar field writes on Stance, no archetype
-// changes.
+// Movement gate: Motion.Speed > stanceProneSpeedCap clamps target to Crouch.
 type StanceControllerSystem struct {
 	filter         *ecs.Filter4[components.Unit, components.Stance, components.Threat, components.Motion]
 	memberMap      *ecs.Map[components.SquadMember]
@@ -41,10 +30,8 @@ type StanceControllerSystem struct {
 	overrideMap    *ecs.Map[components.StanceOverride]
 	movementMap    *ecs.Map[components.MovementProfile]
 	orderMoveOverr *ecs.Map[components.OrderParamMovementProfile]
-	orderQueueMap  *ecs.Map[components.OrderQueueHead]
-	// Phase 17.8 M17.8.3 — Utility AI ModeSuppressed forces Prone regardless
-	// of Threat.State band, animation lock, or doctrine. Reads CurrentMode
-	// from LocalBlackboard (UtilityEvaluatorSystem writes it).
+	orderQueueMap *ecs.Map[components.OrderQueueHead]
+	// ModeSuppressed forces Prone regardless of band / lock / doctrine.
 	blackboardMap *ecs.Map[components.LocalBlackboard]
 	elapsed       float32
 }
@@ -83,26 +70,19 @@ func (sys *StanceControllerSystem) Update(ctx core.UpdateContext) {
 		ent := q.Entity()
 		_, stance, threat, mot := q.Get()
 
-		// Gate: player override takes priority.
 		if ov := sys.overrideMap.Get(ent); ov != nil && ov.Until > now {
 			continue
 		}
-		// Gate: autonomy disabled per doctrine (sniper / ATGunner).
 		if !sys.allowAutoStance(ent) {
 			continue
 		}
-		// Phase 17.8 M17.8.3 — Utility ModeSuppressed forces Prone. Bypasses
-		// the animation lock (suppression is reactive — must collapse to
-		// Prone immediately) but still respects the moving-too-fast gate
-		// below (Crouch fallback when speed > 1.5 m/s).
+		// ModeSuppressed bypasses the animation lock (reactive collapse to
+		// Prone) but still respects the moving-too-fast gate below.
 		suppressedNow := false
 		if b := sys.blackboardMap.Get(ent); b != nil && b.CurrentMode == components.ModeSuppressed {
 			suppressedNow = true
 		}
 
-		// Gate: animation lock - hold the last change for at least
-		// stanceAnimLock seconds before flipping again. Bypassed when
-		// Suppressed (reactive collapse).
 		if !suppressedNow && now < stance.LockUntil {
 			continue
 		}
@@ -112,8 +92,6 @@ func (sys *StanceControllerSystem) Update(ctx core.UpdateContext) {
 			target = components.StanceProne
 		}
 
-		// Movement gate: prone is incompatible with > 1.5 m/s. If the unit
-		// is actually moving that fast, snap up to Crouch.
 		if target == components.StanceProne && mot.Speed > stanceProneSpeedCap {
 			target = components.StanceCrouch
 		}
@@ -125,9 +103,8 @@ func (sys *StanceControllerSystem) Update(ctx core.UpdateContext) {
 	}
 }
 
-// allowAutoStance reads the unit's squad BehaviorRules. Default true for
-// soloists / units without a squad - they fall through to the autonomous
-// path. Squad doctrine (Sniper / ATGunner) can flip it off.
+// allowAutoStance returns the squad's BehaviorRules.AllowAutoStance, true
+// by default for soloists.
 func (sys *StanceControllerSystem) allowAutoStance(unit ecs.Entity) bool {
 	mem := sys.memberMap.Get(unit)
 	if mem == nil || mem.Squad == (ecs.Entity{}) {
@@ -140,9 +117,8 @@ func (sys *StanceControllerSystem) allowAutoStance(unit ecs.Entity) bool {
 	return br.AllowAutoStance
 }
 
-// targetStance maps Threat.State to the desired stance band. Safe/Vigilant
-// falls through to the squad's standing MovementProfile.Stance so a Patrol
-// doctrine staying in Crouch still gets respected when the threat clears.
+// targetStance maps Threat.State to the desired stance. Safe/Vigilant falls
+// through to the squad's standing MovementProfile.Stance.
 func (sys *StanceControllerSystem) targetStance(unit ecs.Entity, state components.ThreatState) components.StanceCode {
 	switch state {
 	case components.ThreatThreatened:
@@ -154,10 +130,9 @@ func (sys *StanceControllerSystem) targetStance(unit ecs.Entity, state component
 	}
 }
 
-// squadStandingStance resolves the unit's idle stance: per-order override
-// (Phase 13 OrderParamMovementProfile.Stance) > squad standing
-// MovementProfile.Stance > StanceStand fallback. Matches the same precedence
-// UnitMovementSystem.resolveProfile follows.
+// squadStandingStance resolves the idle stance: per-order override > squad
+// MovementProfile.Stance > StanceStand. Same precedence as
+// UnitMovementSystem.resolveProfile.
 func (sys *StanceControllerSystem) squadStandingStance(unit ecs.Entity) components.StanceCode {
 	mem := sys.memberMap.Get(unit)
 	if mem == nil || mem.Squad == (ecs.Entity{}) {

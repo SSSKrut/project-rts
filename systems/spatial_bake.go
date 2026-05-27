@@ -8,41 +8,37 @@ import (
 	"rts-go/core"
 )
 
-// Phase 16.B.1.b debug: print first non-trivial Pass 4 bake to stdout so a
-// failing nav setup is immediately diagnosable.
+// One-shot debug flag: print first non-trivial Pass 4 bake to stdout so a
+// failing nav setup is diagnosable.
 var bakeDebugReported bool
 
-// SpatialBakeSystem is the Phase 6 oracle baker: per chunk, it walks the
-// heightmap + props + walls + roads + trenches once and emits a NavGrid + a
-// CoverMap, plus cover-slot entities for any cover-emitting host (prop /
-// wall / corner) inside the chunk. The actual bake is split across four
-// passes living in sibling files:
+// SpatialBakeSystem is the oracle baker: per chunk, it walks the heightmap +
+// props + walls + roads + trenches once and emits a NavGrid + CoverMap, plus
+// cover-slot entities for any cover-emitting host. Split across four passes
+// in sibling files:
 //
-//	spatial_bake_nav.go         Pass 1 - NavGrid bake (gated Without[NavBaked])
-//	spatial_bake_cover.go       Pass 2 - CoverMap + slots + CoverDistance
-//	spatial_bake_level.go       Pass 3 - LevelNavGrid bake per Level entity
-//	spatial_bake_transitions.go Pass 4 - TransitionRegistry rebuild
+//	spatial_bake_nav.go         Pass 1 — NavGrid bake (Without[NavBaked])
+//	spatial_bake_cover.go       Pass 2 — CoverMap + slots + CoverDistance
+//	spatial_bake_level.go       Pass 3 — LevelNavGrid per Level entity
+//	spatial_bake_transitions.go Pass 4 — TransitionRegistry rebuild
 //
-// Modified is *not* gated: bake reflects the live heightmap (potentially
+// Modified is NOT gated: bake reflects the live heightmap (potentially
 // stamped) and props / buildings are spawned by their own systems before us.
-// Modified-stale is an accepted Phase 6 trade-off (P13).
 type SpatialBakeSystem struct {
 	navFilter   *ecs.Filter3[components.ChunkCoord, components.Heightmap, components.WorldPos]
 	coverFilter *ecs.Filter3[components.ChunkCoord, components.Heightmap, components.WorldPos]
 	wallFilter  *ecs.Filter2[components.WorldPos, components.WallSegment]
 	floorFilter *ecs.Filter2[components.WorldPos, components.Floor]
-	// Phase 16.B.1.b: LevelNavGrid now hangs on Level entities, one per
-	// interior volume. Pass 3 iterates levels (gated by LevelNavBaked);
-	// Pass 4 needs the full set of baked levels to find transition endpoints,
-	// so levelFilterAll skips the Without gate.
+	// Pass 3 iterates levels (gated by LevelNavBaked); Pass 4 needs the full
+	// set of baked levels to find transition endpoints, so levelFilterAll
+	// skips the Without gate.
 	levelFilter    *ecs.Filter2[components.Level, components.WorldPos]
 	levelFilterAll *ecs.Filter2[components.Level, components.WorldPos]
 	levelMap       *ecs.Map[components.Level]
 	levelMemberMap *ecs.Map[components.LevelMember]
 	stairLevelsMap *ecs.Map[components.StairLevels]
-	// Phase 14.6 M14.6.1 - NavInBuilding bake reads Building roots (any
-	// chunk, AlwaysActive) and stamps the flag onto surface cells whose XZ
-	// falls inside the footprint.
+	// NavInBuilding bake reads Building roots (any chunk, AlwaysActive) and
+	// stamps the flag onto surface cells inside the footprint.
 	buildingFilter    *ecs.Filter1[components.Building]
 	heightmapMap      *ecs.Map[components.Heightmap]
 	navGridMap        *ecs.Map[components.NavGrid]
@@ -69,9 +65,8 @@ type SpatialBakeSystem struct {
 	transitionRes     ecs.Resource[components.TransitionRegistry]
 	stairsFilter      *ecs.Filter2[components.WorldPos, components.Stairs]
 	floorComponentMap *ecs.Map[components.Floor]
-	// Phase 13 M13.4: CoverDistance bake - query all cover-slot entities and
-	// bucket by host chunk, then re-write NavCell.CoverDistance for cells
-	// within scan radius of any slot in the 9-chunk window.
+	// CoverDistance bake: query all cover-slot entities and re-write
+	// NavCell.CoverDistance for cells within scan radius (9-chunk window).
 	coverSlotFilter *ecs.Filter2[components.WorldPos, components.CoverSlot]
 }
 
@@ -136,16 +131,13 @@ type spatialBakeChunkRec struct {
 
 // wallEntry is a per-wall snapshot used inside one bake tick. Captures the
 // passable-opening flag (door open) so the rasteriser doesn't need to peek
-// into Door state again.
-//
-// Phase 17.9 M2 — `outward` is the wall's CoverDirection.Dir (XZ unit vector
-// pointing away from the building interior). The NavInBuilding-clear sweep
-// after applyNavBuildings reads this to compute each door's outside cell
-// and unstamp the bit so pathfinder can approach the door from open terrain.
+// into Door state again. `outward` is the CoverDirection.Dir; the post-
+// applyNavBuildings sweep reads it to compute each door's outside cell and
+// clear NavInBuilding so pathfinder can approach the door from open terrain.
 type wallEntry struct {
 	local           rl.Vector3
 	w               components.WallSegment
-	openingPassable bool // true <-> open door; false otherwise (windows, closed doors, plain walls)
+	openingPassable bool // true ↔ open door
 	outward         rl.Vector3
 }
 

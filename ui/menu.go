@@ -4,25 +4,16 @@ import (
 	rl "github.com/gen2brain/raylib-go/raylib"
 )
 
-// Phase 18.C chevron popup menu: anchored to a leaf, lists swappable widget
-// kinds + Close pane. Stateless other than (Open, Anchor, Leaf); main.go
-// owns the lifecycle (open on chevron-click, dispatch on item-click, close
-// on outside-click or ESC).
-
-// MenuItemKind discriminates between a widget-switch item and the close
-// action. Phase 18.D may add more (split-here, dock-out).
 type MenuItemKind uint8
 
 const (
 	MenuItemSwitch MenuItemKind = iota
 	MenuItemClose
-	// MenuItemFloat detaches the leaf's current widget into a floating
-	// panel and removes the leaf from the workspace tree. The host wires
-	// the actual spawn in handleMenuItem - menu.go just signals intent.
+	// MenuItemFloat detaches the widget into a floating panel and
+	// removes the leaf; the host wires the spawn, menu.go signals intent.
 	MenuItemFloat
 )
 
-// MenuItem is one row in the chevron menu.
 type MenuItem struct {
 	Kind     MenuItemKind
 	Target   PanelID // valid for MenuItemSwitch
@@ -30,10 +21,6 @@ type MenuItem struct {
 	Disabled bool
 }
 
-// ChevronMenu is the runtime state of the popup. Chevron holds the source
-// chevron rect on screen; Rect() uses it to position the menu below by
-// default and flip above / right-align when it would otherwise overflow the
-// screen.
 type ChevronMenu struct {
 	Open    bool
 	Leaf    *LayoutNode
@@ -58,9 +45,8 @@ var (
 	menuSep         = rl.Color{R: 50, G: 55, B: 65, A: 255}
 )
 
-// OpenAt populates the menu for `leaf` and anchors it to the chevron rect.
-// Items list: every WorkspacePanelKinds entry as a switch action (current
-// widget shown disabled), plus Close pane (disabled when leaf is root).
+// OpenAt populates Items with every WorkspacePanelKinds entry (current
+// widget disabled) plus Close pane (disabled when leaf is root).
 func (m *ChevronMenu) OpenAt(leaf *LayoutNode, chevron rl.Rectangle, isRoot bool) {
 	if leaf == nil {
 		m.Open = false
@@ -83,7 +69,7 @@ func (m *ChevronMenu) OpenAt(leaf *LayoutNode, chevron rl.Rectangle, isRoot bool
 	}
 	// Float pane is disabled for the root leaf (no sibling to merge into)
 	// and for Panel3D (the scene render texture is sized to the workspace
-	// leaf - detaching would need a second RT, deferred work).
+	// leaf — detaching would need a second RT, deferred work).
 	m.Items = append(m.Items, MenuItem{
 		Kind:     MenuItemFloat,
 		Label:    "Float pane",
@@ -97,14 +83,10 @@ func (m *ChevronMenu) OpenAt(leaf *LayoutNode, chevron rl.Rectangle, isRoot bool
 	m.Open = true
 }
 
-// Close hides the menu.
 func (m *ChevronMenu) Close() { m.Open = false; m.Leaf = nil }
 
-// Rect returns the menu's screen rectangle, clamped so it stays fully on
-// screen. Default: anchored below the chevron, left edge aligned with
-// chevron's left edge. If that would overflow the bottom, the menu flips
-// to open above the chevron. If it would overflow the right, the right
-// edge aligns with the chevron's right edge instead of the left.
+// Rect anchors below the chevron, flipping above on bottom overflow and
+// right-aligning on right overflow.
 func (m *ChevronMenu) Rect(font rl.Font) rl.Rectangle {
 	if !m.Open {
 		return rl.Rectangle{}
@@ -120,9 +102,6 @@ func (m *ChevronMenu) Rect(font rl.Font) rl.Rectangle {
 	screenW := float32(rl.GetScreenWidth())
 	screenH := float32(rl.GetScreenHeight())
 
-	// Horizontal: left-align to chevron by default, flip to right-align if
-	// it would overflow. Final clamp keeps the menu on screen even when
-	// the chevron itself sits near an edge.
 	x := m.Chevron.X
 	if x+width > screenW {
 		x = m.Chevron.X + m.Chevron.Width - width
@@ -134,7 +113,6 @@ func (m *ChevronMenu) Rect(font rl.Font) rl.Rectangle {
 		x = 2
 	}
 
-	// Vertical: below chevron by default; flip above if would overflow.
 	y := m.Chevron.Y + m.Chevron.Height
 	if y+height > screenH {
 		y = m.Chevron.Y - height
@@ -148,7 +126,6 @@ func (m *ChevronMenu) Rect(font rl.Font) rl.Rectangle {
 	return rl.Rectangle{X: x, Y: y, Width: width, Height: height}
 }
 
-// HitItem returns the menu item under `cursor` (-1 if none).
 func (m *ChevronMenu) HitItem(font rl.Font, cursor rl.Vector2) int {
 	if !m.Open {
 		return -1
@@ -165,8 +142,7 @@ func (m *ChevronMenu) HitItem(font rl.Font, cursor rl.Vector2) int {
 	return idx
 }
 
-// Draw paints the menu under its anchor. Caller draws after every other
-// frame element so the menu sits on top of all chrome.
+// Draw must run after all other UI so the menu sits on top of all chrome.
 func (m *ChevronMenu) Draw(font rl.Font, cursor rl.Vector2) {
 	if !m.Open {
 		return
@@ -178,7 +154,6 @@ func (m *ChevronMenu) Draw(font rl.Font, cursor rl.Vector2) {
 	for i, it := range m.Items {
 		rowY := r.Y + menuPad + float32(i)*menuItemH
 		rowRect := rl.Rectangle{X: r.X + 1, Y: rowY, Width: r.Width - 2, Height: menuItemH}
-		// Separator before the action group (Float / Close pane).
 		if it.Kind == MenuItemFloat {
 			sepY := rowY - 1
 			rl.DrawLine(int32(r.X+menuPad), int32(sepY), int32(r.X+r.Width-menuPad), int32(sepY), menuSep)

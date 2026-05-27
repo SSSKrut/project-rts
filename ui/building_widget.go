@@ -9,7 +9,6 @@ import (
 	"rts-go/components"
 )
 
-// ChipKind discriminates clickable rectangles on the building widget.
 type ChipKind uint8
 
 const (
@@ -18,9 +17,8 @@ const (
 	ChipKindInside
 )
 
-// WidgetChip is one clickable rectangle. Index holds either the level
-// index (ChipKindLevel) or the wall-mode enum value (ChipKindWallMode);
-// ignored for Inside.
+// Index holds the level index (ChipKindLevel) or wall-mode enum value
+// (ChipKindWallMode); ignored for Inside.
 type WidgetChip struct {
 	Rect   rl.Rectangle
 	Kind   ChipKind
@@ -29,9 +27,6 @@ type WidgetChip struct {
 	Label  string
 }
 
-// BuildingWidgetLayout is the precomputed chip strip. Same struct is read
-// by both the renderer (DrawBuildingWidget) and the input layer
-// (HitTestBuildingWidget) so the click region matches the visual exactly.
 type BuildingWidgetLayout struct {
 	Root  ecs.Entity
 	Chips []WidgetChip
@@ -44,8 +39,6 @@ const (
 	widgetFontPx = 14
 )
 
-// ComputeBuildingWidget assembles a chip layout above `screenPos`. Returns
-// nil when bvm is nil or no levels exist.
 func ComputeBuildingWidget(root ecs.Entity, bvm *components.BuildingViewMode, levels []ecs.Entity, screenPos rl.Vector2, levelMap *ecs.Map[components.Level]) *BuildingWidgetLayout {
 	if bvm == nil {
 		return nil
@@ -68,8 +61,8 @@ func ComputeBuildingWidget(root ecs.Entity, bvm *components.BuildingViewMode, le
 		}
 		out.Chips = append(out.Chips, WidgetChip{
 			Rect: rl.Rectangle{
-				X: rowX + float32(i)*(widgetChipW+widgetGap),
-				Y: rowY,
+				X:      rowX + float32(i)*(widgetChipW+widgetGap),
+				Y:      rowY,
 				Width:  widgetChipW,
 				Height: widgetChipH,
 			},
@@ -85,8 +78,8 @@ func ComputeBuildingWidget(root ecs.Entity, bvm *components.BuildingViewMode, le
 	for i, l := range modeLabels {
 		out.Chips = append(out.Chips, WidgetChip{
 			Rect: rl.Rectangle{
-				X: rowX + float32(i)*(widgetChipW+widgetGap),
-				Y: rowY2,
+				X:      rowX + float32(i)*(widgetChipW+widgetGap),
+				Y:      rowY2,
 				Width:  widgetChipW,
 				Height: widgetChipH,
 			},
@@ -104,8 +97,8 @@ func ComputeBuildingWidget(root ecs.Entity, bvm *components.BuildingViewMode, le
 	}
 	out.Chips = append(out.Chips, WidgetChip{
 		Rect: rl.Rectangle{
-			X: rowX,
-			Y: rowY3,
+			X:      rowX,
+			Y:      rowY3,
 			Width:  3*widgetChipW + 2*widgetGap,
 			Height: widgetChipH,
 		},
@@ -117,8 +110,6 @@ func ComputeBuildingWidget(root ecs.Entity, bvm *components.BuildingViewMode, le
 	return out
 }
 
-// DrawBuildingWidget renders the chip strip. The layout was produced by
-// ComputeBuildingWidget against the SAME mouse / camera frame.
 func DrawBuildingWidget(layout *BuildingWidgetLayout, font rl.Font) {
 	if layout == nil {
 		return
@@ -143,9 +134,8 @@ func DrawBuildingWidget(layout *BuildingWidgetLayout, font rl.Font) {
 	}
 }
 
-// HitTestBuildingWidget returns the chip under `mouse`, or nil. Mouse is
-// in the same coord space the layout was built in (absolute window
-// coords, not panel-local).
+// HitTestBuildingWidget expects `mouse` in absolute window coords (the same
+// space layout was built in), not panel-local.
 func HitTestBuildingWidget(layout *BuildingWidgetLayout, mouse rl.Vector2) *WidgetChip {
 	if layout == nil {
 		return nil

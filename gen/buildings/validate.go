@@ -7,7 +7,7 @@ import (
 )
 
 // Severity ranks ValidationIssue. Errors block loader acceptance; warnings
-// are logged and the plan still loads.
+// are logged but the plan still loads.
 type Severity uint8
 
 const (
@@ -24,7 +24,6 @@ func (s Severity) String() string {
 	}
 }
 
-// ValidationCode enumerates plan-shape problems Validate can detect.
 type ValidationCode uint8
 
 const (
@@ -62,8 +61,7 @@ func (c ValidationCode) String() string {
 }
 
 // ValidationIssue is one diagnostic. EntityIdx is the slice index of the
-// offending entity (Floor / Wall / Stair / Transition / Furniture /
-// Marker / Level) - sandbox uses it for click-to-fly camera. -1 when N/A.
+// offending entity (sandbox uses it for click-to-fly camera). -1 when N/A.
 type ValidationIssue struct {
 	Severity  Severity
 	Code      ValidationCode
@@ -75,9 +73,9 @@ func (iss ValidationIssue) String() string {
 	return fmt.Sprintf("[%s] %s: %s", iss.Severity, iss.Code, iss.Message)
 }
 
-// Validate runs structural checks on a BuildingPlan. Empty result = plan
-// is well-formed. Both Phase 16.5 generator and Phase 16.A .glb loader
-// call this on their output; loader rejects on any Error.
+// Validate runs structural checks on a BuildingPlan. Empty result = well
+// formed. Both the generator and the .glb loader call this; loader rejects
+// on any Error.
 func Validate(plan *components.BuildingPlan) []ValidationIssue {
 	var issues []ValidationIssue
 
@@ -223,7 +221,6 @@ func overlapY(a, b components.AABB3D, eps float32) bool {
 	return a.MinY < b.MaxY-eps && a.MaxY > b.MinY+eps
 }
 
-// HasErrors returns true when any issue has SeverityError.
 func HasErrors(issues []ValidationIssue) bool {
 	for _, iss := range issues {
 		if iss.Severity == SeverityError {

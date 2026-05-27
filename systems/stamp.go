@@ -9,17 +9,13 @@ import (
 )
 
 // HeightKernel returns the per-vertex height delta at offset (dx, dz) from
-// the stamp centre. Implementations return 0 outside their effective radius;
-// the caller's bounding box only skips far-away vertices cheaply.
+// the stamp centre. Implementations return 0 outside their effective radius.
 type HeightKernel func(dx, dz float32) float32
 
-// Crater returns a kernel that subtracts a smooth round bowl. Profile is half
-// a cosine wave -
+// Crater returns a half-cosine bowl kernel:
 //
-//	delta(d) = -depth * 0.5 * (1 + cos(pi * d/radius))    for d <= radius
-//	delta(d) = 0                                          for d >  radius
-//
-// - so the lip blends to zero with no sharp edges.
+//	delta(d) = -depth * 0.5 * (1 + cos(π * d/radius))  for d ≤ radius
+//	delta(d) = 0                                       for d > radius
 func Crater(depth, radius float32) HeightKernel {
 	if radius <= 0 {
 		return func(dx, dz float32) float32 { return 0 }
@@ -37,9 +33,8 @@ func Crater(depth, radius float32) HeightKernel {
 	}
 }
 
-// Stamper applies HeightKernels to live terrain chunks. Service object (not
-// a System); handles are pre-built once via NewStamper and reused. Created
-// in main.go and called from interactive sites.
+// Stamper applies HeightKernels to live terrain chunks. Service object,
+// not a System; pre-built handles via NewStamper.
 type Stamper struct {
 	indexRes     ecs.Resource[TerrainChunkIndex]
 	heightmapMap *ecs.Map[components.Heightmap]
@@ -57,16 +52,11 @@ func NewStamper(w *ecs.World) *Stamper {
 }
 
 // StampHeightmap applies kernel to every loaded-chunk vertex within radius
-// of center (in world XZ). Touched chunks get MeshDirty (rebuild next frame)
-// and Modified (survive eviction).
+// of center. Touched chunks get MeshDirty + Modified (survive eviction).
+// Unloaded chunks are silently skipped.
 //
-// Chunks not currently loaded are silently skipped - streaming owns load
-// lifecycle. Callers that need a guaranteed effect must ensure the affected
-// chunks are within streaming range first.
-//
-// At a chunk seam, both adjacent chunks own a copy of the shared edge
-// vertex; both fall inside the chunk-bounds loop so both get the same
-// delta from kernel(dx, dz), keeping the seam continuous.
+// At a chunk seam, both adjacent chunks own a copy of the shared edge vertex
+// and both get the same delta from kernel(dx, dz), keeping the seam continuous.
 func (s *Stamper) StampHeightmap(center components.WorldPos, kernel HeightKernel, radius float32) {
 	idx := s.indexRes.Get()
 	if idx == nil {
@@ -76,7 +66,7 @@ func (s *Stamper) StampHeightmap(center components.WorldPos, kernel HeightKernel
 	cx := float32(center.Chunk.X)*components.ChunkSize + center.Local.X
 	cz := float32(center.Chunk.Z)*components.ChunkSize + center.Local.Z
 
-	// Floor-divide so negatives land in the right chunk (x = -0.5 -> chunk -1).
+	// Floor-divide so negatives land in the right chunk (x = -0.5 → chunk -1).
 	minCX := int32(math.Floor(float64((cx - radius) / components.ChunkSize)))
 	maxCX := int32(math.Floor(float64((cx + radius) / components.ChunkSize)))
 	minCZ := int32(math.Floor(float64((cz - radius) / components.ChunkSize)))
@@ -136,23 +126,21 @@ func (s *Stamper) StampHeightmap(center components.WorldPos, kernel HeightKernel
 	}
 }
 
-// RiverCut applies a cosine half-falloff cut along a polyline. Wrapper over
-// cutAlongPolyline; semantically a "river bed", but the kernel is identical to
-// the Trench cut. Does NOT set Modified - derivable on respawn.
+// RiverCut applies a cosine half-falloff cut along a polyline. Does NOT set
+// Modified — derivable on respawn.
 func (s *Stamper) RiverCut(cc components.ChunkCoord, polyline []components.WorldPos, width, depth float32) {
 	s.cutAlongPolyline(cc, polyline, width, depth)
 }
 
-// Trench cuts a defensive earthwork along a polyline. Same kernel as RiverCut
-// but kept separate at the API surface so callers (river vs. earthwork) read
-// distinct intent. Does NOT set Modified.
+// Trench cuts a defensive earthwork along a polyline. Same kernel as
+// RiverCut, distinct API surface for distinct intent.
 func (s *Stamper) Trench(cc components.ChunkCoord, polyline []components.WorldPos, width, depth float32) {
 	s.cutAlongPolyline(cc, polyline, width, depth)
 }
 
-// cutAlongPolyline is the shared cosine-falloff polyline-cut kernel:
-// for each chunk vertex, distance d to the nearest segment of polyline drives
-// a cosine ramp from -depth at the line centre to 0 at width.
+// cutAlongPolyline: cosine-falloff polyline cut. For each vertex, distance
+// d to the nearest segment drives a ramp from -depth at line centre to 0
+// at width.
 func (s *Stamper) cutAlongPolyline(cc components.ChunkCoord, polyline []components.WorldPos, width, depth float32) {
 	if width <= 0 || len(polyline) < 2 {
 		return
@@ -216,13 +204,8 @@ func (s *Stamper) cutAlongPolyline(cc components.ChunkCoord, polyline []componen
 	}
 }
 
-// LevelTo flattens the chunk's heightmap to `targetY` inside the footprint
-// and cosine-blends back to the natural terrain over `falloffWidth` metres
-// outside. Does NOT set Modified — pristine chunks re-apply on respawn.
-//
-// Phase 17.6 follow-up: surface buildings call this with their root WorldPos.Y
-// as targetY so door thresholds are flush with the leveled plate. Bunker
-// pads delegate through RectCut which computes targetY = surface − depth.
+// LevelTo flattens the heightmap to `targetY` inside the footprint, cosine-
+// blends back outside over `falloffWidth`. Does NOT set Modified.
 func (s *Stamper) LevelTo(cc components.ChunkCoord, footprint components.AABB2D, targetY, falloffWidth float32) {
 	if falloffWidth < 0 {
 		falloffWidth = 0
@@ -271,29 +254,22 @@ func (s *Stamper) LevelTo(cc components.ChunkCoord, footprint components.AABB2D,
 	}
 }
 
-// RectCut sinks a bunker pad into the surface — flat plate at
-// (surface_at_centre − depth) inside the footprint, cosine-falloff skirt
-// outside. Wraps LevelTo with the bunker-specific targetY derivation.
-// Does NOT set Modified.
+// RectCut sinks a bunker pad — flat plate at (surface_at_centre − depth)
+// inside the footprint, cosine skirt outside.
 func (s *Stamper) RectCut(cc components.ChunkCoord, footprint components.AABB2D, depth, falloffWidth float32) {
 	referenceY := GroundHeight(footprint.CenterX(), footprint.CenterZ())
 	s.LevelTo(cc, footprint, referenceY-depth, falloffWidth)
 }
 
-// RoadFlatten blends the chunk's heightmap toward a linear road profile
-// between two world-space endpoints over a strip of the given width. Profile
-// at distance d from the centre line is a cosine ramp from full replacement
-// (d = 0) to no change (d >= width/2):
+// RoadFlatten blends the heightmap toward a linear road profile between two
+// endpoints over a strip of given width:
 //
-//	w(d) = 0.5 * (1 + cos(pi * d / (width/2)))
+//	w(d) = 0.5 * (1 + cos(π * d / (width/2)))
 //	h    = lerp(h, target, w)
 //
-// where target is interpolated linearly between fromY and toY along the road.
-//
-// Unlike RiverCut (additive), this is a *blend toward target* - flattens a
-// strip of land to road height, fading back to the surrounding terrain at the
-// strip edges. Per-chunk; the caller (RoadSystem) decides which chunks an edge
-// touches. Modified is NOT set, by the same rule as river cuts.
+// where target is interpolated linearly along the road. Unlike RiverCut
+// (additive), this is a blend toward target — flattens a strip and fades
+// back at the edges. Does NOT set Modified.
 func (s *Stamper) RoadFlatten(cc components.ChunkCoord,
 	fromWX, fromWZ, fromY, toWX, toWZ, toY, width float32) {
 	if width <= 0 {

@@ -6,15 +6,11 @@ import (
 	"rts-go/components"
 )
 
-// NewPropTypeRegistry builds the placeholder PropTypeRegistry. Cover/HP/
-// BlocksLOS/BlocksMove are filled for forward-compatibility (Phase 6 NavGrid,
-// Phase 11 combat) - placeholder visuals today, real gameplay later.
-//
-// Returned by pointer so AddResource holds it without copying the 8 KB array.
+// NewPropTypeRegistry builds the placeholder PropTypeRegistry. Returned by
+// pointer so AddResource doesn't copy the 8 KB array.
 func NewPropTypeRegistry() *components.PropTypeRegistry {
 	r := &components.PropTypeRegistry{}
 
-	// Oak - chunky deciduous: brown trunk, broad green canopy.
 	r.Metas[components.PropOak] = components.PropMeta{
 		Primitive:  components.PrimitiveTree,
 		Size:       rl.Vector3{X: 0.35, Y: 4.0, Z: 2.4},
@@ -27,7 +23,6 @@ func NewPropTypeRegistry() *components.PropTypeRegistry {
 		BlocksMove: true,
 	}
 
-	// Pine - narrow tall conifer; single dark cone (cheap visual, no trunk).
 	r.Metas[components.PropPine] = components.PropMeta{
 		Primitive:  components.PrimitiveCone,
 		Size:       rl.Vector3{X: 1.6, Y: 7.0},
@@ -39,7 +34,6 @@ func NewPropTypeRegistry() *components.PropTypeRegistry {
 		BlocksMove: true,
 	}
 
-	// Birch - slim trunk, lighter canopy.
 	r.Metas[components.PropBirch] = components.PropMeta{
 		Primitive:  components.PrimitiveTree,
 		Size:       rl.Vector3{X: 0.22, Y: 5.5, Z: 1.6},
@@ -52,7 +46,6 @@ func NewPropTypeRegistry() *components.PropTypeRegistry {
 		BlocksMove: true,
 	}
 
-	// Bush - low ground sphere; partial cover, doesn't block move.
 	r.Metas[components.PropBush] = components.PropMeta{
 		Primitive:  components.PrimitiveSphere,
 		Size:       rl.Vector3{X: 0.7},
@@ -64,7 +57,6 @@ func NewPropTypeRegistry() *components.PropTypeRegistry {
 		BlocksMove: false,
 	}
 
-	// Rock - grey cube. Solid cover, blocks LOS and movement.
 	r.Metas[components.PropRock] = components.PropMeta{
 		Primitive:  components.PrimitiveCube,
 		Size:       rl.Vector3{X: 1.4, Y: 1.0, Z: 1.4},
@@ -76,7 +68,6 @@ func NewPropTypeRegistry() *components.PropTypeRegistry {
 		BlocksMove: true,
 	}
 
-	// Water - placeholder blue plane along a river segment.
 	r.Metas[components.PropWater] = components.PropMeta{
 		Primitive:  components.PrimitivePlane,
 		Size:       rl.Vector3{X: 4.0, Z: 4.0},
@@ -88,9 +79,8 @@ func NewPropTypeRegistry() *components.PropTypeRegistry {
 		BlocksMove: true,
 	}
 
-	// Bridge - wooden plank spanning the river. Length matches the road spawn
-	// step (4 m); width matches highway. Traversable overrides the underlying
-	// water's BlocksMove for nav purposes.
+	// Bridge length matches road spawn step (4 m); width matches highway.
+	// Traversable overrides the underlying water's BlocksMove for nav.
 	r.Metas[components.PropBridge] = components.PropMeta{
 		Primitive:   components.PrimitiveCube,
 		Size:        rl.Vector3{X: 4.0, Y: 0.4, Z: 4.0},
@@ -103,9 +93,8 @@ func NewPropTypeRegistry() *components.PropTypeRegistry {
 		Traversable: true,
 	}
 
-	// Road surface placeholders. Plane primitive: Size.X = full road width
-	// (perpendicular to travel), Size.Z = step length along travel. Yaw is
-	// applied per-spawn so the plane rotates into segment direction.
+	// Road planes: Size.X = full road width (perpendicular to travel),
+	// Size.Z = step length along travel. Yaw is applied per-spawn.
 	r.Metas[components.PropRoadHighway] = components.PropMeta{
 		Primitive:   components.PrimitivePlane,
 		Size:        rl.Vector3{X: 4.0, Z: 4.0},
@@ -127,8 +116,8 @@ func NewPropTypeRegistry() *components.PropTypeRegistry {
 		BBoxRadius:  1.25,
 		Traversable: true,
 	}
-	// Junction - square plate sized per-spawn via uniform Scale (= 1.5 x
-	// max-incident-edge-width). Single shared meta keeps the registry small.
+	// Junction is sized per-spawn via uniform Scale (= 1.5 × max-incident-
+	// edge-width); single shared meta keeps the registry small.
 	r.Metas[components.PropJunction] = components.PropMeta{
 		Primitive:   components.PrimitivePlane,
 		Size:        rl.Vector3{X: 1.0, Z: 1.0},

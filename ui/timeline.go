@@ -9,12 +9,9 @@ import (
 	"rts-go/components"
 )
 
-// Phase 18 plan timeline. Squad rows on Y, time on X (left = past, right =
-// future). Order blocks span [StartT..EndT]; a "now" line marks current
-// game-time. Click on a block fires TimelineHitTest -> caller jumps camera +
-// re-selects the squad.
+// Plan timeline: squad rows on Y, time on X. Order blocks span
+// [StartT..EndT]; a "now" line marks current game-time.
 
-// TimelineSquadRow is one squad's strip.
 type TimelineSquadRow struct {
 	Squad  ecs.Entity
 	Name   string
@@ -22,7 +19,6 @@ type TimelineSquadRow struct {
 	Orders []TimelineOrderBlock
 }
 
-// TimelineOrderBlock is one order rendered as a coloured rectangle.
 type TimelineOrderBlock struct {
 	Order     ecs.Entity
 	KindCode  components.OrderKindCode
@@ -30,26 +26,21 @@ type TimelineOrderBlock struct {
 	StartT    float32 // game-time seconds (IssuedAt)
 	EndT      float32 // game-time seconds (StartT + estimated duration)
 	Progress  float32 // 0..1
-	IsHead    bool    // true for the current head of the queue
+	IsHead    bool
 }
 
-// TimelineData is the per-frame snapshot main.go builds and hands to
-// DrawTimelinePanel. Pure data, no ECS handles inside the draw call.
+// TimelineData is the per-frame snapshot for DrawTimelinePanel.
 type TimelineData struct {
 	Rows []TimelineSquadRow
-	NowT float32 // current game-time seconds (T+ on the toolbar)
+	NowT float32
 }
 
-// TimelineViewState owns the pan/zoom of the timeline panel. Mutated by the
-// draw call (auto-follow) and by mouse-wheel input from main.go.
 type TimelineViewState struct {
-	OffsetT      float32 // seconds, left edge of timeline content
-	PixelsPerSec float32 // zoom level
-	Follow       bool    // when true, OffsetT auto-advances with NowT
+	OffsetT      float32
+	PixelsPerSec float32
+	Follow       bool
 }
 
-// NewTimelineView returns sensible defaults: 8 px/s (= 1 min per 480 px),
-// follow enabled (now-line parked near the right edge).
 func NewTimelineView() TimelineViewState {
 	return TimelineViewState{
 		OffsetT:      0,
@@ -60,12 +51,12 @@ func NewTimelineView() TimelineViewState {
 
 const (
 	timelineHeaderH      float32 = 26
-	timelineLabelW       float32 = 150 // left gutter with squad name
+	timelineLabelW       float32 = 150
 	timelineRowH         float32 = 32
 	timelineRowPad       float32 = 4
 	TimelineMinPxPerSec  float32 = 2
 	TimelineMaxPxPerSec  float32 = 40
-	timelineFollowAnchor float32 = 0.70 // now-line at 70 % of width while following
+	timelineFollowAnchor float32 = 0.70 // now-line position while following
 )
 
 var (
@@ -81,22 +72,18 @@ var (
 	timelineEmptyText = rl.Color{R: 110, G: 118, B: 128, A: 255}
 )
 
-// Phase 18 estimated durations for blocks (display only, NOT simulation).
-// Used by main.go when building TimelineData. Kept here so the renderer
-// and snapshot agree on placeholder shape.
+// Estimated block durations for display only (NOT simulation).
 const (
-	TimelineMoveSpeedMps          float32 = 5.0
-	TimelineDefendDurationSec     float32 = 30.0
-	TimelineGarrisonDurationSec   float32 = 30.0
-	TimelineAttackDurationSec     float32 = 30.0
-	TimelinePatrolDurationSec     float32 = 30.0
-	TimelineSuppressDurationSec   float32 = 30.0 // matches SuppressFire spec cap
-	TimelineUnknownDurationSec    float32 = 15.0
-	TimelineMinBlockDurationSec   float32 = 3.0 // floor so click target stays usable
+	TimelineMoveSpeedMps        float32 = 5.0
+	TimelineDefendDurationSec   float32 = 30.0
+	TimelineGarrisonDurationSec float32 = 30.0
+	TimelineAttackDurationSec   float32 = 30.0
+	TimelinePatrolDurationSec   float32 = 30.0
+	TimelineSuppressDurationSec float32 = 30.0 // matches SuppressFire spec cap
+	TimelineUnknownDurationSec  float32 = 15.0
+	TimelineMinBlockDurationSec float32 = 3.0 // floor so click target stays usable
 )
 
-// orderKindColor returns the canonical fill colour for an order block.
-// Palette echoes pie-menu / map iconography.
 func orderKindColor(k components.OrderKindCode) rl.Color {
 	switch k {
 	case components.OrderKindMoveTo:
@@ -117,8 +104,8 @@ func orderKindColor(k components.OrderKindCode) rl.Color {
 	return rl.Color{R: 100, G: 100, B: 110, A: 255}
 }
 
-// DrawTimelinePanel renders the bottom timeline panel. Mutates view when
-// Follow is enabled so the now-line stays parked near the right edge.
+// DrawTimelinePanel mutates view when Follow is enabled so the now-line
+// stays parked near the right edge.
 func DrawTimelinePanel(panel Panel, font rl.Font, data TimelineData, view *TimelineViewState) {
 	content := ContentRect(panel)
 	rl.DrawRectangleRec(content, timelineBG)
@@ -126,7 +113,6 @@ func DrawTimelinePanel(panel Panel, font rl.Font, data TimelineData, view *Timel
 		return
 	}
 
-	// Auto-follow keeps the now-line at ~70% of the visible width.
 	if view.Follow {
 		visibleSec := (content.Width - timelineLabelW) / view.PixelsPerSec
 		view.OffsetT = data.NowT - visibleSec*timelineFollowAnchor
@@ -158,7 +144,7 @@ func DrawTimelinePanel(panel Panel, font rl.Font, data TimelineData, view *Timel
 			float32(sz), 1.0, timelineEmptyText)
 	}
 
-	// Now-line drawn last so it sits on top of every block.
+	// Drawn last so it sits on top of every block.
 	nowX := timelineTimeToX(data.NowT, tracksX, view)
 	if nowX >= tracksX && nowX <= tracksX+tracksW {
 		rl.DrawLineEx(
@@ -174,7 +160,7 @@ func drawTimelineRow(font rl.Font, content rl.Rectangle, tracksX, tracksW float3
 	if rowY > content.Y+content.Height {
 		return
 	}
-	// Label gutter (drawn outside scissor too so it stays readable).
+	// Gutter draws outside scissor so the label stays readable.
 	chip := rl.Rectangle{X: content.X + 6, Y: rowY + 4, Width: 12, Height: timelineRowH - 8}
 	rl.DrawRectangleRec(chip, row.Color)
 	const sz int32 = 15
@@ -186,7 +172,6 @@ func drawTimelineRow(font rl.Font, content rl.Rectangle, tracksX, tracksW float3
 		rl.Vector2{X: chip.X + chip.Width + 6, Y: rowY + (timelineRowH-float32(sz))*0.5},
 		float32(sz), 1.0, timelineText)
 
-	// Row separator below.
 	rl.DrawLine(int32(tracksX), int32(rowY+timelineRowH),
 		int32(tracksX+tracksW), int32(rowY+timelineRowH), timelineRowSep)
 
@@ -205,7 +190,6 @@ func drawTimelineBlock(font rl.Font, ord TimelineOrderBlock, rowY, tracksX float
 	bx := rl.Rectangle{X: x0, Y: rowY + timelineRowPad, Width: x1 - x0, Height: timelineRowH - 2*timelineRowPad}
 
 	fill := orderKindColor(ord.KindCode)
-	// State overrides palette.
 	switch ord.StateCode {
 	case components.OrderStateBlocked, components.OrderStateFailed:
 		fill = rl.Color{R: 230, G: 110, B: 80, A: 255}
@@ -235,7 +219,6 @@ func drawTimelineBlock(font rl.Font, ord TimelineOrderBlock, rowY, tracksX float
 		rl.DrawRectangleLinesEx(bx, 1, rl.Color{R: 40, G: 46, B: 54, A: 220})
 	}
 
-	// Label inside the block if width allows.
 	const labelSz int32 = 14
 	label := orderKindLabel(ord.KindCode)
 	m := rl.MeasureTextEx(font, label, float32(labelSz), 1.0)
@@ -262,8 +245,8 @@ func drawTimelineTicks(font rl.Font, header rl.Rectangle, panelBottomY float32, 
 	startT := view.OffsetT
 	endT := startT + header.Width/view.PixelsPerSec
 
-	// Integer indices over multiples of minorEverySec - avoids float drift
-	// that made every tick look major in the previous version.
+	// Integer indices over multiples of minorEverySec avoid float drift
+	// (a previous version had every tick render as major).
 	firstMinor := int(startT / minorEverySec)
 	if float32(firstMinor)*minorEverySec < startT {
 		firstMinor++
@@ -290,15 +273,14 @@ func drawTimelineTicks(font rl.Font, header rl.Rectangle, panelBottomY float32, 
 			rl.DrawTextEx(font, label,
 				rl.Vector2{X: x + 3, Y: header.Y + 2},
 				float32(sz), 1.0, timelineText)
-			// Faint vertical guide down through the row area.
 			rl.DrawLine(int32(x), int32(header.Y+header.Height),
 				int32(x), int32(panelBottomY), rl.Color{R: 28, G: 32, B: 38, A: 180})
 		}
 	}
 }
 
+// tickIntervalSec targets ~80 px between major ticks.
 func tickIntervalSec(pxPerSec float32) float32 {
-	// Aim for ~80 px between major ticks.
 	target := 80.0 / pxPerSec
 	steps := []float32{5, 10, 15, 30, 60, 120, 300, 600}
 	for _, s := range steps {
@@ -329,24 +311,20 @@ func timelineXToTime(x, tracksX float32, view *TimelineViewState) float32 {
 	return view.OffsetT + (x-tracksX)/view.PixelsPerSec
 }
 
-// TimelineHit is returned by TimelineHitTest. Empty Order means the cursor
-// is over a row (or empty area) but not a block.
+// TimelineHit: empty Order means cursor is over a row but not a block.
 type TimelineHit struct {
-	Squad ecs.Entity
-	Order ecs.Entity
-	// HitOrder is true when the cursor sits inside a block (not just the row).
+	Squad    ecs.Entity
+	Order    ecs.Entity
 	HitOrder bool
 }
 
-// TimelineHitTest finds which squad row and order block (if any) sits under
-// the cursor. Returns ok=false when the cursor is outside the tracks area.
+// TimelineHitTest returns ok=false when cursor is outside the tracks area.
 func TimelineHitTest(panel Panel, data TimelineData, view TimelineViewState, cursor rl.Vector2) (TimelineHit, bool) {
 	content := ContentRect(panel)
 	if !pointInRect(cursor, content) {
 		return TimelineHit{}, false
 	}
 	tracksX := content.X + timelineLabelW
-	// Cursor in the label gutter: row hit only.
 	rowIdx := int((cursor.Y - content.Y - timelineHeaderH) / timelineRowH)
 	if rowIdx < 0 || rowIdx >= len(data.Rows) {
 		return TimelineHit{}, true
@@ -356,7 +334,6 @@ func TimelineHitTest(panel Panel, data TimelineData, view TimelineViewState, cur
 	if cursor.X < tracksX {
 		return hit, true
 	}
-	// Cursor in tracks: find the order whose rect contains it.
 	rowY := content.Y + timelineHeaderH + float32(rowIdx)*timelineRowH
 	for _, ord := range row.Orders {
 		x0 := timelineTimeToX(ord.StartT, tracksX, &view)
@@ -374,8 +351,7 @@ func TimelineHitTest(panel Panel, data TimelineData, view TimelineViewState, cur
 	return hit, true
 }
 
-// DrawTimelineTooltip paints a small rect at `cursor` showing the order's
-// kind / state / progress. Caller invokes only when TimelineHit.HitOrder.
+// DrawTimelineTooltip is invoked only when TimelineHit.HitOrder is true.
 func DrawTimelineTooltip(font rl.Font, cursor rl.Vector2, ord TimelineOrderBlock) {
 	const sz int32 = 13
 	lines := [3]string{
@@ -415,8 +391,7 @@ func shortClock(t float32) string {
 	return fmt.Sprintf("%02d:%02d", mins, secs)
 }
 
-// dimColor scales RGB by `f` (0..1) while preserving alpha. Used for
-// progress-bar tracks (the unfilled portion of an order block).
+// dimColor scales RGB by f (0..1) while preserving alpha.
 func dimColor(c rl.Color, f float32) rl.Color {
 	if f < 0 {
 		f = 0

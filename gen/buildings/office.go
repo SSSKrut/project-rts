@@ -2,13 +2,9 @@ package buildings
 
 import "rts-go/components"
 
-// GenerateOffice emits a 3-storey rectangular Office plan. Two entrances
+// GenerateOffice emits a 3-storey rectangular Office plan: two entrances
 // (south + east), central cascade stair, interior partition on each floor.
-// Wraps GenerateHouse with the office-shaped HouseParams so wall / floor /
-// window placement stays a single code path.
-//
-// Phase 17 M17.D.4 closure-criteria template: used by tactical_sandbox to
-// stage Garrison test cases where the player must pick the safer entrance.
+// Wraps GenerateHouse so wall / floor / window placement stays a single path.
 func GenerateOffice(seed uint64, pos components.WorldPos) *components.BuildingPlan {
 	return GenerateHouse(seed, HouseParams{
 		Stories:   3,

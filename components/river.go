@@ -5,7 +5,7 @@ package components
 //
 // Width is the half-strip distance from centre line (cut spans 2*Width); Depth
 // is peak cut depth at the centre line, blended to zero at the edges via
-// cosine half-falloff (Stamper.RiverCut).
+// cosine half-falloff.
 type RiverPolyline struct {
 	Points []WorldPos
 	Width  float32
@@ -13,7 +13,6 @@ type RiverPolyline struct {
 }
 
 // Rivers is the singleton resource holding every static river polyline.
-// Empty Polylines is the legitimate "no rivers" state.
 type Rivers struct {
 	Polylines []RiverPolyline
 }

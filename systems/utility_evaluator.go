@@ -7,28 +7,16 @@ import (
 	"rts-go/core"
 )
 
-// UtilityEvaluatorSystem — Phase 17.8 M17.8.2.
+// UtilityEvaluatorSystem is the per-unit Utility-AI evaluator. Each unit is
+// re-scored once per ~0.5 s (bucket-distributed across UtilityBucketCount
+// frames). Hysteresis guards the switch: newScore must beat currentScore by
+// ModeSwitchScoreDelta AND the unit must have spent ≥ MinModeDurationSec in
+// the current mode (bypassed by UtilityEmergencyDelta for sudden transitions).
 //
-// Per-unit Utility-AI evaluator. Each unit is re-scored once per ~0.5s
-// (bucket-distributed across UtilityBucketCount frames so total cost is
-// amortised). For every enabled ActionMode the system computes a score
-// from the unit's perception state (Threat, Awareness, cover assignment,
-// ammo, formation goal, recent fire) and picks the highest-scoring mode.
-//
-// Hysteresis guards the switch:
-//   - newScore must beat currentScore by ModeSwitchScoreDelta, AND
-//   - the unit must have spent at least MinModeDurationSec in its current
-//     mode (bypassed by UtilityEmergencyDelta for emergency transitions
-//     like sudden Suppressed).
-//
-// Writes: LocalBlackboard.CurrentMode, LastModeSwitch, Reason (via
-// SetReason). Other AI executor systems (WeaponSystem, StanceController,
-// MicroPath goal selection) read CurrentMode for mode-specific behavior —
-// wired in M17.8.3.
-//
-// Score functions live in utility_evaluator_scoring.go. Adding a new mode
-// = bump ModeCount + spec row + scoring function + (optional) executor
-// wiring. No switch on ActionMode here — it loops over UtilitySpecs.
+// Writes LocalBlackboard.CurrentMode / LastModeSwitch / Reason. Other AI
+// executors read CurrentMode for mode-specific behavior. Adding a new mode
+// = bump ModeCount + spec row + scoring function — no switch on ActionMode
+// here.
 type UtilityEvaluatorSystem struct {
 	filter         *ecs.Filter2[components.Unit, components.LocalBlackboard]
 	blackboardMap  *ecs.Map[components.LocalBlackboard]
@@ -42,11 +30,9 @@ type UtilityEvaluatorSystem struct {
 	orderQueueMap  *ecs.Map[components.OrderQueueHead]
 	factionMap     *ecs.Map[components.Faction]
 
-	clock float32 // session-time; set via SetClock once per frame from main.go
+	clock float32
 }
 
-// NewUtilityEvaluatorSystem allocates the system stub. InitUI populates
-// the handles after the World exists.
 func NewUtilityEvaluatorSystem() *UtilityEvaluatorSystem {
 	return &UtilityEvaluatorSystem{}
 }
@@ -67,9 +53,6 @@ func (sys *UtilityEvaluatorSystem) InitUI(w *ecs.World) {
 
 func (UtilityEvaluatorSystem) Name() string { return "utility_evaluator" }
 
-// LODPolicy: Active per-tick (with internal bucket gate), Relevant once
-// per 500 ms (covers dormant-bucket fallback), Dormant disabled (off-screen
-// units don't need mode re-evaluation until they come back into focus).
 func (UtilityEvaluatorSystem) LODPolicy() core.LODPolicy {
 	return core.LODPolicy{
 		ActiveEvery:   0,
@@ -78,14 +61,12 @@ func (UtilityEvaluatorSystem) LODPolicy() core.LODPolicy {
 	}
 }
 
-// SetClock updates the session clock used for hysteresis (LastModeSwitch
-// comparisons). main.go calls this once per frame before app.Tick — same
-// pattern as SquadService.SetClock.
+// SetClock updates the session clock used for hysteresis. Same pattern as
+// SquadService.SetClock — called once per frame before Tick.
 func (sys *UtilityEvaluatorSystem) SetClock(t float32) {
 	sys.clock = t
 }
 
-// Update runs the bucket-gated evaluation for one tick.
 func (sys *UtilityEvaluatorSystem) Update(ctx core.UpdateContext) {
 	if ctx.Tier != core.LODTierActive {
 		return
@@ -94,8 +75,8 @@ func (sys *UtilityEvaluatorSystem) Update(ctx core.UpdateContext) {
 	for q.Next() {
 		_, blackboard := q.Get()
 		ent := q.Entity()
-		// Bucket gate: hash entity into one of UtilityBucketCount slots and
-		// evaluate only on the matching frame index. Spreads cost evenly.
+		// Bucket gate: only evaluate on the matching frame index; spreads
+		// cost evenly across UtilityBucketCount frames.
 		if (uint32(ent.ID())+ctx.FrameIndex)%components.UtilityBucketCount != 0 {
 			continue
 		}
@@ -104,10 +85,8 @@ func (sys *UtilityEvaluatorSystem) Update(ctx core.UpdateContext) {
 	}
 }
 
-// evaluateAndApply scores every enabled mode against the context, picks
-// the winner, and writes CurrentMode + LastModeSwitch + Reason if the
-// hysteresis gate passes. No-op when the winner matches the current mode
-// (still updates Reason in case the dominant signal changed).
+// evaluateAndApply scores every enabled mode, picks the winner, and writes
+// CurrentMode/LastModeSwitch/Reason if the hysteresis gate passes.
 func (sys *UtilityEvaluatorSystem) evaluateAndApply(b *components.LocalBlackboard, uctx *UtilityContext) {
 	currentScore := scoreForMode(b.CurrentMode, uctx)
 	bestMode := b.CurrentMode
@@ -123,19 +102,17 @@ func (sys *UtilityEvaluatorSystem) evaluateAndApply(b *components.LocalBlackboar
 		}
 	}
 
-	// Hysteresis: same mode = just refresh reason and exit.
 	if bestMode == b.CurrentMode {
 		applyReason(b, bestMode, uctx)
 		return
 	}
 
-	// Score-delta gate.
 	if bestScore < currentScore+components.ModeSwitchScoreDelta {
 		applyReason(b, b.CurrentMode, uctx)
 		return
 	}
 
-	// Dwell-time gate — bypassed for emergency-class transitions.
+	// Dwell-time gate; bypassed for emergency-class transitions.
 	dwell := sys.clock - b.LastModeSwitch
 	emergency := bestScore >= currentScore+components.UtilityEmergencyDelta
 	if !emergency && dwell < components.MinModeDurationSec {
@@ -143,7 +120,6 @@ func (sys *UtilityEvaluatorSystem) evaluateAndApply(b *components.LocalBlackboar
 		return
 	}
 
-	// Commit the switch.
 	b.CurrentMode = bestMode
 	b.LastModeSwitch = sys.clock
 	applyReason(b, bestMode, uctx)

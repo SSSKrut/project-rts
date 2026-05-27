@@ -151,9 +151,9 @@ func TestThreatDirWeightedAverage(t *testing.T) {
 	}
 }
 
-// TestClassifyThreatBands: verifies the four-band classifier on threshold
-// edges. The constants are load-bearing for SurvivalInstinct + future
-// StanceController, so freeze them with a test.
+// TestClassifyThreatBands verifies the four-band classifier on threshold
+// edges. The constants are load-bearing for SurvivalInstinct and
+// StanceController — freeze them with a test.
 func TestClassifyThreatBands(t *testing.T) {
 	cases := []struct {
 		total float32
@@ -190,9 +190,8 @@ func TestRingOverwrite(t *testing.T) {
 	}
 }
 
-// TestChannelDecayRatesDistinct: Phase 17 plan documents per-channel decay
-// targets (0.10 Supp / 0.11 ShotsFired / 0.20 Endangered / 0.05 Injury).
-// Lock them so a future tune doesn't silently shift behaviour.
+// TestChannelDecayRatesDistinct locks the per-channel decay rates so a
+// future tune doesn't silently shift behaviour.
 func TestChannelDecayRatesDistinct(t *testing.T) {
 	if components.ChannelDecayRates[components.ThreatChannelSuppression] != 0.10 {
 		t.Errorf("Suppression decay = %f, want 0.10",

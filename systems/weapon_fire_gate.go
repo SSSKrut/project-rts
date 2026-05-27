@@ -8,43 +8,18 @@ import (
 	"rts-go/components"
 )
 
-// weaponMovingSpeedThreshold - Motion.Speed above this (m/s) counts as
-// "moving" for the firing-while-moving gate. PHASE-14.md notes: matches the
-// dispersion movingFactor threshold (1.0 m/s) so the two flags toggle on the
-// same boundary instead of needing two separate empirical fits.
+// Matches the dispersion movingFactor threshold so the moving/dispersion
+// flags toggle on the same boundary.
 const weaponMovingSpeedThreshold float32 = 1.0
 
-// shouldFire is the RoE + AttackMove + Sector gate. Returns true when the
-// unit is permitted to take the resolved shot.
-//
-// Decision tree (PHASE-14.md M14.3 + Q2 lock-in: HoldFire wins over
-// AttackMove). Phase 14.5 M14.5.0 (Issue #9 fix): if the active order's spec
-// declares `OverridesHoldFire`, the HoldFire silence is bypassed for that
-// order's duration. AttackTarget and SuppressFire carry this flag; AttackMove
-// does NOT (HoldFire still wins per Q2 lock).
-//
-//   - No squad (soloist) -> default FreeFire-on-Inf. Fires.
-//   - Mode=HoldFire -> never, UNLESS the active order has OverridesHoldFire.
-//   - Mode=ReturnFire -> always (any awareness hostile counts as "threat in
-//     awareness" per P9). Stricter "only after being shot at" deferred.
-//   - Mode=FreeFire -> always.
-//   - FireOnInf gate - Phase 14 has only Inf targets, so this acts on
-//     AT-team-style rules that have FireOnInf=false. Bypassed by the same
-//     OverridesHoldFire override.
-//   - Fire-while-moving (Motion.Speed > threshold) requires the squad's
-//     active order to carry the AttackMove flag.
-//   - Phase 15 M15.A.4: Sector cone. When SectorHalfDot > 0 the squad defends
-//     only a cone centred on SectorYaw; targets outside silently fail the
-//     gate. SectorHalfDot is interpreted as cos(half-angle), so 1.0 = zero
-//     cone (disabled when 0).
-//
-// `motionSpeed` + `shooterPos` + `targetPos` are passed in by the caller so
-// the seer-loop snapshot avoids re-resolving pointers.
+// shouldFire is the RoE + AttackMove + Sector gate. HoldFire wins over
+// AttackMove, but an active order whose spec sets OverridesHoldFire bypasses
+// the HoldFire silence (AttackTarget / SuppressFire carry this flag;
+// AttackMove does not).
 func (sys *WeaponSystem) shouldFire(shooter ecs.Entity, motionSpeed float32,
 	shooterPos *components.WorldPos, targetPos components.WorldPos) bool {
-	// Phase 17.8 M17.8.3 — Utility AI Mode gate. Reloading and Suppressed
-	// silence the unit unconditionally (no fire even with FreeFire RoE or
-	// AttackTarget override — animation / shock state forbids firing).
+	// Reloading / Suppressed silence the unit unconditionally — animation /
+	// shock state forbids firing even with FreeFire or AttackTarget override.
 	if b := sys.blackboardMap.Get(shooter); b != nil {
 		switch b.CurrentMode {
 		case components.ModeReloading, components.ModeSuppressed:
@@ -71,9 +46,8 @@ func (sys *WeaponSystem) shouldFire(shooter ecs.Entity, motionSpeed float32,
 					overridesHoldFire = true
 				}
 			}
-			// Phase 17.6 M17.6.6 - per-order EngagementMode override
-			// (Hidden position preset). Swaps Mode only; FireOn* / Sector
-			// remain the standing rules.
+			// Per-order EngagementMode override (e.g. Hidden position preset).
+			// Swaps Mode only; FireOn* / Sector remain the standing rules.
 			if override := sys.orderEngagementOverrideMap.Get(head.First); override != nil {
 				rules.Mode = override.Mode
 			}
@@ -82,32 +56,21 @@ func (sys *WeaponSystem) shouldFire(shooter ecs.Entity, motionSpeed float32,
 
 	switch rules.Mode {
 	case components.HoldFire:
-		// Phase 14.5 M14.5.0 (Issue #9): AttackTarget / SuppressFire - the
-		// player's explicit fire orders - win over the standing HoldFire.
 		if !overridesHoldFire {
 			return false
 		}
 	case components.ReturnFire, components.FreeFire:
-		// Allowed; target-type and movement gates apply below.
 	}
 
-	// Phase 14 target-type gate: every target is Inf for now (vehicles in
-	// Phase 16). FireOnInf=false (AT team default) silences the squad - unless
-	// an explicit AttackTarget/SuppressFire is overriding.
 	if !rules.FireOnInf && !overridesHoldFire {
 		return false
 	}
 
-	// Fire-while-moving: stationary always fires; moving needs AttackMove or
-	// an explicit fire-order override (you can sprint-shoot an AttackTarget).
 	if motionSpeed > weaponMovingSpeedThreshold && !attackMoveOn && !overridesHoldFire {
 		return false
 	}
 
-	// Phase 15 M15.A.4 - Sector gate. SectorHalfDot is cos(half-angle); when
-	// positive (i.e. the squad has set a cone) any target outside the cone is
-	// filtered out. OverridesHoldFire bypasses the gate so an explicit
-	// AttackTarget on an out-of-sector enemy still fires.
+	// SectorHalfDot is cos(half-angle); 0 disables the cone.
 	if rules.SectorHalfDot > 0 && !overridesHoldFire {
 		dx := targetPos.Local.X - shooterPos.Local.X +
 			float32(targetPos.Chunk.X-shooterPos.Chunk.X)*components.ChunkSize
@@ -128,8 +91,7 @@ func (sys *WeaponSystem) shouldFire(shooter ecs.Entity, motionSpeed float32,
 }
 
 // pickTarget walks the seer's Awareness FIFO and returns the most recent
-// hostile sighting that's still alive, still in range, and within the
-// awareness max-age. (ent, pos, true) on hit; (_, _, false) on miss.
+// hostile sighting still alive, in range, and within the awareness max-age.
 func (sys *WeaponSystem) pickTarget(
 	self ecs.Entity, ownFaction uint8, selfPos *components.WorldPos,
 	aware *components.Awareness, weapon *components.Weapon, now float32,
@@ -143,10 +105,9 @@ func (sys *WeaponSystem) pickTarget(
 		if e.Time == 0 || e.Target == (ecs.Entity{}) || e.Target == self {
 			continue
 		}
-		// Phase 14.6 M14.6.0 (Issue #11): alive-check BEFORE any Map.Get on
-		// e.Target. Vision tick can lag Death by up to one cadence, so the
-		// FIFO may hold a recycled slot; touching factionMap on a dead id
-		// crashes via Ark's slot reuse path.
+		// Alive-check BEFORE any Map.Get: Vision tick can lag Death by one
+		// cadence, so the FIFO may hold a recycled slot; touching a dead id
+		// crashes via Ark's slot-reuse path.
 		if !sys.worldRef.Alive(e.Target) {
 			continue
 		}
@@ -157,13 +118,11 @@ func (sys *WeaponSystem) pickTarget(
 		if f == nil || f.ID == ownFaction {
 			continue
 		}
-		// Use the candidate's live position if the entity is still alive
-		// (Awareness.Pos is stale by up to one Vision tick).
+		// Awareness.Pos is stale by up to one Vision tick; prefer live.
 		pos := e.Pos
 		if live := sys.posMap.Get(e.Target); live != nil {
 			pos = *live
 		} else {
-			// Entity vanished (despawn) - skip.
 			continue
 		}
 		dSq := worldDistSq(*selfPos, pos)

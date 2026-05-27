@@ -10,20 +10,12 @@ import (
 	"rts-go/core"
 )
 
-// BuildingSystem runs two independent passes per tick over chunks needing
-// building work:
-//
-//  1. Terrain pass - for chunks with Heightmap, no Modified, no
-//     BuildingTerrainProcessed: apply Stamper.RectCut for every Bunker
-//     building whose Pos.Chunk equals this chunk. Marks BuildingTerrainProcessed.
-//
-//  2. Child pass - for chunks with Heightmap, no BuildingsProcessed: spawn
-//     Level / Wall / Floor / Stairs / Furniture / Marker entities from the
-//     full BuildingPlan stored in BuildingPlanIndex. Phase 16.5 emits the
-//     plan from a generator; Phase 16.A loader will emit from a .glb file.
-//
-// Marker split mirrors RoadSystem (Phase 4 M4.5): heightmap edits freeze on
-// player Modified, but child entities still respawn on every chunk return.
+// BuildingSystem runs two passes per tick: (1) terrain pass applies bunker
+// RectCut / surface leveling on pristine chunks (gated by Without[Modified] +
+// Without[BuildingTerrainProcessed]); (2) child pass spawns Level / Wall /
+// Floor / Stairs / Furniture / Marker entities from the BuildingPlan. The
+// split means heightmap edits freeze on player Modified, but child entities
+// still respawn on every chunk return.
 type BuildingSystem struct {
 	terrainFilter       *ecs.Filter3[components.ChunkCoord, components.Heightmap, components.WorldPos]
 	childFilter         *ecs.Filter3[components.ChunkCoord, components.Heightmap, components.WorldPos]
@@ -119,10 +111,8 @@ func (sys *BuildingSystem) Update(ctx core.UpdateContext) {
 	}
 	planIdx := sys.planIdxRes.Get()
 
-	// Phase 16.B.0: bucket each Building by EVERY chunk its footprint
-	// overlaps, not just the root chunk. Same Building shows up in 1..N
-	// buckets - the terrain pass and child-spawn pass both rely on this
-	// to do per-chunk work for cross-boundary buildings.
+	// Bucket each Building by EVERY chunk its footprint overlaps (not just the
+	// root chunk) so cross-boundary buildings get per-chunk passes.
 	byChunk := make(map[components.ChunkCoord][]buildingRec)
 	qb := sys.buildingFilter.Query()
 	for qb.Next() {
@@ -155,17 +145,13 @@ func (sys *BuildingSystem) Update(ctx core.UpdateContext) {
 		if recs, ok := byChunk[ccVal]; ok {
 			for _, r := range recs {
 				if r.b.Kind == components.BuildingBunker {
-					// Bunker: sunken plate (deep cut, wider skirt).
 					sys.stamper.RectCut(ccVal, r.b.Footprint,
 						components.BunkerDepth, components.BunkerFalloffWidth)
 					continue
 				}
-				// Phase 17.6 follow-up: surface buildings — level the
-				// heightmap a touch below the root's WorldPos.Y (5 cm)
-				// so door thresholds remain reachable while the grass /
-				// terrain mesh doesn't Z-fight the concrete floor where
-				// their Ys would otherwise coincide. 1 m cosine skirt
-				// outside blends back to natural terrain.
+				// Surface buildings: level a touch below WorldPos.Y so door
+				// thresholds stay reachable and grass doesn't Z-fight the
+				// concrete floor; cosine skirt blends back to natural terrain.
 				rootY := r.rootPos.Local.Y - components.BuildingLevelingDepthOffset
 				sys.stamper.LevelTo(ccVal, r.b.Footprint, rootY,
 					components.BuildingLevelingSkirtWidth)
@@ -220,11 +206,6 @@ func (sys *BuildingSystem) Update(ctx core.UpdateContext) {
 // Marker) for one Building INTO ONE TARGET CHUNK. Multi-chunk buildings
 // process the same plan once per chunk their footprint overlaps; each pass
 // spawns only the children whose world position falls inside `targetChunk`.
-//
-// Level entities are spawned in main.go (AlwaysActive) and resolved via
-// BuildingPlanIndex; LevelTransition attaches to a wall entity if and only
-// if the wall in question landed in this chunk (otherwise the next chunk's
-// pass will attach it).
 func (sys *BuildingSystem) spawnBuilding(ctx core.UpdateContext, idx *BuildingChildIndex, planIdx *BuildingPlanIndex, root ecs.Entity, plan *components.BuildingPlan, rootChunk, targetChunk components.ChunkCoord) {
 	chunkBaseX := float32(rootChunk.X) * components.ChunkSize
 	chunkBaseZ := float32(rootChunk.Z) * components.ChunkSize
@@ -237,9 +218,8 @@ func (sys *BuildingSystem) spawnBuilding(ctx core.UpdateContext, idx *BuildingCh
 		return levelEnts[ref]
 	}
 
-	// localToTarget converts a chunk-local coord (relative to rootChunk) into
-	// (target chunk, target-local). Returns (cc, local, true) iff the coord
-	// lies in `targetChunk`. Used to filter children for this pass.
+	// localToTarget returns (cc, local, true) iff the rootChunk-relative coord
+	// lies in `targetChunk`.
 	localToTarget := func(local rl.Vector3) (components.ChunkCoord, rl.Vector3, bool) {
 		worldX := local.X + chunkBaseX
 		worldZ := local.Z + chunkBaseZ
@@ -256,8 +236,8 @@ func (sys *BuildingSystem) spawnBuilding(ctx core.UpdateContext, idx *BuildingCh
 		}, true
 	}
 
-	// Walls: we still allocate a per-plan slice so LevelTransition can index
-	// into it; slots whose wall didn't land in targetChunk stay zero.
+	// Per-plan slice so LevelTransition can index into it; slots whose wall
+	// didn't land in targetChunk stay zero.
 	wallEnts := make([]ecs.Entity, len(plan.Walls))
 	for i := range plan.Walls {
 		ws := &plan.Walls[i]
@@ -270,8 +250,8 @@ func (sys *BuildingSystem) spawnBuilding(ctx core.UpdateContext, idx *BuildingCh
 		sys.memberMap.Add(e, &components.BuildingMember{Building: root})
 		sys.lodRelevantMap.Add(e, &components.LODRelevant{})
 		// Walls spanning multiple levels carry the lowest as their primary
-		// LevelMember; the cutaway renderer uses wall.WorldPos.Y to derive
-		// the visible level range independently.
+		// LevelMember; the cutaway renderer derives the visible range from
+		// wall.WorldPos.Y independently.
 		if len(ws.LevelRefs) > 0 {
 			if lev := resolveLevel(ws.LevelRefs[0]); lev != (ecs.Entity{}) {
 				sys.levelMemberMap.Add(e, &components.LevelMember{Level: lev})
@@ -347,9 +327,8 @@ func (sys *BuildingSystem) spawnBuilding(ctx core.UpdateContext, idx *BuildingCh
 		sys.lodRelevantMap.Add(e, &components.LODRelevant{})
 		s := ss.Stairs
 		sys.stairsMap.Add(e, &s)
-		// Phase 16.B.1.b: attach the two Level entities this stair joins,
-		// resolved from the first and last anchor in the spec. Used by
-		// SpatialBakeSystem to wire NavNode level endpoints.
+		// Attach the two Level entities this stair joins so SpatialBakeSystem
+		// can wire NavNode level endpoints.
 		var fromLev, toLev ecs.Entity
 		if len(ss.Anchors) > 0 {
 			fromLev = resolveLevel(ss.Anchors[0].LevelRef)

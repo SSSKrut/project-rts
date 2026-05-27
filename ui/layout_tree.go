@@ -2,16 +2,6 @@ package ui
 
 import rl "github.com/gen2brain/raylib-go/raylib"
 
-// Phase 18.C tree-of-splits. The workspace below the TopBar is a recursive
-// binary tree: each node is either a Leaf (one PanelID = one widget) or a
-// Split (two children stacked horizontally or vertically with a ratio).
-//
-// Splitter drags mutate Split.Ratio. Corner-drag on a Leaf wraps it in a
-// new Split and inserts a duplicate Leaf next to it. The chevron menu on
-// a Leaf can swap its Panel with another Leaf in the tree (forbidding two
-// instances of the same PanelID) or merge the Leaf into its sibling.
-
-// NodeKind discriminates Leaf vs Split.
 type NodeKind uint8
 
 const (
@@ -19,9 +9,8 @@ const (
 	NodeSplit
 )
 
-// SplitOrient picks the divider axis. Vertical = children stacked
-// horizontally (left/right), Horizontal = children stacked vertically
-// (top/bottom). Naming follows the divider line, not the child arrangement.
+// SplitOrient names the divider line, not the child arrangement.
+// Vertical divider line = children stacked left/right.
 type SplitOrient uint8
 
 const (
@@ -29,15 +18,12 @@ const (
 	SplitHorizontal                    // divider is a horizontal line; children laid out top/bottom
 )
 
-// MinSplitRatio / MaxSplitRatio clamp split ratios so panels don't shrink
-// below ~panelMinW/H equivalent (sized at recompute against the leaf rect).
 const (
 	MinSplitRatio float32 = 0.05
 	MaxSplitRatio float32 = 0.95
 )
 
-// LayoutNode is the recursive workspace cell. Parent is back-pointer for
-// merge / find-sibling. Bounds is filled by Recompute every frame.
+// Bounds is filled by Recompute every frame.
 type LayoutNode struct {
 	Kind     NodeKind
 	Panel    PanelID
@@ -49,13 +35,11 @@ type LayoutNode struct {
 	Parent   *LayoutNode
 }
 
-// NewLeaf constructs a leaf showing the given widget.
 func NewLeaf(id PanelID, title string) *LayoutNode {
 	return &LayoutNode{Kind: NodeLeaf, Panel: id, Title: title}
 }
 
-// NewSplit constructs a split with two children. ratio is the first child's
-// share. children Parents are wired automatically.
+// NewSplit wires children's Parents to the new split.
 func NewSplit(o SplitOrient, ratio float32, a, b *LayoutNode) *LayoutNode {
 	n := &LayoutNode{Kind: NodeSplit, Orient: o, Ratio: ratio, Children: [2]*LayoutNode{a, b}}
 	if a != nil {
@@ -67,14 +51,10 @@ func NewSplit(o SplitOrient, ratio float32, a, b *LayoutNode) *LayoutNode {
 	return n
 }
 
-// IsLeaf is the Leaf check.
-func (n *LayoutNode) IsLeaf() bool { return n != nil && n.Kind == NodeLeaf }
-
-// IsSplit is the Split check.
+func (n *LayoutNode) IsLeaf() bool  { return n != nil && n.Kind == NodeLeaf }
 func (n *LayoutNode) IsSplit() bool { return n != nil && n.Kind == NodeSplit }
 
-// Compute walks the tree DFS and assigns Bounds to every node. Caller
-// passes the rect to fill (i.e. the workspace area below the top bar).
+// Compute walks DFS and assigns Bounds to every node.
 func (n *LayoutNode) Compute(rect rl.Rectangle) {
 	if n == nil {
 		return
@@ -106,7 +86,6 @@ func (n *LayoutNode) Compute(rect rl.Rectangle) {
 	}
 }
 
-// WalkLeaves visits every leaf in subtree order.
 func (n *LayoutNode) WalkLeaves(fn func(leaf *LayoutNode)) {
 	if n == nil {
 		return
@@ -119,7 +98,6 @@ func (n *LayoutNode) WalkLeaves(fn func(leaf *LayoutNode)) {
 	n.Children[1].WalkLeaves(fn)
 }
 
-// WalkSplits visits every split in subtree order.
 func (n *LayoutNode) WalkSplits(fn func(split *LayoutNode)) {
 	if n == nil {
 		return
@@ -131,7 +109,6 @@ func (n *LayoutNode) WalkSplits(fn func(split *LayoutNode)) {
 	}
 }
 
-// FindLeaf returns the first Leaf in BFS order whose Panel == id, or nil.
 func (n *LayoutNode) FindLeaf(id PanelID) *LayoutNode {
 	if n == nil {
 		return nil
@@ -148,9 +125,6 @@ func (n *LayoutNode) FindLeaf(id PanelID) *LayoutNode {
 	return n.Children[1].FindLeaf(id)
 }
 
-// LeafAt returns the first leaf whose Bounds contain `p`, or nil. Iterates
-// in reverse Z order (later leaves win) — for now there's no Z, so first
-// match is fine.
 func (n *LayoutNode) LeafAt(p rl.Vector2) *LayoutNode {
 	var hit *LayoutNode
 	n.WalkLeaves(func(l *LayoutNode) {
@@ -164,10 +138,9 @@ func (n *LayoutNode) LeafAt(p rl.Vector2) *LayoutNode {
 	return hit
 }
 
-// SplitLeaf wraps `leaf` in a new Split node. The original leaf goes to
-// one side (originalSide), a duplicate (same PanelID) to the other. Caller
-// chooses orientation + ratio. Tree root pointer may need to be updated:
-// returns the new Split node, which replaces `leaf` in its parent.
+// SplitLeaf wraps `leaf` in a new Split with a duplicate Leaf on the
+// opposite side. Caller updates the tree root pointer to the returned
+// Split if leaf was the root.
 func SplitLeaf(leaf *LayoutNode, orient SplitOrient, ratio float32, originalSide int) *LayoutNode {
 	if leaf == nil || !leaf.IsLeaf() {
 		return nil
@@ -175,9 +148,9 @@ func SplitLeaf(leaf *LayoutNode, orient SplitOrient, ratio float32, originalSide
 	if originalSide < 0 || originalSide > 1 {
 		originalSide = 0
 	}
-	// Snapshot the old parent BEFORE NewSplit reparents `leaf` (otherwise
-	// reading leaf.Parent below sees the new split → self-referential
-	// Children[0] = split → infinite Compute recursion).
+	// Snapshot oldParent BEFORE NewSplit reparents leaf: otherwise
+	// leaf.Parent points at the new split, becoming self-referential
+	// and infinitely recursing Compute.
 	oldParent := leaf.Parent
 	dup := NewLeaf(leaf.Panel, leaf.Title)
 	var a, b *LayoutNode
@@ -195,12 +168,9 @@ func SplitLeaf(leaf *LayoutNode, orient SplitOrient, ratio float32, originalSide
 			oldParent.Children[1] = split
 		}
 	}
-	// NewSplit already set leaf.Parent = split via its loop, so no extra
-	// reparenting is needed here.
 	return split
 }
 
-// Sibling returns the other child of leaf.Parent (or nil if leaf is root).
 func (n *LayoutNode) Sibling() *LayoutNode {
 	if n == nil || n.Parent == nil {
 		return nil
@@ -211,10 +181,8 @@ func (n *LayoutNode) Sibling() *LayoutNode {
 	return n.Parent.Children[0]
 }
 
-// MergeIntoSibling collapses `leaf` into its sibling: the parent split is
-// replaced by the sibling subtree. Returns the new root for the subtree
-// previously rooted at leaf.Parent. Caller must update the workspace root
-// pointer if leaf.Parent was the root.
+// MergeIntoSibling replaces leaf.Parent with the sibling subtree.
+// Caller must update the workspace root pointer if leaf.Parent was root.
 func MergeIntoSibling(leaf *LayoutNode) *LayoutNode {
 	if leaf == nil || leaf.Parent == nil {
 		return leaf
@@ -235,8 +203,6 @@ func MergeIntoSibling(leaf *LayoutNode) *LayoutNode {
 	return sib
 }
 
-// SwapPanels swaps the PanelID + Title between two leaves. Used when the
-// chevron menu picks a target that's already shown elsewhere.
 func SwapPanels(a, b *LayoutNode) {
 	if a == nil || b == nil || !a.IsLeaf() || !b.IsLeaf() {
 		return
@@ -245,7 +211,6 @@ func SwapPanels(a, b *LayoutNode) {
 	a.Title, b.Title = b.Title, a.Title
 }
 
-// DockSide picks which edge of a target leaf a dropped source will dock at.
 type DockSide uint8
 
 const (
@@ -256,9 +221,7 @@ const (
 	DockBottom
 )
 
-// DockSideFor classifies which edge of `target` the cursor is closest to,
-// using normalized X / Y diamond regions. Returns DockNone for a degenerate
-// target.
+// DockSideFor uses normalized X / Y diamond regions.
 func DockSideFor(target *LayoutNode, cursor rl.Vector2) DockSide {
 	if target == nil {
 		return DockNone
@@ -289,10 +252,8 @@ func DockSideFor(target *LayoutNode, cursor rl.Vector2) DockSide {
 	return DockBottom
 }
 
-// DockWrapBounds returns the rect of the subtree that DockNear will wrap
-// when docking `source` at `target` on `side`. Equal to target.Parent.Bounds
-// when target has a parent; falls back to target.Bounds when target is root.
-// Used by the drag preview to highlight what area will be reorganised.
+// DockWrapBounds returns the rect of the subtree DockNear will wrap. Used
+// by the drag preview to highlight what area will be reorganised.
 func DockWrapBounds(target *LayoutNode) rl.Rectangle {
 	if target == nil {
 		return rl.Rectangle{}
@@ -303,8 +264,8 @@ func DockWrapBounds(target *LayoutNode) rl.Rectangle {
 	return target.Bounds
 }
 
-// DockHighlightRect returns the rect inside DockWrapBounds where the source
-// will land. Used by the drag preview.
+// DockHighlightRect returns the rect inside DockWrapBounds where source
+// will land.
 func DockHighlightRect(target *LayoutNode, side DockSide) rl.Rectangle {
 	b := DockWrapBounds(target)
 	if b.Width <= 0 || b.Height <= 0 {
@@ -323,12 +284,8 @@ func DockHighlightRect(target *LayoutNode, side DockSide) rl.Rectangle {
 	return rl.Rectangle{}
 }
 
-// DockNear restructures the tree so `source` becomes a strip on `side` of
-// the subtree containing `target`. The wrap point is target.Parent (so the
-// new strip spans the full "level" the target lives in); if target is the
-// root, wrap target itself. Returns the new Split node (which replaces the
-// wrap point in its old parent). Caller must ensure `source` has already
-// been detached from the tree before calling.
+// DockNear wraps target.Parent (or target if root) in a new Split with
+// `source` on `side`. Caller must detach source from the tree first.
 func DockNear(source, target *LayoutNode, side DockSide) *LayoutNode {
 	if source == nil || target == nil || side == DockNone {
 		return nil
@@ -360,6 +317,5 @@ func DockNear(source, target *LayoutNode, side DockSide) *LayoutNode {
 			oldParent.Children[1] = newSplit
 		}
 	}
-	// NewSplit already wired source.Parent and wrap.Parent to newSplit.
 	return newSplit
 }

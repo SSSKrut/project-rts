@@ -9,10 +9,9 @@ import (
 	"rts-go/components"
 )
 
-// InspectorMaps is the bundle of ECS handles the inspector reads. Built once
-// at startup via NewInspectorMaps(world); embedded into InspectorCtx so call
-// sites stay `ctx.StanceMap.Get(...)` style with no manual plumbing in
-// main.go (was ~30 fields hand-wired per frame pre-refactor).
+// InspectorMaps bundles ECS read-handles. Built once at startup via
+// NewInspectorMaps; embedded into InspectorCtx so call sites stay
+// `ctx.StanceMap.Get(...)` via Go field promotion.
 type InspectorMaps struct {
 	PosMap                   *ecs.Map[components.WorldPos]
 	StanceMap                *ecs.Map[components.Stance]
@@ -49,9 +48,6 @@ type InspectorMaps struct {
 	BehaviorRulesEditMap     *ecs.Map[components.BehaviorRulesEdit]
 }
 
-// NewInspectorMaps pre-builds every read-handle the inspector needs. Cheap
-// to call - Ark Map[T] is a thin archetype-aware accessor, not the storage
-// itself, so duplicating with other systems' handles costs nothing.
 func NewInspectorMaps(world *ecs.World) InspectorMaps {
 	return InspectorMaps{
 		PosMap:                   ecs.NewMap[components.WorldPos](world),
@@ -90,41 +86,26 @@ func NewInspectorMaps(world *ecs.World) InspectorMaps {
 	}
 }
 
-// InspectorCtx bundles all the data the inspector reads. Built once per frame
-// in main.go and passed by value. The Maps slot is embedded so call sites
-// stay `ctx.StanceMap.Get(...)` via Go field promotion.
+// InspectorCtx is built once per frame and passed by value. PanelFocused
+// gates chip clicks so they don't react to drags from other panels.
 type InspectorCtx struct {
 	InspectorMaps
-	World    *ecs.World
-	Selected []ecs.Entity
-	Hovered  ecs.Entity
-	Font     rl.Font
-	// EventLog isn't a map - kept separate from InspectorMaps so the resource
-	// stays explicit at the call site.
-	EventLog *components.EventLog
-	// Phase 13 click input. Cursor is the current mouse position in screen
-	// coords; LMBPressed is true exactly on the frame the left button was
-	// pressed (passed through from main.go's rl.IsMouseButtonPressed call);
-	// PanelFocused gates clicks so chips don't react to drags / clicks that
-	// belong to other panels.
+	World        *ecs.World
+	Selected     []ecs.Entity
+	Hovered      ecs.Entity
+	Font         rl.Font
+	EventLog     *components.EventLog
 	Cursor       rl.Vector2
 	LMBPressed   bool
 	PanelFocused bool
-	// Phase 13.5 M13.5.3: scroll handle. DrawInspector subtracts Scroll.OffsetY
-	// from initial y and writes total content height into Scroll.ContentHeight
-	// at the end of the draw - caller's DrawScrollbar reads it next frame. Nil
-	// -> behave as if scroll==0 with no measurement (legacy callers).
+	// Nil Scroll -> behave as if scroll==0 with no measurement.
+	// DrawInspector writes total content height into ContentHeight at
+	// end of draw; caller's DrawScrollbar reads it next frame.
 	Scroll *ScrollState
-	// SquadColor picks a stable palette colour from a squad entity so the
-	// inspector and the map render use the same shade. Injected as a func to
-	// avoid a UI -> render-package cycle. Phase 14 M14.6: signature takes
-	// ecs.Entity (not just ID) so the colour function can read Faction off the
-	// squad entity directly.
+	// SquadColor is injected to avoid a UI -> render-package cycle.
 	SquadColor func(ent ecs.Entity) rl.Color
 }
 
-// roleOf is a small helper that resolves the unit's role with a Rifleman
-// fallback. Mirrors the pattern used by render_world.go::drawUnitCube.
 func roleOf(ctx InspectorCtx, ent ecs.Entity) components.UnitRoleKind {
 	if ctx.RoleMap == nil {
 		return components.RoleRifleman
@@ -150,28 +131,13 @@ var (
 	inspectorRowSelectBG = rl.Color{R: 30, G: 80, B: 110, A: 180}
 )
 
-// DrawInspector paints the inspector panel content (background + text rows).
-// Phase 10 M10.4 content tree:
+// DrawInspector dispatches on selection:
+//   - Empty -> "No selection" + list every Squad.
+//   - Single Unit / Single Squad / Multi -> per-flavour panels.
 //
-//   - Empty selection -> "No selection" + list every Squad on the scene.
-//   - Single Unit     -> stance / motion / suppression / squad ref / equip.
-//   - Single Squad    -> name / members / formation / macro state / roster.
-//   - Multi-select    -> counts (units, squads).
-//
-// Hovered entity (a unit or squad) is highlighted by a tinted row background.
-//
-// Phase 13.5 M13.5.3: when ctx.Scroll != nil, the initial y is shifted up by
-// Scroll.OffsetY (so on-screen content scrolls), and at the end of the draw
-// the total used height is written back into Scroll.ContentHeight so the
-// scrollbar can size + clamp correctly. Caller (main.go) draws the scrollbar
-// after EndScissorMode.
-//
-// Section helpers live in sibling files:
-//
-//	inspector_unit.go      single-unit panel + role / faction / stance labels
-//	inspector_squad.go     single-squad panel + formation / macro labels
-//	inspector_orders.go    order rows + progress bar + AttackMove pill
-//	inspector_override.go  TacticalOverride block + threat label
+// When ctx.Scroll != nil, the initial y is shifted by Scroll.OffsetY and
+// the total used height is written back into Scroll.ContentHeight at the
+// end of draw so the scrollbar can size and clamp on the next frame.
 func DrawInspector(panel Panel, ctx InspectorCtx) {
 	content := ContentRect(panel)
 	rl.DrawRectangleRec(content, inspectorBG)
@@ -184,9 +150,8 @@ func DrawInspector(panel Panel, ctx InspectorCtx) {
 	if ctx.Scroll != nil {
 		scrollOffset = int32(ctx.Scroll.OffsetY)
 	}
-	// Reserve room for the scrollbar on the right so chips/text aren't drawn
-	// under it. Scrollbar width is small (8 px) so subtracting per-row would
-	// be wasteful; just shrink usable width once.
+	// Reserve room for the scrollbar on the right so chips/text don't
+	// draw under it.
 	usableWidth := int32(content.Width) - 2*inspectorPadX - int32(scrollbarTrackWidth)
 	y := y0 - scrollOffset
 
@@ -197,9 +162,6 @@ func DrawInspector(panel Panel, ctx InspectorCtx) {
 	case selSingleUnit:
 		endY = drawInspectorUnit(ctx, ctx.Selected[0], x, y)
 	case selSingleSquad:
-		// One squad selected = the roster's count matches len(selected) and
-		// every member shares the same Squad. We resolve the squad through
-		// the first member's SquadMember.
 		if sm := ctx.SquadMemberMap.Get(ctx.Selected[0]); sm != nil {
 			endY = drawInspectorSquad(ctx, sm.Squad, x, y, usableWidth)
 		} else {
@@ -212,8 +174,6 @@ func DrawInspector(panel Panel, ctx InspectorCtx) {
 	}
 
 	if ctx.Scroll != nil {
-		// Total used height = (endY + scrollOffset) - y0. Add inspectorPadY of
-		// bottom padding so the last row isn't hugging the panel edge.
 		ctx.Scroll.ContentHeight = float32(endY+scrollOffset-y0) + float32(inspectorPadY)
 	}
 }
@@ -241,13 +201,11 @@ func describeSelection(ctx InspectorCtx) selectionKind {
 		}
 		return selMulti
 	}
-	// homogeneous squad: single-squad view if the selection equals the entire
-	// roster (or any non-empty subset - the inspector still shows the squad).
 	return selSingleSquad
 }
 
 // groupSelectedHelper mirrors main.groupSelected to keep this package
-// self-contained (no UI -> main import).
+// free of a main import.
 func groupSelectedHelper(selected []ecs.Entity,
 	squadMemberMap *ecs.Map[components.SquadMember]) (ecs.Entity, bool) {
 	var common ecs.Entity
@@ -301,8 +259,6 @@ func drawInspectorEmpty(ctx InspectorCtx, x, y, width int32) int32 {
 		y += inspectorRowH
 	}
 
-	// Phase 15 M15.C.2 - recent events feed. Surfaces KIA / OrderCompleted /
-	// SuppressionStart even when no squad is selected.
 	if ctx.EventLog != nil && ctx.EventLog.Count > 0 {
 		y += inspectorRowH
 		drawText(ctx.Font, "Recent events:", x, y, inspectorFontSize, inspectorTextDim)

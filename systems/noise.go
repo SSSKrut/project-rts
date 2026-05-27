@@ -5,10 +5,9 @@ import (
 	"math/rand"
 )
 
-// Terrain noise - single source of truth for ground height. Sampled in *world*
-// coordinates so neighbouring chunks line up by construction. Both procgen
-// and the ground-stick controller call GroundHeight, guaranteeing the anchor
-// sits exactly on the surface and chunk seams stay continuous.
+// Terrain noise — single source of truth for ground height. Sampled in
+// world coordinates so neighbouring chunks line up. Both procgen and the
+// ground-stick controller call GroundHeight, keeping chunk seams continuous.
 
 const terrainSeed int64 = 0x434F4C4457415221 // "COLD WAR!"
 
@@ -20,8 +19,8 @@ const (
 	terrainAmplitude = 8.0 // peak-to-trough envelope, metres
 )
 
-// permTable: 256-entry permutation doubled to 512 to avoid wrap-around in the
-// gradient lookup. Built once from terrainSeed at init.
+// 256-entry permutation doubled to 512 to avoid wrap-around in the gradient
+// lookup. Built once from terrainSeed at init.
 var permTable [512]int
 
 func init() {
@@ -39,7 +38,7 @@ func init() {
 	}
 }
 
-// fade is Perlin's quintic ease curve: 6t^5 - 15t^4 + 10t^3.
+// fade is Perlin's quintic ease curve: 6t⁵ - 15t⁴ + 10t³.
 func fade(t float64) float64 {
 	return t * t * t * (t*(t*6-15) + 10)
 }
@@ -48,9 +47,8 @@ func lerp(a, b, t float64) float64 {
 	return a + t*(b-a)
 }
 
-// grad2 picks one of 8 unit-ish gradients on the XY plane based on the low
-// bits of hash and returns its dot with (x, y). Standard Perlin trick:
-// directions encoded in switch arms, no real lookup table.
+// grad2 picks one of 8 unit-ish gradients on the XY plane from hash and
+// returns its dot with (x, y).
 func grad2(hash int, x, y float64) float64 {
 	switch hash & 7 {
 	case 0:
@@ -72,7 +70,7 @@ func grad2(hash int, x, y float64) float64 {
 	}
 }
 
-// perlin2 evaluates classic 2D Perlin noise at (x, y). Output ~[-1, 1].
+// perlin2 evaluates 2D Perlin noise at (x, y). Output ~[-1, 1].
 func perlin2(x, y float64) float64 {
 	xi := int(math.Floor(x)) & 255
 	yi := int(math.Floor(y)) & 255
@@ -92,8 +90,8 @@ func perlin2(x, y float64) float64 {
 	return lerp(x1, x2, v)
 }
 
-// fbm2 sums fbmOctaves octaves, doubling frequency / halving amplitude per
-// octave. Result normalised to ~[-1, 1] by dividing by cumulative amplitude.
+// fbm2 sums fbmOctaves, doubling frequency / halving amplitude per octave.
+// Normalised to ~[-1, 1] via cumulative amplitude.
 func fbm2(x, y float64) float64 {
 	var sum, amp, totalAmp float64
 	freq := 1.0
@@ -111,7 +109,6 @@ func fbm2(x, y float64) float64 {
 }
 
 // GroundHeight returns the terrain height (Y, metres) at world (X, Z).
-// Single source of truth for procgen and ground-stick.
 func GroundHeight(worldX, worldZ float32) float32 {
 	h := fbm2(float64(worldX)*noiseScale, float64(worldZ)*noiseScale)
 	return float32(h * terrainAmplitude)

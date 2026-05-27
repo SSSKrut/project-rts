@@ -9,35 +9,26 @@ import (
 	"rts-go/components"
 )
 
-// resolveShot is the parallel work unit. Applies dispersion, walks the LOS,
-// finds the closest unit-vs-ray hit, and emits damage / tracer / impact /
-// threat / suppression records into per-worker buffers.
+// resolveShot is the parallel work unit. It runs inside ParallelForIndexed
+// and must only write to per-worker scratch buffers (the buf pointers).
 func resolveShot(
 	s *shotWork, targets []targetSnap, targetsByChunk map[components.ChunkCoord][]int32,
 	wallsByChunk map[components.ChunkCoord][]losWall, now float32,
 	dmgBuf *[]damageEvent, tracerBuf *[]tracerSpec, impactBuf *[]impactSpec,
 	threatBuf *[]threatEvent, suppBuf *[]suppressionEvent, splashBuf *[]splashEvent,
 ) {
-	// Apply lateral dispersion to the aim point. dispersion is small-angle
-	// radians; lateral deflection ~ dispersion * range. Sample one uniform
-	// per axis from the seeded RNG so the same shot always lands the same way
-	// (debuggable replay).
 	dx := s.aim.X - s.muzzle.X
 	dz := s.aim.Z - s.muzzle.Z
 	dist := float32(math.Sqrt(float64(dx*dx + dz*dz)))
 	if dist > s.rangeMax {
-		// Out-of-range guard (should have been filtered in pickTarget but
-		// targets move between picks). Drop the shot silently.
 		return
 	}
 
+	// Seeded RNG so the same shot lands the same way every replay.
 	rng := s.rngSeed
-	rx := float32(splitmix(&rng))/float32(0x40000000) - 1 // [-1, 1)
+	rx := float32(splitmix(&rng))/float32(0x40000000) - 1
 	ry := float32(splitmix(&rng))/float32(0x40000000) - 1
 	lateral := s.dispersion * dist
-	// Perpendicular-to-LOS XZ basis (rotate (dx,dz) by 90 deg). Adds
-	// horizontal scatter; ry adds a small vertical jitter so the impact
-	// sphere doesn't always sit on the ground plane.
 	invD := float32(1)
 	if dist > 1e-4 {
 		invD = 1 / dist
@@ -49,13 +40,10 @@ func resolveShot(
 	aim.Z += perpZ * lateral * rx
 	aim.Y += lateral * ry * 0.5
 
-	// Wall LOS - collect walls in the 3x3 chunk window around the shooter.
 	walls := localWalls(wallsByChunk, s.shooterChunk)
 	wallT, wallBlocks := segmentToWallsT(walls, s.muzzle.X, s.muzzle.Z, aim.X, aim.Z)
 
-	// Unit-vs-ray - walk targets in the 3x3 chunk window. Pick the unit
-	// closest to the shooter (along ray) that's within its hit cylinder.
-	bestHitT := float32(1.5) // > 1 means no hit yet
+	bestHitT := float32(1.5)
 	var bestHit ecs.Entity
 	var bestPos components.WorldPos
 	var bestRadius float32
@@ -83,12 +71,9 @@ func resolveShot(
 		}
 	}
 
-	// Final hit decision: nearest event between unit and wall.
 	hitWall := wallBlocks && wallT < bestHitT
 	hitUnit := bestHit != (ecs.Entity{}) && !hitWall
 
-	// Compute terminal impact point + classify the hit kind for per-kind
-	// particle dispatch in the serial post-pass.
 	var impact rl.Vector3
 	var hk hitKind
 	switch {
@@ -98,10 +83,10 @@ func resolveShot(
 	case hitUnit:
 		impact = rl.Vector3{
 			X: float32(bestPos.Chunk.X)*components.ChunkSize + bestPos.Local.X,
-			Y: aim.Y, // approximate impact at aim's torso height
+			Y: aim.Y,
 			Z: float32(bestPos.Chunk.Z)*components.ChunkSize + bestPos.Local.Z,
 		}
-		_ = bestRadius // reserved for cover model in Phase 24
+		_ = bestRadius
 		hk = hitKindUnitFlag
 	default:
 		impact = aim
@@ -122,9 +107,7 @@ func resolveShot(
 		Hit: hk,
 	})
 
-	// Phase 14.5 M14.5.5: splash event for AoE weapons. Direct-hit target
-	// already lands in dmgBuf; the splash applies to everyone else in radius
-	// (friendly fire enabled, matches Phase 14 design).
+	// Direct-hit target already lands in dmgBuf; splash hits everyone else.
 	if s.splashRadius > 0 {
 		*splashBuf = append(*splashBuf, splashEvent{
 			pos: impact, radius: s.splashRadius, falloff: s.splashFalloff,
@@ -133,9 +116,6 @@ func resolveShot(
 	}
 
 	if hitUnit {
-		// Stance multiplier - smaller silhouette -> less damage transferred.
-		// Re-read stance from snapshot (best-effort; stance change between
-		// snapshot and apply is rare and acceptable).
 		mul := float32(1)
 		for _, idx := range targetsByChunk[bestPos.Chunk] {
 			if targets[idx].ent == bestHit {
@@ -149,9 +129,6 @@ func resolveShot(
 		})
 	}
 
-	// Phase 14 M14.5: every shot spawns one ThreatSource at the muzzle.
-	// Severity grows with weapon damage so MG bursts press harder than
-	// single-shot rifle fire - clamped to 1.0.
 	severity := s.damage / 100
 	if severity > 1 {
 		severity = 1
@@ -161,10 +138,8 @@ func resolveShot(
 		severity: severity,
 	})
 
-	// Suppression propagation: every shot (hit or miss) writes one event at
-	// the terminal impact point. Hit -> bigger nominal weight; miss ->
-	// smaller distance-scaled push. resolveShot can't walk units (workers
-	// don't share state) - the serial post-pass does the radius query.
+	// Every shot (hit or miss) writes one suppression event at the terminal
+	// impact; the radius query is done in the serial post-pass.
 	hitMul := suppressionMissMul
 	if hitUnit {
 		hitMul = suppressionHitMul
@@ -176,9 +151,7 @@ func resolveShot(
 	})
 }
 
-// localWalls returns the concatenated wall slice for the 3x3 chunk window
-// around `home`. Returns a fresh slice each call (worker-local - no shared
-// mutation), so the parallel pass is race-safe.
+// Fresh slice per call so the parallel pass stays race-safe.
 func localWalls(wallsByChunk map[components.ChunkCoord][]losWall, home components.ChunkCoord) []losWall {
 	var total int
 	for dz := int32(-1); dz <= 1; dz++ {
@@ -198,10 +171,7 @@ func localWalls(wallsByChunk map[components.ChunkCoord][]losWall, home component
 	return out
 }
 
-// segmentToWallsT returns the smallest t in [0,1] along (ax,az)->(bx,bz) at
-// which a non-transparent wall is hit, plus a "blocked" flag. Mirrors
-// anyLosWallBlocks but reports the parametric distance so we can render the
-// tracer up to the wall.
+// Smallest t in [0,1] where a non-transparent wall is hit, plus blocked flag.
 func segmentToWallsT(walls []losWall, ax, az, bx, bz float32) (float32, bool) {
 	bestT := float32(2)
 	blocked := false
@@ -229,10 +199,6 @@ func segmentToWallsT(walls []losWall, ax, az, bx, bz float32) (float32, bool) {
 	return bestT, blocked
 }
 
-// segmentPointHit returns (t, miss) - t is the parametric position on the
-// (ax,az)->(bx,bz) segment closest to (px,pz). miss=true if that closest
-// approach distance exceeds `radius` (no hit) or if the closest point lies
-// outside [0,1] (beyond the segment endpoints).
 func segmentPointHit(ax, az, bx, bz, px, pz, radius float32) (float32, bool) {
 	dx := bx - ax
 	dz := bz - az
@@ -253,8 +219,6 @@ func segmentPointHit(ax, az, bx, bz, px, pz, radius float32) (float32, bool) {
 	return t, false
 }
 
-// worldXYZ converts a WorldPos to absolute rl.Vector3 in world coords (chunk
-// base + local + extra Y offset).
 func worldXYZ(p components.WorldPos, yOff float32) rl.Vector3 {
 	return rl.Vector3{
 		X: float32(p.Chunk.X)*components.ChunkSize + p.Local.X,
@@ -263,8 +227,7 @@ func worldXYZ(p components.WorldPos, yOff float32) rl.Vector3 {
 	}
 }
 
-// worldDistSq returns squared world XZ distance between two WorldPos values.
-// Y is ignored - combat range is read on the horizontal plane.
+// XZ only — combat range is horizontal.
 func worldDistSq(a, b components.WorldPos) float32 {
 	ax := float32(a.Chunk.X)*components.ChunkSize + a.Local.X
 	az := float32(a.Chunk.Z)*components.ChunkSize + a.Local.Z
@@ -275,7 +238,6 @@ func worldDistSq(a, b components.WorldPos) float32 {
 	return dx*dx + dz*dz
 }
 
-// lerpVec3 is plain linear interpolation between two rl.Vector3.
 func lerpVec3(a, b rl.Vector3, t float32) rl.Vector3 {
 	return rl.Vector3{
 		X: a.X + (b.X-a.X)*t,
@@ -284,8 +246,6 @@ func lerpVec3(a, b rl.Vector3, t float32) rl.Vector3 {
 	}
 }
 
-// clampWeaponRange enforces the system-wide max so the LOS window stays
-// bounded.
 func clampWeaponRange(r float32) float32 {
 	if r <= 0 {
 		return 0
@@ -296,18 +256,12 @@ func clampWeaponRange(r float32) float32 {
 	return r
 }
 
-// tracerColorFor reads tracer hue from components.WeaponSpecs. Phase 14.5
-// M14.5.1 - palette switch replaced with spec table.
 func tracerColorFor(k components.WeaponKind) rl.Color {
 	return components.SpecForWeapon(k).TracerColor
 }
 
-// splitmix is a tiny stateful SplitMix64 used to pick deterministic
-// dispersion jitter inside resolveShot. Reading *seed and writing back so
-// successive calls advance the stream. Output is uint32 in [0, 2^31); caller
-// divides by 2^30 then subtracts 1 to recentre to [-1, 1). Pulling math/rand
-// would allocate a *rand.Rand per worker for thread safety, which we avoid
-// here.
+// Stateful SplitMix64: math/rand would allocate a *rand.Rand per worker for
+// thread safety, which we avoid here. Output is uint32 in [0, 2^31).
 func splitmix(seed *uint64) uint32 {
 	*seed += 0x9e3779b97f4a7c15
 	z := *seed

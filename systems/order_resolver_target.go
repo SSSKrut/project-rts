@@ -9,30 +9,20 @@ import (
 )
 
 // resolveTargetPos refreshes OrderTarget.Pos when the target is an entity
-// (Garrison -> Building, OccupyTrench -> TrenchRoot). For Pos-only kinds it's
-// a no-op.
+// (Garrison → Building, OccupyTrench → TrenchRoot). No-op for Pos-only kinds.
 func (sys *OrderResolverSystem) resolveTargetPos(kind components.OrderKindCode, target *components.OrderTarget) {
 	if target.Entity == (ecs.Entity{}) {
 		return
 	}
-	// Phase 14.6 M14.6.0 (Issue #11): refuse Map.Get on a dead entity id.
-	// Building / TrenchRoot don't die in Phase 14.6 (root entities carry
-	// AlwaysActive), but the guard is cheap and protects against future
-	// targets that do.
 	if !sys.squadService.world.Alive(target.Entity) {
 		return
 	}
 	switch kind {
 	case components.OrderKindGarrison, components.OrderKindOccupyBuilding, components.OrderKindClearBuilding:
-		// Phase 17.6: Occupy / Clear share Garrison's target resolution —
-		// anchor on the lowest Floor NavNode so A* routes through a Door
-		// TransitionEdge. Distribution (per-floor equal-spread for Occupy)
-		// lands in M17.6.6 via Floor-anchored IndividualPosition.
+		// Anchor on the lowest Floor NavNode (NodeLevel) so A* routes
+		// through a Door TransitionEdge instead of dead-ending at a
+		// NavInBuilding surface cell.
 		if b := sys.buildingMap.Get(target.Entity); b != nil {
-			// Phase 14.6 followup - prefer the ground-floor (lowest Level)
-			// child's WorldPos. NavService.resolveNode matches it as a
-			// NodeLevel, so A* routes through a Door TransitionEdge instead
-			// of dead-ending at a NavInBuilding surface cell.
 			if fp, ok := sys.firstFloorPos(target.Entity); ok {
 				target.Pos = fp
 			} else {
@@ -54,20 +44,13 @@ func (sys *OrderResolverSystem) resolveTargetPos(kind components.OrderKindCode, 
 	}
 }
 
-// updateProgress writes a rough 0..1 progress value for the head order.
-// Currently 1 - dist/initialDist, computed against OrderIssuedAt as anchor
-// (no extra component needed for "initial" position; we use squad center at
-// issuance via the issued-at clock + a per-tick recompute would drift).
-// Approximation: clamp(1 - cur/100m, 0, 1) - coarse but enough for Inspector
-// progress bars. Real progress accounting comes with Phase 13's Pace param.
+// updateProgress writes a rough 0..1 progress value: clamp(1 - dist/100m, 0, 1).
+// Garrison writes inside/alive directly in evaluateCompletion and is skipped.
 func (sys *OrderResolverSystem) updateProgress(squad, ord ecs.Entity, target *components.OrderTarget) {
 	pr := sys.orderProgressMap.Get(ord)
 	if pr == nil {
 		return
 	}
-	// Phase 14.6 M14.6.2: Garrison writes inside/alive into Progress.Value
-	// directly from evaluateCompletion. Don't clobber it with a distance-
-	// from-center fraction here.
 	if kind := sys.orderKindMap.Get(ord); kind != nil &&
 		components.SpecForOrderKind(kind.Code).Completion == components.CompletionEveryMemberOnFloor {
 		return
@@ -92,14 +75,8 @@ func (sys *OrderResolverSystem) updateProgress(squad, ord ecs.Entity, target *co
 	pr.Value = v
 }
 
-// applyArrivedFacing reads the optional OrderParamFacing on a freshly-
-// completed order and snaps every roster member's Motion.Yaw to the requested
-// yaw. Phase 13.6 M13.6.4: instant rotation - no easing. Phase 25 polish may
-// interpolate; the writer side is the same, just the reader (UnitMovement)
-// becomes lerp-aware.
-//
-// No-op when the order has no facing param, the squad has no roster, or a
-// member lacks a Motion component (defensive - Phase 7 spawns guarantee it).
+// applyArrivedFacing snaps every roster member's Motion.Yaw to the
+// OrderParamFacing yaw on completion. Instant rotation, no easing.
 func (sys *OrderResolverSystem) applyArrivedFacing(squad, ord ecs.Entity) {
 	if sys.orderFacingMap == nil || sys.motionMap == nil {
 		return
@@ -124,10 +101,8 @@ func (sys *OrderResolverSystem) applyArrivedFacing(squad, ord ecs.Entity) {
 }
 
 // firstFloorPos returns the WorldPos of the lowest-Level Floor child of
-// `building`. Used by resolveTargetPos to anchor a Garrison goal on a Floor
-// NavNode (reachable through Door TransitionEdges) rather than a surface
-// NavInBuilding cell that A* would refuse. (_, false) when the building has
-// no live Floor children (chunk evicted, or layout has not yet generated).
+// `building` — anchors the Garrison goal on a Floor NavNode reachable
+// through Door TransitionEdges. (_, false) when no live Floor children.
 func (sys *OrderResolverSystem) firstFloorPos(building ecs.Entity) (components.WorldPos, bool) {
 	idx := sys.buildingChildIndex.Get()
 	if idx == nil {
@@ -159,11 +134,7 @@ func (sys *OrderResolverSystem) firstFloorPos(building ecs.Entity) (components.W
 }
 
 // countInsideBuilding tallies how many of `roster`'s live members sit inside
-// the building's Footprint AABB AND on a Floor entity (any storey). Returns
-// (alive, inside). Phase 14.6 M14.6.2 - the Garrison
-// CompletionEveryMemberOnFloor arm uses this to gate Done / Failed
-// transitions and to write a per-member progress fraction into
-// OrderProgress.Value.
+// the building's Footprint AABB AND on a Floor entity (any storey).
 func (sys *OrderResolverSystem) countInsideBuilding(
 	roster *components.CommandRoster, footprint components.AABB2D,
 ) (alive, inside uint8) {
@@ -192,20 +163,12 @@ func (sys *OrderResolverSystem) countInsideBuilding(
 	return alive, inside
 }
 
-// memberOnFloor returns true when `pos` sits over the horizontal extent of
-// any live Floor plate AND its Y is within +/-1.5 m of the floor surface.
-// The Y proximity catches both surface stories (member Y ~ floor Y) and
-// bunkers (member Y dropped into the sunken floor). Cheap: 1-3 buildings x
-// 1-3 floors per scene = handful of plate checks per call.
-//
-// Phase 17.9 — Floor entity's WorldPos is the plate CENTRE (set by house.go
-// `b.AddFloor(rl.Vector3{X: cx, Y: baseY, Z: cz}, ...)` where cx/cz = building
-// centre). Plate extent is therefore [centre - Size/2, centre + Size/2], same
-// convention GroundStickSystem uses. Previous version treated fx/fz as the
-// corner and checked [fx, fx + Size], shifting the matched area by +Size/2 —
-// any unit physically inside the building but in the lower-X / lower-Z half
-// of the plate failed the floor check, so OccupyBuilding completion stalled
-// at "half the squad inside" even when all 8 were geometrically inside.
+// memberOnFloor returns true when `pos` sits over a live Floor plate AND its
+// Y is within ±1.5 m of the floor surface. Floor WorldPos is the plate
+// centre, so the extent is [centre ± Size/2] (same convention as
+// GroundStick). Treating the WorldPos as a corner shifts the match by
+// +Size/2 and breaks OccupyBuilding completion for units in the lower-X /
+// lower-Z half of the plate.
 func (sys *OrderResolverSystem) memberOnFloor(pos *components.WorldPos) bool {
 	mx := float32(pos.Chunk.X)*components.ChunkSize + pos.Local.X
 	mz := float32(pos.Chunk.Z)*components.ChunkSize + pos.Local.Z
@@ -229,12 +192,8 @@ func (sys *OrderResolverSystem) memberOnFloor(pos *components.WorldPos) bool {
 }
 
 // countHostilesInBuilding tallies live Units whose Faction differs from
-// `ownFaction` and whose XZ position lies inside `footprint`. Phase 17.6
-// M17.6.5: ClearBuilding completion gates on this returning 0 (no hostiles
-// left) plus at least one friendly inside.
-//
-// Walks the unit filter rather than the roster — clearing must consider
-// every live unit in the building, not just members of the issuing squad.
+// `ownFaction` and whose XZ position lies inside `footprint`. Walks the unit
+// filter (every live unit, not just the issuing squad's roster).
 func (sys *OrderResolverSystem) countHostilesInBuilding(
 	footprint components.AABB2D, ownFaction uint8,
 ) uint8 {
@@ -260,8 +219,7 @@ func (sys *OrderResolverSystem) countHostilesInBuilding(
 	return hostiles
 }
 
-// pointNearPolyline returns true when p is within `radius` of any segment of
-// the polyline. Reused by trench arrival and the hit-test resolver.
+// pointNearPolyline returns true when p is within `radius` of any segment.
 func pointNearPolyline(p components.WorldPos, points []components.WorldPos, radius float32) bool {
 	if len(points) < 2 {
 		return false

@@ -3,12 +3,10 @@ package components
 import "github.com/mlange-42/ark/ecs"
 
 // Order is a first-class ECS entity. Per-kind optional params live on
-// sibling components added only when needed (OrderParamFacing, OrderParamPatrol).
+// sibling components added only when needed.
 
-// Order is the marker. Filter target only.
 type Order struct{}
 
-// OrderKindCode is the type of order.
 type OrderKindCode uint8
 
 const (
@@ -21,21 +19,17 @@ const (
 	// Resolved by RMB on an enemy unit. Completes when target dies.
 	OrderKindAttackTarget
 	// OrderKindSuppressFire: drench a terrain sector with fire on a timer.
-	// Resolved via pie-menu on terrain.
 	OrderKindSuppressFire
-	// OrderKindOccupyBuilding (Phase 17.6): "go inside and stay" — squad
-	// enters a Building through the nearest door and spreads via NavGrid
-	// across the lowest floor. Distinct from Garrison ("attacking position
-	// at windows") in intent: Occupy is the new default RMB-tap action on a
-	// building, Garrison is reached only via the building popup. Both use
-	// CompletionEveryMemberOnFloor; per-floor equal-spread via Floor-anchored
-	// IndividualPosition lands in M17.6.6.
+	// OrderKindOccupyBuilding: "go inside and stay" — squad enters a Building
+	// through the nearest door and spreads via NavGrid across the lowest floor.
+	// Distinct from Garrison ("attacking position at windows") in intent:
+	// Occupy is the default RMB-tap action on a building, Garrison is reached
+	// only via the building popup.
 	OrderKindOccupyBuilding
-	// OrderKindClearBuilding (Phase 17.6 M17.6.5): "go in, kill hostiles
-	// inside, hold". Composite intent — completion gates on no-hostiles-
-	// inside-footprint + at-least-one-friendly-inside; OrderResolverSystem
-	// auto-chains an OccupyBuilding onto the same building entity on Done so
-	// the squad transitions from clearing into resting after the fight.
+	// OrderKindClearBuilding: "go in, kill hostiles inside, hold". Composite
+	// intent — completion gates on no-hostiles-inside-footprint +
+	// at-least-one-friendly-inside; OrderResolverSystem auto-chains an
+	// OccupyBuilding onto the same building entity on Done.
 	OrderKindClearBuilding
 )
 
@@ -45,7 +39,6 @@ type OrderKind struct {
 	Code OrderKindCode
 }
 
-// OrderStateCode tracks lifecycle. Transitions are owned by OrderResolverSystem.
 type OrderStateCode uint8
 
 const (
@@ -57,13 +50,12 @@ const (
 	OrderStateFailed
 )
 
-// OrderState on the order entity.
 type OrderState struct {
 	Code OrderStateCode
 }
 
 // OrderOwner is the back-reference to the Squad entity executing this order.
-// One-to-one. Joint orders (Phase 20+) add a sibling OrderGroup, not a list.
+// One-to-one. Joint orders add a sibling OrderGroup, not a list.
 type OrderOwner struct {
 	Squad ecs.Entity
 }
@@ -78,9 +70,8 @@ type OrderTarget struct {
 	Entity ecs.Entity
 }
 
-// OrderIssuedAt records the session-time when the order was created. Used for
-// timeouts and Inspector "issued 5s ago" display. Name avoids clash with
-// OrderStateIssued.
+// OrderIssuedAt records the session-time when the order was created. Name
+// avoids clash with OrderStateIssued.
 type OrderIssuedAt struct {
 	Time float32
 }
@@ -103,11 +94,10 @@ type OrderParamPatrol struct {
 	Loop bool
 }
 
-// OrderParamEngagementOverride is optional (Phase 17.6 M17.6.6). When
-// present on the head order, WeaponSystem.shouldFire reads `Mode` in place
-// of the squad's standing EngagementRules.Mode for the order's duration.
-// Used by the "Hidden position" popup preset (Mode=HoldFire) so the squad
-// holds fire while occupying without disturbing standing RoE state.
+// OrderParamEngagementOverride is optional. When present on the head order,
+// WeaponSystem.shouldFire reads `Mode` in place of the squad's standing
+// EngagementRules.Mode for the order's duration. Used by the "Hidden
+// position" popup preset (Mode=HoldFire).
 type OrderParamEngagementOverride struct {
 	Mode EngagementMode
 }
@@ -130,8 +120,7 @@ type OrderOutOfRangeTracker struct {
 }
 
 // OrderQueueHead lives on the Squad entity. First = zero => squad is idle.
-// The chain extends via OrderChain.Next on the head order. This is the primary
-// order state on the squad; MacroPath becomes derived/cached.
+// The chain extends via OrderChain.Next on the head order.
 type OrderQueueHead struct {
 	First ecs.Entity
 }

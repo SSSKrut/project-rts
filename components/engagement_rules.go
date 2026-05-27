@@ -1,7 +1,7 @@
 package components
 
 // EngagementMode is the standing fire-decision for a Squad. WeaponSystem
-// gates firing on it. See COMMAND-MODEL.md S4 for the per-role default.
+// gates firing on it.
 type EngagementMode uint8
 
 const (
@@ -15,8 +15,6 @@ const (
 	FreeFire
 )
 
-// StandoffPolicy is the preferred engagement range bucket. TargetPriority
-// uses it to bias target selection.
 type StandoffPolicy uint8
 
 const (
@@ -27,7 +25,7 @@ const (
 )
 
 // EngagementRules is the per-Squad standing rule covering fire decisions.
-// Lives on Squad (per-Unit override deferred). WeaponSystem is the reader.
+// WeaponSystem is the reader.
 type EngagementRules struct {
 	Mode         EngagementMode
 	FireOnInf    bool

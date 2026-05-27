@@ -10,23 +10,13 @@ import (
 	"rts-go/components"
 )
 
-// FormationEditorCtx bundles the ECS maps + world handle the editor needs.
-// Built once at startup; passed by value to NewFormationEditor. Presets is
-// a pointer to the global FormationPresets resource so Save / Apply
-// share state with every other open editor.
+// FormationEditorCtx tuning fields (zero = use built-in defaults):
 //
-// Tuning fields (zero = use built-in defaults):
-//
-//   - MinPxPerM / MaxPxPerM bound the wheel-zoom range. Lower MinPxPerM
-//     lets the user zoom out to fit huge custom formations; higher
-//     MaxPxPerM lets fine drags at half-metre precision.
-//   - SnapMeters is the drag-snap step; default 0.5 m. Set to 0 to disable
-//     snapping (free placement).
-//   - SelectionFn (optional) returns the currently selected squad each
-//     frame. When set, the editor re-binds to it so the floating /
-//     docked widget follows the player's selection instead of staying
-//     pinned to the squad alive at open time. Returning a zero entity
-//     leaves the previous bind alone (avoids flicker between selections).
+//   - SnapMeters: drag-snap step (default 0.5 m, negative disables).
+//   - SelectionFn: when set, the editor re-binds each frame so the
+//     widget follows the player's selection instead of staying pinned
+//     to the squad alive at open time. Returning a zero entity leaves
+//     the previous bind alone to avoid flicker.
 type FormationEditorCtx struct {
 	World          *ecs.World
 	RosterMap      *ecs.Map[components.CommandRoster]
@@ -44,26 +34,21 @@ type FormationEditorCtx struct {
 	SelectionFn func() ecs.Entity
 }
 
-// FormationEditor renders the concentric-rings UI for one squad. Owns its
-// per-instance drag + zoom state. Plug into a FloatingPanel via .Render.
+// FormationEditor renders the concentric-rings UI for one squad. PxPerM
+// is seeded from canvas size on first frame; the canvas adapts rings as
+// the panel is resized so the same value works at any size.
 type FormationEditor struct {
 	Squad ecs.Entity
 	Ctx   FormationEditorCtx
 
-	// Drag state: slot index of the member being dragged (-1 = none).
 	draggedSlot int
 
-	// Mouse-wheel zoom. Stored as pixels per metre; the canvas adapts
-	// rings + ring-max as the panel is resized so the same PxPerM works
-	// at any size. Zero on first frame → seeded from canvas size.
 	PxPerM float32
 
-	// Kind/preset dropdown menu state (only relevant for infantry).
 	kindMenuOpen bool
 	kindMenuRect rl.Rectangle
 }
 
-// NewFormationEditor constructs an editor for one squad.
 func NewFormationEditor(squad ecs.Entity, ctx FormationEditorCtx) *FormationEditor {
 	return &FormationEditor{Squad: squad, Ctx: ctx, draggedSlot: -1}
 }
@@ -74,10 +59,8 @@ const (
 	feDotPickRadius float32 = 12
 	feSnapMeters    float32 = 0.5
 	feCompassPad    float32 = 18
-	// Wheel-zoom range. Built-in defaults; FormationEditorCtx can override.
-	// Lower bound = 2 px/m (~half-screen radius of 60+ m) so the user can
-	// lay out wide loose / vehicle formations without clipping members at
-	// the edge. Upper bound = 200 px/m for half-metre dot-snap precision.
+	// Lower bound (2 px/m, ~60+ m half-screen radius) supports wide loose
+	// / vehicle formations; upper bound supports half-metre dot-snap.
 	fePxPerMMin float32 = 2
 	fePxPerMMax float32 = 200
 	feZoomStep  float32 = 1.15
@@ -101,11 +84,9 @@ var (
 	feBtnBorder     = rl.Color{R: 80, G: 90, B: 105, A: 255}
 )
 
-// DrawPanel renders the editor inside a workspace panel. Mirrors the
-// DrawInspector / DrawTimelinePanel signature so main.go can dispatch on
-// PanelID. lmbPress mirrors main.go's `chromeBusy()`-gated press edge.
-// Workspace flavour ignores the editor's close-request (Render's return
-// value) because the chevron "Close pane" already covers panel teardown.
+// DrawPanel hosts the editor inside a workspace panel; the return from
+// Render is ignored because the chevron "Close pane" already covers
+// panel teardown.
 func (e *FormationEditor) DrawPanel(panel Panel, font rl.Font, cursor rl.Vector2, lmbPress bool) {
 	content := ContentRect(panel)
 	rl.DrawRectangleRec(content, feCanvasBG)
@@ -114,18 +95,16 @@ func (e *FormationEditor) DrawPanel(panel Panel, font rl.Font, cursor rl.Vector2
 	_ = e.Render(content, cursor, font, lmbPress)
 }
 
-// Render is the FloatingRenderFn entry point. Returns true when the editor
-// wants to close itself (squad no longer alive, AND the editor is hosted
-// as a floating panel - workspace embedding ignores the return).
+// Render returns true when hosted as a floating panel and the editor
+// wants to close itself (squad gone). Workspace embedding ignores the
+// return.
 func (e *FormationEditor) Render(content rl.Rectangle, cursor rl.Vector2, font rl.Font, lmbPress bool) bool {
 	if e == nil || e.Ctx.World == nil {
 		return true
 	}
-	// Follow the active selection when the host wired a SelectionFn -
-	// rebinding here keeps the floating + workspace editor in sync with
-	// the player's current squad rather than the one alive at open-time.
-	// Returning a zero squad means "keep what you have" so the panel
-	// doesn't flicker between selections.
+	// Selection-follow: re-bind to the player's current squad each frame.
+	// Zero entity means "keep what you have" so the panel doesn't
+	// flicker between selections.
 	if e.Ctx.SelectionFn != nil {
 		if s := e.Ctx.SelectionFn(); s != (ecs.Entity{}) && e.Ctx.World.Alive(s) && s != e.Squad {
 			e.Squad = s
@@ -134,10 +113,9 @@ func (e *FormationEditor) Render(content rl.Rectangle, cursor rl.Vector2, font r
 		}
 	}
 	if e.Squad == (ecs.Entity{}) || !e.Ctx.World.Alive(e.Squad) {
-		// Workspace host calls e.RenderEmbedded which short-circuits this
-		// branch before we get here; floating host treats true as "close
-		// the panel". When wired with SelectionFn the editor instead shows
-		// a placeholder until a new selection arrives.
+		// Floating host treats true as "close the panel"; with
+		// SelectionFn the editor instead shows a placeholder until a
+		// new selection arrives.
 		if e.Ctx.SelectionFn != nil {
 			e.drawEmpty(content, font)
 			return false
@@ -173,19 +151,15 @@ func (e *FormationEditor) Render(content rl.Rectangle, cursor rl.Vector2, font r
 		e.drawCanvas(canvas, cursor, font, roster, fd, canvasLMB)
 	}
 
-	// Kind/preset popup is drawn last so it overlays the canvas. Returns
-	// true when an LMB landed on an item or outside the popup; in either
-	// case the popup closes and the canvas drag-start handler stayed
-	// gated above.
+	// Drawn last so it overlays the canvas.
 	if e.kindMenuOpen {
 		e.drawKindMenu(content, cursor, lmbPress && !headerConsumed, font, fd, roster)
 	}
 	return false
 }
 
-// drawHeader paints the top strip: title + kind dropdown + orientation
-// toggle. Returns true when a header click was consumed (used to gate the
-// canvas drag-start so the same press doesn't also pick a dot).
+// drawHeader returns true when a header click was consumed; gates the
+// canvas drag-start so the same press doesn't also pick a dot.
 func (e *FormationEditor) drawHeader(r rl.Rectangle, cursor rl.Vector2, lmbPress bool, font rl.Font, fd *components.FormationData) bool {
 	rl.DrawRectangleRec(r, feHeaderBG)
 	const titleSize int32 = 13
@@ -193,7 +167,6 @@ func (e *FormationEditor) drawHeader(r rl.Rectangle, cursor rl.Vector2, lmbPress
 		rl.Vector2{X: r.X + 8, Y: r.Y + (r.Height-float32(titleSize))*0.5},
 		float32(titleSize), 1.0, feText)
 
-	// Orientation toggle on the right.
 	btnW := float32(70)
 	btnH := r.Height - 8
 	btnY := r.Y + 4
@@ -204,7 +177,6 @@ func (e *FormationEditor) drawHeader(r rl.Rectangle, cursor rl.Vector2, lmbPress
 	drawFeBtn(font, mvtRect, "Movement", cursor, mode == components.OrientMovement)
 	drawFeBtn(font, nthRect, "North", cursor, mode == components.OrientNorth)
 
-	// Kind dropdown button between title and toggle.
 	kindLabel := e.kindLabelFor(fd)
 	kindBtnW := float32(120)
 	kindRect := rl.Rectangle{X: r.X + 90, Y: btnY, Width: kindBtnW, Height: btnH}
@@ -228,9 +200,6 @@ func (e *FormationEditor) drawHeader(r rl.Rectangle, cursor rl.Vector2, lmbPress
 	return false
 }
 
-// kindLabelFor returns the dropdown button text - reflects either the
-// active preset name (when CustomSlots is present), the preset that was
-// last applied, or the kind enum's name for kind-based formations.
 func (e *FormationEditor) kindLabelFor(fd *components.FormationData) string {
 	if e.Ctx.CustomSlotsMap != nil && e.Ctx.CustomSlotsMap.Has(e.Squad) {
 		return "Custom"
@@ -248,8 +217,6 @@ func (e *FormationEditor) kindLabelFor(fd *components.FormationData) string {
 	return "?"
 }
 
-// drawCanvas paints concentric rings, axis, compass, and member dots; also
-// handles dot drag (begin/update/end) which mutates CustomSlots.
 func (e *FormationEditor) drawCanvas(canvas rl.Rectangle, cursor rl.Vector2,
 	font rl.Font, roster *components.CommandRoster, fd *components.FormationData, lmbPress bool) {
 	rl.DrawRectangleRec(canvas, feCanvasBG)
@@ -264,12 +231,9 @@ func (e *FormationEditor) drawCanvas(canvas rl.Rectangle, cursor rl.Vector2,
 		halfPx = 10
 	}
 
-	// Seed PxPerM on first paint so ~6 m fits the initial canvas. After
-	// that the user controls it with the wheel.
 	if e.PxPerM <= 0 {
 		e.PxPerM = halfPx / 6
 	}
-	// Wheel zoom while cursor inside canvas (and no drag in progress).
 	minPx, maxPx := e.zoomRange()
 	if pointInRect(cursor, canvas) && e.draggedSlot < 0 {
 		if w := rl.GetMouseWheelMove(); w != 0 {
@@ -291,8 +255,6 @@ func (e *FormationEditor) drawCanvas(canvas rl.Rectangle, cursor rl.Vector2,
 	pxPerM := e.PxPerM
 	maxMeters := halfPx / pxPerM
 
-	// Concentric meter rings + labels - count adapts to current zoom so we
-	// always see at least 3 rings and at most ~10.
 	step := chooseRingStep(maxMeters)
 	for m := step; m <= maxMeters; m += step {
 		rl.DrawCircleLines(int32(cx), int32(cy), m*pxPerM, feRingColor)
@@ -308,15 +270,11 @@ func (e *FormationEditor) drawCanvas(canvas rl.Rectangle, cursor rl.Vector2,
 			rl.Vector2{X: cx + m*pxPerM - w - 3, Y: cy + 2},
 			float32(sz), 1.0, feRingLabelColr)
 	}
-	// Cross-hair axes.
 	rl.DrawLine(int32(canvas.X), int32(cy), int32(canvas.X+canvas.Width), int32(cy), feAxisColor)
 	rl.DrawLine(int32(cx), int32(canvas.Y), int32(cx), int32(canvas.Y+canvas.Height), feAxisColor)
 
-	// Compass / forward arrow at top.
 	e.drawCompass(cx, canvas.Y+feCompassPad, font, fd)
 
-	// Drag handling first - resolve which slot the cursor would grab and
-	// whether to start/update/end the drag this frame.
 	lmbDown := rl.IsMouseButtonDown(rl.MouseButtonLeft)
 	if e.draggedSlot >= 0 {
 		if !lmbDown {
@@ -343,7 +301,6 @@ func (e *FormationEditor) drawCanvas(canvas rl.Rectangle, cursor rl.Vector2,
 		}
 	}
 
-	// Draw + hit-test dots.
 	for i := uint8(0); i < roster.Count; i++ {
 		mem := roster.Members[i]
 		if mem == (ecs.Entity{}) || !e.Ctx.World.Alive(mem) {
@@ -352,7 +309,6 @@ func (e *FormationEditor) drawCanvas(canvas rl.Rectangle, cursor rl.Vector2,
 		slot := e.slotOffset(i, fd)
 		dotX := cx + slot.X*pxPerM
 		dotY := cy - slot.Y*pxPerM
-		// Constrain to canvas.
 		col := rl.Color{R: 160, G: 200, B: 240, A: 255}
 		if e.Ctx.RoleMap != nil {
 			if r := e.Ctx.RoleMap.Get(mem); r != nil {
@@ -372,7 +328,6 @@ func (e *FormationEditor) drawCanvas(canvas rl.Rectangle, cursor rl.Vector2,
 			rl.DrawCircle(int32(dotX), int32(dotY), feDotRadius, col)
 			rl.DrawCircleLines(int32(dotX), int32(dotY), feDotRadius, border)
 		}
-		// Slot index label.
 		const sz int32 = 11
 		label := fmt.Sprintf("%d", i)
 		w := rl.MeasureTextEx(font, label, float32(sz), 1.0).X
@@ -380,29 +335,24 @@ func (e *FormationEditor) drawCanvas(canvas rl.Rectangle, cursor rl.Vector2,
 			rl.Vector2{X: dotX - w*0.5, Y: dotY - float32(sz)*0.5},
 			float32(sz), 1.0, contrastTextColor(col))
 
-		// Drag-start: LMB pressed on this dot, no drag in progress. Slot
-		// 0 (commander) is locked at centre for infantry-only squads —
-		// the formation rotates around the leader and pulling them off
-		// centre would orphan the radial coordinate frame. Mixed squads
-		// (with vehicles, Phase 19+) unlock slot 0 because vehicle leads
-		// often anchor off-centre.
+		// Slot 0 (commander) is locked at centre for infantry: the
+		// formation rotates around the leader and pulling them off
+		// centre would orphan the radial coordinate frame. Mixed
+		// squads with vehicles unlock slot 0.
 		canDrag := i != 0 || e.allowsCommanderDrag(roster)
 		if canDrag && e.draggedSlot < 0 && lmbPress {
 			dx := cursor.X - dotX
 			dy := cursor.Y - dotY
 			if dx*dx+dy*dy <= feDotPickRadius*feDotPickRadius {
 				e.draggedSlot = int(i)
-				// On first drag, materialise CustomSlots seeded from the
-				// current formation kind so existing layout doesn't snap
-				// to zero.
+				// Materialise CustomSlots seeded from current kind so
+				// existing layout doesn't snap to zero.
 				e.ensureCustomSlots(roster, fd)
 			}
 		}
 	}
 }
 
-// drawCompass paints the forward indicator at the top of the canvas. North
-// mode shows a compass "N" arrow; Movement mode shows a cyan march arrow.
 func (e *FormationEditor) drawCompass(cx, topY float32, font rl.Font, fd *components.FormationData) {
 	mode := e.currentOrient()
 	col := feCompassColor
@@ -411,7 +361,6 @@ func (e *FormationEditor) drawCompass(cx, topY float32, font rl.Font, fd *compon
 		col = feMovementClr
 		label = "MARCH"
 	}
-	// Arrow pointing up from (cx, topY+12) to (cx, topY-4).
 	tip := rl.Vector2{X: cx, Y: topY - 6}
 	tail := rl.Vector2{X: cx, Y: topY + 14}
 	rl.DrawLineEx(tail, tip, 2.5, col)
@@ -427,25 +376,20 @@ func (e *FormationEditor) drawCompass(cx, topY float32, font rl.Font, fd *compon
 	_ = fd
 }
 
-// slotOffset returns the squad-local XY offset (X = right, Y = forward) for
-// rendering slot `i`. Prefers CustomSlots if present; otherwise computes
-// from FormationOffset with forward = (0,0,1) so the canvas always shows
-// the formation in its "canonical" upright pose.
+// slotOffset returns the squad-local XY offset (X = right, Y = forward),
+// preferring CustomSlots over the canonical formation offset.
 func (e *FormationEditor) slotOffset(i uint8, fd *components.FormationData) rl.Vector2 {
 	if e.Ctx.CustomSlotsMap != nil {
 		if cs := e.Ctx.CustomSlotsMap.Get(e.Squad); cs != nil {
 			return cs.Slots[i]
 		}
 	}
-	// Compute using canonical forward (+Z). FormationOffset returns world
-	// XZ; we map world.X → slot.X (right), world.Z → slot.Y (forward).
 	wx, wz := formationOffsetCanonical(fd.Type, i, fd.Spacing)
 	return rl.Vector2{X: wx, Y: wz}
 }
 
-// formationOffsetCanonical computes the kind-based offset in canonical
-// orientation (forward = +Z). Duplicates the right/forward maths from
-// systems.FormationOffset so this UI package doesn't depend on systems.
+// formationOffsetCanonical duplicates systems.FormationOffset (forward = +Z)
+// so the UI package doesn't depend on systems.
 func formationOffsetCanonical(kind components.FormationKind, slot uint8, spacing float32) (float32, float32) {
 	if slot == 0 {
 		return 0, 0
@@ -469,7 +413,7 @@ func formationOffsetCanonical(kind components.FormationKind, slot uint8, spacing
 		}
 		return row * sign * spacing, -row * spacing
 	case components.FormationLoose:
-		// Deterministic radial scatter matching the systems-side hash.
+		// Hash must match the systems-side scatter.
 		hash := uint32(slot)*2654435761 ^ 0x9e3779b9
 		ang := float32(hash%360) * (3.14159265 / 180)
 		r := float32(1+(hash/360)%3) * spacing
@@ -478,8 +422,6 @@ func formationOffsetCanonical(kind components.FormationKind, slot uint8, spacing
 	return 0, 0
 }
 
-// ensureCustomSlots adds CustomSlots to the squad with current per-kind
-// offsets pre-filled, so a drag doesn't snap members to zero.
 func (e *FormationEditor) ensureCustomSlots(roster *components.CommandRoster, fd *components.FormationData) {
 	if e.Ctx.CustomSlotsMap == nil {
 		return
@@ -497,8 +439,6 @@ func (e *FormationEditor) ensureCustomSlots(roster *components.CommandRoster, fd
 	e.Ctx.CustomSlotsMap.Add(e.Squad, &cs)
 }
 
-// setSlot writes a new offset for the given slot, materialising
-// CustomSlots if needed.
 func (e *FormationEditor) setSlot(i uint8, offset rl.Vector2) {
 	if e.Ctx.CustomSlotsMap == nil {
 		return
@@ -510,10 +450,8 @@ func (e *FormationEditor) setSlot(i uint8, offset rl.Vector2) {
 	cs.Slots[i] = offset
 }
 
-// drawKindMenu renders the dropdown that opens under the Kind button.
-// Items: predefined kinds → saved presets → "Save current as preset".
-// LMB on an item applies the action and closes the menu. LMB outside the
-// menu (and outside the Kind button itself) also closes.
+// drawKindMenu lists predefined kinds → saved presets → "Save current
+// as preset". LMB outside the menu (and outside the Kind button) closes.
 func (e *FormationEditor) drawKindMenu(content rl.Rectangle, cursor rl.Vector2,
 	lmbPress bool, font rl.Font, fd *components.FormationData, roster *components.CommandRoster) {
 	const itemH float32 = 22
@@ -536,35 +474,28 @@ func (e *FormationEditor) drawKindMenu(content rl.Rectangle, cursor rl.Vector2,
 	if e.Ctx.Presets != nil {
 		presets = e.Ctx.Presets.List
 	}
-	// Vertical layout: header / kinds / header / presets / footer button.
-	rows := 0
-	rows++ // "Predefined" header
-	rows += len(predefined)
-	rows++ // "Presets" header
+	rows := 1 + len(predefined) + 1
 	if len(presets) == 0 {
-		rows++ // "(none)" placeholder
+		rows++
 	} else {
 		rows += len(presets)
 	}
-	rows++ // separator
-	rows++ // "Save current as preset" footer
+	rows += 2 // separator + save footer
 
 	width := minW
 	height := float32(rows)*itemH + 2*padY
 	x := e.kindMenuRect.X
 	y := e.kindMenuRect.Y + e.kindMenuRect.Height + 2
-	// Clamp menu within the panel content.
 	if x+width > content.X+content.Width-4 {
 		x = content.X + content.Width - 4 - width
 	}
 	if y+height > content.Y+content.Height-4 {
-		y = e.kindMenuRect.Y - height - 2 // open upward if no space below
+		y = e.kindMenuRect.Y - height - 2
 	}
 	menu := rl.Rectangle{X: x, Y: y, Width: width, Height: height}
 	rl.DrawRectangleRec(menu, feBtnBG)
 	rl.DrawRectangleLinesEx(menu, 1, feBtnBorder)
 
-	// Outside click closes the menu (caught before processing items).
 	if lmbPress && !pointInRect(cursor, menu) && !pointInRect(cursor, e.kindMenuRect) {
 		e.kindMenuOpen = false
 		return
@@ -623,7 +554,6 @@ func (e *FormationEditor) drawKindMenu(content rl.Rectangle, cursor rl.Vector2,
 			}
 		}
 	}
-	// Separator.
 	rl.DrawLine(int32(x+padX), int32(rowY+itemH*0.5-1),
 		int32(x+width-padX), int32(rowY+itemH*0.5-1), feBtnBorder)
 	rowY += itemH
@@ -634,8 +564,7 @@ func (e *FormationEditor) drawKindMenu(content rl.Rectangle, cursor rl.Vector2,
 	}
 }
 
-// applyKind switches the squad to a predefined formation kind, clears any
-// custom slots, and resets spacing to the kind's default.
+// applyKind clears any custom slots and resets spacing to the kind's default.
 func (e *FormationEditor) applyKind(k components.FormationKind, fd *components.FormationData) {
 	fd.Type = k
 	fd.Spacing = formationSpacingDefault(k)
@@ -644,8 +573,6 @@ func (e *FormationEditor) applyKind(k components.FormationKind, fd *components.F
 	}
 }
 
-// applyPreset copies a saved preset's slot offsets into the squad's
-// CustomSlots (creating the component on first apply).
 func (e *FormationEditor) applyPreset(p components.FormationPreset, roster *components.CommandRoster) {
 	if e.Ctx.CustomSlotsMap == nil {
 		return
@@ -663,10 +590,8 @@ func (e *FormationEditor) applyPreset(p components.FormationPreset, roster *comp
 	}
 }
 
-// saveCurrentAsPreset snapshots the squad's current effective slots into
-// a new FormationPreset on the resource. When CustomSlots is present its
-// values are taken verbatim; otherwise the kind-based offsets are
-// captured so the preset reflects what the user actually sees.
+// saveCurrentAsPreset captures slotOffset (CustomSlots verbatim or
+// kind-based) so the preset reflects what the user sees.
 func (e *FormationEditor) saveCurrentAsPreset(fd *components.FormationData, roster *components.CommandRoster) {
 	if e.Ctx.Presets == nil {
 		return
@@ -680,8 +605,7 @@ func (e *FormationEditor) saveCurrentAsPreset(fd *components.FormationData, rost
 	e.Ctx.Presets.List = append(e.Ctx.Presets.List, preset)
 }
 
-// formationSpacingDefault mirrors systems.FormationSpacing so the ui
-// package doesn't pull in systems.
+// formationSpacingDefault mirrors systems.FormationSpacing.
 func formationSpacingDefault(k components.FormationKind) float32 {
 	switch k {
 	case components.FormationLine, components.FormationColumn:
@@ -694,18 +618,14 @@ func formationSpacingDefault(k components.FormationKind) float32 {
 	return 2.0
 }
 
-// allowsCommanderDrag returns true when the squad contains any non-
-// infantry member (vehicles, mounted units), in which case slot 0 is
-// draggable. Placeholder for Phase 19: until the Vehicle component
-// lands every member is treated as infantry and this always returns
-// false (commander locked at centre).
+// allowsCommanderDrag returns true when slot 0 should be draggable
+// (mixed squads with vehicles). TODO: Phase 19 will plug in once the
+// Vehicle component lands; for now infantry-only locks the commander.
 func (e *FormationEditor) allowsCommanderDrag(roster *components.CommandRoster) bool {
 	_ = roster
 	return false
 }
 
-// currentOrient reads the squad's orientation mode (defaulting to Movement
-// when absent).
 func (e *FormationEditor) currentOrient() components.FormationOrientationMode {
 	if e.Ctx.OrientMap == nil {
 		return components.OrientMovement
@@ -716,8 +636,7 @@ func (e *FormationEditor) currentOrient() components.FormationOrientationMode {
 	return components.OrientMovement
 }
 
-// setOrient mutates the squad's orientation. Adds the component on first
-// non-default write.
+// setOrient adds the component on first non-default write.
 func (e *FormationEditor) setOrient(mode components.FormationOrientationMode) {
 	if e.Ctx.OrientMap == nil {
 		return
@@ -727,7 +646,6 @@ func (e *FormationEditor) setOrient(mode components.FormationOrientationMode) {
 		return
 	}
 	if mode == components.OrientMovement {
-		// Default - no need to add the component.
 		return
 	}
 	e.Ctx.OrientMap.Add(e.Squad, &components.FormationOrientation{Mode: mode})
@@ -756,10 +674,8 @@ func snapTo(v, step float32) float32 {
 	return float32(math.Round(float64(v/step))) * step
 }
 
-// chooseRingStep returns the ring spacing (metres) such that the canvas
-// shows ~5-9 rings total. Stops scale with the visible maximum so a heavy
-// zoom-in shows 0.5m rings, zoom-out goes to 2-5m, deep zoom-out adds
-// 25 / 50 m so 100+ m formations stay readable without 30 rings.
+// chooseRingStep targets ~5-9 visible rings; the 25 / 50 m stops keep
+// 100+ m formations readable without 30 rings.
 func chooseRingStep(maxMeters float32) float32 {
 	steps := []float32{0.5, 1, 2, 5, 10, 25, 50}
 	for _, s := range steps {
@@ -770,9 +686,6 @@ func chooseRingStep(maxMeters float32) float32 {
 	return steps[len(steps)-1]
 }
 
-// zoomRange returns the effective min/max PxPerM, preferring overrides on
-// the ctx when set so a host can widen or narrow the range without
-// touching the package-level defaults.
 func (e *FormationEditor) zoomRange() (float32, float32) {
 	minPx := e.Ctx.MinPxPerM
 	if minPx <= 0 {
@@ -788,8 +701,7 @@ func (e *FormationEditor) zoomRange() (float32, float32) {
 	return minPx, maxPx
 }
 
-// snapStep returns the metric drag snap; negative ctx value disables
-// snapping entirely (free placement).
+// snapStep: negative ctx value disables snapping (free placement).
 func (e *FormationEditor) snapStep() float32 {
 	if e.Ctx.SnapMeters < 0 {
 		return 0
@@ -800,9 +712,6 @@ func (e *FormationEditor) snapStep() float32 {
 	return feSnapMeters
 }
 
-// drawEmpty paints a "select a squad" placeholder for the selection-aware
-// flavour (workspace panel, follow-selection floating). Centred dim text;
-// no chrome. Cheap enough to call every frame.
 func (e *FormationEditor) drawEmpty(r rl.Rectangle, font rl.Font) {
 	rl.DrawRectangleRec(r, feCanvasBG)
 	const sz int32 = 13

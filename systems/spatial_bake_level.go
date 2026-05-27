@@ -11,15 +11,11 @@ import (
 	"rts-go/core"
 )
 
-// bakeLevelNavPass is Pass 3: per Level entity (gated by Without[LevelNavBaked]),
-// build a LevelNavGrid sized from Level.AABB and rasterise every wall whose
-// LevelMember matches into Cost=0 cells. Open-door openings carve a passable
-// strip; windows and closed doors keep the cell at Cost=0.
-//
-// Phase 16.B.1.b: one grid per Level (not per Floor). Grid origin is the
-// AABB.Min{X,Z} in chunk-local coords of the Level's root chunk; multi-chunk
-// buildings translate each wall's Local from its own chunk to the level
-// grid's anchor chunk before rasterising.
+// bakeLevelNavPass is Pass 3: per Level entity (Without[LevelNavBaked]),
+// build a LevelNavGrid sized from Level.AABB. Open-door openings carve a
+// passable strip; windows and closed doors keep Cost=0. Grid origin =
+// AABB.Min{X,Z} in chunk-local coords of the Level's root chunk;
+// multi-chunk buildings translate each wall's Local to the anchor chunk.
 func (sys *SpatialBakeSystem) bakeLevelNavPass(ctx core.UpdateContext) {
 	type levelRec struct {
 		ent ecs.Entity
@@ -33,7 +29,6 @@ func (sys *SpatialBakeSystem) bakeLevelNavPass(ctx core.UpdateContext) {
 		levelTodo = append(levelTodo, levelRec{ent: qL.Entity(), pos: *pos, lvl: *lvl})
 	}
 	if len(levelTodo) > 0 && !bakeDebugReported {
-		// One-shot diagnostic when the first non-trivial bake happens.
 		total := 0
 		qLAll := sys.levelFilterAll.Query()
 		for qLAll.Next() {
@@ -96,7 +91,7 @@ func (sys *SpatialBakeSystem) bakeLevelNavPass(ctx core.UpdateContext) {
 		grid.SizeZ = szj
 		grid.Origin = components.Vec3{X: originX, Y: lr.lvl.AABB.MinY, Z: originZ}
 
-		// Seed all valid cells as open (Cost=navCostOpen).
+		// Seed cells open with NavInBuilding flag.
 		for cj := uint8(0); cj < szj; cj++ {
 			for ci := uint8(0); ci < szi; ci++ {
 				grid.Cells[int(cj)*components.MaxLevelSide+int(ci)] = components.NavCell{
@@ -106,10 +101,8 @@ func (sys *SpatialBakeSystem) bakeLevelNavPass(ctx core.UpdateContext) {
 			}
 		}
 
-		// Rasterise walls of this level (matched by LevelMember). Walls can
-		// live in any chunk crossed by a multi-chunk building, so we
-		// translate each wall's Local from its own chunk to the level grid's
-		// anchor chunk before rasterising.
+		// Walls can live in any chunk crossed by a multi-chunk building;
+		// translate each wall's Local to the anchor chunk before rasterising.
 		for _, ws := range wallSnaps {
 			if ws.levelMember != lr.ent {
 				continue
@@ -136,11 +129,10 @@ func (sys *SpatialBakeSystem) bakeLevelNavPass(ctx core.UpdateContext) {
 	_ = ctx
 }
 
-// rasterizeFloorWall marks cells of a LevelNavGrid as Cost=0 inside the wall's
-// oriented rectangle, mirroring rasterizeWall for chunk-NavGrids but with a
-// (sizeX, sizeZ, origin) sub-block instead of a full 64x64 grid. Passable
-// opening (open door) carves a gap along the wall axis. Windows and closed
-// doors leave Cost=0 over the opening.
+// rasterizeFloorWall marks cells of a LevelNavGrid as Cost=0 inside the
+// wall's oriented rectangle. Mirrors rasterizeWall but uses a (sizeX, sizeZ,
+// origin) sub-block. Open-door openings carve a gap; closed doors / windows
+// stay Cost=0.
 func rasterizeFloorWall(grid *components.LevelNavGrid, wallLocal rl.Vector3,
 	w components.WallSegment, openingPassable bool,
 	originX, originZ float32) {

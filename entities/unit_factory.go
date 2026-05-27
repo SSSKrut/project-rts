@@ -1,11 +1,7 @@
-// Package entities holds ECS-spawn helpers that bundle the per-archetype map
-// handles + the init defaults for a single entity kind. main.go uses a
-// factory in place of a long NewMap + Add boilerplate block per spawn site.
-//
-// Factories are NOT systems - they don't tick. They construct entities on
-// demand from external callers (main.go starter scene, SquadService.
-// CreateFromTemplate, future spawn rules). Map handles are built once in
-// NewXxxFactory(world); Spawn() reuses them without re-resolving archetypes.
+// Package entities holds ECS-spawn helpers that bundle per-archetype Map
+// handles + init defaults for a single entity kind. Map handles are built
+// once in NewXxxFactory(world); Spawn() reuses them without re-resolving
+// archetypes per call site. Factories are NOT systems - they don't tick.
 package entities
 
 import (
@@ -15,24 +11,14 @@ import (
 )
 
 // UnitFactory bundles every Map handle needed to spawn a "naked" infantry
-// unit - every component the simulation reads (Unit / Stance / Motion /
-// Vision / Threat / DangerBuffer / MicroPath / Awareness / LocalBlackboard /
-// ActionQueue / Collider / WorldPos) but no UnitRole and no Equipment
-// sub-entities. RoleService.AssignRole stamps the role + spawns the
-// weapon/gear afterwards.
-//
-// External callers occasionally need to read certain unit components (the
-// Inspector and the RMB handler look at Stance / Motion / Threat /
-// ActionQueue). The factory exposes them as exported pointer fields so a
-// single line in main.go (`units := entities.NewUnitFactory(world, posMap)`)
-// replaces ~22 lines of per-component plumbing.
+// unit. Spawn() emits the unit-side components only; RoleService.AssignRole
+// stamps the role + spawns weapon/gear afterwards. Read-handles are exported
+// so the Inspector / input layer can reuse them instead of allocating a
+// duplicate NewMap.
 type UnitFactory struct {
 	world  *ecs.World
 	posMap *ecs.Map[components.WorldPos]
 
-	// Public read-handles - kept exported so the Inspector / input layer can
-	// avoid a duplicate NewMap call (handle is a thin wrapper, but the
-	// duplication added noise).
 	StanceMap       *ecs.Map[components.Stance]
 	MotionMap       *ecs.Map[components.Motion]
 	ThreatMap       *ecs.Map[components.Threat]
@@ -46,9 +32,9 @@ type UnitFactory struct {
 	UnitMap         *ecs.Map[components.Unit]
 }
 
-// NewUnitFactory pre-builds every Map handle. Pass in the shared `posMap`
-// the rest of main.go uses for terrain anchors / building roots so we don't
-// fork the WorldPos archetype writer.
+// NewUnitFactory pre-builds every Map handle so per-spawn cost is just Add
+// calls. Pass in the shared `posMap` (also used by terrain anchors / building
+// roots) so we don't fork the WorldPos archetype writer.
 func NewUnitFactory(world *ecs.World, posMap *ecs.Map[components.WorldPos]) *UnitFactory {
 	return &UnitFactory{
 		world:          world,
@@ -67,10 +53,8 @@ func NewUnitFactory(world *ecs.World, posMap *ecs.Map[components.WorldPos]) *Uni
 	}
 }
 
-// Spawn creates a unit entity at `pos` with the canonical starter component
-// set: standing, idle, vision range 40 m / cone ~60 deg half-angle, empty
-// action queue. Caller (typically RoleService) stamps the role and weapon
-// afterwards.
+// Spawn creates a unit at `pos` with the canonical starter set: standing,
+// idle, vision range 40 m / cone ~60 deg half-angle, empty action queue.
 func (f *UnitFactory) Spawn(pos components.WorldPos) ecs.Entity {
 	ent := f.world.NewEntity()
 	wp := pos

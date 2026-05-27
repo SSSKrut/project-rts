@@ -24,7 +24,6 @@ const (
 )
 
 // workersFlag picks the worker-pool size. 0 (default) -> runtime.NumCPU().
-// Phase 11.5 M11.5.1; pool feeds the parallel hot-path systems below.
 var workersFlag = flag.Int("workers", 0, "worker pool size (default = NumCPU)")
 
 func main() {
@@ -39,14 +38,12 @@ func main() {
 		defer rl.UnloadFont(hudFont)
 	}
 
-	rl.SetTargetFPS(60)
-
-	// Phase 14.5 cleanup: audio scaffolding (placeholder square-wave +
-	// SpatialAudioSystem) removed from main; the engine-tone test sound
-	// and voice limiter served as a Phase 7 placeholder for vehicle/unit
-	// sound. Real audio (footsteps, gunfire, voices) lands in Phase 25
-	// polish - reintroduce wiring here when the audio asset pipeline
-	// exists.
+	headless := isAIScene()
+	if headless {
+		rl.SetTargetFPS(0)
+	} else {
+		rl.SetTargetFPS(60)
+	}
 
 	app := core.NewApp()
 
@@ -54,8 +51,7 @@ func main() {
 	defer func() { _ = app.Trace.Close() }()
 
 	// Worker pool feeds the parallel hot-path systems (UnitMovement / Vision /
-	// Formation / SquadMacroPath). Stop on shutdown so the worker goroutines
-	// don't outlive main.
+	// Formation / SquadMacroPath).
 	workerCount := *workersFlag
 	if workerCount <= 0 {
 		workerCount = runtime.NumCPU()
@@ -100,23 +96,15 @@ func main() {
 	ecs.AddResource(app.World, &transitionRegistry)
 	mapMarkerCache := components.NewMapMarkerCache()
 	ecs.AddResource(app.World, &mapMarkerCache)
-	// Phase 18 formation presets - shared across squads via the formation
-	// editor "Save current" / "Apply preset" buttons.
 	formationPresets := components.FormationPresets{}
 	ecs.AddResource(app.World, &formationPresets)
-	// Phase 14.5 M14.5.4 - VisualEvents resource replaced by ECS-entity
-	// particles. Spawn handles + ParticleSystem registered below.
-	// Phase 14.5 M14.5.2: SpatialHash for Unit XZ positions. Rebuilt every
-	// tick (serial pass) before UnitMovement so this frame's separation
-	// steering sees fresh positions. Consumed by UnitMovement.separation,
-	// WeaponSystem.resolveShot (unit-vs-ray), WeaponSystem.propagateSuppression,
-	// and VisionSystem.processVisionSeer (M14.5.3).
+	// SpatialHash for Unit XZ positions; rebuilt serially before UnitMovement
+	// so this tick's separation steering reads fresh positions. Consumers:
+	// UnitMovement.separation, WeaponSystem.resolveShot/propagateSuppression,
+	// VisionSystem.processVisionSeer.
 	unitSpatialHash := core.NewSpatialHash(32.0)
 	ecs.AddResource(app.World, unitSpatialHash)
 
-	// Phase 15 M15.C.2 - global event log. Push targets are SurvivalInstinct
-	// (SuppressionStart), DamageService (KIA), OrderResolverSystem
-	// (OrderCompleted / OrderFailed). Readers: Inspector squad view.
 	eventLog := components.NewEventLog()
 	ecs.AddResource(app.World, eventLog)
 
@@ -125,9 +113,7 @@ func main() {
 	stamper := systems.NewStamper(app.World)
 	navService := systems.NewNavService(app.World)
 	squadService := systems.NewSquadService(app.World)
-	// Phase 14 M14.1/M14.2: damage service handles HP decrement and the
-	// death-despawn path; WeaponSystem hands every applied hit through it.
-	// Constructed before WeaponSystem.InitUI so the handle is live by then.
+	// DamageService constructed before WeaponSystem.InitUI so the handle is live.
 	damageService := systems.NewDamageService(app.World, squadService)
 	damageService.SetClock(func() float32 { return squadService.Clock() })
 	mapPingService := systems.NewMapPingService(app.World, func() float32 { return squadService.Clock() })
@@ -166,8 +152,6 @@ func main() {
 	groundStickSys := &systems.GroundStickSystem{}
 	groundStickSys.InitUI(app.World)
 
-	// Phase 14.5 M14.5.2: SpatialHash rebuild runs before UnitMovement so
-	// this tick's separation steering reads fresh positions.
 	spatialHashRebuildSys := systems.NewSpatialHashRebuildSystem()
 	spatialHashRebuildSys.InitUI(app.World)
 
@@ -177,56 +161,37 @@ func main() {
 	visionSys := systems.NewVisionSystem(workerPool)
 	visionSys.InitUI(app.World)
 
-	// Phase 14.5 M14.5.4: particle spawn handles + ParticleSystem. Handles
-	// built before WeaponSystem so its constructor can take a non-nil ref.
+	// Particle handles built before WeaponSystem so its constructor takes a non-nil ref.
 	particleHandles := systems.NewSpawnHandles(app.World)
 	particleSys := systems.NewParticleSystem()
 	particleSys.InitUI(app.World)
 
-	// Phase 14 M14.2: WeaponSystem runs after Vision so it sees the freshest
-	// Awareness FIFO entries each tick.
+	// WeaponSystem runs after Vision so it reads the freshest Awareness FIFO.
 	weaponSys := systems.NewWeaponSystem(workerPool, damageService, particleHandles)
 	weaponSys.InitUI(app.World)
 
-	// Phase 17 M17.0.1 - per-unit Threat aggregator. Runs after WeaponSystem
-	// (which mutates Threat.Suppression / ThreatDir) so SurvivalInstinct /
-	// future StanceController read a recomputed Total + State.
+	// ThreatSystem runs after WeaponSystem (which mutates Threat.Suppression /
+	// ThreatDir) so SurvivalInstinct / StanceController read recomputed State.
 	threatSys := systems.NewThreatSystem()
 	threatSys.InitUI(app.World)
 
-	// Phase 17 M17.C - autonomous stance controller. Reads Threat.State after
-	// threatSys recomputes it, maps to Prone / Crouch / standing default, with
-	// animation lock + player-override gate.
 	stanceSys := systems.NewStanceControllerSystem()
 	stanceSys.InitUI(app.World)
 
-	// Phase 17.8 M17.8.2 — Utility AI evaluator. Picks per-unit ActionMode
-	// (Following / Engaging / TakingCover / Repositioning / Reloading /
-	// Suppressed) every ~0.5s with hysteresis. Reads Threat / Awareness /
-	// Equipment / OrderQueue, writes LocalBlackboard.CurrentMode + Reason.
-	// Other executor systems (M17.8.3) will gate behavior on CurrentMode.
 	utilityEvalSys := systems.NewUtilityEvaluatorSystem()
 	utilityEvalSys.InitUI(app.World)
 
-	// Cleanup of expired ThreatSource entities. SurvivalInstinct reads
-	// Threat.Suppression (a faster signal); ThreatSource entities will become
-	// the primary input once M15.A.1 ScatterProtocol consumes the cluster.
 	threatDecaySys := systems.NewThreatDecaySystem()
 	threatDecaySys.InitUI(app.World)
 
-	// Phase 15 M15.C.3 - despawn expired MapPing entities (KIA rings, etc.).
 	mapPingDecaySys := systems.NewMapPingDecaySystem()
 	mapPingDecaySys.InitUI(app.World)
 
-	// Phase 16.C.2 - per-Level fog-of-war tracking. Marks LevelVisibility
-	// when an anchor / unit enters the level bbox; renderer fades unseen
-	// levels.
 	levelVisSys := systems.NewLevelVisibilitySystem()
 	levelVisSys.InitUI(app.World)
 
-	// Phase 15 M15.A.0 - reactive cover seek. Runs after WeaponSystem (fresh
-	// Threat.Suppression) and before FormationSystem (so override-driven
-	// ActionQueue writes survive the formation pass).
+	// SurvivalInstinct runs after WeaponSystem (fresh Threat.Suppression) and
+	// before FormationSystem so override-driven ActionQueue writes survive.
 	survivalSys := systems.NewSurvivalInstinctSystem()
 	survivalSys.InitUI(app.World)
 
@@ -239,10 +204,9 @@ func main() {
 	formationSys := systems.NewFormationSystem(squadService, workerPool)
 	formationSys.InitUI(app.World)
 
-	// Phase 17 M17.A - per-unit waypoint planner. Runs after FormationSystem
-	// (the writer of ActionQueue.Head.Target + MicroPath.Dirty) so the next
-	// tick's UnitMovement reads a fresh waypoint stream. Serial - NavService
-	// holds Filter handles and is not concurrent-safe.
+	// MicroPath runs after FormationSystem (writer of ActionQueue.Head.Target
+	// + MicroPath.Dirty). Serial — NavService holds Filter handles not
+	// concurrent-safe.
 	microPathSys := systems.NewMicroPathSystem(navService, workerPool)
 	microPathSys.InitUI(app.World)
 
@@ -365,10 +329,9 @@ func main() {
 		alwaysActiveMap.Add(root, &components.AlwaysActive{})
 		buildingPlanIndex.Plans[root] = p
 
-		// Phase 16.B.0: Level entities live for the building's whole life,
-		// independent of chunk lifecycle. They are AlwaysActive so a child
-		// (Furniture / Marker / LevelTransition) spawned in any chunk can
-		// reference a Level by stable entity handle.
+		// Level entities live for the building's whole life independent of
+		// chunk lifecycle (AlwaysActive); chunk-spawned children reference
+		// them by stable entity handle.
 		levels := make([]ecs.Entity, len(p.Levels))
 		for li := range p.Levels {
 			ls := &p.Levels[li]
@@ -399,9 +362,6 @@ func main() {
 		fmt.Printf("[startup] building %d kind=%d stories=%d levels=%d footprint=(%.0f..%.0f, %.0f..%.0f)\n",
 			i, p.Kind, p.Stories, len(levels), fp.MinX, fp.MaxX, fp.MinZ, fp.MaxZ)
 
-		// Phase 16.C.0: BuildingViewMode is the cutaway state for this
-		// building. Defaults: closed, ground-level selected (spec sorts
-		// levels by storey ascending, so levels[0] is the lowest).
 		var currentLevel ecs.Entity
 		if len(levels) > 0 {
 			currentLevel = levels[0]
@@ -413,11 +373,8 @@ func main() {
 		})
 	}
 
-	// Phase 11: one TrenchRoot entity per polyline so the hit-test resolver
-	// can return an ecs.Entity in OrderTarget.Entity for OccupyTrench. The
-	// Trench polyline data stays in the TrenchNetwork resource - TrenchRoot
-	// is a thin reverse-index. Pos is the polyline midpoint, used for any
-	// "where is this trench" preview before order resolution.
+	// One TrenchRoot entity per polyline so the hit-test resolver can return
+	// an ecs.Entity in OrderTarget.Entity for OccupyTrench.
 	trenchRootMap := ecs.NewMap[components.TrenchRoot](app.World)
 	for i := range trenches.Lines {
 		pts := trenches.Lines[i].Points
@@ -431,39 +388,22 @@ func main() {
 		alwaysActiveMap.Add(ent, &components.AlwaysActive{})
 	}
 
-	// Phase 17.5 refactor: unit spawn boilerplate hidden behind
-	// entities.UnitFactory. Read handles for components the Inspector / input
-	// layer touches are still reachable through factory fields (StanceMap,
-	// MotionMap, ThreatMap, ActionQueueMap ...).
 	unitFactoryRef := entities.NewUnitFactory(app.World, posMap)
 	actionQueueMap := unitFactoryRef.ActionQueueMap
 
-	// Inspector reads ~30 component maps. NewInspectorMaps pre-builds them
-	// in one call so the per-frame InspectorCtx literal stays small.
 	inspectorMaps := ui.NewInspectorMaps(app.World)
-	// Phase 12: RoleService owns weapon / radio / medkit / spade lifecycle so
-	// the Unit-side spawn block stays narrow. main.go just reads the maps
-	// (Inspector + render).
 	weaponMap := ecs.NewMap[components.Weapon](app.World)
-	_ = weaponMap // referenced by render-time stats display; keep handle live.
-	// roleMap is read by 3D render (cap colour + label) and the Inspector
-	// (role-tinted roster rows) + map commander icon. Phase 12 only reads;
-	// RoleService is the canonical writer.
+	_ = weaponMap
 	roleMap := ecs.NewMap[components.UnitRole](app.World)
 	squadMemberMap := ecs.NewMap[components.SquadMember](app.World)
 	rosterMap := ecs.NewMap[components.CommandRoster](app.World)
 	formationDataMap := ecs.NewMap[components.FormationData](app.World)
 	formationOrientMap := ecs.NewMap[components.FormationOrientation](app.World)
 	formationCustomSlotsMap := ecs.NewMap[components.FormationCustomSlots](app.World)
-	// Order / quick-bar maps that input handlers + ghost preview reuse outside
-	// the Inspector layer. Maps used ONLY by the Inspector are reachable via
-	// inspectorMaps.X without a separate declaration here.
 	orderQueueMap := ecs.NewMap[components.OrderQueueHead](app.World)
 	orderKindMap := ecs.NewMap[components.OrderKind](app.World)
 	orderTargetMap := ecs.NewMap[components.OrderTarget](app.World)
 	orderChainMap := ecs.NewMap[components.OrderChain](app.World)
-	// Phase 18 timeline panel reads these directly from main.go - inspectorMaps
-	// only exposes the head + 2-queued used by the inline order section.
 	orderStateMap := ecs.NewMap[components.OrderState](app.World)
 	orderProgressMap := ecs.NewMap[components.OrderProgress](app.World)
 	orderIssuedAtMap := ecs.NewMap[components.OrderIssuedAt](app.World)
@@ -473,9 +413,7 @@ func main() {
 	factionMap := ecs.NewMap[components.Faction](app.World)
 	individualPosMap := ecs.NewMap[components.IndividualPosition](app.World)
 
-	// Phase 14 M14.6: faction-aware squad colour. Lookups the entity's
-	// Faction and picks the player or enemy palette accordingly. Missing
-	// Faction (legacy spawns) falls through to FactionPlayer.
+	// Missing Faction (legacy spawns) falls through to FactionPlayer.
 	squadColor := func(ent ecs.Entity) rl.Color {
 		faction := components.FactionPlayer
 		if ent != (ecs.Entity{}) && app.World.Alive(ent) {
@@ -486,34 +424,19 @@ func main() {
 		return squadColorFor(ent, faction)
 	}
 
-	// Phase 12 role service. Owns UnitRole + per-role Equipment sub-entities
-	// (Primary weapon, Secondary gear: Radio / Medkit / Spade / sidearm).
+	// RoleService owns UnitRole + per-role Equipment sub-entities.
 	roleService := systems.NewRoleService(app.World)
 
-	// unitFactory delegates to entities.UnitFactory.Spawn - kept as a closure
-	// so existing SquadService.CreateFromTemplate / pie-menu spawn callsites
-	// keep their func(WorldPos) ecs.Entity signature.
+	// Closure so existing call sites keep their func(WorldPos) ecs.Entity sig.
 	unitFactory := unitFactoryRef.Spawn
 
-	// Phase 12 starter scene: three 4-soldier squads with distinct templates
-	// so the role differentiation (cap colours, ShortLabel, map icon) is
-	// visible immediately at startup. Phase 14 M14.1: stamped FactionPlayer.
 	playerFaction := components.Faction{ID: components.FactionPlayer}
 	var doorScene *doorSceneState
 	var aiTest *aiTestState
 	if isAIScene() {
-		// Phase 17.8 — automated AI test scene. Spawns 1 squad + selects
-		// target building, returns a state struct that auto-issues an
-		// OccupyBuilding order at t=2s and prints a PASS/FAIL verdict at
-		// t=30s. main.go's default test squads + enemies are skipped so
-		// only the scene under test is in the world.
 		aiTest = aiSceneSpawn(app.World, squadService, roleService, unitFactory,
 			playerFaction, posMap, rosterMap, buildingMap)
 	} else if isDoorScene() {
-		// Minimal test scene: one 5-unit Recon squad 12 m south of the
-		// single test house, no enemy. Building / Level entities were
-		// spawned above; capture the first ones into doorScene for the
-		// auto-verifier + O / I / K / U hotkeys.
 		testSquad := squadService.CreateFromTemplate(
 			systems.TmplMotorRifle, doorSceneSquadSpawn(),
 			components.FormationLine, playerFaction, roleService, unitFactory)
@@ -547,10 +470,8 @@ func main() {
 			RosterMap:    rosterMap,
 		}
 	} else {
-		// Phase 16.B.1.b: squads spawn OUTSIDE buildings so formation slots
-		// don't land on wall-rasterised surface cells (which would block path
-		// planning). Player can RMB inside a building to test enter-through-door
-		// nav.
+		// Squads spawn OUTSIDE buildings so formation slots don't land on
+		// wall-rasterised surface cells (which would block path planning).
 		squadService.CreateFromTemplate(
 			systems.TmplLightInfantry,
 			components.WorldPos{}.Add(rl.Vector3{X: -25, Z: -55}),
@@ -568,10 +489,7 @@ func main() {
 			components.WorldPos{}.Add(rl.Vector3{X: -20, Z: 0}),
 			components.FormationLoose, playerFaction, roleService, unitFactory)
 
-		// Phase 14 M14.1: hostile MotorRifle squad ~60 m from the player base on
-		// the opposite side. DefendPosition order parks them in place (Phase 14
-		// simple: enemies don't patrol - Phase 15 reactive movement). Once
-		// WeaponSystem lands in M14.2 the player can engage by hand.
+		// Hostile MotorRifle squad parked via DefendPosition.
 		enemySpawn := components.WorldPos{}.Add(rl.Vector3{X: 5, Z: -90})
 		enemySquad := squadService.CreateFromTemplate(
 			systems.TmplMotorRifle, enemySpawn,
@@ -584,7 +502,6 @@ func main() {
 		}
 	}
 
-	// Render filters.
 	unitRenderFilter := ecs.NewFilter3[components.WorldPos, components.Unit, components.Stance](app.World)
 	chunkActiveFilter := ecs.NewFilter3[components.WorldPos, components.ChunkMesh, components.LODActive](app.World)
 	chunkRelevantFilter := ecs.NewFilter3[components.WorldPos, components.ChunkMesh, components.LODRelevant](app.World)
@@ -592,8 +509,6 @@ func main() {
 	wallRenderFilter := ecs.NewFilter2[components.WorldPos, components.WallSegment](app.World)
 	floorRenderFilter := ecs.NewFilter2[components.WorldPos, components.Floor](app.World)
 	stairsRenderFilter := ecs.NewFilter2[components.WorldPos, components.Stairs](app.World)
-	// Phase 16.C.0 cutaway state. levelMap and buildingViewModeMap were
-	// already constructed for spawn; levelMemberMap is the new read handle.
 	levelCutawayFilter := ecs.NewFilter2[components.Level, components.BuildingMember](app.World)
 	levelMemberMap := ecs.NewMap[components.LevelMember](app.World)
 	coverDirReadMap := ecs.NewMap[components.CoverDirection](app.World)
@@ -603,16 +518,12 @@ func main() {
 	coverOverlayFilter := ecs.NewFilter4[components.WorldPos, components.ChunkCoord, components.CoverMap, components.Heightmap](app.World).
 		With(ecs.C[components.LODActive]())
 	coverSlotFilter := ecs.NewFilter2[components.WorldPos, components.CoverSlot](app.World)
-	// Phase 15 M15.C.3 - MapPing filter for the pulsing-ring render pass.
 	mapPingFilter := ecs.NewFilter2[components.WorldPos, components.MapPing](app.World)
 	navGridChunkFilter := ecs.NewFilter1[components.NavGrid](app.World)
 	floorNavFilter := ecs.NewFilter3[components.WorldPos, components.Level, components.LevelNavGrid](app.World)
 	visionAwareFilter := ecs.NewFilter2[components.WorldPos, components.Awareness](app.World).
 		With(ecs.C[components.Unit]())
-	// Phase 17.9 — debug "Unit paths" overlay. Two filters: members of a
-	// squad (with SquadMember), and solo units (without SquadMember). The
-	// solo filter still includes SquadMember-having entities; drawUnitPaths
-	// dedupes via the squadMemberMap.Has check.
+	// drawUnitPaths dedupes squad members from the solo filter via squadMemberMap.Has.
 	unitPathSquadFilter := ecs.NewFilter4[components.Unit, components.WorldPos, components.MicroPath, components.SquadMember](app.World)
 	unitPathSoloFilter := ecs.NewFilter3[components.Unit, components.WorldPos, components.MicroPath](app.World)
 
@@ -622,14 +533,9 @@ func main() {
 	stairsCountFilter := ecs.NewFilter1[components.Stairs](app.World)
 	squadFilter := ecs.NewFilter2[components.Squad, components.CommandRoster](app.World)
 
-	// Phase 11 hit-test filters. The Building filter is the same archetype as
-	// buildingMap; the Trench-root filter walks the small startup-spawned set.
 	buildingFilter := ecs.NewFilter1[components.Building](app.World)
 	trenchRootFilter := ecs.NewFilter1[components.TrenchRoot](app.World)
-	// Phase 14 M14.4: unit hit-test wired with a Filter2[Unit, WorldPos] and
-	// the global Faction map. 1.5 m snap radius matches the standing-unit
-	// collider (0.35 m) plus a ~1 m forgiveness margin so the player doesn't
-	// have to click pixel-perfect on a unit's torso.
+	// 1.5 m snap radius = standing collider (0.35 m) + ~1 m forgiveness margin.
 	unitHitFilter := ecs.NewFilter2[components.Unit, components.WorldPos](app.World)
 	hitTester := &HitTester{
 		BuildingFilter:  buildingFilter,
@@ -643,14 +549,6 @@ func main() {
 		UnitHitRadius:   1.5,
 	}
 
-	// Phase 13.6 ghost preview context - bundles the maps drawSelectionGhost
-	// needs (squad roster + formation + stance + movement profile). One
-	// allocation up-front so the render loop just passes &ghostCtx.
-	//
-	// M13.6.3 fields (hitTester / buildingIndex / wallMap / windowMap /
-	// trenches / trenchRootMap) drive per-kind placement: cursor over a
-	// building -> ghosts in N first windows; over a trench -> ghosts equal-
-	// spaced along the polyline.
 	ghostWallMap := ecs.NewMap[components.WallSegment](app.World)
 	ghostWindowMap := ecs.NewMap[components.Window](app.World)
 	ghostFloorMap := ecs.NewMap[components.Floor](app.World)
@@ -672,8 +570,6 @@ func main() {
 		squadColor:       squadColor,
 	}
 
-	// Phase 17.6 M17.6.7: 3D order-marker context — handles drawOrderMarkers3D
-	// needs to walk OrderQueueHead + OrderChain for every selected squad.
 	orderMarkerRenderCtx := orderMarkerCtx{
 		world:          app.World,
 		posMap:         posMap,
@@ -687,8 +583,6 @@ func main() {
 		squadColor:     squadColor,
 	}
 
-	// Phase 14.5 M14.5.4: ParticleRenderCtx - handles for drawParticles.
-	// Built once; reused every frame in the 3D pass.
 	particleRenderCtx := ParticleRenderCtx{
 		Filter: ecs.NewFilter3[components.Particle, components.WorldPos, components.ParticleVisual](app.World),
 		EndMap: ecs.NewMap[components.ParticleEnd](app.World),
@@ -697,23 +591,16 @@ func main() {
 	terrainMaterial := rl.LoadMaterialDefault()
 	defer rl.UnloadMaterial(terrainMaterial)
 
-	// Phase 10 UI scaffold.
 	screenW, screenH := initialScreenWidth, initialScreenHeight
 	panelMgr := ui.NewPanelManager()
-	// Phase 13.5 M13.5.5: restore split ratios from disk before the first
-	// Recompute so panels start at the user's last layout. Missing/corrupt
-	// file silently falls back to defaults.
+	// Restore split ratios from disk before the first Recompute.
 	loadLayout(panelMgr)
 	panelMgr.Recompute(screenW, screenH)
-	// Fail-safe: persist on shutdown in case the user resized but didn't end
-	// the drag (or the EndDrag persistence missed an edge case).
 	defer saveLayout(panelMgr)
 	scene3DRT := ui.NewScene3DRT(panelMgr.Get(ui.Panel3D))
 	defer scene3DRT.Unload()
 
-	// Pre-bake the map underlay. 2 km x 2 km centred at origin, 4 m / pixel
-	// (500x500 = 250 KB upload). Blocking; runs once at startup before the
-	// main loop kicks off.
+	// Pre-bake the map underlay (2 km x 2 km, 4 m/pixel = 500x500 = 250 KB).
 	underlay := ui.BakeUnderlay(0, 0, 2000, 4, func(wx, wz float32) float32 {
 		return systems.GroundHeight(wx, wz)
 	})
@@ -721,82 +608,62 @@ func main() {
 	mapCam := ui.NewMapCamera()
 	var mapPanning bool
 	var mapPanCursor rl.Vector2
-	// Phase 17.6 M17.6.4: ContextMenu replaces PieMenu for object-specific
-	// popups. PieMenu type still exists in ui/pie_menu.go for future radial
-	// revivals but is no longer driven from this flow.
 	var ctxMenu ui.ContextMenu
-	// rmbState bundles the per-frame state of an RMB-hold session. Replaces
-	// pieMenu fields. Active is set on press, cleared on release.
-	// PressOrigin / PressTarget capture press-time anchors so release
-	// commits don't drift with the cursor.
+	// rmbState bundles RMB-hold session state. Active set on press, cleared
+	// on release. PressOrigin / PressTarget are captured at press time so
+	// release commits don't drift with the cursor.
 	var rmbState struct {
 		Active       bool
 		SourcePanel  ui.PanelID
 		PressOrigin  rl.Vector2
 		PressTarget  components.WorldPos
-		PressTimeSec float32 // session-time at press
+		PressTimeSec float32
 		HoveredBldg  ecs.Entity
 		HasSelection bool
 		FacingActive bool // > 8 px drag committed to facing-drag
 		Ctrl, Alt    bool
 		Double       bool
 	}
-	var lastRMBPressAt float32 // session-time of the previous press
-	// Window for treating consecutive RMB presses as a double-click. PHASE-13.md
-	// заметка про Double-RMB: 300 ms is empirical - wide enough for relaxed
-	// chains, narrow enough that two deliberate sequential clicks don't fuse.
+	var lastRMBPressAt float32
+	// 300 ms window for double-RMB — wide enough for relaxed chains, narrow
+	// enough that two deliberate sequential clicks don't fuse.
 	const rmbDoubleWindow float32 = 0.30
-	// Phase 13.5 M13.5.4: scrollbar thumb drag state. scrollDragging = true
-	// while LMB is held on a scrollbar thumb; scrollDragStartCursorY +
-	// scrollDragStartOffset capture the press-time anchor so cursor delta
-	// translates linearly to scroll offset.
 	var (
 		scrollDragging         bool
 		scrollDragStartCursorY float32
 		scrollDragStartOffset  float32
 	)
-	// One wheel-tick of `rl.GetMouseWheelMove()` scrolls Inspector by this
-	// many pixels (~3 rows at fontSize=14). Tunable in M13.5.6 if it feels
-	// off in playtest.
 	const wheelScrollSpeed float32 = 30
-	// Inter-frame smoothing for map squad markers (ISSUES #1 polish).
 	smoothedSquadPos := make(map[ecs.Entity]components.WorldPos, 8)
 
-	// Selection / hover state. Hover refreshes each frame from cursor + focused
-	// panel; `hovered` is consumed by the inspector and the map renderer.
 	var (
 		navPath          []components.WorldPos
 		selected         []ecs.Entity
 		hovered          ecs.Entity
-		hoveredBuilding  ecs.Entity // Phase 16.C.1
-		hoveredLevel     ecs.Entity // Phase 17.6 M17.6.8 — level under ray
-		selectedBuilding ecs.Entity // Phase 16.C.1 - sticky
-		buildingWidget   *ui.BuildingWidgetLayout    // Phase 16.C.1 (per frame)
-		marqueeStart     rl.Vector2                  // screen coords
+		hoveredBuilding  ecs.Entity
+		hoveredLevel     ecs.Entity
+		selectedBuilding ecs.Entity
+		buildingWidget   *ui.BuildingWidgetLayout
+		marqueeStart     rl.Vector2
 		marqueeActive    bool
 		marqueeOrigin    ui.PanelID
 		expandedHUDOn    bool
-		showMapDebugLy   bool // toggled per-frame by hold-G
+		showMapDebugLy   bool
 		binds            [5]bindEntry
-		// Phase 18 timeline panel state.
-		timelineView      = ui.NewTimelineView()
-		timelineData      ui.TimelineData
-		timelineHoverHit  ui.TimelineHit
-		timelineHoverOK   bool
-		timelineHoverBlk  ui.TimelineOrderBlock
-		topBarPlayPause   rl.Rectangle
-		topBarSpeedDown   rl.Rectangle
-		topBarSpeedUp     rl.Rectangle
-		// Phase 18.C tree-of-splits popup menu (per-leaf widget switch / close).
-		chevronMenu ui.ChevronMenu
-		// Phase 18 floating panels (formation editor, future dialogs).
-		floating = ui.NewFloatingState()
+		timelineView     = ui.NewTimelineView()
+		timelineData     ui.TimelineData
+		timelineHoverHit ui.TimelineHit
+		timelineHoverOK  bool
+		timelineHoverBlk ui.TimelineOrderBlock
+		topBarPlayPause  rl.Rectangle
+		topBarSpeedDown  rl.Rectangle
+		topBarSpeedUp    rl.Rectangle
+		chevronMenu      ui.ChevronMenu
+		floating         = ui.NewFloatingState()
 	)
 	const marqueeClickThreshold float32 = 5
-	// chromeBusy = "UI chrome currently owns mouse/keyboard". When true the
-	// content layers (3D selection / marquee / map click / inspector chips /
-	// top-bar buttons / timeline blocks) skip their LMB handlers so a chrome
-	// interaction doesn't double-fire into the world below.
+	// chromeBusy = "UI chrome currently owns mouse/keyboard"; content layers
+	// skip LMB handlers when true so chrome doesn't double-fire into the world.
 	chromeBusy := func() bool {
 		return panelMgr.IsDragging() || panelMgr.IsCornerDragging() ||
 			chevronMenu.Open || floating.IsBusy(rl.GetMousePosition()) ||
@@ -823,12 +690,8 @@ func main() {
 		return systems.SquadCenter(world, roster, posMap)
 	}
 
-	// Shared FormationEditorCtx + singleton editor instance. Both the
-	// floating-panel form (E hotkey) and the workspace-panel form
-	// (PanelFormation in the leaf tree) read state through the same
-	// pointer, so changes (zoom, kind, custom slots) survive a re-dock
-	// and the editor always tracks the currently selected squad through
-	// SelectionFn.
+	// Floating and workspace forms share this pointer so zoom / kind / custom
+	// slots survive a re-dock; SelectionFn keeps it bound to the selected squad.
 	formationEditorCtx := ui.FormationEditorCtx{
 		World:          app.World,
 		RosterMap:      rosterMap,
@@ -848,13 +711,10 @@ func main() {
 	}
 	formationEditor := ui.NewFormationEditor(ecs.Entity{}, formationEditorCtx)
 
-	// renderFloatingWidget paints any workspace widget into a floating
-	// panel's content rect. ContentToPanel synthesises a Panel whose
-	// ContentRect recovers `content`, so each widget's existing chrome-
-	// aware draw code (which subtracts a title bar + border) lands in the
-	// right place. Panel3D is intentionally a no-op: the scene RT is
-	// sized to the workspace 3D leaf and detaching would need a second
-	// render texture - skipped for the first iteration of Float pane.
+	// ContentToPanel synthesises a Panel whose ContentRect recovers `content`
+	// so each widget's chrome-aware draw code lands in the right place.
+	// Panel3D is intentionally a no-op: the scene RT is sized to the
+	// workspace leaf; detaching would need a second render texture.
 	renderFloatingWidget := func(id ui.PanelID, content rl.Rectangle,
 		cursor rl.Vector2, font rl.Font, lmbPress bool) bool {
 		syn := func(title string) ui.Panel { return ui.ContentToPanel(content, title, id) }
@@ -911,17 +771,11 @@ func main() {
 				debugOverlayToggles(&debugOverlay), cursor, lmbPress,
 				"Radius: 2 chunks around camera")
 		case ui.Panel3D:
-			// Not floatable yet - see comment above. The chevron menu
-			// disables Float pane for the 3D leaf so this branch is
-			// unreachable in practice.
+			// Not floatable; chevron menu disables Float pane for the 3D leaf.
 		}
 		return false
 	}
 
-	// makeFloatingRender packs renderFloatingWidget into a closure for a
-	// specific PanelID. Used both by floatSpawn (chevron Float pane) and
-	// the E-hotkey, so a floater opened either way is uniformly
-	// switchable via the title-bar chevron button.
 	makeFloatingRender := func(id ui.PanelID) ui.FloatingRenderFn {
 		return func(c rl.Rectangle, cu rl.Vector2, f rl.Font, l bool) bool {
 			return renderFloatingWidget(id, c, cu, f, l)
@@ -929,10 +783,7 @@ func main() {
 	}
 
 	floatSpawn := func(id ui.PanelID, title string, bounds rl.Rectangle) {
-		// Use the leaf's previous bounds as the initial floater rect so
-		// the panel materialises in place rather than snapping to the
-		// top-left default. Clamp to a sensible minimum so a tiny pane
-		// doesn't yield an unusable floater.
+		// Use the leaf's previous bounds so the floater materialises in place.
 		if bounds.Width < 240 {
 			bounds.Width = 360
 		}
@@ -949,7 +800,6 @@ func main() {
 	}
 
 	for !rl.WindowShouldClose() {
-		// Window resize -> re-layout + re-alloc the 3D RT to the new bounds.
 		if rl.IsWindowResized() {
 			screenW = int32(rl.GetScreenWidth())
 			screenH = int32(rl.GetScreenHeight())
@@ -957,11 +807,16 @@ func main() {
 			scene3DRT.EnsureSize(panelMgr.Get(ui.Panel3D))
 		}
 
-		// Real-time dt for input / camera-orbit. The simulation tick gets this
-		// scaled by app.TimeScale inside App.Tick (Phase 10 P7).
-		dtReal := time.Duration(float64(rl.GetFrameTime()) * float64(time.Second))
-		// Session clock for OrderIssuedAt / progress timing. Scaled to match
-		// simulation time so pause freezes the clock with the rest of the sim.
+		// Real-time dt for input / camera-orbit; the simulation tick scales
+		// this by app.TimeScale inside App.Tick.
+		var dtReal time.Duration
+		if headless {
+			// Fixed sim dt so headless AI tests are deterministic and don't
+			// depend on whatever the uncapped CPU frame time happens to be.
+			dtReal = time.Second / 60
+		} else {
+			dtReal = time.Duration(float64(rl.GetFrameTime()) * float64(time.Second))
+		}
 		squadService.SetClock(float32(app.Elapsed().Seconds()))
 		utilityEvalSys.SetClock(float32(app.Elapsed().Seconds()))
 
@@ -974,11 +829,9 @@ func main() {
 		panel3D := panelMgr.Get(ui.Panel3D)
 		panelMap := panelMgr.Get(ui.PanelMap)
 
-		// -- Tab -> toggle layout preset --
 		if rl.IsKeyPressed(rl.KeyTab) {
-			// Phase 13.5: Tab during a splitter drag aborts the drag (revert
-			// to pre-drag ratio) before flipping the preset - avoids weird
-			// half-applied resize state on preset swap.
+			// Tab during a splitter drag aborts the drag before flipping the
+			// preset (avoids half-applied resize state).
 			if panelMgr.IsDragging() {
 				panelMgr.AbortDrag()
 			}
@@ -989,10 +842,8 @@ func main() {
 			panelMap = panelMgr.Get(ui.PanelMap)
 		}
 
-		// -- Phase 18.C - splitter / corner / chevron hover + drag --
-		// Priority chain: open menu wins LMB; then splitter (drag existing
-		// divider); then chevron (open menu); then corner-grab (start a
-		// pending split). The chrome cursor reflects the topmost target.
+		// Splitter / corner / chevron hover + drag. Priority chain: open menu
+		// wins LMB; splitter; chevron (open menu); corner-grab (start split).
 		splitterHover := panelMgr.SplitterAt(cursor)
 		cornerHover := panelMgr.CornerAt(cursor)
 		chevronHover := chevronLeafAt(panelMgr, cursor)
@@ -1027,21 +878,15 @@ func main() {
 			rl.SetMouseCursor(rl.MouseCursorDefault)
 		}
 
-		// Phase 18 floating panels eat LMB first (drag header, X close,
-		// content focus). Returns true when this frame's LMB was consumed.
+		// Floating panels eat LMB first; returns true when consumed.
 		floatingConsumed := floating.HandleInput(cursor,
 			rl.IsMouseButtonPressed(rl.MouseButtonLeft),
 			rl.IsMouseButtonDown(rl.MouseButtonLeft),
 			rl.IsKeyPressed(rl.KeyEscape),
 			screenW, screenH)
 
-		// LMB press dispatch. Order matters: menu-open takes priority so the
-		// rest of the UI doesn't react under it. lmbDown is the raw "press
-		// this frame" signal (menu still needs to receive it even when
-		// chromeBusy gates everything else); lmbPress is the gated form
-		// used by splitter / chevron / corner start. A press inside any
-		// floating panel is forwarded to the panel only - workspace chrome
-		// and content stay silent.
+		// LMB press dispatch. lmbDown is the raw press; lmbPress is the gated
+		// form. Menu-open and floating-panel presses bypass workspace handlers.
 		overFloating := floating.HitTest(cursor) != nil
 		lmbDown := rl.IsMouseButtonPressed(rl.MouseButtonLeft) && !floatingConsumed && !overFloating
 		lmbPress := lmbDown && !panelMgr.IsDragging() && !panelMgr.IsCornerDragging()
@@ -1069,8 +914,6 @@ func main() {
 			panelMgr.BeginCornerDrag(cornerHover, cursor)
 		}
 
-		// Active splitter drag - apply cursor pos to ratio, persist on
-		// release.
 		if panelMgr.IsDragging() {
 			if rl.IsMouseButtonDown(rl.MouseButtonLeft) {
 				panelMgr.UpdateDrag(cursor)
@@ -1086,7 +929,6 @@ func main() {
 				scene3DRT.EnsureSize(panel3D)
 			}
 		}
-		// Active corner drag - release commits a new split.
 		if panelMgr.IsCornerDragging() {
 			if !rl.IsMouseButtonDown(rl.MouseButtonLeft) {
 				if panelMgr.CommitCornerDrag(cursor) {
@@ -1100,19 +942,16 @@ func main() {
 			}
 		}
 
-		// -- Door test scene auto-verifier + hotkeys (O / I / K / U) --
 		if doorScene != nil {
 			doorScene.EnsureInit()
 			doorScene.Update(float32(app.Elapsed().Seconds()))
 			doorScene.HandleHotkeys(focused == ui.Panel3D)
 		}
 
-		// -- AI test scene auto-verifier (Phase 17.8) --
 		if aiTest != nil {
 			aiTest.Update(float32(app.Elapsed().Seconds()))
 		}
 
-		// -- Space -> toggle pause; +/- -> cycle speed 1->2->4->8->1 --
 		if rl.IsKeyPressed(rl.KeySpace) {
 			if app.TimeScale > 0 {
 				app.LastNonZeroScale = app.TimeScale
@@ -1133,7 +972,6 @@ func main() {
 			app.LastNonZeroScale = app.TimeScale
 		}
 
-		// -- WASD anchor (Panel3D-or-none focus) --
 		anchorPos := posMap.Get(anchor)
 		anchorSpeed := float32(20.0)
 		if shiftHeld {
@@ -1173,15 +1011,10 @@ func main() {
 			navPath = nil
 		}
 
-		// Map's content rect - the actual drawing surface, minus chrome. Cursor
-		// conversions go through this rather than panelMap.Bounds so clicks /
-		// zoom pivots align with what the player sees.
+		// Map's content rect (drawing surface minus chrome). Cursor conversions
+		// go through this so clicks / zoom pivots align with what's drawn.
 		panelMapContent := ui.ContentRect(panelMap)
 
-		// -- Map pan / zoom (only when map focused, no chrome busy) --
-		// chromeBusy includes "cursor over a floating panel", so wheel /
-		// pan / click stay locked to the floater chrome above and don't
-		// bleed through to the underlying map.
 		if focused == ui.PanelMap && !chromeBusy() {
 			if rl.IsMouseButtonPressed(rl.MouseButtonMiddle) {
 				mapPanning = true
@@ -1204,10 +1037,6 @@ func main() {
 			mapPanning = false
 		}
 
-		// -- Phase 13.5 M13.5.4 - Inspector wheel scroll + thumb drag --
-		// Wheel only fires when the cursor is over the Inspector panel and
-		// no splitter drag is active. MapCamera's wheel block above is gated
-		// on focused == ui.PanelMap, so the two paths are mutually exclusive.
 		if focused == ui.PanelInspect && !chromeBusy() {
 			if wheel := rl.GetMouseWheelMove(); wheel != 0 {
 				if scroll := panelMgr.ScrollByID(ui.PanelInspect); scroll != nil {
@@ -1216,9 +1045,6 @@ func main() {
 				}
 			}
 		}
-		// Thumb drag - LMB-press on thumb rect starts the drag, regardless of
-		// focused panel (the thumb itself is always inside Inspector bounds).
-		// Splitter drag has priority - it uses LMB too, so guard against both.
 		inspScrollPanel := panelMgr.Get(ui.PanelInspect)
 		inspScroll := panelMgr.ScrollByID(ui.PanelInspect)
 		if !chromeBusy() && inspScroll != nil {
@@ -1248,7 +1074,6 @@ func main() {
 			}
 		}
 
-		// -- Phase 18 top bar: LMB on play/pause/speed buttons --
 		if focused == ui.PanelTopBar && !chromeBusy() && !scrollDragging &&
 			rl.IsMouseButtonPressed(rl.MouseButtonLeft) {
 			switch ui.TopBarHitTest(cursor, topBarPlayPause, topBarSpeedDown, topBarSpeedUp) {
@@ -1271,7 +1096,6 @@ func main() {
 			}
 		}
 
-		// -- Phase 18 timeline: hover/click on order blocks, wheel pan/zoom --
 		timelineHoverOK = false
 		if focused == ui.PanelTimeline && !chromeBusy() {
 			panelTL := panelMgr.Get(ui.PanelTimeline)
@@ -1325,17 +1149,14 @@ func main() {
 					}
 				}
 			}
-			// Double-click on the panel background -> re-enable Follow.
+			// RMB on background -> re-enable Follow.
 			if rl.IsMouseButtonPressed(rl.MouseButtonRight) && timelineHoverOK && !timelineHoverHit.HitOrder {
 				timelineView.Follow = true
 			}
 		}
 
-		// -- 3D panel cursor (content-rect-local) --
-		// Cursor coords used for raycast / marquee / picking are relative to
-		// the 3D content rect (panel minus chrome), and viewW/H match the
-		// content rect - same as the RT - so GetScreenToWorldRayEx /
-		// GetWorldToScreenEx project consistently with what the player sees.
+		// 3D panel cursor (content-rect-local). viewW/H match the content
+		// rect (= RT size) so screen<->world projections match what's drawn.
 		panel3DContent := ui.ContentRect(panel3D)
 		panel3DLocal := rl.Vector2{
 			X: cursor.X - panel3DContent.X,
@@ -1350,15 +1171,8 @@ func main() {
 			panel3DH = 1
 		}
 
-		// -- LMB press --
-		// Phase 13.5 guard: a splitter drag claims LMB exclusively. Skip
-		// selection / marquee / map-pick on the press that started the drag
-		// AND every frame the drag is active.
-		//
-		// Phase 16.C.1: building widget chips claim the press too. If the
-		// cursor sits over a chip when LMB goes down, apply the mutation
-		// (CurrentLevel / WallMode / InteriorOpen) and skip marquee start;
-		// otherwise the click would also start a stray selection rectangle.
+		// LMB press. Splitter drag claims LMB exclusively. Building widget
+		// chips also claim the press — skip marquee start when over a chip.
 		widgetClickConsumed := false
 		if !chromeBusy() && rl.IsMouseButtonPressed(rl.MouseButtonLeft) && buildingWidget != nil {
 			if hit := ui.HitTestBuildingWidget(buildingWidget, cursor); hit != nil {
@@ -1375,9 +1189,7 @@ func main() {
 					case ui.ChipKindInside:
 						bvm.InteriorOpen = !bvm.InteriorOpen
 					}
-					// Clicking a chip implicitly pins the widget on this
-					// building so it doesn't disappear when the cursor moves
-					// off the chip during a follow-up click.
+					// Pin the widget so it doesn't vanish on a follow-up click.
 					selectedBuilding = target
 					widgetClickConsumed = true
 				}
@@ -1390,7 +1202,6 @@ func main() {
 				marqueeActive = true
 				marqueeOrigin = ui.Panel3D
 			case ui.PanelMap:
-				// Click on map: pick squad marker, else clear selection.
 				mapCtx := ui.MapRenderCtx{
 					World: app.World, Cam: mapCam, SquadFilter: squadFilter,
 					SquadCenter:    squadCenter,
@@ -1415,7 +1226,6 @@ func main() {
 			}
 		}
 
-		// -- LMB release -> commit marquee or treat as a 3D click --
 		if rl.IsMouseButtonReleased(rl.MouseButtonLeft) && marqueeActive {
 			end := cursor
 			dx := end.X - marqueeStart.X
@@ -1430,11 +1240,9 @@ func main() {
 						} else {
 							selected = []ecs.Entity{hit}
 						}
-						// Clicking a unit removes any prior building pin.
 						selectedBuilding = ecs.Entity{}
 					} else if hoveredBuilding != (ecs.Entity{}) {
-						// Phase 16.C.1: empty 3D click that landed on a
-						// building footprint pins the widget on that building.
+						// Empty 3D click on a footprint pins the widget.
 						selectedBuilding = hoveredBuilding
 						if !shiftHeld {
 							selected = nil
@@ -1469,18 +1277,10 @@ func main() {
 			marqueeActive = false
 		}
 
-		// -- RMB orders (Phase 17.6 rewrite). Flow:
-		//   - Press: snapshot target / modifiers / hovered building. Start
-		//     an RMB session (rmbState.Active = true).
-		//   - While held + no popup + no facing-drag:
-		//       drag > 8 px → facing-drag mode (yaw from cursor delta).
-		//       hold >= 200 ms over a building → open ContextMenu popup.
-		//   - Release:
-		//       popup active → commit hovered item (or cancel).
-		//       facing-drag active → commit order with arrived-facing yaw.
-		//       neither → tap commit (default hit-test action).
-		//   - ESC closes the popup at any time.
-		// Camera (MMB) is independent — no orbit-suppression needed.
+		// RMB orders. Flow: press snapshots target+modifiers+hovered-building;
+		// while held, drag>8px enters facing-drag mode and hold≥200ms over a
+		// building opens the ContextMenu popup; release commits hovered popup
+		// item / facing-drag yaw / tap; ESC closes the popup.
 		if rl.IsMouseButtonPressed(rl.MouseButtonRight) && !floating.IsBusy(cursor) {
 			var (
 				pressTarget components.WorldPos
@@ -1491,11 +1291,8 @@ func main() {
 				pressTarget, targetOK = mouseTargetWorldPos(systems.CurrentCamera,
 					anchorPos.ToRenderSpace(systems.CurrentOriginChunk),
 					panel3DLocal, panel3DW, panel3DH)
-				// Phase 16.B.1.b / 17.6 UX: cursor visually over a building
-				// but raycast lands just outside the footprint → snap target
-				// to the ground-floor centre so hit-test classifies as
-				// HitBuilding (Footprint.Contains succeeds) → OccupyBuilding
-				// resolves through the nearest door.
+				// Snap to ground-floor centre when cursor visually over a
+				// building but raycast lands just outside the footprint.
 				if targetOK && hoveredBuilding != (ecs.Entity{}) {
 					if levels := buildingPlanIndex.Levels[hoveredBuilding]; len(levels) > 0 {
 						if lvl := levelMap.Get(levels[0]); lvl != nil {
@@ -1540,13 +1337,10 @@ func main() {
 			}
 		}
 
-		// While RMB session is active, decide between facing-drag and
-		// popup-open. Popup, once opened, persists until release / ESC.
 		if rmbState.Active {
 			rmbDown := rl.IsMouseButtonDown(rl.MouseButtonRight)
 			rmbReleased := rl.IsMouseButtonReleased(rl.MouseButtonRight)
 
-			// While held, no popup yet, no facing yet — check both triggers.
 			if rmbDown && !ctxMenu.IsActive() && !rmbState.FacingActive {
 				dx := cursor.X - rmbState.PressOrigin.X
 				dy := cursor.Y - rmbState.PressOrigin.Y
@@ -1563,15 +1357,13 @@ func main() {
 				}
 			}
 
-			// Popup-active path: read LMB / ESC. RMB release also commits
-			// the hovered item in single-gesture style.
+			// Popup active: LMB / ESC / RMB-release (single-gesture commit).
 			if ctxMenu.IsActive() {
 				escPressed := rl.IsKeyPressed(rl.KeyEscape)
 				lmbPressedForMenu := rl.IsMouseButtonPressed(rl.MouseButtonLeft)
 				res := ctxMenu.Tick(cursor, lmbPressedForMenu, escPressed)
 				switch {
 				case rmbReleased && ctxMenu.IsActive():
-					// Single-gesture release: commit hovered item if any.
 					if item, ok := ctxMenu.HoveredItemDetails(); ok && item.Enabled {
 						ctxMenu.Reset()
 						issueBuildingPopupOrder(selected, item, rmbState.HoveredBldg,
@@ -1585,10 +1377,8 @@ func main() {
 						rmbState.PressTarget, shiftHeld,
 						squadService, navService, squadMemberMap, posMap, actionQueueMap, levelMap)
 				}
-				// res.Cancelled or still-active — nothing else to do.
 			}
 
-			// Release handling for paths that don't involve popup.
 			if rmbReleased && !ctxMenu.IsActive() {
 				switch {
 				case rmbState.FacingActive:
@@ -1603,7 +1393,7 @@ func main() {
 					resolveRMBOrderWithParams(selected, rmbState.PressTarget, shiftHeld, nil, params, hitTester,
 						squadService, navService, squadMemberMap, posMap, actionQueueMap)
 				default:
-					// Tap commit. Shift+RMB on subset → IndividualPosition path.
+					// Shift+RMB on subset → IndividualPosition path.
 					placed := false
 					if shiftHeld {
 						if _, ok := detectSubsetOfSquad(selected, squadMemberMap, rosterMap); ok {
@@ -1624,16 +1414,13 @@ func main() {
 				}
 			}
 
-			// Close session on release regardless of outcome.
 			if rmbReleased {
 				rmbState.Active = false
 				rmbState.FacingActive = false
 			}
 		}
 
-		// -- H -> Stop order (global hotkey) --
-		// Phase 11: iterates SquadsToOrder for distributed cancel, plus the
-		// per-unit Stop for soloists. Mirrors resolveRMBOrder's split.
+		// H -> Stop order. Mirrors resolveRMBOrder's squad-vs-soloist split.
 		if rl.IsKeyPressed(rl.KeyH) && len(selected) > 0 {
 			groups := groupSelectionByOwner(selected, squadMemberMap)
 			for _, s := range groups.SquadsToOrder {
@@ -1647,20 +1434,16 @@ func main() {
 			}
 		}
 
-		// -- T -> form Squad. Phase 18 auto-formation rule: infantry-only
-		// merges land in FormationLoose (free); mixed infantry+vehicle
-		// merges snapshot current world positions into FormationCustomSlots
-		// + lock OrientNorth so each member stays where it stood relative
-		// to the new squad centre. Phase 19 will populate the vehicle
-		// branch; until then the mixed check is always false.
+		// T -> form Squad. Infantry-only merges land in FormationLoose;
+		// mixed infantry+vehicle (future) snapshot positions into
+		// FormationCustomSlots + lock OrientNorth.
 		if rl.IsKeyPressed(rl.KeyT) && len(selected) >= 2 {
 			mixed := containsVehicle(selected, app.World)
 			kind := components.FormationLoose
 			if mixed {
 				kind = components.FormationLine
 			}
-			// Snapshot positions BEFORE create (CreateFromUnits may despawn
-			// old squads but doesn't move WorldPos).
+			// Snapshot BEFORE create (CreateFromUnits may despawn old squads).
 			snapshots := make(map[ecs.Entity]components.WorldPos, len(selected))
 			for _, e := range selected {
 				if p := posMap.Get(e); p != nil {
@@ -1679,14 +1462,13 @@ func main() {
 			}
 		}
 
-		// -- U -> ungroup --
 		if rl.IsKeyPressed(rl.KeyU) && len(selected) > 0 {
 			for _, e := range selected {
 				squadService.Leave(e)
 			}
 		}
 
-		// -- F1-F4 -> change formation --
+		// F1-F4 -> change formation.
 		if len(selected) > 0 {
 			if commonSquad, homo := groupSelected(selected, squadMemberMap); homo && commonSquad != (ecs.Entity{}) {
 				var newKind components.FormationKind
@@ -1714,10 +1496,7 @@ func main() {
 			}
 		}
 
-		// -- E -> toggle formation editor floating panel. Pinned to the
-		//        squad active when the panel is opened; afterwards
-		//        SelectionFn keeps it in sync as selection changes.
-		//        (F is taken by FloorNavGrid debug hold-overlay.)
+		// E -> toggle formation editor floating panel.
 		if rl.IsKeyPressed(rl.KeyE) {
 			if floating.IsOpen("formation-editor") {
 				floating.Close("formation-editor")
@@ -1732,14 +1511,7 @@ func main() {
 			}
 		}
 
-		// -- Phase 13 M13.7 - MovementProfile hotkeys --
-		// `[` / `]` cycle MovementProfile presets prev/next. `'` toggles
-		// Posture Standard <-> Quiet. Stance hotkeys (Z/X/C) are deferred to
-		// Phase 21 because Z/X are already taken (crater, cover overlay) and
-		// the Inspector quick-bar covers the case meanwhile.
-		//
-		// Hotkeys apply when a homogeneous squad is selected - same gate as
-		// formation hotkeys above.
+		// [ / ] cycle MovementProfile presets; ' toggles Posture.
 		if len(selected) > 0 {
 			if commonSquad, homo := groupSelected(selected, squadMemberMap); homo && commonSquad != (ecs.Entity{}) {
 				if app.World.Alive(commonSquad) {
@@ -1762,7 +1534,6 @@ func main() {
 			}
 		}
 
-		// -- Ctrl+1..5 bind / 1..5 recall --
 		digitKeys := [5]int32{rl.KeyOne, rl.KeyTwo, rl.KeyThree, rl.KeyFour, rl.KeyFive}
 		for i, k := range digitKeys {
 			if !rl.IsKeyPressed(k) {
@@ -1798,15 +1569,11 @@ func main() {
 			navPath = stepAlongPath(anchorPos, navPath, anchorSpeed*float32(dtReal.Seconds()))
 		}
 
-		// -- X -> crater (Panel3D only) --
 		if focused == ui.Panel3D && rl.IsKeyPressed(rl.KeyX) {
 			stamper.StampHeightmap(*anchorPos, systems.Crater(2.0, 4.0), 4.0)
 		}
 
-		// -- B -> toggle BuildingViewMode.InteriorOpen on every building.
-		// Phase 16.C.0 smoke; replaced by per-building widget (M16.C.1).
-		// PgUp / PgDn cycle CurrentLevel up / down across the building's
-		// level list (sorted ascending by storey by HouseTemplate).
+		// B toggles InteriorOpen on every building; PgUp/PgDn cycles CurrentLevel.
 		if focused == ui.Panel3D && rl.IsKeyPressed(rl.KeyB) {
 			qbf := buildingFilter.Query()
 			for qbf.Next() {
@@ -1861,9 +1628,7 @@ func main() {
 			}
 		}
 
-		// -- Hover update --
-		// Hover in Panel3D: closest unit under cursor (silent pick).
-		// Hover in PanelMap: closest squad marker within 12 px.
+		// Hover: closest unit (Panel3D) / closest squad marker (PanelMap).
 		hovered = ecs.Entity{}
 		switch focused {
 		case ui.Panel3D:
@@ -1879,10 +1644,6 @@ func main() {
 			hovered = ui.PickSquadAt(cursor, mapCtx, panelMap, 12)
 		}
 
-		// Phase 13.6 M13.6.2: cursor target in WorldPos for the ghost preview.
-		// Recomputed every frame (continuous hover tracking); the raycast is one
-		// per-frame, cheap. When the cursor leaves Panel3D or the ray misses
-		// the ground plane (sky / parallel), the ghost pass skips itself.
 		var (
 			ghostTarget   components.WorldPos
 			ghostTargetOK bool
@@ -1893,9 +1654,7 @@ func main() {
 				panel3DLocal, panel3DW, panel3DH)
 		}
 
-		// Phase 16.C.1: building hover - cursor's ground target inside any
-		// Building.Footprint surfaces that building as hoverable. Used both
-		// to gate the chip widget and to claim LMB clicks on it.
+		// Building hover: cursor's ground target inside any Building.Footprint.
 		hoveredBuilding = ecs.Entity{}
 		hoveredLevel = ecs.Entity{}
 		if focused == ui.Panel3D && ghostTargetOK {
@@ -1910,10 +1669,8 @@ func main() {
 					break
 				}
 			}
-			// Phase 17.6 M17.6.8 — narrow the outline to the storey the
-			// cursor's ray actually pierces. Falls back to whole-building
-			// outline if no Level box catches the ray (ray near floor
-			// plane, multi-floor building viewed from above, etc.).
+			// Narrow outline to the storey the ray hits; falls back to
+			// whole-building if no Level box catches the ray.
 			if hoveredBuilding != (ecs.Entity{}) {
 				ray := rl.GetScreenToWorldRayEx(panel3DLocal, systems.CurrentCamera, panel3DW, panel3DH)
 				if lvl, ok := pickLevelUnderRay(ray, hoveredBuilding, &buildingPlanIndex, levelMap); ok {
@@ -1922,10 +1679,8 @@ func main() {
 			}
 		}
 
-		// Widget target priority: a sticky selectedBuilding wins so the
-		// player can move the cursor onto the chips without the panel
-		// vanishing. Otherwise show a hover preview for whatever footprint
-		// the cursor sits inside.
+		// Sticky selectedBuilding wins over hovered so cursor can move onto
+		// chips without the panel vanishing.
 		effectiveBuilding := selectedBuilding
 		if effectiveBuilding != (ecs.Entity{}) && !app.World.Alive(effectiveBuilding) {
 			selectedBuilding = ecs.Entity{}
@@ -1964,27 +1719,22 @@ func main() {
 			}
 		}
 
-		// Gate the 3D camera's orbit / wheel zoom by panel focus. Wheel events
-		// when the map panel is focused belong to the map's own zoom; MMB held
-		// inside the map panel should pan the map, not spin the field camera.
-		// Also suppress while a floating panel owns the cursor (so wheel-zoom
-		// of the formation editor doesn't also dolly the field camera
-		// underneath). Phase 17.6: orbit moved to MMB so RMB is free for order
-		// popups - pieMenu suppressors removed since pie no longer captures
-		// RMB anyway (it'll be torn out of the RMB flow in M17.6.4).
+		// Gate orbit/wheel by focus; suppress while a floater owns the cursor.
 		systems.OrbitInputEnabled = (focused == ui.Panel3D || focused == ui.PanelNone) &&
 			!floating.IsBusy(cursor)
 
 		app.Tick(dtReal)
 
+		if headless {
+			if aiTest != nil && aiTest.verdictDone {
+				break
+			}
+			continue
+		}
+
 		anchorPos = posMap.Get(anchor)
 		anchorRender := anchorPos.ToRenderSpace(systems.CurrentOriginChunk)
 
-		// Phase 14.5 M14.5.4: particles are ECS entities now - lifecycle
-		// (age + despawn) lives in ParticleSystem.Update. No per-frame
-		// decay needed here.
-
-		// -- Render 3D scene into RT --
 		rl.BeginTextureMode(scene3DRT.RT)
 		rl.ClearBackground(rl.RayWhite)
 		rl.BeginMode3D(systems.CurrentCamera)
@@ -2022,9 +1772,7 @@ func main() {
 			pos, _, st := qu.Get()
 			renderPos := pos.ToRenderSpace(systems.CurrentOriginChunk)
 			ent := qu.Entity()
-			// Phase 12: role drives cap colour + ShortLabel. Fall back to
-			// Rifleman if a unit somehow lacks UnitRole - keeps render
-			// resilient if a future spawn path forgets AssignRole.
+			// Default Rifleman keeps render resilient if a spawn path forgot AssignRole.
 			role := components.RoleRifleman
 			if r := roleMap.Get(ent); r != nil {
 				role = r.Kind
@@ -2060,10 +1808,8 @@ func main() {
 			}
 		}
 
-		// Phase 16.C.0: build a per-frame "hidden level" set. A Level is
-		// hidden when its owning building has BuildingViewMode.InteriorOpen
-		// AND the level's avgY sits above CurrentLevel's avgY + epsilon.
-		// Skip-render gating below reads this map.
+		// A Level is hidden when its building has InteriorOpen AND its avgY
+		// sits above CurrentLevel's avgY + epsilon.
 		hiddenLevels := map[ecs.Entity]bool{}
 		qLev := levelCutawayFilter.Query()
 		for qLev.Next() {
@@ -2084,10 +1830,7 @@ func main() {
 			}
 		}
 
-		// Phase 16.C.2: a level is "fogged" when it's never been discovered
-		// OR was last seen more than FogVisibleDuration ago. Static layout
-		// (walls / floors) renders with a grey tint; dynamic contents would
-		// be culled outright (no renderer yet for furniture / hostiles).
+		// A level is fogged when never discovered OR last seen >FogVisibleDuration ago.
 		now := levelVisSys.Clock()
 		levelFogged := func(level ecs.Entity) bool {
 			if level == (ecs.Entity{}) {
@@ -2131,9 +1874,7 @@ func main() {
 					continue
 				}
 				fogged = levelFogged(lm.Level)
-				// Phase 16.C.4: wall mode only applies to walls of the
-				// currently-viewed level inside an open cutaway. Lower
-				// levels render normally even when InteriorOpen.
+				// WallMode only applies to the currently-viewed level inside an open cutaway.
 				if member := buildingMemberMap.Get(e); member != nil {
 					if bvm := buildingViewModeMap.Get(member.Building); bvm != nil &&
 						bvm.InteriorOpen && lm.Level == bvm.CurrentLevel {
@@ -2157,11 +1898,8 @@ func main() {
 			drawBuildingStairs(renderPos, *st)
 		}
 
-		// Phase 16.C.1 polish: outline boxes around the hovered (preview) and
-		// selected (pinned) buildings. Drawn after walls/floors so the lines
-		// sit on top of the geometry from most angles. Box is padded 0.15 m
-		// outwards from the footprint to keep the wireframe legible against
-		// the wall surfaces.
+		// Outline boxes around hovered + selected buildings. 0.15 m pad keeps
+		// the wireframe legible against wall surfaces.
 		drawBuildingOutline := func(root ecs.Entity, color rl.Color) {
 			if root == (ecs.Entity{}) || !app.World.Alive(root) {
 				return
@@ -2185,8 +1923,6 @@ func main() {
 		}
 		if hoveredBuilding != (ecs.Entity{}) && hoveredBuilding != selectedBuilding {
 			yellow := rl.Color{R: 255, G: 220, B: 60, A: 200}
-			// Phase 17.6 M17.6.8 — outline the storey under the ray if we
-			// have one; otherwise fall back to the whole-building wireframe.
 			if hoveredLevel != (ecs.Entity{}) {
 				if lvl := levelMap.Get(hoveredLevel); lvl != nil {
 					drawLevelOutline(lvl, yellow)
@@ -2201,8 +1937,7 @@ func main() {
 			drawBuildingOutline(selectedBuilding, rl.Color{R: 90, G: 200, B: 240, A: 230})
 		}
 
-		// Debug overlays - all gated by hold-key. The hold-G road overlay also
-		// toggles the map's road / river / building debug layer for consistency.
+		// Hold-G also toggles the map's road / river / building debug layer.
 		if rl.IsKeyDown(rl.KeyG) {
 			drawRoadGraphDebug(&roadGraph)
 			showMapDebugLy = true
@@ -2308,10 +2043,8 @@ func main() {
 			}
 		}
 
-		// Phase 16.B.1.b debug: transition edges in the registry as coloured
-		// 3D lines. Surface<->Level edges = green, Level<->Level = yellow.
-		// Missing lines through a door/stair = the bake failed to resolve
-		// LevelMember / StairLevels for that opening. Toggle via Debug widget.
+		// Surface<->Level edges = green, Level<->Level = yellow. Missing
+		// lines through a door/stair ⇒ bake failed to resolve LevelMember.
 		if debugOverlay.Transitions {
 			levelGridReadMap := ecs.NewMap[components.LevelNavGrid](app.World)
 			nodeWorld := func(n components.NavNode) (rl.Vector3, bool) {
@@ -2345,7 +2078,7 @@ func main() {
 					if !ok1 || !ok2 {
 						continue
 					}
-					col := rl.Color{R: 50, G: 220, B: 80, A: 255} // surf<->level
+					col := rl.Color{R: 50, G: 220, B: 80, A: 255}
 					if e.From.Kind == components.NodeLevel && e.To.Kind == components.NodeLevel {
 						col = rl.Color{R: 240, G: 220, B: 60, A: 255}
 					}
@@ -2382,8 +2115,6 @@ func main() {
 
 		drawNavPath(navPath, *anchorPos)
 
-		// Phase 17.9 — Unit paths overlay. Toggle from Debug widget; when
-		// a squad is selected, only its members' MicroPath stripes draw.
 		if debugOverlay.UnitPaths {
 			drawUnitPaths(unitPathRenderCtx{
 				filter:         unitPathSquadFilter,
@@ -2393,18 +2124,10 @@ func main() {
 			})
 		}
 
-		// Phase 13.6 M13.6.2 / M13.6.4: ghost-preview formation. Continuous
-		// render of where the selected squad would arrive if the player issued
-		// a Move order at the current cursor target. No-op when cursor isn't
-		// in Panel3D, no squad in selection, or raycast missed the ground.
-		// While the player is facing-dragging, ghosts rotate live to match the
-		// drag-derived yaw so the orientation preview is honest about what
-		// release will commit to.
+		// Ghost preview rotates live during facing-drag so the orientation
+		// matches what release will commit to.
 		var ghostDragFacing *float32
 		if rmbState.Active && rmbState.FacingActive {
-			// Recompute the current yaw — release commits the same screen-space
-			// formula. Pin the ghost to press-time target so the formation
-			// orientation rotates around a stable anchor while dragging.
 			dx := cursor.X - rmbState.PressOrigin.X
 			dy := cursor.Y - rmbState.PressOrigin.Y
 			yaw := float32(math.Atan2(float64(dx), float64(-dy)))
@@ -2412,10 +2135,7 @@ func main() {
 			ghostTarget = rmbState.PressTarget
 			ghostTargetOK = true
 		}
-		// Phase 17.6 M17.6.4: when ContextMenu is open and hovering an item,
-		// expose the kind so the ghost render swaps preview placement (Garrison
-		// = at-windows, OccupyBuilding = by-floors, etc — full per-kind swap is
-		// M17.6.9).
+		// Popup-hover swaps ghost placement per kind; anchor at press-time target.
 		var ghostPopupKind *components.OrderKindCode
 		var ghostPopupLevel ecs.Entity
 		if ctxMenu.IsActive() {
@@ -2424,36 +2144,23 @@ func main() {
 				ghostPopupKind = &k
 				ghostPopupLevel = item.LevelEntity
 			}
-			// Anchor at press-time target while the popup is open — player
-			// is choosing for that point, not for whatever's under the cursor
-			// (which is on a menu item).
 			ghostTarget = rmbState.PressTarget
 			ghostTargetOK = true
 		}
 		drawSelectionGhost(ghostCtx, selected, focused == ui.Panel3D, ghostTarget, ghostTargetOK,
 			ghostDragFacing, ghostPopupKind, ghostPopupLevel, levelMap)
 
-		// Phase 17.6 M17.6.7: 3D order markers for every selected squad —
-		// cube + connector lines per Order. Depth-test disabled so markers
-		// stay visible through walls. Drawn after ghost so the active head
-		// marker sits on top of any overlapping ghost dot.
 		drawOrderMarkers3D(orderMarkerRenderCtx, selected)
 
-		// Phase 14.5 M14.5.4: ECS-particle render walks the Particle filter.
-		// Per-kind dispatch (tracer line / impact sphere / smoke / dust /
-		// debris cube / muzzle flash) lives in drawParticles.
 		drawParticles(particleRenderCtx, float32(app.Elapsed().Seconds()))
 
 		rl.EndMode3D()
 		rl.EndTextureMode()
 
-		// -- 2D pass - clear bg, paint each panel --
 		rl.BeginDrawing()
 		rl.ClearBackground(rl.Color{R: 8, G: 10, B: 14, A: 255})
 
-		// Panel content (background + body) drawn before chrome so the title
-		// bar overlays the content cleanly.
-		// Map panel.
+		// Panel content drawn before chrome so title bars overlay cleanly.
 		mapCtx := ui.MapRenderCtx{
 			World:            app.World,
 			Cam:              mapCam,
@@ -2484,13 +2191,6 @@ func main() {
 		}
 		ui.DrawMap(panelMap, mapCtx)
 
-		// Inspector panel.
-		// Phase 13 M13.6: feed click state + standing-rule handles for the
-		// quick-bar sections. LMBPressed mirrors the single press edge so
-		// chips fire once per click. PanelFocused gates clicks so a drag
-		// originating elsewhere doesn't accidentally trigger toggles.
-		// Phase 13.5 M13.5.3: pass the per-panel scroll handle so DrawInspector
-		// can subtract OffsetY and write back ContentHeight.
 		inspectorFocused := panelMgr.FocusedAt(cursor) == ui.PanelInspect
 		inspectorPanel := panelMgr.Get(ui.PanelInspect)
 		inspectorScroll := panelMgr.ScrollByID(ui.PanelInspect)
@@ -2507,23 +2207,18 @@ func main() {
 			Scroll:        inspectorScroll,
 			SquadColor:    squadColor,
 		})
-		// Phase 13.5 M13.5.3: scrollbar overlay drawn AFTER DrawInspector so
-		// the EndScissorMode released its clip first. ClampScrollOffset keeps
-		// the offset valid if a content shrink (selection switch) made the
-		// previous offset out-of-range.
+		// Scrollbar overlay drawn AFTER DrawInspector so EndScissorMode has released its clip.
 		if inspectorScroll != nil {
 			ui.ClampScrollOffset(inspectorPanel, inspectorScroll)
 			ui.DrawScrollbar(inspectorPanel, inspectorScroll)
 		}
 
-		// Phase 18 top bar (chromeless toolbar).
 		topBarPlayPause, topBarSpeedDown, topBarSpeedUp = ui.DrawTopBar(
 			panelMgr.Get(ui.PanelTopBar), hudFont, ui.TimeDisplay{
 				Scale:   app.TimeScale,
 				Elapsed: float32(app.Elapsed().Seconds()),
 			})
 
-		// Phase 18 timeline panel.
 		timelineData = buildTimelineData(app.World, squadFilter, posMap, factionMap,
 			orderQueueMap, orderChainMap, orderKindMap, orderTargetMap, orderStateMap,
 			orderProgressMap, orderIssuedAtMap, squadColor,
@@ -2533,10 +2228,6 @@ func main() {
 			ui.DrawTimelineTooltip(hudFont, cursor, timelineHoverBlk)
 		}
 
-		// Formation editor as a workspace panel - the chevron menu can place
-		// it in any leaf. lmbPress is gated by chromeBusy so a press inside
-		// the editor's chrome (kind dropdown, dot drag) doesn't double-fire
-		// into the world below.
 		if leaf := panelMgr.LeafFor(ui.PanelFormation); leaf != nil {
 			formationLMB := !chromeBusy() && !scrollDragging &&
 				panelMgr.FocusedAt(cursor) == ui.PanelFormation &&
@@ -2545,9 +2236,6 @@ func main() {
 				hudFont, cursor, formationLMB)
 		}
 
-		// Phase 17.9 — Debug overlays widget. Toggle state lives in
-		// `debugOverlay`; the actual overlay rendering happens later in the
-		// 3D pass, gated by the flags this widget mutates.
 		if leaf := panelMgr.LeafFor(ui.PanelDebug); leaf != nil {
 			debugLMB := !chromeBusy() && !scrollDragging &&
 				panelMgr.FocusedAt(cursor) == ui.PanelDebug &&
@@ -2557,13 +2245,10 @@ func main() {
 				"Radius: 2 chunks around camera")
 		}
 
-		// 3D RT composite into Panel3D bounds.
 		scene3DRT.Composite(panel3D)
 
-		// Phase 12 role labels - 2D screen-projected ShortLabel pills above
-		// every unit. Done after RT composite so the labels overlay the
-		// scene; scissored to Panel3D content rect so they don't bleed onto
-		// neighbouring panels.
+		// Role labels are 2D screen-projected after RT composite; scissored
+		// to Panel3D so they don't bleed onto neighbouring panels.
 		rl.BeginScissorMode(int32(panel3DContent.X), int32(panel3DContent.Y),
 			int32(panel3DContent.Width), int32(panel3DContent.Height))
 		quLabels := unitRenderFilter.Query()
@@ -2576,20 +2261,15 @@ func main() {
 				role = r.Kind
 			}
 			drawUnitRoleLabel(renderPos, *st, role, hudFont, panel3DContent)
-			// Phase 13 M13.7: thin Stamina bar above the cap when < 80%.
 			if stam := staminaMap.Get(ent); stam != nil {
 				drawUnitStaminaBar(renderPos, *st, role, stam.Current, stam.MaxLevel, panel3DContent)
 			}
-			// Phase 14 M14.6: HP bar above Stamina when damaged.
 			if hp := hpMap.Get(ent); hp != nil {
 				drawUnitHPBar(renderPos, *st, role, hp.Current, hp.Max, panel3DContent)
 			}
 		}
 		rl.EndScissorMode()
 
-		// Phase 16.C.1: cutaway chip widget for the hovered building.
-		// Layout was built in the input phase against the same cursor and
-		// camera as the click hit-test, so the visual matches the click.
 		if buildingWidget != nil {
 			rl.BeginScissorMode(int32(panel3DContent.X), int32(panel3DContent.Y),
 				int32(panel3DContent.Width), int32(panel3DContent.Height))
@@ -2597,9 +2277,7 @@ func main() {
 			rl.EndScissorMode()
 		}
 
-		// Marquee (panel-local clipped). Drawn after composite so it sits over
-		// the 3D scene; scissored to Panel3D so dragging outside the panel
-		// doesn't leak. Only fired when the marquee originated in Panel3D.
+		// Marquee drawn after composite, scissored to Panel3D.
 		if marqueeActive && marqueeOrigin == ui.Panel3D {
 			end := cursor
 			minX, maxX := marqueeStart.X, end.X
@@ -2621,44 +2299,24 @@ func main() {
 			rl.EndScissorMode()
 		}
 
-		// Chrome (border + title) on every panel, drawn last so it overlays
-		// content (including marquee strokes that bleed onto the title bar).
-		// PanelTopBar drawn by DrawTopBar itself (no chrome). All workspace
-		// leaves get normal chrome via tree walk - Phase 18.C tree layout
-		// means we no longer iterate a fixed list of PanelIDs.
+		// Chrome drawn last so it overlays content (incl. marquee strokes
+		// that bleed onto title bars). PanelTopBar draws its own chrome.
 		panelMgr.Workspace.WalkLeaves(func(l *ui.LayoutNode) {
 			ui.DrawChrome(ui.Panel{ID: l.Panel, Bounds: l.Bounds, Title: l.Title}, hudFont, 16)
 		})
 
-		// Phase 18.C corner-grab handles + active split preview line.
 		ui.DrawCornerHandles(panelMgr, cursor)
 		if panelMgr.IsCornerDragging() {
 			ui.DrawCornerDragPreview(panelMgr, cursor)
 		}
 
-		// Chevron popup menu (Phase 18.C). Drawn after chrome so the menu
-		// sits over title bars.
 		chevronMenu.Draw(hudFont, cursor)
 
-		// Phase 18 floating panels (formation editor + future dialogs).
-		// Drawn after chevron menu so floaters sit above it; rendered
-		// before pie menu so RMB pie still wins as top overlay.
 		floating.DrawAll(hudFont, cursor, rl.IsMouseButtonPressed(rl.MouseButtonLeft))
-		// Switch-content popup is drawn last so it sits over every
-		// floater's chrome.
 		floating.DrawSwitchMenu(hudFont, cursor)
 
-		// Phase 17.6 M17.6.4: context menu (RMB-hold-on-building popup).
-		// Drawn after chrome + switch menu so it sits above every panel.
-		// Pie menu (legacy) is no longer in the RMB flow but kept in
-		// ui/pie_menu.go for future radial revivals.
 		ctxMenu.Draw(hudFont, cursor)
 
-		// HUD hotkey hints moved into expanded profiler HUD (toggle with P).
-		// Phase 10: drawing them over the panel chrome on every frame conflicts
-		// with each panel's title bar; they're discoverable on demand instead.
-
-		// Profiler HUD - collapsed always, expanded behind P toggle.
 		const heapInterval = time.Second
 		if app.Prof.HeapStale(app.Elapsed(), heapInterval) {
 			var ms runtime.MemStats
@@ -2715,21 +2373,17 @@ func main() {
 	}
 }
 
-// containsVehicle reports whether any unit in `units` is non-infantry.
-// Placeholder until Phase 19 lands the Vehicle component — currently
-// always returns false (every unit on the field is infantry). When
-// vehicles ship, swap the body for a real Vehicle-map.Has loop.
+// containsVehicle is a placeholder — always false until the Vehicle
+// component ships. Swap the body for a real Vehicle-map.Has loop then.
 func containsVehicle(units []ecs.Entity, world *ecs.World) bool {
 	_ = world
 	_ = units
 	return false
 }
 
-// applyPreservedSlots snapshots each rostered member's pre-merge world
-// position into FormationCustomSlots, expressed in north-relative local
-// frame (X = world +X, Y = world +Z), then sets OrientNorth so the layout
-// doesn't rotate with motion. Slot 0 (commander) is the anchor: all other
-// slots are offsets from the commander's snapshot position.
+// applyPreservedSlots snapshots each rostered member's pre-merge position
+// into FormationCustomSlots (north-relative: X = world +X, Y = world +Z),
+// then sets OrientNorth. Slot 0 (commander) is the anchor.
 func applyPreservedSlots(
 	squad ecs.Entity,
 	roster *components.CommandRoster,
@@ -2752,9 +2406,6 @@ func applyPreservedSlots(
 		if !ok {
 			continue
 		}
-		// WorldPos.Sub returns a world-space rl.Vector3 from `other` to `p`
-		// (chunk-aware), so this is already the per-member offset from
-		// the commander in metres.
 		diff := snap.Sub(center)
 		cs.Slots[i] = rl.Vector2{X: diff.X, Y: diff.Z}
 	}
@@ -2770,8 +2421,7 @@ func applyPreservedSlots(
 	}
 }
 
-// chevronLeafAt returns the workspace leaf whose chevron button sits under
-// the cursor, or nil. Walks the tree and tests each leaf's chevron rect.
+// chevronLeafAt returns the workspace leaf whose chevron button is under the cursor.
 func chevronLeafAt(panelMgr *ui.PanelManager, cursor rl.Vector2) *ui.LayoutNode {
 	if panelMgr == nil || panelMgr.Workspace == nil {
 		return nil
@@ -2790,12 +2440,8 @@ func chevronLeafAt(panelMgr *ui.PanelManager, cursor rl.Vector2) *ui.LayoutNode 
 	return hit
 }
 
-// handleMenuItem dispatches a chevron-menu selection: switch the leaf to
-// a different widget (swapping with the existing host if it's already in
-// the tree), merge the leaf into its sibling (close pane), or detach the
-// widget into a floating panel via the supplied floatSpawn callback (the
-// callback owns the FloatingState + per-widget render closures since
-// those live in main's scope).
+// handleMenuItem dispatches a chevron-menu selection: switch widget, close
+// (merge with sibling), or detach into a floating panel via floatSpawn.
 func handleMenuItem(panelMgr *ui.PanelManager, menu *ui.ChevronMenu, it ui.MenuItem,
 	floatSpawn func(id ui.PanelID, title string, bounds rl.Rectangle)) {
 	leaf := menu.Leaf
@@ -2807,8 +2453,8 @@ func handleMenuItem(panelMgr *ui.PanelManager, menu *ui.ChevronMenu, it ui.MenuI
 		if it.Target == leaf.Panel {
 			return
 		}
-		// If the target widget is already shown elsewhere, swap contents
-		// so each PanelID appears at most once.
+		// If the target widget is already shown, swap contents so each
+		// PanelID appears at most once.
 		if other := panelMgr.Workspace.FindLeaf(it.Target); other != nil {
 			ui.SwapPanels(leaf, other)
 		} else {
@@ -2828,7 +2474,7 @@ func handleMenuItem(panelMgr *ui.PanelManager, menu *ui.ChevronMenu, it ui.MenuI
 		if leaf.Parent == nil || floatSpawn == nil {
 			return
 		}
-		// Snapshot leaf state before we tear it out of the tree.
+		// Snapshot leaf state before tearing it out of the tree.
 		id := leaf.Panel
 		title := leaf.Title
 		bounds := leaf.Bounds
@@ -2842,9 +2488,8 @@ func handleMenuItem(panelMgr *ui.PanelManager, menu *ui.ChevronMenu, it ui.MenuI
 	panelMgr.Recompute(int32(rl.GetScreenWidth()), int32(rl.GetScreenHeight()))
 }
 
-// nextTimeScale advances the speed multiplier through 1 -> 2 -> 4 -> 8 -> 1
-// (step=+1) or backwards (step=-1). When currently paused, advancing forward
-// jumps to 1x; advancing back jumps to 8x. Used by the +/- hotkey.
+// nextTimeScale cycles 1 -> 2 -> 4 -> 8 -> 1 (step=+1) / reverse (step=-1).
+// Paused → step=+1 jumps to 1x, step=-1 to 8x.
 func nextTimeScale(cur float32, step int) float32 {
 	stops := [...]float32{1, 2, 4, 8}
 	if cur <= 0 {
@@ -2864,10 +2509,9 @@ func nextTimeScale(cur float32, step int) float32 {
 	return stops[idx]
 }
 
-// buildTimelineData snapshots all squads + their order queues into a flat
-// structure for ui.DrawTimelinePanel. Phase 18 MVP: live orders only (head +
-// chain). Queued blocks stack right after the head's estimated end so the
-// timeline reads left-to-right even before resolver actually starts them.
+// buildTimelineData flattens all squads + their order queues for
+// ui.DrawTimelinePanel. Queued blocks stack right after the head's estimated
+// end so the timeline reads left-to-right.
 func buildTimelineData(
 	world *ecs.World,
 	squadFilter *ecs.Filter2[components.Squad, components.CommandRoster],
@@ -2945,9 +2589,6 @@ func buildTimelineData(
 }
 
 // estimateOrderDuration is a heuristic display-only duration per order kind.
-// MoveTo / Garrison / OccupyTrench mix travel time (dist / 5 m/s) with a
-// fixed action timer; pure timers (Defend / Patrol / Attack / Suppress) use
-// a flat block so the player still sees something on the timeline.
 func estimateOrderDuration(kind components.OrderKindCode, from, to components.WorldPos) float32 {
 	var moveTime float32
 	switch kind {

@@ -16,37 +16,31 @@ const ProfileWindow = 60
 // if exceeded so the panic fires once at startup, not silently mid-session.
 const MaxSystems = 64
 
-// profileFrame is one tick's worth of per-system timings plus the tick total.
-// Fixed-size array - no per-frame allocations.
 type profileFrame struct {
 	tickTotalNs int64
 	perSystemNs [MaxSystems]int64
 }
 
-// Profiler is a fixed-window rolling collector of per-tick timings. Reads
-// (medians) are O(ProfileWindow * log) - microseconds per HUD draw.
 type Profiler struct {
 	samples [ProfileWindow]profileFrame
-	head    int  // index to write the NEXT frame
-	full    bool // true once head wrapped at least once
+	head    int
+	full    bool
 
 	systemNames [MaxSystems]string
 	systemCount int
 
-	// Scratch buffer reused by Median* so HUD draws don't allocate.
+	// scratch is reused by Median* so HUD draws don't allocate.
 	scratch [ProfileWindow]int64
 
-	// Last heap value, refreshed by ReadHeapEvery. Bytes.
 	lastHeapBytes  uint64
 	lastHeapUpdate time.Duration
 
-	// Last entity count, refreshed by ReadEntityCountEvery.
 	lastEntityUsed   int
 	lastEntityUpdate time.Duration
 }
 
-// RegisterSystem assigns a stable index to a system name. Called once per
-// system by App.AddSystem. Panics on overflow so the build fails loud.
+// RegisterSystem assigns a stable index to a system name. Panics on overflow
+// so the build fails loud rather than silently mid-session.
 func (p *Profiler) RegisterSystem(name string) int {
 	if p.systemCount >= MaxSystems {
 		panic(fmt.Sprintf("profiler: more than %d systems registered (raise MaxSystems)", MaxSystems))
@@ -66,7 +60,6 @@ func (p *Profiler) SystemName(idx int) string {
 	return p.systemNames[idx]
 }
 
-// BeginTick zeroes the slot the next RecordSystem calls will accumulate into.
 func (p *Profiler) BeginTick() {
 	f := &p.samples[p.head]
 	f.tickTotalNs = 0
@@ -75,9 +68,9 @@ func (p *Profiler) BeginTick() {
 	}
 }
 
-// RecordSystem accumulates a duration into the current frame's slot for
-// sysIdx. A system may be called up to three times per tick (one per LOD
-// tier); they all sum into the same slot.
+// RecordSystem accumulates into the current frame's slot. A system may be
+// called up to three times per tick (one per LOD tier); they all sum into
+// the same slot.
 func (p *Profiler) RecordSystem(sysIdx int, d time.Duration) {
 	if sysIdx < 0 || sysIdx >= MaxSystems {
 		return
@@ -85,7 +78,6 @@ func (p *Profiler) RecordSystem(sysIdx int, d time.Duration) {
 	p.samples[p.head].perSystemNs[sysIdx] += int64(d)
 }
 
-// EndTick stamps the total tick duration and advances the ring head.
 func (p *Profiler) EndTick(tickTotal time.Duration) {
 	p.samples[p.head].tickTotalNs = int64(tickTotal)
 	p.head++
@@ -102,7 +94,6 @@ func (p *Profiler) sampleCount() int {
 	return p.head
 }
 
-// MedianTick returns the median total-tick duration over the current window.
 func (p *Profiler) MedianTick() time.Duration {
 	n := p.sampleCount()
 	if n == 0 {
@@ -114,7 +105,6 @@ func (p *Profiler) MedianTick() time.Duration {
 	return time.Duration(medianInPlace(p.scratch[:n]))
 }
 
-// MedianSystem returns the median tick duration for sysIdx over the window.
 func (p *Profiler) MedianSystem(sysIdx int) time.Duration {
 	if sysIdx < 0 || sysIdx >= p.systemCount {
 		return 0
@@ -129,7 +119,7 @@ func (p *Profiler) MedianSystem(sysIdx int) time.Duration {
 	return time.Duration(medianInPlace(p.scratch[:n]))
 }
 
-// medianInPlace sorts buf and returns the middle element. buf is clobbered.
+// medianInPlace sorts buf in place and returns the middle element.
 func medianInPlace(buf []int64) int64 {
 	sort.Slice(buf, func(i, j int) bool { return buf[i] < buf[j] })
 	return buf[len(buf)/2]
@@ -142,8 +132,6 @@ func (p *Profiler) SetHeap(heapBytes uint64, now time.Duration) {
 
 func (p *Profiler) HeapBytes() uint64 { return p.lastHeapBytes }
 
-// HeapStale reports whether enough time has passed since the last SetHeap
-// that the caller should refresh.
 func (p *Profiler) HeapStale(now, interval time.Duration) bool {
 	return now-p.lastHeapUpdate >= interval
 }
@@ -159,7 +147,6 @@ func (p *Profiler) EntityCountStale(now, interval time.Duration) bool {
 	return now-p.lastEntityUpdate >= interval
 }
 
-// SystemMedian is a sortable (name, median) pair for HUD presentation.
 type SystemMedian struct {
 	Name   string
 	Median time.Duration
@@ -176,7 +163,6 @@ func (p *Profiler) SystemMediansSorted() []SystemMedian {
 	return out
 }
 
-// PrintSnapshot writes a copy-pasteable two-column report to stdout.
 func (p *Profiler) PrintSnapshot() {
 	var sb strings.Builder
 	sb.WriteString("\n─── Profiler snapshot ───\n")

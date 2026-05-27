@@ -36,23 +36,14 @@ const (
 	DirtySuppressionThreshold
 )
 
-// BehaviorRulesEdit carries the dirty mask for one squad's BehaviorRules.
-// Scaffold for Phase 15.C - the chip click checks each bit before
-// overwriting that field; the player-edit handler in
-// drawBehaviorSection flips the bit. Detailed UX (reset chip, visual
-// dirty indicators) lands in a follow-up.
 type BehaviorRulesEdit struct {
 	DirtyMask BehaviorRulesField
 }
 
-// AutonomySpec is one row in the per-code spec table. Mirrors DoctrineSpec
-// shape but the Inspector chip writes only the Behavior field - Autonomy
-// is the AI-freedom dial, Doctrine is the macro stance.
 type AutonomySpec struct {
 	Behavior BehaviorRules
 }
 
-// AutonomySpecs - Phase 15 C-P1 initial values. None stays zero.
 var AutonomySpecs = [5]AutonomySpec{
 	AutonomyNone: {},
 	AutonomyStrict: {

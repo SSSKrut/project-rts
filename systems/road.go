@@ -10,32 +10,22 @@ import (
 	"rts-go/core"
 )
 
-// roadPropSpacing is the per-chunk spawn step along an edge. Matches the
-// PrimitivePlane meta length so consecutive surface plates tile end-to-end.
+// Per-chunk spawn step along an edge; matches PrimitivePlane meta length so
+// consecutive surface plates tile end-to-end.
 const roadPropSpacing float32 = 4.0
 
-// roadSurfaceYOffset lifts road-surface props slightly above the flattened
-// heightmap to avoid z-fighting. Bridges sit higher (above the river cut).
+// Lift road-surface props above the flattened heightmap to avoid z-fighting;
+// bridges sit higher (above the river cut).
 const roadSurfaceYOffset float32 = 0.05
 const bridgeYOffset float32 = 1.5
 
 // junctionYOffset stacks junction plates atop surface plates at the same node.
 const junctionYOffset float32 = 0.06
 
-// RoadSystem runs two passes per tick over chunks that need road work:
-//
-//  1. Flatten pass - for chunks with Heightmap, no Modified, no RoadProcessed:
-//     blend heightmap toward the road profile for every non-bridge edge that
-//     intersects the chunk. Marks RoadProcessed.
-//
-//  2. Spawn pass - for chunks with Heightmap, no RoadPropsSpawned: spawn
-//     road-surface, bridge and junction props. Independent of Modified -
-//     player-edited chunks keep their road visual even though the heightmap
-//     flatten was skipped (M4.5).
-//
-// Both passes consume the same RoadGraph resource. Edges are processed
-// deterministically; eviction + respawn yields the same flatten and the same
-// props.
+// RoadSystem runs two passes per tick: (1) flatten heightmap for non-bridge
+// edges (gated by Without[Modified] + Without[RoadProcessed]); (2) spawn
+// road / bridge / junction props (gated by Without[RoadPropsSpawned] only —
+// player-edited chunks keep their road visual).
 type RoadSystem struct {
 	flattenFilter       *ecs.Filter3[components.ChunkCoord, components.Heightmap, components.WorldPos]
 	spawnFilter         *ecs.Filter3[components.ChunkCoord, components.Heightmap, components.WorldPos]
@@ -50,14 +40,13 @@ type RoadSystem struct {
 }
 
 func (sys *RoadSystem) InitUI(w *ecs.World) {
-	// Flatten gate: skip Modified (player edit wins) and RoadProcessed (already done).
 	sys.flattenFilter = ecs.NewFilter3[components.ChunkCoord, components.Heightmap, components.WorldPos](w).
 		Without(
 			ecs.C[components.Modified](),
 			ecs.C[components.RoadProcessed](),
 		)
-	// Spawn gate: only RoadPropsSpawned. Modified is irrelevant - props live
-	// in entity-space, not on the heightmap.
+	// Modified excluded only from flatten — props live in entity-space, not
+	// on the heightmap.
 	sys.spawnFilter = ecs.NewFilter3[components.ChunkCoord, components.Heightmap, components.WorldPos](w).
 		Without(ecs.C[components.RoadPropsSpawned]())
 	sys.graphRes = ecs.NewResource[components.RoadGraph](w)
@@ -107,8 +96,8 @@ func (sys RoadSystem) Update(ctx core.UpdateContext) {
 		return
 	}
 
-	// Pre-compute per-edge geometry + per-node ground height. Cheap and reused
-	// across every chunk this tick.
+	// Per-edge geometry + per-node ground height; reused across every chunk
+	// this tick.
 	nodeY := make([]float32, len(graph.Nodes))
 	for i := range graph.Nodes {
 		wx, wz := worldXZ(graph.Nodes[i].Pos)
@@ -127,8 +116,6 @@ func (sys RoadSystem) Update(ctx core.UpdateContext) {
 		if minZ > maxZ {
 			minZ, maxZ = maxZ, minZ
 		}
-		// Inflate by Width so a chunk whose centre line is just outside still
-		// catches the strip clip. Same trick RiverSystem uses.
 		w := e.Width
 		segLen := float32(math.Sqrt(float64((bx-ax)*(bx-ax) + (bz-az)*(bz-az))))
 		edges[i] = edgeInfo{
@@ -140,7 +127,7 @@ func (sys RoadSystem) Update(ctx core.UpdateContext) {
 		}
 	}
 
-	// Per-node, find max width of incident edges - used to size junction props.
+	// Max width of incident edges per node — sizes junction props.
 	nodeMaxW := make([]float32, len(graph.Nodes))
 	for i := range graph.Edges {
 		e := &graph.Edges[i]
@@ -152,7 +139,6 @@ func (sys RoadSystem) Update(ctx core.UpdateContext) {
 		}
 	}
 
-	// -- Pass 1: heightmap flatten --
 	type processedEnt struct {
 		id ecs.Entity
 	}
@@ -191,7 +177,6 @@ func (sys RoadSystem) Update(ctx core.UpdateContext) {
 		}
 	}
 
-	// -- Pass 2: spawn road / bridge / junction props --
 	var pendingProps []roadPendingProp
 	var spawned []processedEnt
 
@@ -250,9 +235,9 @@ func (sys RoadSystem) Update(ctx core.UpdateContext) {
 			}
 		}
 
-		// Junction props: one per node whose Pos.Chunk == ccVal. Avoids
-		// duplication when a node sits on a chunk boundary (Pos.Chunk is the
-		// floor-rounded owner - exactly one chunk wins).
+		// One junction per node whose Pos.Chunk == ccVal — avoids duplication
+		// when a node sits on a chunk boundary (Pos.Chunk = floor-rounded
+		// owner, exactly one chunk wins).
 		for ni := range graph.Nodes {
 			n := &graph.Nodes[ni]
 			if n.Pos.Chunk != ccVal {
@@ -308,9 +293,9 @@ func propTypeForKind(k components.RoadKind) components.PropType {
 	return components.PropRoadLocal
 }
 
-// segmentBBoxClipXZ - Liang-Barsky clip of segment (ax,az)->(bx,bz) against
-// axis-aligned XZ rectangle [minX, maxX] x [minZ, maxZ]. Returns the t-range
-// of the segment portion inside the rectangle, or ok=false if disjoint.
+// segmentBBoxClipXZ does Liang-Barsky clip of segment (ax,az)→(bx,bz)
+// against rectangle [minX, maxX]×[minZ, maxZ]. Returns the inside t-range,
+// or ok=false if disjoint.
 func segmentBBoxClipXZ(ax, az, bx, bz, minX, minZ, maxX, maxZ float32) (float32, float32, bool) {
 	dx := bx - ax
 	dz := bz - az

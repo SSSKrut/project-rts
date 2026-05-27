@@ -1,12 +1,9 @@
-// Package props is the sequence / composite / single generator output for
-// world-decoration props (vegetation, fences, lamp posts, sandbags, debris).
-// Generators in this package and its siblings (gen/fences, gen/lamps,
-// gen/vegetation) all return []PropPlacement so a single spawner can apply
-// the result regardless of the rule that produced it.
-//
-// Buildings stay in gen/buildings because their spec (Walls / Floors /
-// Stairs / Levels / Transitions) is structurally richer than a flat
-// placement list - they keep BuildingPlan as their output shape.
+// Package props is the canonical generator output for world-decoration
+// props (vegetation, fences, lamp posts, sandbags, debris). Generators here
+// and in sibling packages all return []PropPlacement so a single spawner
+// can apply the result regardless of the rule that produced it. Buildings
+// stay in gen/buildings — their spec is structurally richer than a flat
+// placement list.
 package props
 
 import (
@@ -15,14 +12,11 @@ import (
 	"rts-go/components"
 )
 
-// PropPlacement is the canonical generator output for a single decoration
-// prop. The caller spawns one entity per placement in the order returned
-// (some generators rely on ordering for chain visuals like fence posts).
-//
-// Pos is world-space (chunk + local). The spawner is responsible for
-// converting to the host chunk's local frame before attaching WorldPos.
-// Scale is a multiplicative factor on the registry's default size; 1.0 = use
-// the registry meta verbatim.
+// PropPlacement is the per-prop generator output. Caller spawns one entity
+// per placement in the returned order (some generators rely on ordering for
+// chain visuals like fence posts). Pos is world-space (chunk + local); the
+// spawner converts to the host chunk's local frame before attaching
+// WorldPos. Scale = 1.0 means "use registry meta verbatim".
 type PropPlacement struct {
 	Type  components.PropType
 	Pos   components.WorldPos
@@ -31,12 +25,9 @@ type PropPlacement struct {
 }
 
 // AlongPolyline emits one PropPlacement per `spacing` metres along a chain
-// of waypoints. Each placement faces along the local segment tangent. Used
-// by fence / lamp / sandbag-line generators - the same primitive walks any
-// polyline (road centre, building perimeter, hand-drawn path).
-//
-// Returns nil for < 2 waypoints or non-positive spacing. The trailing partial
-// segment is dropped (caller adds the endpoint manually if needed).
+// of waypoints. Each placement faces along the local segment tangent.
+// Returns nil for < 2 waypoints or non-positive spacing. Trailing partial
+// segment is dropped — caller adds the endpoint manually if needed.
 func AlongPolyline(points []components.WorldPos, spacing float32, kind components.PropType, scale float32) []PropPlacement {
 	if len(points) < 2 || spacing <= 0 {
 		return nil
@@ -71,20 +62,19 @@ func AlongPolyline(points []components.WorldPos, spacing float32, kind component
 	return out
 }
 
-// Composite copies a fixed offset list into PropPlacements anchored at
-// `centre`. Used for single "structures" made of multiple props (lamp =
-// pole + bulb + base; sandbag stack = three cubes in a triangle).
+// CompositeOffset is one part of a Composite. DX/DZ are metres east/north of
+// the composite centre; Yaw stacks on top of centreYaw.
 type CompositeOffset struct {
 	Type  components.PropType
-	DX    float32 // metres east of centre
-	DZ    float32 // metres north of centre
-	Yaw   float32 // additional yaw on top of centre yaw
+	DX    float32
+	DZ    float32
+	Yaw   float32
 	Scale float32
 }
 
-// Composite returns one PropPlacement per `parts` entry, rotated/anchored
-// around `centre`. `centreYaw` rotates the whole arrangement; each part's
-// own Yaw stacks on top.
+// Composite emits one PropPlacement per part, rotated/anchored around
+// `centre`. Used for single "structures" made of multiple props (lamp =
+// pole + bulb + base; sandbag stack = three cubes in a triangle).
 func Composite(centre components.WorldPos, centreYaw float32, parts []CompositeOffset) []PropPlacement {
 	if len(parts) == 0 {
 		return nil
@@ -92,7 +82,6 @@ func Composite(centre components.WorldPos, centreYaw float32, parts []CompositeO
 	cs, sn := cosSin(centreYaw)
 	out := make([]PropPlacement, 0, len(parts))
 	for _, p := range parts {
-		// Rotate local offset by centreYaw.
 		dx := p.DX*cs + p.DZ*sn
 		dz := -p.DX*sn + p.DZ*cs
 		scale := p.Scale

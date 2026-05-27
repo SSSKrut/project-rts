@@ -8,15 +8,13 @@ import (
 	"rts-go/components"
 )
 
-// GenerateHouse emits a BuildingPlan for a small rectangular house with
-// 1 or 2 storeys. Deterministic from `seed`.
+// GenerateHouse emits a BuildingPlan for a small rectangular house, 1..5
+// storeys, deterministic from `seed`.
 //
-// `pos` carries the building footprint centre in world-space: Pos.Chunk
-// + Pos.Local.XZ. Pos.Local.Y must already hold the surface ground height
-// for that footprint - the caller (main.go) computes it before invoking
-// the generator. For BuildingBunker the floor sits BunkerDepth below
-// Pos.Local.Y; the entrance stair connects the surface to the sunken
-// level.
+// `pos.Local.Y` must already hold the surface ground height for the
+// footprint — the caller computes it before invoking the generator. For
+// BuildingBunker the floor sits BunkerDepth below `pos.Local.Y` and the
+// entrance stair connects the surface to the sunken level.
 func GenerateHouse(seed uint64, p HouseParams, pos components.WorldPos, kind components.BuildingKind) *components.BuildingPlan {
 	if p.Stories == 0 {
 		p.Stories = 1
@@ -69,9 +67,8 @@ func GenerateHouse(seed uint64, p HouseParams, pos components.WorldPos, kind com
 		levelRefs[s] = ref
 	}
 
-	// Phase 17 M17.D.3: multi-entrance support. DoorSides list wins; falling
-	// back to the legacy single DoorSide field (with seed pick for 4+) when
-	// the slice is empty.
+	// DoorSides list wins; fall back to legacy single DoorSide (seed-picked
+	// for 4+) when empty.
 	doorSet := uint8(0)
 	if len(p.DoorSides) > 0 {
 		for _, side := range p.DoorSides {
@@ -112,10 +109,9 @@ func GenerateHouse(seed uint64, p HouseParams, pos components.WorldPos, kind com
 		b.AddFloor(rl.Vector3{X: cx, Y: baseY, Z: cz}, p.SizeX, p.SizeZ, s, levelRefs[s])
 	}
 
-	// Stair placement: straight ladder for 2-storey buildings, switchback
-	// cascade for 3+. Cascade footprint = StairsLength x 2*StairsWidth, which
-	// fits comfortably in the SW corner of an 8x8 plate. Tucked at minX+inset
-	// so the centre of the floor stays clear.
+	// Straight ladder for 2 storeys, switchback cascade for 3+. Cascade
+	// footprint = StairsLength x 2*StairsWidth, fits in the SW corner of an
+	// 8x8 plate. Tucked at minX+inset so the centre stays clear.
 	const inset float32 = 0.5
 	useCascade := p.Stories >= 3
 	for s := uint8(0); s+1 < p.Stories; s++ {
@@ -133,13 +129,11 @@ func GenerateHouse(seed uint64, p HouseParams, pos components.WorldPos, kind com
 		}
 	}
 
-	// Phase 17 M17.D.3: optional interior partition. Splits each storey with
-	// a single N-S wall biased by seed, with a 1.2 m doorway in the centre.
-	// Minimal pass - no Room metadata is emitted, see plan note.
+	// Optional interior partition: single N-S wall biased by seed with a
+	// centred doorway. No Room metadata emitted yet.
 	if p.Interior {
 		for s := uint8(0); s < p.Stories; s++ {
 			baseY := floorY + float32(s)*components.FloorHeight
-			// Partition runs N-S at ~1/3 across the X axis. Doorway centred.
 			partX := minX + p.SizeX*0.4
 			from := rl.Vector3{X: partX, Y: baseY, Z: minZ + 0.1}
 			to := rl.Vector3{X: partX, Y: baseY, Z: maxZ - 0.1}
@@ -154,8 +148,8 @@ func GenerateHouse(seed uint64, p HouseParams, pos components.WorldPos, kind com
 		end := rl.Vector3{X: local.X, Y: local.Y + components.BunkerDepth, Z: local.Z + components.StairsLength}
 		mid := rl.Vector3{X: local.X, Y: 0.5 * (local.Y + end.Y), Z: 0.5 * (local.Z + end.Z)}
 		// Both anchors point at ground-floor level: the exterior surface is
-		// not represented as a Level in Phase 16.5 (it's open ground, not a
-		// building volume). Phase 16.B may introduce an Exterior pseudo-level.
+		// not represented as a Level (it's open ground, not a building
+		// volume).
 		b.AddCustomStair(local, components.Stairs{
 			FromFloor: 0,
 			ToFloor:   1,
@@ -172,9 +166,8 @@ func GenerateHouse(seed uint64, p HouseParams, pos components.WorldPos, kind com
 	return b.Plan()
 }
 
-// wallEndpoints returns "from", "to" chunk-local endpoints, and the outward
-// XZ normal for one of the four rectangular sides. Side numbering matches
-// the legacy generateBuildingLayout: 0=south, 1=east, 2=north, 3=west.
+// wallEndpoints returns from/to chunk-local endpoints + outward XZ normal
+// for one of the four sides. Side numbering: 0=south, 1=east, 2=north, 3=west.
 func wallEndpoints(minX, minZ, maxX, maxZ, y float32, side uint8) (rl.Vector3, rl.Vector3, rl.Vector3) {
 	switch side {
 	case 0:

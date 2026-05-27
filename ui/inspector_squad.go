@@ -43,8 +43,7 @@ func drawInspectorSquad(ctx InspectorCtx, squad ecs.Entity, x, y, width int32) i
 		drawText(ctx.Font, macroPathLabel(mp),
 			x, y, inspectorFontSize, inspectorText)
 		y += inspectorRowH
-		// Phase 15 M15.A.5 - surface the stragglers gate. Only show when
-		// active so the row stays quiet during normal movement.
+		// Only show when active so the row stays quiet during normal movement.
 		if mp.WaitingForStragglers {
 			drawText(ctx.Font, fmt.Sprintf("Waiting for stragglers (%d/%d)",
 				mp.StragglerCaughtUp, mp.StragglerTotal),
@@ -52,9 +51,8 @@ func drawInspectorSquad(ctx InspectorCtx, squad ecs.Entity, x, y, width int32) i
 			y += inspectorRowH
 		}
 	}
-	// Phase 15 M15.C.1: squad tactical state. Idle keeps the row out so the
-	// inspector stays quiet by default; Engaged / Scrambling get a coloured
-	// row so the player notices reactive behaviour.
+	// Idle hides the row; Engaged / Scrambling get a coloured row so the
+	// player notices reactive behaviour.
 	if ctx.SquadStateMap != nil {
 		if state := ctx.SquadStateMap.Get(squad); state != nil {
 			if label := squadStateLabel(state.Code); label != "" {
@@ -70,7 +68,6 @@ func drawInspectorSquad(ctx InspectorCtx, squad ecs.Entity, x, y, width int32) i
 	}
 	y += inspectorRowH / 2
 
-	// Order section. Head + up to 2 queued.
 	y = drawInspectorOrderSection(ctx, squad, x, y, width)
 	y += inspectorRowH / 2
 
@@ -83,8 +80,7 @@ func drawInspectorSquad(ctx InspectorCtx, squad ecs.Entity, x, y, width int32) i
 			continue
 		}
 		role := roleOf(ctx, mem)
-		// Phase 12: row background tint by role. Selection / hover override the
-		// role tint so the focus state stays unambiguous.
+		// Selection / hover override the role tint so focus stays unambiguous.
 		bg := components.RoleColor(role)
 		bg.A = 90
 		if isSelected(ctx.Selected, mem) {
@@ -95,8 +91,8 @@ func drawInspectorSquad(ctx InspectorCtx, squad ecs.Entity, x, y, width int32) i
 		}
 		rl.DrawRectangle(x-2, y-2, width, inspectorRowH, bg)
 
-		// ShortLabel chip on the left so the role reads at a glance even when
-		// the row tint is dimmed by selection state.
+		// ShortLabel chip stays readable when the row tint is dimmed by
+		// selection state.
 		chip := components.RoleColor(role)
 		rl.DrawRectangle(x, y+2, 22, inspectorRowH-4, chip)
 		rl.DrawRectangleLines(x, y+2, 22, inspectorRowH-4, rl.Color{R: 20, G: 20, B: 20, A: 200})
@@ -116,9 +112,6 @@ func drawInspectorSquad(ctx InspectorCtx, squad ecs.Entity, x, y, width int32) i
 		y += inspectorRowH
 	}
 
-	// Phase 13 M13.6: standing-rule quick-bars under the roster. Guard on the
-	// new maps so a caller that hasn't wired them (older test) still gets the
-	// Phase 12 layout without quick-bars.
 	if ctx.MovementProfileMap != nil && ctx.EngagementRulesMap != nil && ctx.BehaviorRulesMap != nil {
 		y += inspectorRowH / 2
 		y = drawStandingRulesSections(ctx, squad, x, y, width)
@@ -153,8 +146,7 @@ func macroPathLabel(mp *components.MacroPath) string {
 	return fmt.Sprintf("Macro:     Moving (wp %d/%d)", mp.Head+1, mp.Count)
 }
 
-// squadStateLabel returns the user-facing name of the squad's tactical
-// posture. Idle returns "" so callers can skip rendering the row.
+// squadStateLabel returns "" for Idle so callers skip rendering the row.
 func squadStateLabel(c components.SquadStateCode) string {
 	switch c {
 	case components.SquadStateEngaged:

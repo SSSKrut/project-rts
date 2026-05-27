@@ -10,16 +10,11 @@ import (
 	"github.com/mlange-42/ark/ecs"
 )
 
-// OrbitInputEnabled is the per-frame gate for mouse-driven camera orbit.
-// Phase 10 main.go sets this to true only when the 3D panel is focused (or
-// nothing is focused), so MMB-drag / wheel inside the map / inspector / time
-// panels don't bleed into the 3D camera. Phase 17.6: orbit moved from RMB to
-// MMB so RMB can host order popups without drag-disambig with the camera.
-// Default true preserves pre-Phase-10 behaviour for any caller that forgets
-// to set it.
+// OrbitInputEnabled gates mouse-driven camera orbit per frame. main.go
+// sets true only when the 3D panel is focused so MMB-drag / wheel inside
+// UI panels doesn't bleed into the 3D camera.
 var OrbitInputEnabled = true
 
-// OrbitSystem updates camera position from OrbitController + mouse input.
 type OrbitSystem struct {
 	filter *ecs.Filter2[components.OrbitController, components.WorldPos]
 	posMap *ecs.Map[components.WorldPos]
@@ -86,7 +81,7 @@ func (sys OrbitSystem) Update(ctx core.UpdateContext) {
 			orbit.Radius = orbit.MaxRadius
 		}
 
-		// Spherical -> cartesian world-space offset from target.
+		// Spherical → cartesian offset from target.
 		cp := float32(math.Cos(float64(orbit.Pitch)))
 		sp := float32(math.Sin(float64(orbit.Pitch)))
 		sy := float32(math.Sin(float64(orbit.Yaw)))

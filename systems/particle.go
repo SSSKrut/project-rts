@@ -8,35 +8,25 @@ import (
 	"rts-go/core"
 )
 
-// ParticleSystem - Phase 14.5 M14.5.4. Manages the ECS-entity-backed
-// transient visual particles spawned by WeaponSystem (tracers, impacts,
-// muzzle flashes, smoke, dust, debris).
+// ParticleSystem manages ECS-entity-backed transient visual particles
+// (tracers, impacts, muzzle flashes, smoke, dust, debris).
 //
-// Pipeline shape:
+// Pipeline: (1) age each particle, integrate Vel + gravity, collect expired;
+// (2) soft-cap eviction by SpawnTime when count > ParticleSoftCap;
+// (3) RemoveEntity sweep. Serial — particle counts are low (<2000).
 //
-//  1. Update pass (serial - Phase 14.5 simple): walk Filter[Particle], age
-//     each particle, integrate Vel, apply per-kind gravity, collect expired
-//     into `removeBuf`. Serial because particle counts are low (<2000) and
-//     adding archetype removal to a parallel pass requires worker buffers
-//     for the same effect.
-//  2. Soft-cap eviction: if count > ParticleSoftCap, sort by SpawnTime and
-//     drop the oldest (count - ParticleSoftCap) entities. Phase 14.5 simple:
-//     full sort; Phase 16 may swap to a min-heap if counts grow.
-//  3. Cleanup pass: RemoveEntity for everything in removeBuf.
-//
-// Render path lives in render_world.go (drawParticles) and walks the same
-// filter set, dispatching by Kind. ParticleSystem doesn't touch raylib
-// drawing.
+// Render lives in render_world.go (drawParticles); ParticleSystem doesn't
+// touch raylib drawing.
 type ParticleSystem struct {
-	filter        *ecs.Filter3[components.Particle, components.WorldPos, components.ParticleVisual]
-	posMap        *ecs.Map[components.WorldPos]
-	visualMap     *ecs.Map[components.ParticleVisual]
-	velMap        *ecs.Map[components.ParticleVel]
-	endMap        *ecs.Map[components.ParticleEnd]
-	world         *ecs.World
-	removeBuf     []ecs.Entity
-	sortBuf       []particleAge
-	elapsed       float32
+	filter    *ecs.Filter3[components.Particle, components.WorldPos, components.ParticleVisual]
+	posMap    *ecs.Map[components.WorldPos]
+	visualMap *ecs.Map[components.ParticleVisual]
+	velMap    *ecs.Map[components.ParticleVel]
+	endMap    *ecs.Map[components.ParticleEnd]
+	world     *ecs.World
+	removeBuf []ecs.Entity
+	sortBuf   []particleAge
+	elapsed   float32
 }
 
 type particleAge struct {
@@ -44,8 +34,6 @@ type particleAge struct {
 	spawnTime float32
 }
 
-// NewParticleSystem wires the system. Filters / maps must be built post-
-// world creation (InitUI).
 func NewParticleSystem() *ParticleSystem {
 	return &ParticleSystem{
 		removeBuf: make([]ecs.Entity, 0, 64),
@@ -65,8 +53,6 @@ func (sys *ParticleSystem) InitUI(w *ecs.World) {
 func (ParticleSystem) Name() string { return "particle" }
 
 func (ParticleSystem) LODPolicy() core.LODPolicy {
-	// Active only. Particles in dormant range despawn immediately via TTL
-	// (no special handling - they just age out untouched).
 	return core.LODPolicy{
 		ActiveEvery:   0,
 		RelevantEvery: core.LODDisabled,
@@ -74,10 +60,7 @@ func (ParticleSystem) LODPolicy() core.LODPolicy {
 	}
 }
 
-// kindGravity gives the per-kind vertical acceleration (m/s^2). Positive Y is
-// up. Smoke rises gently; debris falls; dust settles slowly. Stationary
-// kinds (Tracer, Impact, MuzzleFlash) get zero - Velocity, if non-nil, is
-// preserved as-is.
+// kindGravity gives per-kind vertical acceleration (m/s², +Y up).
 var kindGravity = [...]float32{
 	components.ParticleTracer:      0,
 	components.ParticleImpact:      0,
@@ -107,7 +90,6 @@ func (sys *ParticleSystem) Update(ctx core.UpdateContext) {
 			sys.removeBuf = append(sys.removeBuf, ent)
 			continue
 		}
-		// Integrate velocity + gravity for moving kinds.
 		if vel := sys.velMap.Get(ent); vel != nil {
 			if int(vis.Kind) < len(kindGravity) {
 				vel.Vel.Y += kindGravity[vis.Kind] * dt
@@ -121,11 +103,8 @@ func (sys *ParticleSystem) Update(ctx core.UpdateContext) {
 		})
 	}
 
-	// Soft cap: if alive count beyond cap, evict the oldest first.
+	// Soft cap: evict the oldest when alive count exceeds the cap.
 	if overflow := len(sys.sortBuf) - components.ParticleSoftCap; overflow > 0 {
-		// Insertion sort is overkill for ~50 evictions when count ~ 2050,
-		// but the buffer is small enough that the cost is negligible.
-		// Use stable bubble for simplicity (n x overflow comparisons).
 		for i := 1; i < len(sys.sortBuf); i++ {
 			for j := i; j > 0 && sys.sortBuf[j-1].spawnTime > sys.sortBuf[j].spawnTime; j-- {
 				sys.sortBuf[j-1], sys.sortBuf[j] = sys.sortBuf[j], sys.sortBuf[j-1]
@@ -144,19 +123,16 @@ func (sys *ParticleSystem) Update(ctx core.UpdateContext) {
 }
 
 // SpawnParticleHandles bundles the maps a writer (WeaponSystem) needs to
-// spawn a particle entity in the serial post-pass. Built once via
-// `NewSpawnHandles` and reused.
+// spawn a particle entity in the serial post-pass.
 type SpawnParticleHandles struct {
-	world     *ecs.World
-	particle  *ecs.Map[components.Particle]
-	pos       *ecs.Map[components.WorldPos]
-	visual    *ecs.Map[components.ParticleVisual]
-	vel       *ecs.Map[components.ParticleVel]
-	end       *ecs.Map[components.ParticleEnd]
+	world    *ecs.World
+	particle *ecs.Map[components.Particle]
+	pos      *ecs.Map[components.WorldPos]
+	visual   *ecs.Map[components.ParticleVisual]
+	vel      *ecs.Map[components.ParticleVel]
+	end      *ecs.Map[components.ParticleEnd]
 }
 
-// NewSpawnHandles constructs handles for spawning particles. Call after
-// world creation.
 func NewSpawnHandles(w *ecs.World) *SpawnParticleHandles {
 	return &SpawnParticleHandles{
 		world:    w,
@@ -172,7 +148,7 @@ func NewSpawnHandles(w *ecs.World) *SpawnParticleHandles {
 func (h *SpawnParticleHandles) SpawnTracer(from, to rl.Vector3, color rl.Color, now, ttl float32) {
 	ent := h.world.NewEntity()
 	h.particle.Add(ent, &components.Particle{})
-	posCopy := components.WorldPos{Local: from} // chunk = 0; render uses absolute coords
+	posCopy := components.WorldPos{Local: from} // chunk=0; render uses absolute coords
 	h.pos.Add(ent, &posCopy)
 	h.visual.Add(ent, &components.ParticleVisual{
 		Kind: components.ParticleTracer, Color: color, Size: 0, SpawnTime: now, TTL: ttl,
@@ -180,7 +156,6 @@ func (h *SpawnParticleHandles) SpawnTracer(from, to rl.Vector3, color rl.Color, 
 	h.end.Add(ent, &components.ParticleEnd{To: to})
 }
 
-// SpawnImpact spawns a sphere-particle at `pos`.
 func (h *SpawnParticleHandles) SpawnImpact(pos rl.Vector3, color rl.Color, now, ttl float32) {
 	ent := h.world.NewEntity()
 	h.particle.Add(ent, &components.Particle{})
@@ -191,7 +166,6 @@ func (h *SpawnParticleHandles) SpawnImpact(pos rl.Vector3, color rl.Color, now, 
 	})
 }
 
-// SpawnMuzzleFlash - short-lived bright sphere at muzzle.
 func (h *SpawnParticleHandles) SpawnMuzzleFlash(pos rl.Vector3, color rl.Color, now float32) {
 	ent := h.world.NewEntity()
 	h.particle.Add(ent, &components.Particle{})
@@ -202,7 +176,6 @@ func (h *SpawnParticleHandles) SpawnMuzzleFlash(pos rl.Vector3, color rl.Color, 
 	})
 }
 
-// SpawnSmoke - slow-rising puff. Vel is upward (drifts via kindGravity).
 func (h *SpawnParticleHandles) SpawnSmoke(pos rl.Vector3, color rl.Color, now float32) {
 	ent := h.world.NewEntity()
 	h.particle.Add(ent, &components.Particle{})
@@ -214,7 +187,6 @@ func (h *SpawnParticleHandles) SpawnSmoke(pos rl.Vector3, color rl.Color, now fl
 	h.vel.Add(ent, &components.ParticleVel{Vel: rl.Vector3{X: 0, Y: 0.2, Z: 0}})
 }
 
-// SpawnDust - small downward-settling sphere on terrain impact.
 func (h *SpawnParticleHandles) SpawnDust(pos rl.Vector3, color rl.Color, vel rl.Vector3, now float32) {
 	ent := h.world.NewEntity()
 	h.particle.Add(ent, &components.Particle{})
@@ -226,7 +198,6 @@ func (h *SpawnParticleHandles) SpawnDust(pos rl.Vector3, color rl.Color, vel rl.
 	h.vel.Add(ent, &components.ParticleVel{Vel: vel})
 }
 
-// SpawnDebris - falling-shrapnel cube; gravity accelerates the velocity.
 func (h *SpawnParticleHandles) SpawnDebris(pos rl.Vector3, color rl.Color, vel rl.Vector3, now float32) {
 	ent := h.world.NewEntity()
 	h.particle.Add(ent, &components.Particle{})

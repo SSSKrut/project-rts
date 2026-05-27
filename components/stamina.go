@@ -4,9 +4,6 @@ package components
 // Pace > Walk and recovers it when Pace=Walk + Stance in {Stand, Crouch}.
 // At Current==0 the StaminaExhausted marker forces Walk regardless of the
 // squad's MovementProfile.Pace until Current rises past the regen threshold.
-//
-// MaxLevel is per-role (RoleService writes it via the per-role modifier:
-// MG / AT / Engineer / Demo / Radio at 0.7..0.85, others at 1.0).
 type Stamina struct {
 	Current     float32
 	MaxLevel    float32

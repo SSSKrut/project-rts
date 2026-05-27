@@ -1,7 +1,7 @@
 package components
 
 // Pace is a movement-tempo dial that multiplies the base stance-speed table.
-// Walk is the default; Sprint costs Stamina. See COMMAND-MODEL.md S4.
+// Walk is the default; Sprint costs Stamina.
 type Pace uint8
 
 const (
@@ -46,8 +46,8 @@ const (
 )
 
 // MovementProfile is the per-Squad standing rule covering all four movement
-// axes. Lives on the Squad entity; UnitMovementSystem reads it via SquadMember
-// back-pointer. Override per-order via OrderParamMovementProfile.
+// axes. UnitMovementSystem reads it via SquadMember back-pointer. Override
+// per-order via OrderParamMovementProfile.
 //
 // Stance is the resting posture to return to once any ActionStance from
 // ActionQueue completes.
@@ -58,8 +58,6 @@ type MovementProfile struct {
 	PathStyle PathStyle
 }
 
-// MovementPreset enumerates the built-in preset chips surfaced in the
-// Inspector quick-bar and cycled via the `[` / `]` hotkeys.
 type MovementPreset uint8
 
 const (
@@ -71,8 +69,6 @@ const (
 	PresetProneCrawl
 )
 
-// ApplyPreset returns the MovementProfile for a given preset. Mirrors the
-// GAMEDESIGN S5 / COMMAND-MODEL S4 standard preset list.
 func ApplyPreset(p MovementPreset) MovementProfile {
 	switch p {
 	case PresetCautious:

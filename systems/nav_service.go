@@ -10,20 +10,15 @@ import (
 	"rts-go/components"
 )
 
-// Phase 16.B.1.b debug: print first empty FindPath result and first
-// successful FindPath so we can tell empty-path bug from wrong-path bug.
+// Debug flags: print first empty FindPath result and first successful one
+// so we can distinguish empty-path bug from wrong-path bug.
 var navDebugReported bool
 var navOKReported bool
 var navSnapshotReported bool
 
-// NavService is the multi-graph A* pathfinder. Service object (not a System);
-// pre-built handles via NewNavService and reused across calls.
-//
-// Phase 7 widens the planner past per-chunk surface NavGrids: each Floor
-// entity also carries a LevelNavGrid, and surface<->floor / floor<->floor
-// transitions live in a TransitionRegistry resource. WorldPos->NavNode
-// resolution checks floor footprint membership first; in-grid neighbours +
-// registry edges are unified in one A* expansion.
+// NavService is the multi-graph A* pathfinder (not a System). Per-chunk
+// surface NavGrids and per-Level LevelNavGrids share one A* expansion via
+// the TransitionRegistry resource (door / stairs edges).
 type NavService struct {
 	indexRes      ecs.Resource[TerrainChunkIndex]
 	transitionRes ecs.Resource[components.TransitionRegistry]
@@ -48,33 +43,21 @@ func NewNavService(w *ecs.World) *NavService {
 	}
 }
 
-// NavOpts is the per-call planner config.
 type NavOpts struct {
-	Locomotion components.Locomotion
-	// AvoidOpenedDoors - Phase 12 stealth stub; ignored in Phase 7.
-	AvoidOpenedDoors bool
-	// PathStyle is the per-squad routing preference (PHASE-13.md P4). The
-	// modifier table is applied as a float multiplier on NavCell.Cost
-	// during A* expansion. Default Direct = x1.0 (no change).
+	Locomotion       components.Locomotion
+	AvoidOpenedDoors bool // stealth stub; ignored
+	// PathStyle scales NavCell.Cost via styleCellCost. Direct = ×1.0.
 	PathStyle components.PathStyle
 }
 
 // navMaxIter caps the number of cells A* will expand per call.
 const navMaxIter = 50000
 
-// navArrivalRadius - when walking the path returned by FindPath, the agent
-// can pop a waypoint whenever it gets within this many metres of it.
+// navArrivalRadius — agent pops a waypoint within this many metres.
 const navArrivalRadius float32 = 0.5
 
-// FindPath returns waypoints (cell centres) along a least-cost path from
-// `from` to `to`. Empty result = no path; nil = both endpoints fall in the
-// same cell. The multi-graph A* expansion picks up surface<->floor transitions
-// from the TransitionRegistry resource so a path through a doorway or up a
-// staircase just works.
-//
-// PHASE-13.md P4: opts.PathStyle scales NavCell.Cost via styleCellCost. Direct
-// is a no-op; RoadPrefer / RoadAvoid bias by NavOnRoad flag; CoverSeek biases
-// by NavCell.CoverDistance (baked in M13.4 SpatialBakeSystem Pass 2).
+// FindPath returns waypoints (cell centres) along a least-cost path. Empty
+// result = no path; nil = both endpoints in the same cell.
 func (s *NavService) FindPath(from, to components.WorldPos, opts NavOpts) []components.WorldPos {
 	idx := s.indexRes.Get()
 	if idx == nil {
@@ -83,16 +66,13 @@ func (s *NavService) FindPath(from, to components.WorldPos, opts NavOpts) []comp
 	registry := s.transitionRes.Get()
 
 	floors := s.snapshotLevels()
-	// Phase 16.B.1.b diagnostic: spot-check the door surface cell of House #0
-	// (43, 24) in chunk(-1,-1). If it's cost=0 or NavInBuilding-flagged, the
-	// transition edge is reachable in the registry but not via gridNeighbours.
+	// Diagnostic: spot-check the door surface cell of House #0 (43, 24) in
+	// chunk(-1,-1).
 	if !navSnapshotReported {
 		doorSurf := components.NavNode{Kind: components.NodeSurface,
 			Chunk: components.ChunkCoord{X: -1, Z: -1}, I: 43, J: 24}
 		doorCell, doorOK := s.cellAt(doorSurf, idx, floors)
 		fmt.Printf("[nav] doorSurfCell(43,24): ok=%v cost=%d flags=%d\n", doorOK, doorCell.Cost, doorCell.Flags)
-		// Same for (43, 23) and (43, 25) - adjacent cells; if (43, 24) is OK
-		// but unreachable, neighbour state matters.
 		for j := int16(19); j <= 25; j++ {
 			n := components.NavNode{Kind: components.NodeSurface,
 				Chunk: components.ChunkCoord{X: -1, Z: -1}, I: 43, J: j}
@@ -167,7 +147,6 @@ func (s *NavService) FindPath(from, to components.WorldPos, opts NavOpts) []comp
 		closed[cur.node] = true
 		curG := states[cur.node].g
 
-		// In-grid 8 neighbours.
 		neighbours := s.gridNeighbours(cur.node)
 		for _, n := range neighbours {
 			if closed[n.node] {
@@ -192,7 +171,6 @@ func (s *NavService) FindPath(from, to components.WorldPos, opts NavOpts) []comp
 			})
 		}
 
-		// Cross-graph transitions.
 		if registry != nil {
 			for _, edge := range registry.Out[cur.node] {
 				if edge.Cost == 0 {
@@ -246,7 +224,7 @@ func (s *NavService) FindPath(from, to components.WorldPos, opts NavOpts) []comp
 		return []components.WorldPos{}
 	}
 
-	// Reconstruct goal->start, then reverse into start->goal.
+	// Reconstruct goal→start, then reverse.
 	var nodes []components.NavNode
 	cur := toNode
 	for {
@@ -261,9 +239,8 @@ func (s *NavService) FindPath(from, to components.WorldPos, opts NavOpts) []comp
 	for i := len(nodes) - 1; i >= 0; i-- {
 		waypoints = append(waypoints, s.nodeWorldPos(nodes[i], floors))
 	}
-	// Drop the leading waypoint (start cell centre) - the caller's agent is
-	// already there; the walker would otherwise spend its first metres
-	// lateral-correcting onto the cell centre.
+	// Drop the leading waypoint (start cell centre) — the agent is already
+	// there; otherwise the walker spends its first metres correcting onto it.
 	if len(waypoints) > 1 {
 		waypoints = waypoints[1:]
 	}
@@ -282,9 +259,9 @@ func (s *NavService) FindPath(from, to components.WorldPos, opts NavOpts) []comp
 	return waypoints
 }
 
-// levelRec - per-Level lookup record used during one FindPath call.
-// Phase 16.B.1.b: the navigation grid is now anchored on a Level entity,
-// one per interior volume; floors are render-only.
+// levelRec is a per-Level lookup record used during one FindPath call. The
+// nav grid is anchored on a Level entity, one per interior volume; floors
+// are render-only.
 type levelRec struct {
 	ent     ecs.Entity
 	chunk   components.ChunkCoord
@@ -296,10 +273,8 @@ type levelRec struct {
 	grid    *components.LevelNavGrid
 }
 
-// snapshotLevels walks every Level entity that already has a baked
-// LevelNavGrid and returns a per-call slice for resolve / neighbour
-// expansion. Level entities are AlwaysActive so they aren't tied to a
-// BuildingChildIndex - we filter directly.
+// snapshotLevels walks every Level with a baked LevelNavGrid. Level entities
+// are AlwaysActive, so we filter directly (no BuildingChildIndex hop).
 func (s *NavService) snapshotLevels() []levelRec {
 	var out []levelRec
 	q := s.levelFilter.Query()
@@ -325,9 +300,8 @@ func (s *NavService) snapshotLevels() []levelRec {
 	return out
 }
 
-// resolveNode maps a WorldPos to a NavNode. If the position falls inside a
-// Level's AABB (XZ + Y proximity), the NavNode is NodeLevel. Otherwise it's
-// NodeSurface, derived from the global cell math.
+// resolveNode maps a WorldPos to a NavNode. Inside a Level's AABB
+// (XZ + Y proximity) → NodeLevel; otherwise NodeSurface.
 func (s *NavService) resolveNode(wp components.WorldPos, idx *TerrainChunkIndex, levels []levelRec) (components.NavNode, bool) {
 	worldX := wp.Local.X + float32(wp.Chunk.X)*components.ChunkSize
 	worldZ := wp.Local.Z + float32(wp.Chunk.Z)*components.ChunkSize
@@ -367,13 +341,11 @@ func (s *NavService) resolveNode(wp components.WorldPos, idx *TerrainChunkIndex,
 	}, true
 }
 
-// cellAt returns the NavCell for a NavNode. (false) if the host grid is not
-// loaded.
+// cellAt returns the NavCell for a NavNode. ok=false if the host grid is
+// not loaded.
 //
-// Phase 14.6 M14.6.1: surface cells flagged NavInBuilding are reported
-// inaccessible. The interior of a building can only be reached through a
-// TransitionEdge (Door / Stairs) that lands the path on a Floor NavNode;
-// pure surface expansion must go around the footprint.
+// Surface cells flagged NavInBuilding are reported inaccessible: building
+// interior must be reached through a TransitionEdge (Door / Stairs).
 func (s *NavService) cellAt(n components.NavNode, idx *TerrainChunkIndex, floors []levelRec) (components.NavCell, bool) {
 	switch n.Kind {
 	case components.NodeSurface:
@@ -390,21 +362,14 @@ func (s *NavService) cellAt(n components.NavNode, idx *TerrainChunkIndex, floors
 		}
 		cell := grid.Cells[int(n.J)*components.NavGridSide+int(n.I)]
 		if cell.Flags&components.NavInBuilding != 0 {
-			// Phase 17.8 follow-up — a surface cell stamped
-			// NavInBuilding by one building's footprint can still be
-			// the outside side of another building's door (compound
-			// case: wings touch / overlap; one wing's door exits onto
-			// a cell that's inside the neighbour wing's footprint).
-			// Treat the cell as walkable when the TransitionRegistry
-			// reports incoming/outgoing edges — pathfinder uses them
-			// to enter the building anyway.
+			// A surface cell stamped NavInBuilding by one building's
+			// footprint can still be the outside side of another
+			// building's door (compound case: wings overlap). When
+			// TransitionRegistry reports outgoing edges, treat the cell
+			// as walkable; force cost to a non-zero value so the
+			// `cost == 0` guard doesn't skip it.
 			if registry := s.transitionRes.Get(); registry != nil {
 				if len(registry.Out[n]) > 0 {
-					// Force walkable cost so FindPath's `cost == 0`
-					// guard doesn't skip this cell. NavInBuilding
-					// stamping commonly zeroes the cost; the
-					// transition edge tells us the cell is a
-					// legitimate traversal point.
 					if cell.Cost == 0 {
 						cell.Cost = 8
 					}
@@ -429,8 +394,7 @@ func (s *NavService) cellAt(n components.NavNode, idx *TerrainChunkIndex, floors
 	return components.NavCell{}, false
 }
 
-// nodeWorldPos returns the centre-of-cell WorldPos for a NavNode. Used by the
-// heuristic, path reconstruction, and the walker.
+// nodeWorldPos returns the centre-of-cell WorldPos for a NavNode.
 func (s *NavService) nodeWorldPos(n components.NavNode, floors []levelRec) components.WorldPos {
 	switch n.Kind {
 	case components.NodeSurface:
@@ -454,16 +418,14 @@ func (s *NavService) nodeWorldPos(n components.NavNode, floors []levelRec) compo
 	return components.WorldPos{}
 }
 
-// gridNeighbour - output of gridNeighbours, packs target NavNode + a flag
-// telling A* whether the move is diagonal (sqrt2 step) or cardinal (1 m).
 type gridNeighbour struct {
 	node components.NavNode
-	diag bool
+	diag bool // true: sqrt2 step; false: 1 m cardinal
 }
 
-// gridNeighbours enumerates the 8 cells around a node *inside the same grid*.
-// Surface nodes overflow into neighbouring chunks via the global-cell math;
-// floor nodes are clamped to the grid's SizeX x SizeZ block.
+// gridNeighbours enumerates the 8 cells around a node inside the same grid.
+// Surface nodes overflow into neighbouring chunks; floor nodes clamp to the
+// grid's SizeX × SizeZ block.
 func (s *NavService) gridNeighbours(n components.NavNode) []gridNeighbour {
 	var out [8]gridNeighbour
 	offsets := [8][3]int{
@@ -506,9 +468,8 @@ func (s *NavService) gridNeighbours(n components.NavNode) []gridNeighbour {
 	return out[:count]
 }
 
-// nodeHeuristic - Chebyshev distance in WorldPos space, scaled by min cell
-// cost (navCostRoad = 2). Admissible regardless of whether the two nodes
-// live on the same grid.
+// nodeHeuristic — Chebyshev distance scaled by min cell cost (navCostRoad).
+// Admissible across heterogeneous grids.
 func nodeHeuristic(a, b components.WorldPos) float32 {
 	d := a.Sub(b)
 	dx := d.X
@@ -526,7 +487,7 @@ func nodeHeuristic(a, b components.WorldPos) float32 {
 	return cheb * float32(navCostRoad)
 }
 
-// nodeHeap - min-heap on f-score, keyed on NavNode payload.
+// nodeHeap — min-heap on f-score, keyed on NavNode payload.
 type nodeHeapEntry struct {
 	f    float32
 	node components.NavNode
@@ -585,16 +546,14 @@ func (h *nodeHeap) siftDown(i int) {
 	}
 }
 
-// styleCellCost applies the PathStyle modifier to NavCell.Cost. PHASE-13.md
-// P4 table:
+// styleCellCost applies the PathStyle modifier to NavCell.Cost:
 //
-//	Direct      x1.0
-//	RoadPrefer  roadx0.5,  off-roadx1.5
-//	RoadAvoid   roadx2.0,  off-roadx1.0 (cover-rich cells get an extra x0.8)
-//	CoverSeek   CoverDistance<threshold x0.7, else x1.0
+//	Direct      ×1.0
+//	RoadPrefer  road ×0.5,  off-road ×1.5
+//	RoadAvoid   road ×2.0,  off-road ×1.0 (cover-rich cells ×0.8)
+//	CoverSeek   CoverDistance<threshold ×0.7, else ×1.0
 //
-// Multipliers stay strictly positive so A* admissibility holds. Result is a
-// float that the planner multiplies by step length (1 m NSEW, sqrt2 m diagonal).
+// Multipliers stay strictly positive so A* admissibility holds.
 func styleCellCost(cell components.NavCell, style components.PathStyle) float32 {
 	base := float32(cell.Cost)
 	onRoad := cell.Flags&components.NavOnRoad != 0
@@ -608,8 +567,6 @@ func styleCellCost(cell components.NavCell, style components.PathStyle) float32 
 		if onRoad {
 			return base * 2.0
 		}
-		// Cover-rich cells inherit a small bonus so the unit naturally
-		// drifts toward cover when avoiding roads.
 		if cell.CoverDistance < components.CoverSeekThreshold {
 			return base * 0.8
 		}
@@ -624,22 +581,22 @@ func styleCellCost(cell components.NavCell, style components.PathStyle) float32 
 	}
 }
 
-// navGridShift / navGridMask - NavGridSide is fixed at 64 (1 m cells, 64 m
-// chunk). Compile-time bit ops decode (gi, gj) into (chunk, local).
+// NavGridSide is fixed at 64 (1 m cells, 64 m chunk). Compile-time bit ops
+// decode (gi, gj) into (chunk, local).
 const (
 	navGridShift = 6
 	navGridMask  = components.NavGridSide - 1
 )
 
-// worldPosToCell - global (gi, gj) surface-cell index of a WorldPos.
+// worldPosToCell returns the global (gi, gj) surface-cell index of a WorldPos.
 func worldPosToCell(p components.WorldPos) (int32, int32) {
 	gi := p.Chunk.X<<navGridShift + int32(math.Floor(float64(p.Local.X)))
 	gj := p.Chunk.Z<<navGridShift + int32(math.Floor(float64(p.Local.Z)))
 	return gi, gj
 }
 
-// cellToWorldPos - centre-of-cell WorldPos for a surface cell. Y is the
-// procgen surface; GroundStickSystem clamps later.
+// cellToWorldPos returns the centre-of-cell WorldPos for a surface cell. Y
+// is the procgen surface; GroundStickSystem clamps later.
 func cellToWorldPos(gi, gj int32) components.WorldPos {
 	cc := components.ChunkCoord{X: gi >> navGridShift, Z: gj >> navGridShift}
 	li := float32(gi&navGridMask) + 0.5

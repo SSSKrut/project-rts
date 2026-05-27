@@ -9,10 +9,6 @@ import (
 	"rts-go/components"
 )
 
-// drawOverrideBlock renders the Override / Reason / Resume rows under a
-// suppressed unit's stats. Threshold is read off the unit's squad via
-// BehaviorRules; soloists fall back to the SurvivalInstinct default surfaced
-// in the Reason text.
 func drawOverrideBlock(ctx InspectorCtx, ent ecs.Entity, ov *components.TacticalOverride, x, y int32) int32 {
 	label := components.ReasonLabel(ov.Reason)
 	if label == "" {
@@ -36,9 +32,8 @@ func drawOverrideBlock(ctx InspectorCtx, ent ecs.Entity, ov *components.Tactical
 	return y
 }
 
-// overrideReasonDetail expands the static ReasonLabel into a live numbers
-// string, e.g. "Threat 0.72 > threshold 0.45". Falls back to an empty string
-// if the reason has no live numbers (placeholder reasons).
+// overrideReasonDetail expands ReasonLabel with live numbers, e.g.
+// "Threat 0.72 > threshold 0.45". Empty for placeholder reasons.
 func overrideReasonDetail(ctx InspectorCtx, ent ecs.Entity, ov *components.TacticalOverride) string {
 	switch ov.Reason {
 	case components.TacticalOverrideUnderFire:
@@ -54,8 +49,6 @@ func overrideReasonDetail(ctx InspectorCtx, ent ecs.Entity, ov *components.Tacti
 	return ""
 }
 
-// threatStateLabel returns the short-form name for the Threat.State band,
-// used in the Inspector single-unit row. Phase 17 M17.0.3.
 func threatStateLabel(s components.ThreatState) string {
 	switch s {
 	case components.ThreatVigilant:
@@ -68,8 +61,8 @@ func threatStateLabel(s components.ThreatState) string {
 	return "Safe"
 }
 
-// overrideThreshold returns the unit's squad BehaviorRules.SuppressionThreshold
-// (matching SurvivalInstinct.thresholdFor), with a 0.45 fallback for soloists.
+// overrideThreshold mirrors SurvivalInstinct.thresholdFor (0.45 fallback
+// for soloists).
 func overrideThreshold(ctx InspectorCtx, ent ecs.Entity) float32 {
 	if ctx.SquadMemberMap == nil || ctx.BehaviorRulesMap == nil {
 		return 0.45

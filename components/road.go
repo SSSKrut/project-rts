@@ -28,9 +28,8 @@ type RoadEdge struct {
 }
 
 // RoadGraph is the singleton resource holding every road segment in the world.
-// Read by RoadSystem (per chunk), prop_spawn (clearance), Phase 6 NavGrid and
-// Phase 8 vehicle pathfinder. Mutated only at startup (PreprocessRoadGraph)
-// and on rare runtime events (Phase 11 - bridge destruction).
+// Mutated only at startup (PreprocessRoadGraph) and on rare runtime events
+// (bridge destruction).
 type RoadGraph struct {
 	Nodes []RoadNode
 	Edges []RoadEdge

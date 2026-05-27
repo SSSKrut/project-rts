@@ -11,8 +11,7 @@ import (
 
 // coverSlotSpec is the pure-data result of a cover-slot generator. Local is
 // in chunk-local coords of the slot's host chunk; OriginDir is a unit vector
-// pointing OUTWARD from cover (the direction a shooter peeks). Phase 11 will
-// reuse the same spec list for destruction-time re-generation.
+// pointing OUTWARD from cover (the direction a shooter peeks).
 type coverSlotSpec struct {
 	Local     rl.Vector3
 	Host      ecs.Entity
@@ -23,13 +22,12 @@ type coverSlotSpec struct {
 }
 
 // propCoverSlots emits 8 cover slots radially around a prop with non-zero
-// Cover. The slots stand BBoxRadius out from the centre on the eight compass
-// points; the actual ray-cast-to-centre check from P11 is approximated by the
-// bbox geometry - placeholder primitives are convex, so any slot at the bbox
-// radius has the prop between it and the centre by construction.
+// Cover. Slots stand BBoxRadius out on the eight compass points; placeholder
+// primitives are convex, so any slot at bbox radius has the prop between it
+// and the centre by construction.
 //
-// Stance: short props (effective height < 1.5 m) are crouch-only; the rest
-// support both crouch and stand. Prone is reserved for wall-corner slots.
+// Short props (effective height < 1.5 m) are crouch-only; the rest support
+// crouch+stand. Prone is reserved for wall-corner slots.
 func propCoverSlots(host ecs.Entity, propLocal rl.Vector3, meta components.PropMeta, scale float32) []coverSlotSpec {
 	if meta.Cover <= 0 || meta.BBoxRadius <= 0 {
 		return nil
@@ -43,8 +41,8 @@ func propCoverSlots(host ecs.Entity, propLocal rl.Vector3, meta components.PropM
 	}
 	stance := components.StanceMaskCrouch | components.StanceMaskStand
 
-	// Effective height heuristic - sphere primitives use 2*X (radius); the
-	// rest use Size.Y; trees count their trunk only (canopy doesn't shield).
+	// Sphere primitives use 2*X (radius); rest use Size.Y; trees count trunk
+	// only (canopy doesn't shield).
 	height := meta.Size.Y
 	if meta.Primitive == components.PrimitiveSphere {
 		height = meta.Size.X * 2
@@ -100,9 +98,8 @@ func windowCoverSlots(host ecs.Entity, wallLocal rl.Vector3, w components.WallSe
 	}}
 }
 
-// wallCornerSrc - per-wall input for the corner pairing pass. World-space
-// endpoints (XZ) and the wall's outward normal are pre-computed; the entity
-// id is used as the deterministic owner of any corner slot it shares.
+// wallCornerSrc is per-wall input for the corner pairing pass. The entity id
+// becomes the deterministic owner of any corner slot it shares.
 type wallCornerSrc struct {
 	entity                     ecs.Entity
 	startX, startZ, endX, endZ float32
@@ -111,14 +108,11 @@ type wallCornerSrc struct {
 	chunk                      components.ChunkCoord
 }
 
-// wallCornerCoverSlots returns one slot per pair of walls that share a
-// world-XZ endpoint within tolerance. Each corner gets one slot, owned by
-// the lower-ID wall (so ByHost lookups stay deterministic). OriginDir is the
-// normalized sum of the two outward normals - points along the bisector
-// where the shooter would peek around the corner.
-//
-// Walls must all belong to the same building (one host chunk). Caller groups
-// walls by building root before calling.
+// wallCornerCoverSlots returns one slot per pair of walls sharing a world-XZ
+// endpoint within tolerance. Each corner is owned by the lower-ID wall (so
+// ByHost lookups stay deterministic). OriginDir is the normalized sum of the
+// two outward normals — bisector where the shooter peeks around the corner.
+// Caller must group walls by building root before calling.
 func wallCornerCoverSlots(walls []wallCornerSrc) []coverSlotSpec {
 	if len(walls) < 2 {
 		return nil
@@ -127,9 +121,8 @@ func wallCornerCoverSlots(walls []wallCornerSrc) []coverSlotSpec {
 		ax, az, bx, bz float32
 	}
 	var out []coverSlotSpec
-	// Dedupe by 1 cm-binned XZ key - multiple pair combos can hit the same
-	// corner (a 4-wall rectangle has each corner shared by exactly two walls,
-	// but a more general layout could have three walls meeting).
+	// Dedupe by 1 cm-binned XZ key — multiple pair combos can hit the same
+	// corner (3+ walls meeting at one vertex).
 	seen := map[uint64]bool{}
 
 	for i := 0; i < len(walls); i++ {
@@ -188,13 +181,9 @@ func wallCornerCoverSlots(walls []wallCornerSrc) []coverSlotSpec {
 }
 
 // coverSlotsForBuilding returns every live cover-slot entity attached to any
-// child of `root`. Walks BuildingChildIndex for the root's wall children, then
-// CoverSlotIndex.ByHost for each - exactly the destruction-time helper Phase 11
-// will call before tearing down a building.
-//
-// The two-hop walk (root -> children -> slots) is deliberate: the slot index is
-// host-keyed (wall / window / corner anchor), not building-keyed, so this is
-// the only way to address every slot of a building in one call.
+// child of `root`. Two-hop walk (root → children → slots) is needed because
+// the slot index is host-keyed (wall / window / corner anchor), not
+// building-keyed.
 func coverSlotsForBuilding(coverIdx *CoverSlotIndex, buildingIdx *BuildingChildIndex, root ecs.Entity) []ecs.Entity {
 	if coverIdx == nil || buildingIdx == nil {
 		return nil

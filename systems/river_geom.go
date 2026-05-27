@@ -6,9 +6,8 @@ import (
 	"rts-go/components"
 )
 
-// pointToSegment2D - distance from (px, pz) to segment (ax,az)-(bx,bz) in XZ.
-// Standard projection-clamp formula. Degenerate (zero-length) segments fall
-// through to point-distance.
+// pointToSegment2D returns the XZ distance from (px, pz) to segment
+// (ax,az)–(bx,bz). Degenerate segments fall through to point-distance.
 func pointToSegment2D(px, pz, ax, az, bx, bz float32) float32 {
 	dx := bx - ax
 	dz := bz - az
@@ -31,12 +30,8 @@ func pointToSegment2D(px, pz, ax, az, bx, bz float32) float32 {
 	return float32(math.Sqrt(float64(ex*ex + ez*ez)))
 }
 
-// nearestRiverDistance - smallest 2D distance from (wx, wz) to any segment
-// of any river polyline. +Inf when polylines is empty so callers don't need
-// a separate "no rivers" branch.
-//
-// O(total-segments) per call. Fine with a few hand-authored polylines; for
-// procedural river networks, replace with a chunk-bucketed spatial index.
+// nearestRiverDistance — smallest 2D distance from (wx, wz) to any segment
+// of any river polyline. +Inf when polylines is empty.
 func nearestRiverDistance(wx, wz float32, polylines []components.RiverPolyline) float32 {
 	best := float32(math.Inf(1))
 	for pi := range polylines {
@@ -55,8 +50,7 @@ func nearestRiverDistance(wx, wz float32, polylines []components.RiverPolyline) 
 	return best
 }
 
-// polylineWorldBBox - axis-aligned XZ bounding box of the polyline in world
-// coords. Used by RiverSystem for cheap chunk-vs-river rejection.
+// polylineWorldBBox returns the axis-aligned XZ bbox of the polyline.
 func polylineWorldBBox(pl components.RiverPolyline) (minX, minZ, maxX, maxZ float32) {
 	minX = float32(math.Inf(1))
 	minZ = float32(math.Inf(1))

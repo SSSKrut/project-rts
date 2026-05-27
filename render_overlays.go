@@ -10,8 +10,6 @@ import (
 	"rts-go/systems"
 )
 
-// orderMarkerCtx bundles the per-frame handles drawOrderMarkers3D needs.
-// Built once in main.go (alongside ghostCtx) and reused per frame.
 type orderMarkerCtx struct {
 	world          *ecs.World
 	posMap         *ecs.Map[components.WorldPos]
@@ -26,26 +24,16 @@ type orderMarkerCtx struct {
 }
 
 // drawOrderMarkers3D paints a cube + connector line for every order in the
-// queue of each selected squad. Phase 17.6 M17.6.7: depth-test is disabled so
-// markers are visible through walls / hills — standard RTS convention.
-//
-// Marker shape:
-//   - Active (head) order: 0.5 m solid cube + wire outline at +1.0 alpha
-//   - Queued: 0.35 m cube at +0.5 alpha
-//   - DefendPosition: extra 90° sector arc oriented by OrderParamFacing
-//   - Connector line: squad center → head marker; previous → next for chain
+// queue of each selected squad. Active head = larger/brighter cube; queued =
+// smaller/dim; DefendPosition adds a 90° sector arc.
 //
 // Caller must invoke between BeginMode3D and EndMode3D, after the scene's
-// real geometry, so marker depth-disable doesn't bleed into terrain depth.
+// real geometry — depth test is disabled here so markers always show.
 func drawOrderMarkers3D(ctx orderMarkerCtx, selected []ecs.Entity) {
 	if len(selected) == 0 || ctx.orderQueueMap == nil {
 		return
 	}
-	// Collect unique squads touched by selection.
 	seen := make(map[ecs.Entity]struct{}, len(selected))
-	// Disable depth test so markers are always visible — standard RTS
-	// convention for command icons (Wargame / Combat Mission). Re-enable
-	// at function exit so subsequent passes (particles, etc.) keep depth.
 	rl.DisableDepthTest()
 	defer rl.EnableDepthTest()
 	for _, e := range selected {
@@ -83,9 +71,6 @@ func drawOrderMarkers3D(ctx orderMarkerCtx, selected []ecs.Entity) {
 	}
 }
 
-// drawOrderChainMarkers walks the OrderChain starting at `ord`, drawing each
-// marker + connector. Head marker (the first call) is the "active" style;
-// every subsequent marker is the "queued" style.
 func drawOrderChainMarkers(ctx orderMarkerCtx, ord ecs.Entity, prevRender rl.Vector3, col rl.Color) {
 	active := true
 	cur := ord
@@ -102,11 +87,8 @@ func drawOrderChainMarkers(ctx orderMarkerCtx, ord ecs.Entity, prevRender rl.Vec
 		markerRender := target.Pos.ToRenderSpace(systems.CurrentOriginChunk)
 		markerRender.Y += 0.6
 
-		// Connector line previous → current marker. Slight Y offset keeps
-		// the line above ground without intersecting the cube.
 		rl.DrawLine3D(prevRender, markerRender, rl.Color{R: col.R, G: col.G, B: col.B, A: 180})
 
-		// Marker cube + outline. Active style is bigger + brighter.
 		size := float32(0.35)
 		alpha := uint8(140)
 		if active {
@@ -118,7 +100,6 @@ func drawOrderChainMarkers(ctx orderMarkerCtx, ord ecs.Entity, prevRender rl.Vec
 		rl.DrawCubeWiresV(markerRender, rl.Vector3{X: size, Y: size, Z: size},
 			rl.Color{R: col.R, G: col.G, B: col.B, A: 240})
 
-		// DefendPosition arc: orient via OrderParamFacing if present.
 		if kind := ctx.orderKindMap.Get(cur); kind != nil && kind.Code == components.OrderKindDefendPosition {
 			yaw := float32(0)
 			if facing := ctx.orderFacingMap.Get(cur); facing != nil {
@@ -139,9 +120,7 @@ func drawOrderChainMarkers(ctx orderMarkerCtx, ord ecs.Entity, prevRender rl.Vec
 }
 
 // aabbToRenderBox converts a world-space AABB3D into a render-space
-// rl.BoundingBox using the current origin chunk. Phase 17.6 M17.6.8:
-// shared by ray-vs-floor pick + per-level outline draw so both use the
-// same coordinate frame.
+// rl.BoundingBox using the current origin chunk.
 func aabbToRenderBox(aabb components.AABB3D) rl.BoundingBox {
 	offX := float32(systems.CurrentOriginChunk.X) * components.ChunkSize
 	offZ := float32(systems.CurrentOriginChunk.Z) * components.ChunkSize
@@ -151,9 +130,8 @@ func aabbToRenderBox(aabb components.AABB3D) rl.BoundingBox {
 	}
 }
 
-// drawLevelOutline paints a wire-box around `lvl.AABB` in `color`. Phase
-// 17.6 M17.6.8: per-floor highlight when the cursor's ray hits a specific
-// storey of a building. Caller invokes inside BeginMode3D.
+// drawLevelOutline paints a wire-box around `lvl.AABB` in `color`. Caller
+// invokes inside BeginMode3D.
 func drawLevelOutline(lvl *components.Level, color rl.Color) {
 	if lvl == nil {
 		return
@@ -170,10 +148,7 @@ func drawLevelOutline(lvl *components.Level, color rl.Color) {
 }
 
 // pickLevelUnderRay finds the topmost Level entity of `building` that the
-// ray hits — "topmost" by closest hit distance (ray nearest-first). Returns
-// (entity, true) on hit; (zero, false) if the building has no levels or
-// the ray misses all level boxes. Phase 17.6 M17.6.8: routes the floor
-// outline + future popup defaults at the level the cursor is visually on.
+// ray hits — closest by hit distance. Returns (zero, false) on miss.
 func pickLevelUnderRay(
 	ray rl.Ray,
 	building ecs.Entity,
@@ -207,19 +182,15 @@ func pickLevelUnderRay(
 	return best, best != (ecs.Entity{})
 }
 
-// unitPathRenderCtx bundles the handles drawUnitPaths needs. Built once
-// per frame in main.go; the filters are reused across ticks.
 type unitPathRenderCtx struct {
 	filter         *ecs.Filter4[components.Unit, components.WorldPos, components.MicroPath, components.SquadMember]
 	soloFilter     *ecs.Filter3[components.Unit, components.WorldPos, components.MicroPath]
 	squadMemberMap *ecs.Map[components.SquadMember]
 	// selectedSquad narrows the draw to one squad's members. Zero =
-	// every unit gets a path (used when the player hasn't selected anyone).
+	// every unit gets a path.
 	selectedSquad ecs.Entity
 }
 
-// unitPathColour hashes the entity ID into a stable bright hue. 8 squad
-// members visibly diverge.
 func unitPathColour(e ecs.Entity) rl.Color {
 	h := uint32(e.ID()) * 2654435761
 	r := uint8(80 + (h>>0)&0x7F)
@@ -230,12 +201,7 @@ func unitPathColour(e ecs.Entity) rl.Color {
 
 // drawUnitPaths renders each eligible unit's MicroPath as a line strip from
 // the unit's current position through Waypoints[Head..Count). A small cube
-// marks the goal cell. Colour is per-unit hashed so overlapping paths in a
-// squad of 8 stay distinguishable.
-//
-// Selection-aware: if `ctx.selectedSquad` is set we draw only that squad's
-// members; otherwise every unit gets a path. This keeps the overlay readable
-// when the player is examining one squad's stragglers.
+// marks the goal cell.
 func drawUnitPaths(ctx unitPathRenderCtx) {
 	originChunk := systems.CurrentOriginChunk
 	q := ctx.filter.Query()
@@ -250,8 +216,6 @@ func drawUnitPaths(ctx unitPathRenderCtx) {
 		}
 		drawUnitPathLineStrip(ent, *pos, mp, originChunk)
 	}
-	// Soloists (units with no SquadMember). Skipped when a specific squad
-	// is selected — soloists by definition aren't in it.
 	if ctx.selectedSquad == (ecs.Entity{}) {
 		qs := ctx.soloFilter.Query()
 		for qs.Next() {
@@ -268,8 +232,6 @@ func drawUnitPaths(ctx unitPathRenderCtx) {
 	}
 }
 
-// drawUnitPathLineStrip emits one polyline from unit pos through every live
-// waypoint plus a small goal-marker cube at the last waypoint.
 func drawUnitPathLineStrip(ent ecs.Entity, pos components.WorldPos,
 	mp *components.MicroPath, originChunk components.ChunkCoord) {
 	col := unitPathColour(ent)
@@ -284,9 +246,6 @@ func drawUnitPathLineStrip(ent ecs.Entity, pos components.WorldPos,
 	rl.DrawCubeV(prev, rl.Vector3{X: 0.3, Y: 0.3, Z: 0.3}, col)
 }
 
-// drawNavPath renders the path from the anchor through every remaining
-// waypoint. Empty/nil paths render nothing. Lifted slightly so the line is
-// visible against the terrain.
 func drawNavPath(path []components.WorldPos, anchorPos components.WorldPos) {
 	if len(path) == 0 {
 		return
@@ -305,15 +264,7 @@ func drawNavPath(path []components.WorldPos, anchorPos components.WorldPos) {
 }
 
 // drawNavGridOverlay draws a flat coloured plate per NavCell at the cell's
-// terrain height + 5 cm. Cell size is 1 m; plates are sized to 0.9 m so
-// neighbouring cells visibly separate. Colour LUT:
-//
-//	Cost = 0           -> black (impassable)
-//	Cost = navCostRoad -> light blue (OnRoad - M6.4)
-//	Cost = navCostOpen -> green (open field)
-//	Cost = navCostRough -> yellow-orange (rough)
-//	Cost = navCostTrench -> orange (trench - M6.4)
-//	other              -> magenta (unknown)
+// terrain height + 5 cm. Colour LUT lives in navCellColor.
 func drawNavGridOverlay(chunkPos components.WorldPos, cc components.ChunkCoord,
 	grid *components.NavGrid, hm *components.Heightmap) {
 	chunkRender := chunkPos.ToRenderSpace(systems.CurrentOriginChunk)
@@ -342,9 +293,8 @@ func drawNavGridOverlay(chunkPos components.WorldPos, cc components.ChunkCoord,
 	_ = cc
 }
 
-// drawCoverMapOverlay - same shape as drawNavGridOverlay but with a single
-// translucent blue plate per cell whose alpha tracks BaseCover. 0 cover ->
-// fully transparent (cell skipped); 8 covered directions -> 90% blue.
+// drawCoverMapOverlay draws a translucent blue plate per cell with alpha
+// tracking BaseCover. Cells with 0 cover are skipped.
 func drawCoverMapOverlay(chunkPos components.WorldPos, cc components.ChunkCoord,
 	cov *components.CoverMap, hm *components.Heightmap) {
 	chunkRender := chunkPos.ToRenderSpace(systems.CurrentOriginChunk)
@@ -378,7 +328,7 @@ func drawCoverMapOverlay(chunkPos components.WorldPos, cc components.ChunkCoord,
 }
 
 // drawFloorNavOverlay renders one LevelNavGrid as a layer of coloured plates
-// 5 cm above the floor surface. Black = Cost=0 (wall / blocked); green = open.
+// 5 cm above the floor surface. Black = blocked; green = open.
 func drawFloorNavOverlay(floorPos components.WorldPos, grid *components.LevelNavGrid) {
 	chunkBase := (components.WorldPos{Chunk: floorPos.Chunk}).ToRenderSpace(systems.CurrentOriginChunk)
 	const plate float32 = 0.85
@@ -430,7 +380,6 @@ func drawRoadGraphDebug(g *components.RoadGraph) {
 		to := g.Nodes[e.To].Pos
 		fr := from.ToRenderSpace(systems.CurrentOriginChunk)
 		tr := to.ToRenderSpace(systems.CurrentOriginChunk)
-		// Lift slightly so the line isn't buried in the road surface.
 		fr.Y += 0.5
 		tr.Y += 0.5
 		var col rl.Color

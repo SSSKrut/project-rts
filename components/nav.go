@@ -7,11 +7,8 @@ import "github.com/mlange-42/ark/ecs"
 // openings resolve to >= 1 cell.
 const NavGridSide = 64
 
-// NavGridCells is the total cell count per chunk grid (64 * 64).
 const NavGridCells = NavGridSide * NavGridSide
 
-// NavFlags is a bitmask of per-cell semantic tags consulted by the pathfinder
-// for cost overrides and tactical AI for terrain context.
 type NavFlags uint8
 
 const (
@@ -27,8 +24,7 @@ const (
 //
 // CoverDistance is the distance in cells to the nearest cover slot in the
 // 9-chunk window. 0 = on a slot, 255 = no slot within range
-// (CoverDistanceFar). NavService.FindPath reads this when
-// PathStyle=CoverSeek.
+// (CoverDistanceFar). Read when PathStyle=CoverSeek.
 type NavCell struct {
 	Cost          uint8
 	Flags         NavFlags
@@ -51,7 +47,7 @@ type NavGrid struct {
 // CoverCell records, per cell, which compass directions (N=bit0, clockwise:
 // N, NE, E, SE, S, SW, W, NW) are blocked by a wall / steep terrain /
 // LOS-blocking prop within the bake radius. BaseCover is the popcount-based
-// debug overlay aggregate; tactical AI builds its own utility on top.
+// debug overlay aggregate.
 type CoverCell struct {
 	BaseCover uint8
 	DirMask   uint8
@@ -63,8 +59,6 @@ type CoverMap struct {
 	Cells [NavGridCells]CoverCell
 }
 
-// Locomotion enumerates how an entity moves through the world. Vehicles will
-// add wheeled / tracked / heavy variants; NavOpts already carries this.
 type Locomotion uint8
 
 const (
@@ -75,14 +69,12 @@ const (
 // on Without[NavBaked]; cleared on chunk eviction.
 type NavBaked struct{}
 
-// CoverBaked marks a chunk whose CoverMap + cover slot pass has run.
 type CoverBaked struct{}
 
 // MaxLevelSide is the per-side cell count cap for a LevelNavGrid. 32 m,
 // large enough for every placeholder building footprint.
 const MaxLevelSide = 32
 
-// MaxLevelCells is the total cell count of a LevelNavGrid.
 const MaxLevelCells = MaxLevelSide * MaxLevelSide
 
 // LevelNavGrid is the navigation bake for one interior level. Cells are
@@ -93,10 +85,6 @@ const MaxLevelCells = MaxLevelSide * MaxLevelSide
 // Walls of the same level (matched by WorldPos.Y) become Cost=0. Open doors
 // punch passages. Windows and closed doors stay Cost=0. A level is a plane;
 // slope is not computed.
-//
-// Phase 16.B.1.a: pure type rename from FloorNavGrid. The grid still lives
-// on a Floor entity; M16.B.1.b will re-anchor it onto the Level entity
-// (one grid per Level instead of per Floor).
 type LevelNavGrid struct {
 	SizeX, SizeZ uint8
 	Origin       Vec3
@@ -108,7 +96,6 @@ type Vec3 struct {
 	X, Y, Z float32
 }
 
-// LevelNavBaked marks an entity whose LevelNavGrid has been baked.
 type LevelNavBaked struct{}
 
 // NavNodeKind discriminates a NavNode reference. Surface = cell on a chunk's
@@ -122,8 +109,7 @@ const (
 
 // NavNode is the multi-graph cell identifier consumed by A*. For Surface,
 // (Chunk, I, J) is the global cell coord. For Level, Level is the entity ID
-// of the host Level (Phase 16.B.1.b: the grid lives on a Level entity, one
-// per interior level volume).
+// of the host Level.
 type NavNode struct {
 	Kind  NavNodeKind
 	Chunk ChunkCoord

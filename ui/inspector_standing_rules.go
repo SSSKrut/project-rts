@@ -10,31 +10,9 @@ import (
 	"rts-go/components"
 )
 
-// Phase 13 M13.6 - Inspector quick-bars for Squad standing rules
+// Immediate-mode quick-bars for Squad standing rules
 // (MovementProfile / EngagementRules / BehaviorRules) + Stamina avg.
-//
-// Layout (single-squad view, drawn under the Roster section):
-//
-//   +- Movement ----------------------------+
-//   | Presets:  [Default][Cautious][Rush]   |
-//   |           [Sprint ][Stealth ][Crawl ] |
-//   | Pace:    [Walk    ]  Stance:  [Stand] |
-//   | Posture: [Standard]  Path:    [Direct]|
-//   | Stamina avg: ########.. 85%           |
-//   +- Engagement --------------------------+
-//   | Mode:     [Hold ][Return][Free ]      |
-//   | Targets:  [Inf ][Arm ][Air ][Struct]  |
-//   +- Behavior ----------------------------+
-//   | [done] Auto-reposition under fire        |
-//   | [done] Auto-stance change                |
-//   | [ ] Hold until ordered                |
-//   | [done] Allow return fire                 |
-//   | Suppression threshold: [-][+] 0.30    |
-//   +---------------------------------------+
-//
-// Interaction model: immediate-mode. Each "button" is an inline rect + click
-// test against (ctx.Cursor, ctx.LMBPressed). PanelFocused gates clicks so a
-// drag from elsewhere doesn't accidentally toggle a chip.
+// PanelFocused gates clicks so a drag from elsewhere doesn't toggle a chip.
 
 var (
 	srSectionHdr  = rl.Color{R: 90, G: 100, B: 120, A: 255}
@@ -49,32 +27,25 @@ var (
 )
 
 const (
-	srChipH    int32 = 18
-	srChipGap  int32 = 4
-	srRowGap   int32 = 4
+	srChipH      int32 = 18
+	srChipGap    int32 = 4
+	srRowGap     int32 = 4
 	srSectionGap int32 = 6
 )
 
-// drawStandingRulesSections renders the Movement / Engagement / Behavior
-// quick-bars for one squad. Returns the next free Y position.
-//
-// `squad` must be alive and have all three standing-rule components (the
-// SquadService writes them at template instantiation; defensive nil checks
-// keep us safe across hot-reloads).
+// drawStandingRulesSections returns the next free Y. Defensive nil checks
+// keep callers safe across hot-reloads.
 func drawStandingRulesSections(ctx InspectorCtx, squad ecs.Entity, x, y, width int32) int32 {
 	if !ctx.World.Alive(squad) {
 		return y
 	}
 
-	// All three sections operate on this squad - bulk-mutate for multi-select
-	// is deferred (open question 4). Phase 13 single-squad scope.
 	mp := ctx.MovementProfileMap.Get(squad)
 	er := ctx.EngagementRulesMap.Get(squad)
 	br := ctx.BehaviorRulesMap.Get(squad)
 
-	// Phase 15 M15.A.2 - Doctrine chips sit above the three sections. Applying
-	// a doctrine writes through all three components, so it has to run first
-	// so the section chips below highlight the freshly-applied fields.
+	// Doctrine must run before the section chips so the highlights reflect
+	// the freshly-applied fields.
 	if mp != nil && er != nil && br != nil && ctx.ActiveDoctrineMap != nil {
 		y = drawDoctrineSection(ctx, squad, mp, er, br, x, y, width)
 		y += srSectionGap
@@ -89,7 +60,6 @@ func drawStandingRulesSections(ctx InspectorCtx, squad ecs.Entity, x, y, width i
 		y += srSectionGap
 	}
 	if br != nil {
-		// Phase 15 M15.C.0 - Autonomy chip row precedes Behavior section.
 		// AutonomySpec writes through into BehaviorRules skipping dirty bits.
 		if ctx.ActiveAutonomyMap != nil {
 			y = drawAutonomySection(ctx, squad, br, x, y, width)
@@ -101,9 +71,8 @@ func drawStandingRulesSections(ctx InspectorCtx, squad ecs.Entity, x, y, width i
 	return y
 }
 
-// drawAutonomySection renders the 4-chip Strict / Cautious / Adaptive /
-// Survival row. Click applies AutonomySpec to br (skipping dirty fields) and
-// stamps ActiveAutonomy.Code for highlight.
+// drawAutonomySection: click applies AutonomySpec to br (skipping dirty
+// fields) and stamps ActiveAutonomy.Code for highlight.
 func drawAutonomySection(
 	ctx InspectorCtx,
 	squad ecs.Entity,
@@ -141,8 +110,7 @@ func drawAutonomySection(
 	return y
 }
 
-// drawDoctrineSection renders the 4-chip Doctrine row + Patrol / Assault /
-// Stealth / Defense. Click writes through DoctrineSpec into the squad's three
+// drawDoctrineSection: click writes DoctrineSpec into the squad's three
 // components and stamps ActiveDoctrine.Code.
 func drawDoctrineSection(
 	ctx InspectorCtx,
@@ -183,7 +151,6 @@ func drawMovementSection(ctx InspectorCtx, squad ecs.Entity, mp *components.Move
 	drawText(ctx.Font, "Movement", x, y, inspectorFontSize, srSectionHdr)
 	y += inspectorRowH
 
-	// Six preset chips in 2 rows x 3.
 	chipW := (width - 2*srChipGap) / 3
 	presets := [6]components.MovementPreset{
 		components.PresetDefault, components.PresetCautious, components.PresetRush,
@@ -201,19 +168,15 @@ func drawMovementSection(ctx InspectorCtx, squad ecs.Entity, mp *components.Move
 	}
 	y += 2*(srChipH+srChipGap) - srChipGap + srRowGap
 
-	// 4 cyclic field buttons in a 2x2 grid.
 	colW := (width - srChipGap) / 2
-	// Pace.
 	if drawCyclicField(ctx, x, y, colW, srChipH, "Pace: "+components.PaceName(mp.Pace)) {
 		mp.Pace = (mp.Pace + 1) % 3
 	}
-	// Stance.
 	if drawCyclicField(ctx, x+colW+srChipGap, y, colW, srChipH, "Stance: "+components.StanceName(mp.Stance)) {
 		mp.Stance = (mp.Stance + 1) % 3
 	}
 	y += srChipH + srRowGap
 
-	// Posture.
 	if drawCyclicField(ctx, x, y, colW, srChipH, "Posture: "+components.PostureName(mp.Posture)) {
 		if mp.Posture == components.PostureStandard {
 			mp.Posture = components.PostureQuiet
@@ -221,14 +184,11 @@ func drawMovementSection(ctx InspectorCtx, squad ecs.Entity, mp *components.Move
 			mp.Posture = components.PostureStandard
 		}
 	}
-	// PathStyle.
 	if drawCyclicField(ctx, x+colW+srChipGap, y, colW, srChipH, "Path: "+components.PathStyleName(mp.PathStyle)) {
 		mp.PathStyle = (mp.PathStyle + 1) % 4
 	}
 	y += srChipH + srRowGap
 
-	// Stamina avg bar. Averaged across roster members; if no members or no
-	// Stamina components, draw "-".
 	avg := squadStaminaAverage(ctx, squad)
 	drawStaminaBar(ctx, x, y, width, srChipH, avg)
 	y += srChipH
@@ -239,7 +199,6 @@ func drawEngagementSection(ctx InspectorCtx, er *components.EngagementRules, x, 
 	drawText(ctx.Font, "Engagement", x, y, inspectorFontSize, srSectionHdr)
 	y += inspectorRowH
 
-	// Mode: 3 mutually exclusive chips.
 	modes := [3]components.EngagementMode{components.HoldFire, components.ReturnFire, components.FreeFire}
 	chipW := (width - 2*srChipGap) / 3
 	for i, m := range modes {
@@ -250,7 +209,6 @@ func drawEngagementSection(ctx InspectorCtx, er *components.EngagementRules, x, 
 	}
 	y += srChipH + srRowGap
 
-	// Target type toggles: 4 chips.
 	targetW := (width - 3*srChipGap) / 4
 	type targetSpec struct {
 		label string
@@ -268,10 +226,8 @@ func drawEngagementSection(ctx InspectorCtx, er *components.EngagementRules, x, 
 	}
 	y += srChipH + srRowGap
 
-	// Phase 15 M15.A.4 - Standoff cycle button + Sector advisory line. Click
-	// the chip to cycle Any -> Close -> Medium -> Long -> Any. SectorHalfDot
-	// is read-only here; the dedicated edit UI lands when DefendPosition
-	// ghost arc commits ship in a later phase.
+	// Standoff cycles Any -> Close -> Medium -> Long -> Any. SectorHalfDot
+	// is read-only here; the edit UI ships with DefendPosition.
 	standoffLabel := "Standoff: " + components.StandoffName(er.Standoff)
 	if drawCyclicField(ctx, x, y, width, srChipH, standoffLabel) {
 		er.Standoff = (er.Standoff + 1) % 4
@@ -292,8 +248,8 @@ func drawBehaviorSection(ctx InspectorCtx, squad ecs.Entity, br *components.Beha
 	drawText(ctx.Font, "Behavior", x, y, inspectorFontSize, srSectionHdr)
 	y += inspectorRowH
 
-	// Phase 15 M15.C.0 - individual field edits flip the DirtyMask bit so
-	// the next Autonomy chip click skips them.
+	// Individual field edits flip the DirtyMask bit so the next Autonomy
+	// chip click skips them.
 	markDirty := func(bit components.BehaviorRulesField) {
 		if ctx.BehaviorRulesEditMap == nil {
 			return
@@ -305,7 +261,6 @@ func drawBehaviorSection(ctx InspectorCtx, squad ecs.Entity, br *components.Beha
 		ctx.BehaviorRulesEditMap.Add(squad, &components.BehaviorRulesEdit{DirtyMask: bit})
 	}
 
-	// Boolean toggles as rows: [done] / [ ] + label.
 	type toggleSpec struct {
 		label string
 		field *bool
@@ -325,7 +280,6 @@ func drawBehaviorSection(ctx InspectorCtx, squad ecs.Entity, br *components.Beha
 		y += srChipH + 2
 	}
 
-	// SuppressionThreshold: [-] [value] [+] in a row.
 	const step = 0.05
 	const valueW int32 = 50
 	buttonW := (width - valueW - 2*srChipGap) / 2
@@ -350,8 +304,6 @@ func drawBehaviorSection(ctx InspectorCtx, squad ecs.Entity, br *components.Beha
 	return y
 }
 
-// drawChip renders a small clickable chip with an active / hover background.
-// Returns true if the chip was clicked this frame.
 func drawChip(ctx InspectorCtx, x, y, w, h int32, label string, active bool) bool {
 	r := rl.Rectangle{X: float32(x), Y: float32(y), Width: float32(w), Height: float32(h)}
 	hover := rectContains(r, ctx.Cursor) && ctx.PanelFocused
@@ -375,14 +327,11 @@ func drawChip(ctx InspectorCtx, x, y, w, h int32, label string, active bool) boo
 	return hover && ctx.LMBPressed
 }
 
-// drawCyclicField - same visual as drawChip but never "active"; click cycles
-// the underlying value (caller handles the wrap-around).
+// drawCyclicField is drawChip with active=false; caller cycles the value.
 func drawCyclicField(ctx InspectorCtx, x, y, w, h int32, label string) bool {
 	return drawChip(ctx, x, y, w, h, label, false)
 }
 
-// drawToggleRow - left-aligned label with a leading [done]/[ ] indicator. Click
-// anywhere in the row flips the boolean.
 func drawToggleRow(ctx InspectorCtx, x, y, w, h int32, label string, on bool) bool {
 	r := rl.Rectangle{X: float32(x), Y: float32(y), Width: float32(w), Height: float32(h)}
 	hover := rectContains(r, ctx.Cursor) && ctx.PanelFocused
@@ -400,15 +349,14 @@ func drawToggleRow(ctx InspectorCtx, x, y, w, h int32, label string, on bool) bo
 	}
 	drawText(ctx.Font, mark+" "+label, x+4, y+1, inspectorFontSize, markColor)
 	if !on {
-		// Override after the dim mark - keep the label readable.
+		// Override the dim mark so the label stays readable.
 		drawText(ctx.Font, mark+" "+label, x+4, y+1, inspectorFontSize, inspectorText)
 	}
 	return hover && ctx.LMBPressed
 }
 
-// drawStaminaBar - fill ratio 0..1, colour by zone. Renders inline in the
-// Movement section. `ratio < 0` indicates "no Stamina readings" - draws as a
-// flat dim track with "-" label.
+// drawStaminaBar: ratio < 0 means "no readings", drawn as a flat dim
+// track with "-" label.
 func drawStaminaBar(ctx InspectorCtx, x, y, w, h int32, ratio float32) {
 	track := rl.Rectangle{X: float32(x), Y: float32(y), Width: float32(w), Height: float32(h)}
 	rl.DrawRectangleRec(track, srBarTrack)
@@ -428,8 +376,7 @@ func drawStaminaBar(ctx InspectorCtx, x, y, w, h int32, ratio float32) {
 	drawText(ctx.Font, label, x+4, y+1, inspectorFontSize, inspectorText)
 }
 
-// squadStaminaAverage returns the mean Current/MaxLevel across the squad's
-// live roster. -1 if no readable Stamina components were found.
+// squadStaminaAverage returns -1 when no readable Stamina components found.
 func squadStaminaAverage(ctx InspectorCtx, squad ecs.Entity) float32 {
 	if ctx.StaminaMap == nil {
 		return -1
@@ -458,17 +405,13 @@ func squadStaminaAverage(ctx InspectorCtx, squad ecs.Entity) float32 {
 	return sum / float32(n)
 }
 
-// profileMatchesPreset - chip is "active" when every field of the live profile
-// matches the preset. Strict match avoids "partially active" highlights when
-// the player has hand-edited one field after applying a preset.
+// profileMatchesPreset uses strict equality so hand-edited fields don't
+// light the chip as "partially active".
 func profileMatchesPreset(p components.MovementProfile, preset components.MovementPreset) bool {
 	want := components.ApplyPreset(preset)
 	return p == want
 }
 
-// rectContains is a small XZ-style hit test. Inspector cursor is in screen
-// coords (raylib defaults), same as the panel content rect, so a direct
-// comparison works.
 func rectContains(r rl.Rectangle, c rl.Vector2) bool {
 	return c.X >= r.X && c.X < r.X+r.Width && c.Y >= r.Y && c.Y < r.Y+r.Height
 }

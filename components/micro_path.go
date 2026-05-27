@@ -3,8 +3,8 @@ package components
 import rl "github.com/gen2brain/raylib-go/raylib"
 
 // MicroPathSize - waypoint capacity. A decimated A* path across a 60 m route
-// peaks around 10-12 waypoints; 16 leaves headroom for the smaller
-// cover-via / kneel-then-run inserts a later track will splice in.
+// peaks around 10-12 waypoints; 16 leaves headroom for cover-via /
+// kneel-then-run inserts.
 const MicroPathSize = 16
 
 // MicroPath is the per-unit waypoint stream produced by MicroPathSystem from
@@ -14,10 +14,8 @@ const MicroPathSize = 16
 // shifts > microPathGoalShift or the unit hasn't made progress in
 // microPathStuckTime seconds (anti-thrash).
 //
-// GoalSnap is the goal at the moment the path was planned; comparing it to
-// the live ActionQueue head target gives a cheap "did the player move the
-// pin" check. ReplanAt throttles replans to one per microPathReplanCooldown
-// seconds per unit so a jittery goal can't burn the path budget.
+// GoalSnap is the goal at the moment the path was planned. ReplanAt throttles
+// replans so a jittery goal can't burn the path budget.
 type MicroPath struct {
 	Waypoints      [MicroPathSize]WorldPos
 	Head           uint8    // index of next waypoint to reach

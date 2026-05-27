@@ -4,37 +4,32 @@ import (
 	"math"
 )
 
-// Phase 17.8 M17.8.5 — ORCA (Optimal Reciprocal Collision Avoidance) local
-// steering for agent-agent collision avoidance. Based on Van den Berg et al.
-// "Reciprocal n-body Collision Avoidance", 2011 (RVO2 reference). Adapted to
-// our float32 / 2D XZ-plane conventions.
+// ORCA (Optimal Reciprocal Collision Avoidance) local steering for
+// agent-agent collision avoidance. Adapted from Van den Berg et al.
+// "Reciprocal n-body Collision Avoidance" (RVO2) to float32 / XZ-plane.
 //
-// Agent-agent only in this milestone. Wall obstacles still go through
-// reflectAgainstWalls (M17.8.5b will fold walls into ORCA constraints).
+// Agent-agent only; wall obstacles still go through reflectAgainstWalls.
 //
 // Use site: unit_movement_step.go computes a preferred velocity from
-// MicroPath / formation slot, then calls orcaAdjust(self, neighbours,
-// prefVel, ...) which returns a velocity that minimises change from prefVel
-// while satisfying every collision-avoidance half-plane. If no feasible
-// velocity exists (overcrowded), the 3D linear program degrades gracefully.
+// MicroPath / formation slot, then calls orcaAdjust which returns a
+// velocity that minimises change from prefVel while satisfying every
+// collision-avoidance half-plane. If no feasible velocity exists, the 3D
+// linear program degrades gracefully.
 
-// orcaTimeHorizon — predict collisions this many seconds into the future
-// for agent-agent. Higher = earlier evasive action, more cautious flow.
-// 2 s matches RVO2 default; tunable in M17.8.9.
+// Predict collisions this many seconds into the future for agent-agent.
+// Higher = earlier evasive action, more cautious flow. RVO2 default.
 const orcaTimeHorizon float32 = 2.0
 
-// orcaMaxNeighbours — query at most this many nearest neighbours per
-// solver call. Caps O(N²) worst case to O(N·K). 15 is enough for typical
-// formation density (a 2 m grid covers ~9 neighbours in 6 m radius).
+// Query at most this many nearest neighbours per solver call. Caps O(N²) to
+// O(N·K); 15 covers typical formation density.
 const orcaMaxNeighbours int = 15
 
-// orcaNeighbourRadius — spatial-hash query radius. Wider than the actual
-// danger envelope so newly accelerating neighbours are caught in time.
+// Spatial-hash query radius. Wider than the danger envelope so newly
+// accelerating neighbours are caught in time.
 const orcaNeighbourRadius float32 = 6.0
 
-// orcaTimeStep — used by the in-collision fallback (relativePosSq <
-// combinedRadiusSq). Smaller than timeHorizon to make the recovery push
-// stronger. Matches typical game tick of 1/60 s.
+// Used by the in-collision fallback; smaller than timeHorizon to make the
+// recovery push stronger.
 const orcaTimeStep float32 = 1.0 / 60.0
 
 // orcaVec2 is the local 2D vector type. XZ-plane only — no Y.
@@ -51,8 +46,8 @@ func (a orcaVec2) length() float32 {
 	return float32(math.Sqrt(float64(a.X*a.X + a.Z*a.Z)))
 }
 
-// det — 2D cross product, returns the signed area of the parallelogram.
-// Used to choose which side of a velocity obstacle leg to project onto.
+// det — 2D cross product. Used to choose which side of a velocity obstacle
+// leg to project onto.
 func det(a, b orcaVec2) float32 { return a.X*b.Z - a.Z*b.X }
 
 // orcaLine — one ORCA half-plane constraint. The feasible region is the
@@ -64,17 +59,15 @@ type orcaLine struct {
 	// is on the left when facing along Dir, i.e. (Dir.Z, -Dir.X) outward)
 }
 
-// orcaAgent — minimal per-agent state ORCA needs.
 type orcaAgent struct {
 	Pos    orcaVec2
 	Vel    orcaVec2
 	Radius float32
 }
 
-// orcaAgentConstraint builds the ORCA half-plane between `self` and
-// `other` for time horizon `tau`. Reciprocal — only half of the required
-// avoidance vector is loaded onto `self`; `other` shoulders the other
-// half via its own solver invocation.
+// orcaAgentConstraint builds the ORCA half-plane between `self` and `other`
+// for time horizon `tau`. Reciprocal — `self` shoulders half the avoidance
+// vector; `other` handles the rest via its own solver invocation.
 func orcaAgentConstraint(self, other orcaAgent, tau float32) orcaLine {
 	relPos := other.Pos.sub(self.Pos)
 	relVel := self.Vel.sub(other.Vel)
@@ -213,10 +206,8 @@ func orcaSolveLP1D(lines []orcaLine, idx int, maxSpeed float32, prefVel orcaVec2
 	return line.Point.add(line.Dir.scale(t)), true
 }
 
-// orcaSolveLP3D — fallback when 2D LP infeasible. Relaxes constraints by
-// finding the velocity that minimises the maximum violation. Standard
-// RVO2 approach. Used when the agent is hemmed in by multiple agents
-// that can't all be avoided simultaneously.
+// orcaSolveLP3D — fallback when 2D LP infeasible. Minimises maximum
+// violation (standard RVO2). Used when the agent is hemmed in.
 func orcaSolveLP3D(lines []orcaLine, maxSpeed float32, beginIdx int, prevResult orcaVec2) orcaVec2 {
 	result := prevResult
 	distance := float32(0)
@@ -261,15 +252,11 @@ func orcaSolveLP3D(lines []orcaLine, maxSpeed float32, beginIdx int, prevResult 
 	return result
 }
 
-// orcaAdjust is the single-call helper unit_movement_step uses. Builds
-// constraints from `neighbours`, runs the 2D LP, falls back to 3D when
-// infeasible. Returns the adjusted velocity (length ≤ maxSpeed) and a
-// boolean indicating whether the 2D LP found a feasible solution. The
-// boolean feeds the M17.8.6 replan-on-stall logic: persistent infeasibility
-// = unit is hemmed in, MicroPath should re-route.
+// orcaAdjust is the single-call helper unit_movement_step uses. Returns the
+// adjusted velocity and a feasibility bool — persistent infeasibility feeds
+// the replan-on-stall logic (unit hemmed in → MicroPath should re-route).
 func orcaAdjust(self orcaAgent, neighbours []orcaAgent, prefVel orcaVec2, maxSpeed float32) (orcaVec2, bool) {
 	if len(neighbours) == 0 {
-		// No neighbours = no constraints. Clamp to maxSpeed.
 		if prefVel.lenSq() > maxSpeed*maxSpeed {
 			return prefVel.scale(maxSpeed / prefVel.length()), true
 		}
@@ -289,7 +276,6 @@ func orcaAdjust(self orcaAgent, neighbours []orcaAgent, prefVel orcaVec2, maxSpe
 	return result, ok
 }
 
-// abs32 — float32 absolute value.
 func abs32(x float32) float32 {
 	if x < 0 {
 		return -x

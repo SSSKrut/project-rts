@@ -2,8 +2,6 @@ package components
 
 import "github.com/mlange-42/ark/ecs"
 
-// EventKind identifies what happened. Phase 15 covers the five most-asked-
-// about events; later phases extend (BuildingCleared, LowAmmo, etc).
 type EventKind uint8
 
 const (
@@ -15,14 +13,11 @@ const (
 	EventOrderFailed
 )
 
-// EventLogCapacity bounds the ring buffer length. ~200 events is generous
-// for a single skirmish; old entries roll off as new ones arrive.
 const EventLogCapacity = 200
 
 // EventEntry is one event record. Pos lets a future click-to-fly handler
-// move the map camera; Squad is optional (KIA carries the unit's squad,
-// orders carry the issuing squad, suppression carries the suppressed squad).
-// Text is a cached display string so the renderer doesn't fmt every frame.
+// move the map camera. Text is a cached display string so the renderer
+// doesn't fmt every frame.
 type EventEntry struct {
 	Kind  EventKind
 	At    float32
@@ -31,10 +26,8 @@ type EventEntry struct {
 	Text  string
 }
 
-// EventLog is the world-wide ring buffer resource. SurvivalInstinct,
-// DamageService, OrderResolver, etc. push entries via Push; the Inspector
-// renders the head N. Head is the next write slot; Count grows to
-// EventLogCapacity then stays clamped.
+// EventLog is the world-wide ring buffer resource. Head is the next write
+// slot; Count grows to EventLogCapacity then stays clamped.
 type EventLog struct {
 	Entries [EventLogCapacity]EventEntry
 	Head    int
@@ -54,8 +47,7 @@ func (l *EventLog) Push(e EventEntry) {
 }
 
 // Latest returns the n most recent entries, newest first. n is clamped to
-// the live Count; callers iterate the returned slice freely (it's a fresh
-// slice each call, sized n).
+// the live Count; returns a fresh slice each call.
 func (l *EventLog) Latest(n int) []EventEntry {
 	if n > l.Count {
 		n = l.Count
@@ -71,8 +63,6 @@ func (l *EventLog) Latest(n int) []EventEntry {
 	return out
 }
 
-// EventKindLabel returns the headline word used by Inspector / future HUD
-// ticker rendering.
 func EventKindLabel(k EventKind) string {
 	switch k {
 	case EventEnemyContact:

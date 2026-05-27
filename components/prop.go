@@ -29,8 +29,6 @@ type Prop struct {
 }
 
 // PropsDirty marks a chunk that hasn't had its procedural props spawned yet.
-// Set at chunk creation alongside HeightmapDirty + MeshDirty; cleared by
-// PropSpawnSystem after one pass.
 type PropsDirty struct{}
 
 // RiverProcessed marks a chunk whose river-cut + water props have been

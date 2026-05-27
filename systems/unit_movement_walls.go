@@ -7,16 +7,14 @@ import (
 )
 
 // colWall is the movement-collision view of a WallSegment. Windows block
-// movement (separate from LOS - losWall flips openingTransparent for windows
-// too), open doors allow passage through the opening range, closed doors and
-// plain walls fully block. World coords; trig pre-computed.
+// movement (LOS treats them transparent), open doors pass through the
+// opening, closed doors / walls fully block.
 //
-// Phase 17.8 follow-up — yBase/yTop is the storey range the wall occupies.
-// Stacked walls (storey-0 door + storey-1 window at the same XZ) share the
-// same 2D line; without a Y filter the storey-1 window's "block" would
-// override the storey-0 door's "passable", trapping units outside the
-// building. reflectAgainstWalls / escape both skip walls whose Y range
-// doesn't overlap the unit's foot Y.
+// yBase/yTop is the storey range. Stacked walls (storey-0 door + storey-1
+// window at the same XZ projection) share the same 2D line; without the Y
+// filter, the storey-1 window's "block" would override the storey-0 door's
+// "passable" and trap units outside the building. reflectAgainstWalls /
+// escape both skip walls whose Y range doesn't overlap the unit's foot Y.
 type colWall struct {
 	fromX, fromZ       float32
 	sa, ca             float32
@@ -51,43 +49,27 @@ func makeColWall(pos components.WorldPos, w components.WallSegment, doorState co
 }
 
 // unitMatchesWallStorey returns true when the unit's foot Y overlaps the
-// wall's storey range. Stacked walls (storey-0 door + storey-1 window at
-// the same XZ projection) must NOT collectively block a ground-floor unit
-// passing through the door opening — the storey-1 window's blocking should
-// only apply when a unit walks on storey-1's floor.
+// wall's storey range. Critical: without this filter, a storey-1 window
+// stacked above a storey-0 door at the same XZ collectively blocks the
+// ground-floor unit (see colWall comment).
+//
+// 0.3 m margin keeps ground-snap fluctuations from popping the unit out of
+// the matching range right at the storey boundary.
 func unitMatchesWallStorey(unitY, wallYBase, wallYTop float32) bool {
-	// 0.3 m margin so ground-snap fluctuations don't pop the unit out of
-	// the matching range right at the storey boundary.
 	const yMargin float32 = 0.3
 	return unitY >= wallYBase-yMargin && unitY <= wallYTop+yMargin
 }
 
-// reflectAgainstWalls runs an XZ ray cast from `(curX, curZ)` along velocity
-// `(velX, velZ) * dt` and adjusts the velocity vector to glide along the
-// normal of every wall the predicted segment would cross this tick. Walls in
-// the 3x3 chunk window around `home` are considered; open-door openings pass
-// through.
+// reflectAgainstWalls projects velocity along walls in the 3×3 chunk window
+// the predicted XZ step would cross. Sliding (v - (v·n)n) instead of full
+// reflection — units brush past corners and glide along corridor walls.
 //
-// Phase 15 M15.B.3 - velocity adjustment switched from full reflection
-// (v - 2*(v.n)*n, bouncy) to projection along the wall (v - (v.n)*n, slide).
-// Steep impacts now stop perpendicular to the wall while keeping any tangent
-// component, so units brush past corners and glide along corridor walls
-// instead of zig-zagging. Multiple wall hits chain: the first slide updates
-// the prediction, the next wall is tested against the new direction. Bound
-// the loop at 4 passes to avoid pathological corners (two walls meeting at
-// an acute angle).
-//
-// Phase 17.9 M1 — escape recovery now ADDITIVELY blends into velocity instead
-// of fully overriding it. Old override caused oscillation: unit approaches
-// wall to dist=0.05 < escapeMargin → override pushes (0, 2) north → out of
-// margin at 0.30 → ORCA wants south → re-enters margin → re-push. Net
-// forward velocity ~0. With additive blend, the small spring force away from
-// the wall combines with the unit's intent; the main slide loop then handles
-// the wall-crossing case correctly (removing only the into-wall component).
-// On a corner where two walls have opposite normals (compound NW junction:
-// M north + N south both at Z=38), the springs sum to ~0 and don't freeze
-// the unit any more — the velocity simply passes through unmodified, and
-// sliding takes over.
+// Escape recovery blends additively into velocity (not override). Override
+// caused oscillation: dist < margin → push out → out of margin → unit's
+// intent pulls back → re-enters margin → re-push, net velocity ~0. Additive
+// blend lets the spring nudge while the main slide loop handles wall-
+// crossing. On corners with opposite-normal walls (compound NW junction),
+// springs sum to ~0 instead of freezing the unit.
 func reflectAgainstWalls(curX, curZ, curY, velX, velZ, dt float32,
 	walls map[components.ChunkCoord][]colWall, home components.ChunkCoord,
 ) (float32, float32) {
@@ -101,10 +83,7 @@ func reflectAgainstWalls(curX, curZ, curY, velX, velZ, dt float32,
 			cc := components.ChunkCoord{X: home.X + dcX, Z: home.Z + dcZ}
 			for i := range walls[cc] {
 				w := &walls[cc][i]
-				// Phase 17.8 follow-up — skip walls outside the unit's
-				// storey Y range so a 1st-floor window doesn't block a
-				// ground-floor unit walking through the ground door at
-				// the same XZ projection.
+				// Storey Y filter (see unitMatchesWallStorey).
 				if !unitMatchesWallStorey(curY, w.yBase, w.yTop) {
 					continue
 				}
@@ -139,7 +118,7 @@ func reflectAgainstWalls(curX, curZ, curY, velX, velZ, dt float32,
 				}
 				dist := float32(math.Sqrt(float64(distSq)))
 				if dist < 1e-4 {
-					// Degenerate — pick wall normal direction.
+					// Degenerate: use wall normal direction.
 					nx, nz := w.ca, -w.sa
 					escapeX += nx * escapeSpeed
 					escapeZ += nz * escapeSpeed
@@ -151,11 +130,9 @@ func reflectAgainstWalls(curX, curZ, curY, velX, velZ, dt float32,
 			}
 		}
 	}
-	// Phase 17.9 M1 — additive blend instead of override. If the unit is
-	// completely idle (velocity ~ 0) escape becomes the sole driver, which
-	// matches the original "pop unit free" intent. With non-zero velocity,
-	// the spring adds a small drift away from the wall while sliding stays
-	// in charge of crossing geometry.
+	// Additive blend: idle unit → escape becomes sole driver (pops unit
+	// free); non-zero velocity → spring adds drift while sliding handles
+	// geometry crossings.
 	rvx, rvz := velX, velZ
 	if escapeActive {
 		rvx += escapeX * escapeBlendWeight
@@ -174,7 +151,6 @@ func reflectAgainstWalls(curX, curZ, curY, velX, velZ, dt float32,
 				bucket := walls[cc]
 				for i := range bucket {
 					w := &bucket[i]
-					// Phase 17.8 follow-up — storey Y filter (see colWall).
 					if !unitMatchesWallStorey(curY, w.yBase, w.yTop) {
 						continue
 					}
@@ -188,19 +164,17 @@ func reflectAgainstWalls(curX, curZ, curY, velX, velZ, dt float32,
 					if w.hasOpening && w.openPassable {
 						wallT := t2 * w.length
 						if wallT >= w.openStart && wallT <= w.openEnd {
-							continue // pass through open door
+							continue
 						}
 					}
-					// Wall direction (sa, ca); normal perpendicular = (ca,
-					// -sa) or its negation, whichever points toward the
-					// moving unit.
+					// Wall direction (sa, ca); normal (ca, -sa) flipped to
+					// point toward the moving unit.
 					nx, nz := w.ca, -w.sa
 					if rvx*nx+rvz*nz > 0 {
 						nx, nz = -nx, -nz
 					}
-					// Sliding: remove only the component of velocity that
-					// points into the wall. Tangent component survives so the
-					// unit keeps moving along the wall.
+					// Slide: subtract only the into-wall component; tangent
+					// survives.
 					dot := rvx*nx + rvz*nz
 					rvx -= dot * nx
 					rvz -= dot * nz

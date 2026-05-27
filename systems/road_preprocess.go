@@ -6,19 +6,15 @@ import (
 	"rts-go/components"
 )
 
-// preprocessSamples controls how finely we sample each edge to detect "in
-// river" transitions. At 200 samples per edge a 100 m road resolves to 0.5 m
-// step - well below the smallest river width - so transition points land in
-// the right sub-edge with no aliasing.
+// 200 samples per edge → 0.5 m step on a 100 m road (well below smallest
+// river width); transition points land in the right sub-edge without aliasing.
 const preprocessSamples = 200
 
-// PreprocessRoadGraph splits every edge that crosses a river polyline strip
-// at the entry/exit boundaries and tags the inside-the-strip sub-edges as
-// RoadBridge. After this, no system needs to do river-vs-road geometry - the
-// graph is the truth.
+// PreprocessRoadGraph splits every edge that crosses a river strip at the
+// entry/exit boundaries and tags inside-strip sub-edges as RoadBridge. After
+// this, no system needs river-vs-road geometry — the graph is the truth.
 //
-// Determinism: same input graph + same rivers => identical output. Safe to
-// call once at startup before any system reads the graph.
+// Deterministic; call once at startup before any system reads the graph.
 func PreprocessRoadGraph(g *components.RoadGraph, rivers *components.Rivers) {
 	if g == nil || rivers == nil || len(g.Edges) == 0 || len(rivers.Polylines) == 0 {
 		return
@@ -29,8 +25,8 @@ func PreprocessRoadGraph(g *components.RoadGraph, rivers *components.Rivers) {
 		ax, az := worldXZ(g.Nodes[e.From].Pos)
 		bx, bz := worldXZ(g.Nodes[e.To].Pos)
 
-		// Sample-based "in river strip" boolean trace; transition t-values
-		// become split nodes.
+		// Sample-based "in river strip" boolean trace; transitions become
+		// split nodes at the linear midpoint between samples.
 		var splitTs []float32
 		prevIn := isInRiverStrip(ax, az, rivers)
 		for s := 1; s <= preprocessSamples; s++ {
@@ -39,9 +35,6 @@ func PreprocessRoadGraph(g *components.RoadGraph, rivers *components.Rivers) {
 			z := az + t*(bz-az)
 			cur := isInRiverStrip(x, z, rivers)
 			if cur != prevIn {
-				// Linear midpoint between samples is good enough at this
-				// resolution; a binary refinement would cut error by another
-				// log(N) but is unnecessary for placeholder bridges.
 				splitTs = append(splitTs, t-0.5/float32(preprocessSamples))
 			}
 			prevIn = cur
@@ -83,7 +76,7 @@ func makeSubEdge(g *components.RoadGraph, base components.RoadEdge,
 }
 
 // isInRiverStrip returns true if (wx, wz) lies within Width/2 of any river
-// polyline segment - i.e. inside the cosine-cut river bed.
+// polyline segment.
 func isInRiverStrip(wx, wz float32, rivers *components.Rivers) bool {
 	for pi := range rivers.Polylines {
 		pl := &rivers.Polylines[pi]

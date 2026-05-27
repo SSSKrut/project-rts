@@ -9,8 +9,6 @@ import (
 // disjoint subsets.
 type Unit struct{}
 
-// StanceCode is a typed posture identifier. Modifiers (cover, suppressed,
-// aiming) will land as a sibling bitmask later.
 type StanceCode uint8
 
 const (
@@ -20,18 +18,17 @@ const (
 )
 
 // Stance carries the unit's current posture + an animation lock window.
-// LockUntil is session-time (matches squadService.Clock); writers (player
-// command, StanceControllerSystem) set it to "now + animLock" so the next
-// autonomous flipper can't snap-spin between bands.
+// LockUntil is session-time (matches squadService.Clock); writers set it to
+// "now + animLock" so the next autonomous flipper can't snap-spin between
+// bands.
 type Stance struct {
 	Code      StanceCode
 	LockUntil float32
 }
 
 // StanceOverride - player-set stance lock. While Until is in the future,
-// StanceControllerSystem skips the unit (the player meant Z/X/C / pie-menu
-// stance, leave it alone). Phase 21 hot-keys will write this marker; Phase 17
-// only defines the type so the controller's gate is in place.
+// StanceControllerSystem skips the unit (the player meant a manual stance,
+// leave it alone).
 type StanceOverride struct {
 	Until float32
 }
@@ -39,14 +36,12 @@ type StanceOverride struct {
 // Motion - current facing & speed. Yaw is the facing-yaw (radians around +Y),
 // what renderers and Vision read. Speed is |velocity| in m/s.
 //
-// Phase 17 M17.B.4: VelocityYaw is the direction of motion this frame (the
-// "where I'm walking"), computed from the move delta in UnitMovementSystem.
-// It's separated from Yaw so combat-move can decouple body facing from path
-// direction - under fire a unit looks at the threat while sidestepping along
-// VelocityYaw, instead of snapping the body to whatever the path tangent is.
+// VelocityYaw is the direction of motion this frame, computed from the move
+// delta in UnitMovementSystem. Separated from Yaw so combat-move can decouple
+// body facing from path direction - under fire a unit looks at the threat
+// while sidestepping along VelocityYaw.
 //
-// Both yaws follow the same convention as Motion.Yaw did pre-split:
-// 0 = +Z (north), increasing clockwise around +Y.
+// Both yaws: 0 = +Z (north), increasing clockwise around +Y.
 type Motion struct {
 	Yaw          float32 // facing yaw - drives render + Vision cone
 	VelocityYaw  float32 // direction of last frame's motion
@@ -65,7 +60,6 @@ type Vision struct {
 	AngleDot float32
 }
 
-// AwarenessSlots is the fixed-size memory of recently-seen targets per unit.
 const AwarenessSlots = 8
 
 // AwarenessEntry - one sighting record. Time == 0 means the slot is empty.
@@ -80,8 +74,7 @@ type Awareness struct {
 	LastSeen [AwarenessSlots]AwarenessEntry
 }
 
-// LocalBlackboard — per-unit scratchpad for tactical AI. Phase 17.8 M17.8.1
-// gave it real fields after Phase 7 left it as a placeholder.
+// LocalBlackboard — per-unit scratchpad for tactical AI.
 //
 // Layout choices:
 //   - Reason is a fixed-size byte buffer (32 bytes) so SetReason doesn't
@@ -90,13 +83,11 @@ type Awareness struct {
 //     for this tick; ORCA reads them as input, writes the adjusted velocity
 //     back into Motion (the blackboard stays advisory).
 //   - AssignedCover / AssignedTarget link to cover-slot / enemy-unit
-//     entities chosen by SurvivalInstinct / WeaponSystem. UtilityEvaluator
-//     reads them to score mode candidates.
-//   - GoalSlot is the formation-anchored target the unit should pathfind
-//     to. M17.8.4: written by FormationSystem (slot-aware MicroPath path).
+//     entities chosen by SurvivalInstinct / WeaponSystem.
+//   - GoalSlot is the formation-anchored target the unit should pathfind to.
 //
-// Mode transitions are gated by hysteresis — UtilityEvaluator (M17.8.2)
-// checks `now - LastModeSwitch >= MinModeDuration` AND `newScore >
+// Mode transitions are gated by hysteresis — UtilityEvaluator checks
+// `now - LastModeSwitch >= MinModeDuration` AND `newScore >
 // currentScore + Delta` before flipping CurrentMode.
 type LocalBlackboard struct {
 	CurrentMode    ActionMode
@@ -107,20 +98,19 @@ type LocalBlackboard struct {
 	AssignedCover  ecs.Entity
 	AssignedTarget ecs.Entity
 
-	GoalSlot   WorldPos
-	GoalLevel  ecs.Entity // non-zero when GoalSlot lies on a Level entity (interior pathing)
+	GoalSlot  WorldPos
+	GoalLevel ecs.Entity // non-zero when GoalSlot lies on a Level entity (interior pathing)
 
 	PrefVelocityX float32 // pre-ORCA preferred velocity (XZ plane)
 	PrefVelocityZ float32
 
-	// Counters for replan triggers (M17.8.6).
+	// Counters for replan triggers.
 	OvercrowdedSince float32 // accumulates while ORCA reports no feasible solution
 	StuckSince       float32 // accumulates while velocity is low but pref non-zero
 }
 
 // SetReason copies `text` into Blackboard.Reason without allocating. Up to
-// 32 bytes; longer text is truncated. Phase 17.8 M17.8.1 — Inspector
-// reason row reads this slice.
+// 32 bytes; longer text is truncated.
 func (b *LocalBlackboard) SetReason(text string) {
 	n := len(text)
 	if n > len(b.Reason) {
@@ -137,9 +127,9 @@ func (b *LocalBlackboard) ReasonString() string {
 }
 
 // ActionMode is the Utility evaluator's per-unit decision. UtilityEvaluatorSystem
-// (M17.8.2) picks the highest-scoring mode every 0.5 s with hysteresis;
-// executor systems (MicroPath, StanceController, WeaponSystem) read
-// CurrentMode to pick mode-appropriate behavior.
+// picks the highest-scoring mode every 0.5 s with hysteresis; executor
+// systems (MicroPath, StanceController, WeaponSystem) read CurrentMode to
+// pick mode-appropriate behavior.
 type ActionMode uint8
 
 const (
@@ -161,24 +151,18 @@ const (
 	// movement, no fire. Distinct from TakingCover (planned) — Suppressed is
 	// the AI losing initiative.
 	ModeSuppressed
-	// ModeTreating, ModeMounted — placeholders for Phase 19 / 21 expansion.
 	ModeTreating
 	ModeMounted
-	// ModeCount — compile-time bound for the spec table.
 	ModeCount
 )
 
-// UtilitySpec is the per-mode metadata row. Phase 17.8 M17.8.1 ships
-// placeholder rows with Name only; Score functions land in M17.8.2.
-// Spec-table pattern matches OrderKindSpecs (Phase 14.5).
+// UtilitySpec is the per-mode metadata row.
 type UtilitySpec struct {
 	Mode    ActionMode
 	Name    string
 	Enabled bool
 }
 
-// UtilitySpecs — canonical metadata table. Index by ActionMode. Adding a
-// new mode = bump ModeCount + append a row. Compile-time guard below.
 var UtilitySpecs = [ModeCount]UtilitySpec{
 	ModeFollowing:     {Mode: ModeFollowing, Name: "Following", Enabled: true},
 	ModeEngaging:      {Mode: ModeEngaging, Name: "Engaging", Enabled: true},
@@ -187,8 +171,7 @@ var UtilitySpecs = [ModeCount]UtilitySpec{
 	ModeReloading:     {Mode: ModeReloading, Name: "Reloading", Enabled: true},
 	ModeSuppressed:    {Mode: ModeSuppressed, Name: "Suppressed", Enabled: true},
 	// Treating / Mounted: declared so the table is exhaustive but Enabled=false
-	// — UtilityEvaluator skips disabled modes when scoring. Phase 19 / 21 flip
-	// them on with real Score functions + executor wiring.
+	// — UtilityEvaluator skips disabled modes when scoring.
 	ModeTreating: {Mode: ModeTreating, Name: "Treating", Enabled: false},
 	ModeMounted:  {Mode: ModeMounted, Name: "Mounted", Enabled: false},
 }
@@ -198,13 +181,12 @@ var _ = [ModeCount]UtilitySpec(UtilitySpecs)
 
 // UtilityBucketCount — distribute Utility evaluation across N frames so the
 // per-tick cost is ~1/N of the all-units case. At 60 fps with N=30, every
-// unit re-evaluates once per 0.5 s on average. Match UtilityEvaluatorSystem
-// bucket gate in systems/utility_evaluator.go.
+// unit re-evaluates once per 0.5 s on average.
 const UtilityBucketCount uint32 = 30
 
 // ModeSwitchScoreDelta — hysteresis threshold. New mode must beat current
 // mode's score by this much before switching. Prevents per-tick flapping
-// between nearly-tied modes (e.g. Following vs TakingCover at threat=0.4).
+// between nearly-tied modes.
 const ModeSwitchScoreDelta float32 = 0.15
 
 // MinModeDurationSec — anti-flap floor. Once a mode is entered, the unit
@@ -218,8 +200,8 @@ const MinModeDurationSec float32 = 1.0
 // the dwell timer.
 const UtilityEmergencyDelta float32 = 0.6
 
-// ModeName returns the human-readable mode label for Inspector / debug
-// overlays. Falls back to "?" if the code drifts out of bounds.
+// ModeName returns the human-readable mode label. Falls back to "?" if the
+// code drifts out of bounds.
 func ModeName(m ActionMode) string {
 	if int(m) >= len(UtilitySpecs) {
 		return "?"
@@ -227,7 +209,6 @@ func ModeName(m ActionMode) string {
 	return UtilitySpecs[m].Name
 }
 
-// ActionKind discriminates ActionQueue entries.
 type ActionKind uint8
 
 const (

@@ -10,9 +10,9 @@ import (
 
 // StreamingSystem updates node states based on the player's current node.
 type StreamingSystem struct {
-	// anchor filter requests WorldPos (canonical position type) even though
-	// we don't read fields - we reach the anchor via NodeEntity.
-	anchorNodeFilter   *ecs.Filter3[components.LODAnchor, components.NodeEntity, components.WorldPos]
+	// anchor filter requires WorldPos (canonical position type) even though
+	// we don't read fields — anchor is reached via NodeEntity.
+	anchorNodeFilter *ecs.Filter3[components.LODAnchor, components.NodeEntity, components.WorldPos]
 	streamingMapRes    ecs.Resource[components.StreamingMap]
 	nodeEntityFilter   *ecs.Filter2[components.NodeEntity, components.LODActive]
 	nodeRelevantFilter *ecs.Filter2[components.NodeEntity, components.LODRelevant]
@@ -62,8 +62,7 @@ func (sys StreamingSystem) Update(ctx core.UpdateContext) {
 		return
 	}
 
-	// Mutate States in place to avoid the per-tick map allocation the previous
-	// implementation paid.
+	// Mutate States in place to avoid per-tick map allocation.
 	sMap := sys.streamingMapRes.Get()
 	if sMap == nil {
 		return

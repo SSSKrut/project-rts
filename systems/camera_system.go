@@ -8,8 +8,6 @@ import (
 	"github.com/mlange-42/ark/ecs"
 )
 
-// CurrentCamera is the rl.Camera3D the renderer uses; updated each frame by
-// CameraSystem from ECS state.
 var CurrentCamera rl.Camera3D
 
 // CurrentOriginChunk anchors the render space this frame. Every drawn entity
@@ -53,8 +51,6 @@ func (sys CameraSystem) Update(ctx core.UpdateContext) {
 				}
 			}
 
-			// Render origin = camera's chunk; camera sits at camPos.Local in
-			// render space, target is projected relative to that origin.
 			CurrentOriginChunk = camPos.Chunk
 			CurrentCamera = rl.Camera3D{
 				Position:   camPos.Local,

@@ -6,10 +6,10 @@ package systems
 type BiomeKind uint8
 
 const (
-	BiomeForest   BiomeKind = iota // dense trees (Oak/Pine/Birch)
-	BiomeBushland                  // open scrub (Bush)
-	BiomeRocky                     // boulder fields (Rock)
-	BiomePlains                    // mostly empty
+	BiomeForest BiomeKind = iota
+	BiomeBushland
+	BiomeRocky
+	BiomePlains
 )
 
 // Biome fBm tuning. Lower frequency than terrain (1/96) -> larger homogeneous

@@ -11,8 +11,7 @@ import (
 )
 
 // Tracer streams one JSONL line per frame to a file. Active only on builds
-// with `-tags trace`. Opened by main_trace.go after flag parsing; closed via
-// app.Trace.Close() deferred in main.go.
+// with `-tags trace`.
 type Tracer struct {
 	file   *os.File
 	writer *bufio.Writer
@@ -20,8 +19,6 @@ type Tracer struct {
 	open   bool
 }
 
-// Open creates path (truncating any existing file) and prepares the JSON
-// encoder. Subsequent WriteFrame / Mark calls write one line per call.
 func (t *Tracer) Open(path string) error {
 	f, err := os.Create(path)
 	if err != nil {
@@ -35,12 +32,10 @@ func (t *Tracer) Open(path string) error {
 	return nil
 }
 
-// IsOpen reports whether a sink is currently active.
 func (t *Tracer) IsOpen() bool { return t != nil && t.open }
 
-// frameRecord is the on-disk shape of one frame. JSON field names match the
-// PHASE-7.5 plan (`fps`, `frame_ms`, `tick_ms`, ...) so jq filters from one run
-// keep working across runs.
+// frameRecord JSON field names are part of an external contract - jq
+// filters from one run must keep working across runs.
 type frameRecord struct {
 	Frame    int64              `json:"frame"`
 	ElapsMs  float64            `json:"elapsed_ms"`
@@ -59,13 +54,9 @@ type markRecord struct {
 	ElapsMs float64 `json:"elapsed_ms"`
 }
 
-// WriteFrame serialises one trace line. Called from main.go's end-of-frame
-// path so it has access to FPS / frame_ms from raylib and the per-archetype
-// census already computed for the HUD.
-//
-// We re-allocate the Systems map every call (~17 keys) - cheap enough given
-// the file-IO bound, and avoids stale entries if a system is removed mid-run.
-// json.Encoder appends a newline automatically, giving us JSONL.
+// WriteFrame re-allocates the Systems map every call (~17 keys) - cheap
+// enough given the file-IO bound, and avoids stale entries if a system is
+// removed mid-run. json.Encoder appends a newline automatically.
 func (t *Tracer) WriteFrame(m FrameMetrics, p *Profiler) {
 	if !t.open {
 		return
@@ -91,8 +82,8 @@ func (t *Tracer) WriteFrame(m FrameMetrics, p *Profiler) {
 	t.frame++
 }
 
-// Mark writes a one-off marker line (e.g. for "this is where the stress test
-// began"). Safe to call any time the tracer is open; ignored otherwise.
+// Mark writes a one-off marker line. Safe to call any time; ignored when
+// the tracer is closed.
 func (t *Tracer) Mark(label string) {
 	if !t.open {
 		return
@@ -108,7 +99,7 @@ func (t *Tracer) Mark(label string) {
 	}
 }
 
-// Close flushes pending buffered writes and closes the file. Idempotent.
+// Close flushes pending writes and closes the file. Idempotent.
 func (t *Tracer) Close() error {
 	if !t.open {
 		return nil
@@ -121,11 +112,10 @@ func (t *Tracer) Close() error {
 	return t.file.Close()
 }
 
-// TraceEnabled reports whether this build includes file-trace support.
 func TraceEnabled() bool { return true }
 
 // startWallNs is captured at process start for Mark elapsed-ms timestamps.
-// Frame records use the FrameMetrics.Elapsed field instead - measured against
-// the simulation clock, not wall clock - so they stay aligned with the
-// Profiler. Marks happen on rare hotkey input so wall-clock is fine.
+// Frame records use FrameMetrics.Elapsed (simulation clock) so they stay
+// aligned with the Profiler; Marks happen on rare hotkey input so
+// wall-clock is fine.
 var startWallNs = time.Now().UnixNano()

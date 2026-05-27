@@ -10,7 +10,6 @@ type Trench struct {
 	Depth  float32
 }
 
-// TrenchNetwork is the singleton resource holding every static trench line.
 type TrenchNetwork struct {
 	Lines []Trench
 }

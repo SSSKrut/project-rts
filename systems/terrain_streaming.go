@@ -12,22 +12,17 @@ import (
 	"rts-go/core"
 )
 
-// Streaming radii in chunks. Active = full-detail mesh, Relevant = decimated.
-// Chebyshev distance (max of |dx|, |dz|) so the loaded region is a square
-// ring rather than a circle - matches a grid streaming pattern and keeps
-// neighbour lookup trivially correct.
-//
-// 7x7 active + 11x11 relevant (was 5x5 + 9x9). At 64 m chunks the far-LOD
-// ring reaches 320 m from the anchor.
+// Streaming radii in chunks. Chebyshev distance gives a square ring (matches
+// the grid streaming pattern and keeps neighbour lookup trivially correct).
+// 7×7 active + 11×11 relevant; at 64 m chunks the far-LOD ring reaches 320 m.
 const (
 	terrainActiveRadius   = 3
 	terrainRelevantRadius = 6
 	terrainHysteresis     = 1
 )
 
-// TerrainChunkIndex is a singleton: ChunkCoord -> entity. O(1) "is this chunk
-// already loaded?" and eviction set without a full scan. Held by reference
-// (added via ecs.AddResource) and mutated in place - no per-tick allocation.
+// TerrainChunkIndex is a singleton: ChunkCoord → entity. O(1) load-check and
+// eviction set without a full scan.
 type TerrainChunkIndex struct {
 	Loaded map[components.ChunkCoord]ecs.Entity
 }
@@ -38,12 +33,10 @@ func NewTerrainChunkIndex() TerrainChunkIndex {
 	}
 }
 
-// TerrainStreamingSystem owns the lifecycle of terrain chunk entities: spawns
-// them when the anchor moves into range, evicts them (releasing GPU
-// resources) when the anchor moves away, and toggles the LOD marker on tier
-// boundary crossings. Does NOT generate heights or build meshes - just sets
-// HeightmapDirty / MeshDirty for downstream systems. Runs at 4 Hz; the anchor
-// can't outrun a chunk in less than that even at high speed.
+// TerrainStreamingSystem owns the lifecycle of terrain chunk entities:
+// spawns / evicts / toggles LOD markers. Does NOT generate heights or build
+// meshes — sets HeightmapDirty / MeshDirty for downstream systems. Runs at
+// 4 Hz; the anchor can't outrun a chunk in less.
 type TerrainStreamingSystem struct {
 	anchorFilter      *ecs.Filter2[components.LODAnchor, components.WorldPos]
 	chunkFilter       *ecs.Filter2[components.ChunkCoord, components.TerrainChunk]
@@ -113,9 +106,8 @@ func chebyshev(a, b components.ChunkCoord) int32 {
 	return dz
 }
 
-// tierForDistance applies inward/outward hysteresis bands so a chunk doesn't
-// oscillate when the anchor sits on a boundary. Needs the current tier to
-// know which band to test against.
+// tierForDistance applies inward/outward hysteresis bands so a chunk
+// doesn't oscillate when the anchor sits on a boundary.
 func tierForDistance(dist int32, current core.LODTier) core.LODTier {
 	activeIn := int32(terrainActiveRadius - terrainHysteresis)
 	activeOut := int32(terrainActiveRadius + terrainHysteresis)
@@ -150,7 +142,7 @@ func tierForDistance(dist int32, current core.LODTier) core.LODTier {
 	}
 }
 
-// initialTier - tier a brand-new chunk is born into; no hysteresis to consult.
+// initialTier returns the tier a brand-new chunk is born into.
 func initialTier(dist int32) core.LODTier {
 	if dist <= int32(terrainActiveRadius) {
 		return core.LODTierActive
@@ -185,7 +177,7 @@ func (sys TerrainStreamingSystem) Update(ctx core.UpdateContext) {
 		return
 	}
 
-	// Sweep + classify; archetype mutations buffered for after the query.
+	// Archetype mutations buffered for after the query.
 	type tierChange struct {
 		id      ecs.Entity
 		oldTier core.LODTier
@@ -204,8 +196,7 @@ func (sys TerrainStreamingSystem) Update(ctx core.UpdateContext) {
 		id := q2.Entity()
 		dist := chebyshev(*cc, anchorChunk)
 
-		// A chunk briefly between markers (shouldn't happen in practice) is
-		// treated as Dormant to force re-evaluation.
+		// A chunk briefly between markers is treated as Dormant.
 		var current core.LODTier = core.LODTierDormant
 		if sys.lodActiveMap.Has(id) {
 			current = core.LODTierActive
@@ -219,7 +210,7 @@ func (sys TerrainStreamingSystem) Update(ctx core.UpdateContext) {
 		}
 		next := tierForDistance(dist, current)
 		if next == core.LODTierDormant {
-			// No Dormant tier for terrain - out-of-band counts as eviction.
+			// No Dormant tier for terrain — out-of-band = eviction.
 			evictions = append(evictions, evictRec{id, *cc})
 			continue
 		}
@@ -228,7 +219,6 @@ func (sys TerrainStreamingSystem) Update(ctx core.UpdateContext) {
 		}
 	}
 
-	// Spawn missing chunks in range.
 	type spawnRec struct {
 		cc   components.ChunkCoord
 		tier core.LODTier
@@ -250,23 +240,16 @@ func (sys TerrainStreamingSystem) Update(ctx core.UpdateContext) {
 		}
 	}
 
-	// Evictions. CRITICAL: unload GPU mesh BEFORE removing the entity, else
-	// the VAO/VBO is leaked. UnloadMesh (not UnloadModel) so Go-allocated
-	// pointers don't get C.free'd.
-	//
-	// Persistence: Modified chunks get their heights flushed before
-	// destruction; pristine chunks skip the write entirely. Errors are
-	// logged, not fatal - a missed flush degrades to "this edit was lost"
-	// rather than crashing the streaming loop.
+	// Evictions: unload GPU mesh BEFORE RemoveEntity (else VAO/VBO leak).
+	// UnloadMesh, not UnloadModel — Go-allocated pointers must not C.free.
+	// Modified chunks flush heights first; pristine chunks skip the write.
 	propIdx := sys.propIndexRes.Get()
 	bIdx := sys.buildingIndexRes.Get()
 	coverIdx := sys.coverSlotIndexRes.Get()
 	transitionReg := sys.transitionRes.Get()
 
-	// Phase 16.B.0: a Building's footprint may overlap multiple chunks, so
-	// when chunk X evicts we must despawn only those children whose
-	// Pos.Chunk == X. Bucket by EVERY overlapping chunk; same root shows up
-	// in 1..N buckets.
+	// Bucket each Building by every chunk its footprint overlaps so eviction
+	// despawns only children whose Pos.Chunk matches the evicting chunk.
 	var buildingsByChunk map[components.ChunkCoord][]ecs.Entity
 	if bIdx != nil && len(evictions) > 0 {
 		qb := sys.buildingFilter.Query()
@@ -298,9 +281,7 @@ func (sys TerrainStreamingSystem) Update(ctx core.UpdateContext) {
 				}
 			}
 		}
-		// Tear down every prop / water-prop / bridge / road-surface entity
-		// that lived in this chunk. Chunk owns the prop lifecycle; props
-		// respawn deterministically on chunk return.
+		// Chunk owns prop lifecycle; respawn deterministically on return.
 		if propIdx != nil {
 			if props, ok := propIdx.Loaded[ev.cc]; ok {
 				for _, p := range props {
@@ -312,10 +293,8 @@ func (sys TerrainStreamingSystem) Update(ctx core.UpdateContext) {
 				delete(propIdx.Loaded, ev.cc)
 			}
 		}
-		// Tear down only those building children whose Pos.Chunk == ev.cc.
-		// Other children of the same building keep living in their own
-		// chunks; root + Level entities are AlwaysActive and ignore eviction
-		// entirely. Children respawn deterministically on chunk return.
+		// Tear down children whose Pos.Chunk == ev.cc; other children of
+		// the same building keep living. Root + Level are AlwaysActive.
 		if bIdx != nil {
 			for _, root := range buildingsByChunk[ev.cc] {
 				children, ok := bIdx.Loaded[root]
@@ -339,9 +318,8 @@ func (sys TerrainStreamingSystem) Update(ctx core.UpdateContext) {
 						remaining = append(remaining, c)
 					}
 				}
-				// Drop every TransitionEdge whose owner just despawned -
-				// otherwise A* could route through a stale doorway / stair
-				// edge. Per Phase 7 P3 (transition cleanup on eviction).
+				// Drop every TransitionEdge whose owner just despawned —
+				// otherwise A* would route through a stale doorway / stair.
 				if transitionReg != nil && len(evictedChildren) > 0 {
 					for k, edges := range transitionReg.Out {
 						kept := edges[:0]
@@ -371,8 +349,8 @@ func (sys TerrainStreamingSystem) Update(ctx core.UpdateContext) {
 		ctx.World.RemoveEntity(ev.id)
 	}
 
-	// Tier transitions need a remesh (different vertex resolution) but the
-	// heightmap is still valid, so only set MeshDirty.
+	// Tier transitions need a remesh (different resolution); heightmap is
+	// still valid, so only MeshDirty.
 	for _, ch := range changes {
 		switch ch.oldTier {
 		case core.LODTierActive:
@@ -391,9 +369,8 @@ func (sys TerrainStreamingSystem) Update(ctx core.UpdateContext) {
 		}
 	}
 
-	// Spawn new chunks. WorldPos is at the chunk's origin corner - render
-	// adds renderPos = pos.ToRenderSpace and the mesh's local vertices span
-	// [0, ChunkSize].
+	// WorldPos sits at the chunk's origin corner; mesh local vertices span
+	// [0, ChunkSize] and render adds renderPos = pos.ToRenderSpace.
 	for _, sp := range spawns {
 		e := ctx.World.NewEntity()
 		sys.posMap.Add(e, &components.WorldPos{Chunk: sp.cc})

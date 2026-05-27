@@ -6,9 +6,7 @@ import (
 )
 
 // ThreatState is the discretised band of Threat.Total used by reactive AI
-// (cover/stance choice, perception factor, reaction delay). Phase 17 M17.0.3
-// migrates SurvivalInstinct/StanceController to read this enum instead of the
-// raw Suppression float.
+// (cover/stance choice, perception factor, reaction delay).
 type ThreatState uint8
 
 const (
@@ -26,24 +24,21 @@ const (
 	ThreatThreatenedThreshold float32 = 0.66
 )
 
-// Threat is the per-unit aggregate of incoming danger signals. Phase 17 M17.0
-// replaces the Phase 14 Suppression component: Suppression survives as one of
-// the four contributing channels, alongside ShotsFired (far gunfire), Endangered
-// (someone aiming at me) and Injury (HP/bleeding). Total is recomputed each
-// tick by ThreatSystem from those channels; State is the discretised band.
+// Threat is the per-unit aggregate of incoming danger signals. Suppression
+// survives as one of the four contributing channels, alongside ShotsFired
+// (far gunfire), Endangered (someone aiming at me) and Injury (HP/bleeding).
+// Total is recomputed each tick by ThreatSystem from those channels.
 //
 // ThreatDir is the unit-length world XZ vector pointing from the dominant
-// threat source toward this unit (i.e. "where the danger came from, relative
-// to me"). Reactive AI reads it for cover selection (Phase 15) and combat-move
-// facing (Phase 17.B).
+// threat source toward this unit. Reactive AI reads it for cover selection
+// and combat-move facing.
 //
-// Writers: WeaponSystem (and other producers) push typed DangerEvent into the
-// unit's DangerBuffer; ThreatSystem drains the buffer each tick, accumulates
-// per-channel contribs (with decay), aggregates ThreatDir as a recency-weighted
+// Writers: producers push typed DangerEvent into the unit's DangerBuffer;
+// ThreatSystem drains the buffer each tick, accumulates per-channel
+// contribs (with decay), aggregates ThreatDir as a recency-weighted
 // average, recomputes Total + State.
 type Threat struct {
-	// Total is the [0,1] aggregate. ThreatSystem sets it; readers should
-	// treat it as the canonical danger scalar.
+	// Total is the [0,1] aggregate. ThreatSystem sets it.
 	Total float32
 
 	// Suppression - direct-fire pressure (bullets landing close).
@@ -52,20 +47,16 @@ type Threat struct {
 	// ShotsFired - far/indirect gunfire heard but not impacting.
 	ShotsFired float32
 
-	// Endangered - someone is currently aiming at me. Held by an external
-	// signal while the threat is in focus.
+	// Endangered - someone is currently aiming at me.
 	Endangered float32
 
-	// Injury - bleeding / wounded contribution. Held while the effect is
-	// active. Wired in once HP loss feeds DangerDamageTaken.
+	// Injury - bleeding / wounded contribution.
 	Injury float32
 
 	// ThreatDir - unit-length world XZ vector from the dominant threat
-	// source toward the unit. Recency-weighted average of recent
-	// DangerEvent positions.
+	// source toward the unit.
 	ThreatDir rl.Vector3
 
-	// State - discretised band of Total. ThreatSystem owns this field.
 	State ThreatState
 }
 
@@ -82,11 +73,6 @@ func ClassifyThreat(total float32) ThreatState {
 	return ThreatSafe
 }
 
-// DangerKind classifies one entry in the unit's DangerBuffer. Phase 17 M17.0.2
-// implements DangerBulletImpact (the Phase 14 propagateSuppression callsite);
-// the rest are reserved for later milestones (Gunshot - audible far-fire,
-// Explosion / GrenadeLanding - AoE producers, DamageTaken - DamageService hook,
-// Bleeding - status-effect tick, UnsafeArea - manual / artillery zone, etc.).
 type DangerKind uint8
 
 const (
@@ -103,19 +89,18 @@ const (
 	dangerKindCount
 )
 
-// DangerEvent is one typed signal pushed into a unit's DangerBuffer. Producers
-// (WeaponSystem, DamageService, future SoundSystem, AreaMarker) fill these in
-// a serial post-pass; ThreatSystem drains the buffer each tick.
+// DangerEvent is one typed signal pushed into a unit's DangerBuffer.
+// ThreatSystem drains the buffer each tick.
 type DangerEvent struct {
 	Kind     DangerKind
-	Source   ecs.Entity // attacker / shooter (for KIA log, future tracker)
-	Pos      WorldPos   // world location of the source
-	Strength float32    // amplitude: per-kind, e.g. hitMul*falloff for impacts
-	Time     float32    // session-time at emit
+	Source   ecs.Entity
+	Pos      WorldPos
+	Strength float32 // amplitude: per-kind, e.g. hitMul*falloff for impacts
+	Time     float32
 }
 
-// DangerBufferSize - ring capacity. Phase 17 M17.0.2 budgets 8 events per
-// tick per unit; bursts above that overwrite oldest (FIFO eviction).
+// DangerBufferSize - ring capacity. Budgets 8 events per tick per unit;
+// bursts above that overwrite oldest (FIFO eviction).
 const DangerBufferSize = 8
 
 // DangerBuffer is a per-unit fixed-size ring of recently observed
@@ -124,8 +109,8 @@ const DangerBufferSize = 8
 // the same serial post-pass.
 type DangerBuffer struct {
 	Events [DangerBufferSize]DangerEvent
-	Head   uint8 // next write index
-	Count  uint8 // number of valid entries (<= DangerBufferSize)
+	Head   uint8
+	Count  uint8
 }
 
 // PushDanger appends an event to the buffer. When full, overwrites the oldest
@@ -139,7 +124,7 @@ func PushDanger(buf *DangerBuffer, ev DangerEvent) {
 }
 
 // ThreatChannel names which Threat float a DangerEvent contributes to.
-// Phase 17 M17.0.2 - decay is per-channel; event routing is per-DangerKind.
+// Decay is per-channel; event routing is per-DangerKind.
 type ThreatChannel uint8
 
 const (
@@ -151,15 +136,10 @@ const (
 	threatChannelCount
 )
 
-// dangerSpec - per-DangerKind row. Only Channel is consumed in M17.0.2; the
-// table makes it cheap for future producers (DangerExplosion etc.) to route
-// without touching ThreatSystem.
 type dangerSpec struct {
 	Channel ThreatChannel
 }
 
-// dangerSpecs is indexed by DangerKind. M17.0.2 ships BulletImpact live; the
-// rest are pre-classified for the milestones that wire their producers.
 var dangerSpecs = [dangerKindCount]dangerSpec{
 	DangerGunshot:        {Channel: ThreatChannelShotsFired},
 	DangerBulletImpact:   {Channel: ThreatChannelSuppression},
@@ -174,8 +154,7 @@ var dangerSpecs = [dangerKindCount]dangerSpec{
 }
 
 // ChannelDecayRates - per-second linear drop applied to each channel by
-// ThreatSystem. Values match the Phase 14 Suppression decay (0.10) and the
-// Phase 17 plan budgets for the other channels.
+// ThreatSystem.
 var ChannelDecayRates = [threatChannelCount]float32{
 	ThreatChannelNone:        0,
 	ThreatChannelSuppression: 0.10,
@@ -199,13 +178,10 @@ func ChannelForDanger(kind DangerKind) ThreatChannel {
 // danger coming from" vector that stays stable across one threat pulse even
 // as bullets fly out.
 //
-// Writer: WeaponSystem.serialApply spawns one entity per shot. Cleanup:
-// ThreatDecaySystem despawns expired entries.
-//
 // Entity layout: ThreatSource + WorldPos. Severity grows with weapon damage
 // so an MG burst pushes more weight than a single rifle round.
 type ThreatSource struct {
 	Severity  float32 // 0..1 fire intensity / round weight
-	SpawnTime float32 // session-time at spawn
-	TTL       float32 // seconds before ThreatDecaySystem despawns
+	SpawnTime float32
+	TTL       float32
 }

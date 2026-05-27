@@ -11,7 +11,7 @@ import (
 	"rts-go/core"
 )
 
-// minF / maxF — float32 min/max helpers. math.Min / math.Max are float64.
+// math.Min / Max are float64; these are the float32 helpers.
 func minF(a, b float32) float32 {
 	if a < b {
 		return a
@@ -25,11 +25,10 @@ func maxF(a, b float32) float32 {
 	return b
 }
 
-// bakeTransitionsPass is Pass 4: rebuild TransitionRegistry from the live set
-// of Doors / Stairs / bunker entrances. They connect surface<->level and
-// level<->level NavNodes. We wipe the registry and re-emit on every tick that
-// any chunk bakes; on the placeholder scene the total edge count is small
-// (<~20), so a full rebuild is cheaper than per-owner invalidation.
+// bakeTransitionsPass is Pass 4: rebuild TransitionRegistry from the live
+// set of Doors / Stairs / bunker entrances. Connects surface↔level and
+// level↔level NavNodes. Full rebuild every tick that any chunk bakes —
+// edge counts are small (<~20) so it beats per-owner invalidation.
 func (sys *SpatialBakeSystem) bakeTransitionsPass(ctx core.UpdateContext) {
 	_ = ctx
 	registry := sys.transitionRes.Get()
@@ -41,9 +40,7 @@ func (sys *SpatialBakeSystem) bakeTransitionsPass(ctx core.UpdateContext) {
 		delete(registry.Out, k)
 	}
 
-	// Snapshot every Level entity that already has a baked nav grid. Level
-	// entities are AlwaysActive so they're always reachable - we filter only
-	// by "has LevelNavGrid".
+	// Levels are AlwaysActive; filter only by "has LevelNavGrid".
 	type levelSnapshot struct {
 		ent     ecs.Entity
 		chunk   components.ChunkCoord
@@ -77,8 +74,6 @@ func (sys *SpatialBakeSystem) bakeTransitionsPass(ctx core.UpdateContext) {
 		return
 	}
 
-	// Find the level whose AABB contains (worldX, worldZ) and whose Y range
-	// covers `y` with a small pad. Returns nil if no match.
 	findLevel := func(worldX, worldZ, y float32) *levelSnapshot {
 		const yPad float32 = 0.6
 		for i := range levels {
@@ -93,7 +88,6 @@ func (sys *SpatialBakeSystem) bakeTransitionsPass(ctx core.UpdateContext) {
 		}
 		return nil
 	}
-	// Map a world XZ inside a level to a (I, J) cell index on its grid.
 	levelCell := func(lv *levelSnapshot, worldX, worldZ float32) (int16, int16, bool) {
 		chunkBaseX := float32(lv.chunk.X) * components.ChunkSize
 		chunkBaseZ := float32(lv.chunk.Z) * components.ChunkSize
@@ -107,7 +101,6 @@ func (sys *SpatialBakeSystem) bakeTransitionsPass(ctx core.UpdateContext) {
 		return i, j, true
 	}
 
-	// Snapshot door walls.
 	type doorSnap struct {
 		ent     ecs.Entity
 		pos     components.WorldPos
@@ -134,7 +127,6 @@ func (sys *SpatialBakeSystem) bakeTransitionsPass(ctx core.UpdateContext) {
 		doors = append(doors, doorSnap{ent: e, pos: *pos, w: *w, outward: outward, level: lev})
 	}
 
-	// Snapshot stairs (carry their resolved level endpoints).
 	type stairsSnap struct {
 		ent     ecs.Entity
 		pos     components.WorldPos
@@ -176,7 +168,7 @@ func (sys *SpatialBakeSystem) bakeTransitionsPass(ctx core.UpdateContext) {
 		return nil
 	}
 
-	// Doors -> 1 bidirectional edge between surface cell outside and level
+	// 1 bidirectional edge per door between surface cell outside and level
 	// cell inside.
 	for _, d := range doors {
 		sa := float32(math.Sin(float64(d.w.Yaw)))
@@ -187,8 +179,7 @@ func (sys *SpatialBakeSystem) bakeTransitionsPass(ctx core.UpdateContext) {
 		cx := baseX + d.pos.Local.X + sa*centreT
 		cz := baseZ + d.pos.Local.Z + ca*centreT
 
-		// Inside level: prefer LevelMember; fall back to containing-AABB scan
-		// for resilience.
+		// Prefer LevelMember; fall back to containing-AABB scan.
 		var lv *levelSnapshot
 		if d.level != (ecs.Entity{}) {
 			lv = levelByEntity(d.level)
@@ -227,7 +218,7 @@ func (sys *SpatialBakeSystem) bakeTransitionsPass(ctx core.UpdateContext) {
 		addEdge(levelNode, surfNode, cost, d.ent)
 	}
 
-	// Stairs -> level<->level OR level<->surface (bunker entrance, where
+	// Stairs: level↔level OR level↔surface (bunker entrance, where
 	// StairLevels.From == StairLevels.To = ground floor).
 	for _, st := range stairs {
 		if st.fromLev == (ecs.Entity{}) {
@@ -253,8 +244,8 @@ func (sys *SpatialBakeSystem) bakeTransitionsPass(ctx core.UpdateContext) {
 		}
 		fromNode := components.NavNode{Kind: components.NodeLevel, Level: fromLv.ent, I: fI, J: fJ}
 
-		// Bunker entrance: From == To means the stair only anchors to one
-		// level (ground floor) and exits to the exterior surface.
+		// From==To: stair anchors to one level (ground floor) and exits to
+		// the exterior surface.
 		isBunker := st.fromLev == st.toLev
 		if !isBunker && st.toLev != (ecs.Entity{}) {
 			toLv := levelByEntity(st.toLev)
@@ -271,7 +262,6 @@ func (sys *SpatialBakeSystem) bakeTransitionsPass(ctx core.UpdateContext) {
 			continue
 		}
 
-		// Surface side at top of bunker entrance.
 		tgi := int32(math.Floor(float64(topX)))
 		tgj := int32(math.Floor(float64(topZ)))
 		surfChunk := components.ChunkCoord{X: tgi >> 6, Z: tgj >> 6}
@@ -285,27 +275,18 @@ func (sys *SpatialBakeSystem) bakeTransitionsPass(ctx core.UpdateContext) {
 		addEdge(toNode, fromNode, 4, st.ent)
 	}
 
-	// Phase 17.8 M17.8.7 — same-storey Level↔Level junction edges.
-	// Multi-section buildings (Compound / Office wings) generate one Level
-	// per wing. Doors / stairs link a wing to the surface / other floors,
-	// but a unit standing in one wing has no edge to reach the next wing
-	// through an internal open junction — pathfinder treats them as
-	// disconnected islands. This pass walks every Level pair, and where
-	// the AABBs touch / nearly touch at compatible Y, it emits a
-	// NodeLevel↔NodeLevel edge between cells on each side of the junction.
+	// Same-storey Level↔Level junction edges for multi-section buildings
+	// (Compound / Office wings). Without these, units can't path between
+	// wings through internal open junctions even when AABBs touch.
 	const (
 		levelJunctionMaxYDiff float32 = 0.5
 		levelJunctionMaxXZGap float32 = 1.5
-		levelJunctionInset    float32 = 1.0 // sample this far inside each level (avoid degenerate boundary cells)
-		// Phase 17.9 M3 — bumped 1 → 10. The level-junction edge is a
-		// LOGICAL bridge between adjacent wings (same-storey, AABBs flush).
-		// Physically the unit still has to traverse two thin walls between
-		// them, even when there are real doors. Real Door edges cost 3 and
-		// route through the actual opening; if pathfinder picks the cheaper
-		// junction (cost=1), the unit lines up with the junction sample
-		// point, not the door opening, and gets stuck on the wall slide.
-		// Cost=10 keeps the junction as a fallback for wings without doors
-		// to each other but stops it from beating a real door route.
+		// Sample this far inside each level to avoid degenerate boundary cells.
+		levelJunctionInset float32 = 1.0
+		// Cost=10 keeps junctions as a fallback for wings without doors to
+		// each other but stops them beating a real door route (Cost=3) —
+		// otherwise the unit lines up with the junction sample point rather
+		// than the door opening and gets stuck on the wall slide.
 		levelJunctionCost uint8 = 10
 	)
 	clampF := func(v, lo, hi float32) float32 {
@@ -321,27 +302,22 @@ func (sys *SpatialBakeSystem) bakeTransitionsPass(ctx core.UpdateContext) {
 		for j := i + 1; j < len(levels); j++ {
 			lvA := &levels[i]
 			lvB := &levels[j]
-			// Y compatibility — same storey only.
 			if math.Abs(float64(lvA.aabb.MinY-lvB.aabb.MinY)) > float64(levelJunctionMaxYDiff) {
 				continue
 			}
-			// XZ adjacency: AABBs must overlap or be within MaxXZGap on
-			// each axis (both X and Z gaps small means corner-touch only,
-			// which is fine for L/T/U-shape connectors).
+			// AABBs must overlap or be within MaxXZGap on each axis.
 			gapX := maxF(lvA.aabb.MinX, lvB.aabb.MinX) - minF(lvA.aabb.MaxX, lvB.aabb.MaxX)
 			gapZ := maxF(lvA.aabb.MinZ, lvB.aabb.MinZ) - minF(lvA.aabb.MaxZ, lvB.aabb.MaxZ)
 			if gapX > levelJunctionMaxXZGap || gapZ > levelJunctionMaxXZGap {
 				continue
 			}
-			// Sample point INSIDE each level. For lvA pick a point inset
-			// from the junction toward lvA's centre — guarantees levelCell
-			// returns a valid in-range cell instead of edge-case rejection
-			// when the AABBs are flush-touching (zero-width overlap).
+			// Sample points INSIDE each level (inset from junction toward
+			// centre) so levelCell returns a valid cell when AABBs are
+			// flush-touching (zero-width overlap).
 			centreA := orcaVec2{X: lvA.aabb.CenterX(), Z: lvA.aabb.CenterZ()}
 			centreB := orcaVec2{X: lvB.aabb.CenterX(), Z: lvB.aabb.CenterZ()}
 			junctionX := (centreA.X + centreB.X) * 0.5
 			junctionZ := (centreA.Z + centreB.Z) * 0.5
-			// Toward A's centre, by levelJunctionInset.
 			dxA := centreA.X - junctionX
 			dzA := centreA.Z - junctionZ
 			magA := float32(math.Sqrt(float64(dxA*dxA + dzA*dzA)))
@@ -353,10 +329,8 @@ func (sys *SpatialBakeSystem) bakeTransitionsPass(ctx core.UpdateContext) {
 				sampleAX = centreA.X
 				sampleAZ = centreA.Z
 			}
-			// Clamp into lvA's AABB so the sample is definitely inside.
 			sampleAX = clampF(sampleAX, lvA.aabb.MinX+0.5, lvA.aabb.MaxX-0.5)
 			sampleAZ = clampF(sampleAZ, lvA.aabb.MinZ+0.5, lvA.aabb.MaxZ-0.5)
-			// Same for B.
 			dxB := centreB.X - junctionX
 			dzB := centreB.Z - junctionZ
 			magB := float32(math.Sqrt(float64(dxB*dxB + dzB*dzB)))
@@ -400,8 +374,7 @@ func (sys *SpatialBakeSystem) bakeTransitionsPass(ctx core.UpdateContext) {
 				i, lv.ent, lv.chunk, lv.aabb.MinX, lv.aabb.MaxX, lv.aabb.MinY, lv.aabb.MaxY, lv.aabb.MinZ, lv.aabb.MaxZ)
 		}
 		// One-shot stdout dump so a regression in Pass 4 is visible without
-		// adding overlays. Walls / doors / stairs missing a LevelMember /
-		// StairLevels are the common failure mode after Phase 16.B.1.b.
+		// overlays. Missing LevelMember / StairLevels is the common failure.
 		doorsWithLevel := 0
 		for _, d := range doors {
 			if d.level != (ecs.Entity{}) {

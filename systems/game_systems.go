@@ -9,7 +9,6 @@ import (
 	"rts-go/core"
 )
 
-// LODSystem assigns LOD marker components based on distance to the anchor.
 type LODSystem struct {
 	ActiveRadius   float32
 	RelevantRadius float32
@@ -32,23 +31,16 @@ func (system *LODSystem) InitUI(w *ecs.World) {
 	system.posMap = ecs.NewMap[components.WorldPos](w)
 	system.alwaysActiveMap = ecs.NewMap[components.AlwaysActive](w)
 	system.anchorFilter = ecs.NewFilter2[components.LODAnchor, components.WorldPos](w)
-	// TerrainChunk:     LOD owned by TerrainStreamingSystem.
-	// Prop:             pinned to Relevant by PropSpawnSystem.
-	// BuildingMember:   pinned to Relevant by BuildingSystem; chunk owns the
-	//                   lifecycle, so generic LOD is moot.
-	// Unit (Phase 11.5): units no longer carry LOD markers; simulation systems
-	//                    run universally over every unit. Excluding the
-	//                    archetype here keeps LODSystem from thrashing markers
-	//                    on entities that have no readers.
+	// Excluded archetypes have their own LOD owner (TerrainStreaming /
+	// PropSpawn / BuildingSystem / SpatialBake), or run universally
+	// without LOD markers (Unit). Re-including them would cause
+	// LODSystem to thrash markers on entities with no readers.
 	system.posFilter = ecs.NewFilter1[components.WorldPos](w).
 		Without(
 			ecs.C[components.TerrainChunk](),
 			ecs.C[components.Prop](),
 			ecs.C[components.BuildingMember](),
 			ecs.C[components.Unit](),
-			// Cover-slots are pinned to Relevant by SpatialBakeSystem and the
-			// chunk owns their lifecycle; generic distance-based LOD would
-			// thrash markers on thousands of slot entities for no win.
 			ecs.C[components.CoverSlot](),
 		)
 }
@@ -100,7 +92,7 @@ func (system LODSystem) Update(ctx core.UpdateContext) {
 	relevantIn2 := relevantIn * relevantIn
 	relevantOut2 := relevantOut * relevantOut
 
-	// Buffer changes - Ark forbids archetype mutation during iteration.
+	// Ark forbids archetype mutation during iteration; buffer changes.
 	type lodChange struct {
 		id     ecs.Entity
 		remove core.LODTier
@@ -187,7 +179,6 @@ func (system LODSystem) Update(ctx core.UpdateContext) {
 	}
 }
 
-// MovementSystem updates positions based on velocity.
 type MovementSystem struct {
 	activeFilter   *ecs.Filter3[components.WorldPos, components.Velocity3D, components.LODActive]
 	relevantFilter *ecs.Filter3[components.WorldPos, components.Velocity3D, components.LODRelevant]

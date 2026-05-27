@@ -6,20 +6,16 @@ import (
 	rl "github.com/gen2brain/raylib-go/raylib"
 )
 
-// Phase 18.C Blender-style corner drag. Each workspace leaf carries grab
-// handles in all four corners; from any corner the drag does the same
-// thing - the corner is just the entry point. Two modes:
+// Blender-style corner drag. Each workspace leaf carries grab handles in
+// all four corners; from any corner the drag does the same thing. Two modes:
 //
-//   - INSIDE the source leaf at release: split mode. Larger of |dx|/|dy|
-//     picks the axis; sign decides which side keeps the original content.
-//   - OUTSIDE the source leaf at release (and a sibling exists): merge
-//     mode. The source is absorbed; sibling subtree expands to fill the
-//     combined bounds. Sibling is painted gray so the user sees what
-//     will eat the panel; a red arrow points from source to sibling
-//     centre.
+//   - INSIDE source at release: split (larger of |dx|/|dy| picks axis; sign
+//     picks which side keeps the original content).
+//   - OUTSIDE source at release with a sibling: merge (source absorbed,
+//     sibling expands).
 //
 // Top-edge corners are shifted below the title bar so they don't collide
-// with the chevron / title text.
+// with the chevron or title text.
 
 const (
 	cornerGrabSize float32 = 14
@@ -36,7 +32,6 @@ var (
 	cornerDockBorder     = rl.Color{R: 90, G: 200, B: 255, A: 230}
 )
 
-// CornerPos labels which corner of a leaf the handle sits in.
 type CornerPos uint8
 
 const (
@@ -46,23 +41,18 @@ const (
 	CornerTL
 )
 
-// AllCornerPos enumerates every corner kind in draw / hit-test order.
 var AllCornerPos = [...]CornerPos{CornerBR, CornerBL, CornerTR, CornerTL}
 
-// CornerDragKind labels the in-progress drag.
 type CornerDragKind uint8
 
 const (
 	CornerDragNone   CornerDragKind = iota
-	CornerSplitVert                  // horizontal motion → vertical divider
-	CornerSplitHoriz                 // vertical motion → horizontal divider
-	CornerMerge                      // cursor on source's direct sibling → close source
-	CornerDock                       // cursor on a non-sibling leaf → restructure
+	CornerSplitVert                 // horizontal motion → vertical divider
+	CornerSplitHoriz                // vertical motion → horizontal divider
+	CornerMerge                     // cursor on source's direct sibling → close source
+	CornerDock                      // cursor on a non-sibling leaf → restructure
 )
 
-// CornerHandleRect returns the hit / draw rect for one corner of a leaf.
-// Top corners are pushed below the title bar so they don't overlap with
-// the chevron or the title text.
 func CornerHandleRect(leaf *LayoutNode, pos CornerPos) rl.Rectangle {
 	if leaf == nil {
 		return rl.Rectangle{}
@@ -82,7 +72,6 @@ func CornerHandleRect(leaf *LayoutNode, pos CornerPos) rl.Rectangle {
 	return rl.Rectangle{}
 }
 
-// CornerAt walks every leaf × every corner and returns the first match.
 func (m *PanelManager) CornerAt(cursor rl.Vector2) *LayoutNode {
 	if m.Workspace == nil {
 		return nil
@@ -105,28 +94,21 @@ func (m *PanelManager) CornerAt(cursor rl.Vector2) *LayoutNode {
 	return hit
 }
 
-// BeginCornerDrag arms a pending corner drag.
 func (m *PanelManager) BeginCornerDrag(leaf *LayoutNode, cursor rl.Vector2) {
 	m.cornerLeaf = leaf
 	m.cornerStart = cursor
 	m.cornerDirty = false
 }
 
-// IsCornerDragging reports an active corner drag.
-func (m *PanelManager) IsCornerDragging() bool { return m.cornerLeaf != nil }
-
-// CornerDragLeaf returns the leaf currently being dragged.
-func (m *PanelManager) CornerDragLeaf() *LayoutNode { return m.cornerLeaf }
-
-// CornerDragOrigin returns the press cursor of the active drag.
+func (m *PanelManager) IsCornerDragging() bool       { return m.cornerLeaf != nil }
+func (m *PanelManager) CornerDragLeaf() *LayoutNode  { return m.cornerLeaf }
 func (m *PanelManager) CornerDragOrigin() rl.Vector2 { return m.cornerStart }
 
-// CornerDragMode classifies the in-progress drag.
+// CornerDragMode classifies the in-progress drag:
 //   - Cursor inside source.Bounds → split (axis from larger |dx|/|dy|).
 //   - Cursor on source.Sibling()  → merge (close source).
-//   - Cursor on another leaf      → dock (restructure to host source as a
-//     full-level strip on the cursor's nearest edge of the target).
-//   - Else (cursor outside any leaf) → none.
+//   - Cursor on another leaf      → dock (full-level strip on nearest edge).
+//   - Else → none.
 func (m *PanelManager) CornerDragMode(cursor rl.Vector2) CornerDragKind {
 	if m.cornerLeaf == nil {
 		return CornerDragNone
@@ -153,8 +135,7 @@ func (m *PanelManager) CornerDragMode(cursor rl.Vector2) CornerDragKind {
 	return CornerDock
 }
 
-// cornerTargetAt returns the leaf under `cursor` that is NOT the source.
-// Excludes top-bar area.
+// cornerTargetAt returns the leaf under cursor that is NOT the source.
 func (m *PanelManager) cornerTargetAt(cursor rl.Vector2) *LayoutNode {
 	if m.Workspace == nil {
 		return nil
@@ -169,13 +150,11 @@ func (m *PanelManager) cornerTargetAt(cursor rl.Vector2) *LayoutNode {
 	return hit
 }
 
-// CornerDragTarget returns the current dock / merge target leaf (or nil).
 func (m *PanelManager) CornerDragTarget(cursor rl.Vector2) *LayoutNode {
 	return m.cornerTargetAt(cursor)
 }
 
-// CornerDragSide returns which edge of the dock target the cursor is
-// closest to (only meaningful for CornerDock mode).
+// CornerDragSide is only meaningful for CornerDock mode.
 func (m *PanelManager) CornerDragSide(cursor rl.Vector2) DockSide {
 	target := m.cornerTargetAt(cursor)
 	if target == nil {
@@ -184,13 +163,11 @@ func (m *PanelManager) CornerDragSide(cursor rl.Vector2) DockSide {
 	return DockSideFor(target, cursor)
 }
 
-// CancelCornerDrag drops the pending drag without committing.
 func (m *PanelManager) CancelCornerDrag() {
 	m.cornerLeaf = nil
 	m.cornerDirty = false
 }
 
-// CommitCornerDrag finalises the drag.
 func (m *PanelManager) CommitCornerDrag(cursor rl.Vector2) bool {
 	leaf := m.cornerLeaf
 	if leaf == nil {
@@ -216,8 +193,6 @@ func (m *PanelManager) CommitCornerDrag(cursor rl.Vector2) bool {
 	return false
 }
 
-// commitSplit wraps `leaf` in a new Split with original on one side and a
-// duplicate on the other. ratio + originalSide come from the drag delta.
 func (m *PanelManager) commitSplit(leaf *LayoutNode, mode CornerDragKind, cursor rl.Vector2) bool {
 	b := leaf.Bounds
 	dx := cursor.X - m.cornerStart.X
@@ -286,7 +261,6 @@ func (m *PanelManager) commitSplit(leaf *LayoutNode, mode CornerDragKind, cursor
 	return true
 }
 
-// commitMerge absorbs `leaf` into its sibling subtree.
 func (m *PanelManager) commitMerge(leaf *LayoutNode) bool {
 	if leaf == nil || leaf.Parent == nil {
 		return false
@@ -303,17 +277,9 @@ func (m *PanelManager) commitMerge(leaf *LayoutNode) bool {
 	return true
 }
 
-// commitDock detaches `source` from its old slot and re-attaches it as a
-// strip on `side` of the subtree containing `target`. Step-by-step:
-//
-//  1. MergeIntoSibling(source) - source's parent split collapses, sibling
-//     takes its place; if source was a child of the root, sibling becomes
-//     the new root.
-//  2. DockNear(source, target, side) - wraps target.Parent (or target if
-//     root) in a fresh Split with source on the chosen side.
-//
-// After step 1, target's ancestor pointers may have shifted; we re-read
-// them inside DockNear so the wrap level is correct.
+// commitDock detaches `source` from its old slot and re-attaches as a strip
+// on `side` of the subtree containing `target`. MergeIntoSibling can shift
+// `target`'s ancestor pointers, so DockNear re-reads them.
 func (m *PanelManager) commitDock(source, target *LayoutNode, side DockSide) bool {
 	if source == nil || target == nil || source == target || side == DockNone {
 		return false
@@ -345,8 +311,6 @@ func (m *PanelManager) commitDock(source, target *LayoutNode, side DockSide) boo
 	return true
 }
 
-// DrawCornerHandles paints the grab glyph in every corner of every leaf.
-// The leaf under the cursor (or being dragged) gets a brighter tint.
 func DrawCornerHandles(m *PanelManager, cursor rl.Vector2) {
 	if m == nil || m.Workspace == nil {
 		return
@@ -364,11 +328,7 @@ func DrawCornerHandles(m *PanelManager, cursor rl.Vector2) {
 	})
 }
 
-// drawCornerGlyph paints three diagonal grip lines fanning inward from the
-// corner. The fan direction depends on which corner this is.
 func drawCornerGlyph(r rl.Rectangle, pos CornerPos, c rl.Color) {
-	// Each glyph anchors at the panel-corner side of the rect and draws
-	// strokes that fan INTO the panel.
 	var ax, ay float32
 	var dx, dy float32
 	switch pos {
@@ -394,7 +354,6 @@ func drawCornerGlyph(r rl.Rectangle, pos CornerPos, c rl.Color) {
 	}
 }
 
-// DrawCornerDragPreview paints the in-flight drag feedback.
 func DrawCornerDragPreview(m *PanelManager, cursor rl.Vector2) {
 	if m == nil || m.cornerLeaf == nil {
 		return
@@ -443,19 +402,14 @@ func DrawCornerDragPreview(m *PanelManager, cursor rl.Vector2) {
 		side := DockSideFor(target, cursor)
 		wrap := DockWrapBounds(target)
 		highlight := DockHighlightRect(target, side)
-		// Dim the wrap area (what's about to be restructured).
 		rl.DrawRectangleRec(wrap, cornerMergeOverlay)
-		// Bright accent over the side where source will land.
 		rl.DrawRectangleRec(highlight, cornerDockHighlight)
 		rl.DrawRectangleLinesEx(highlight, 2, cornerDockBorder)
-		// Mark the source leaf so user sees what's leaving its old slot.
 		rl.DrawRectangleLinesEx(m.cornerLeaf.Bounds, 2, cornerDockBorder)
 		drawMergeArrow(m.cornerLeaf.Bounds, highlight)
 	}
 }
 
-// drawMergeArrow paints a short arrow from src to dst centres indicating
-// the absorption direction.
 func drawMergeArrow(src, dst rl.Rectangle) {
 	from := rl.Vector2{X: src.X + src.Width*0.5, Y: src.Y + src.Height*0.5}
 	to := rl.Vector2{X: dst.X + dst.Width*0.5, Y: dst.Y + dst.Height*0.5}

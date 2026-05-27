@@ -7,18 +7,14 @@ import (
 	"rts-go/core"
 )
 
-// AnchorEyeHeight: offset above the terrain surface for the anchor and any
-// future ground-stuck pawn. Roughly average human eye level.
+// AnchorEyeHeight: offset above the terrain surface for the anchor.
+// Roughly average human eye level.
 const AnchorEyeHeight float32 = 1.5
 
-// GroundStickSystem clamps the anchor's and every unit's Local.Y to the
-// terrain surface every tick using the same GroundHeight() the procgen does,
-// so they sit exactly on the meshed surface.
-//
-// Two filters: anchor (eye-height offset, AnchorEyeHeight) and unit (foot at
-// surface, no offset - the unit cube draws upward from its WorldPos). A unit
-// whose WorldPos lies on a building Floor is left alone - Floor-Y is set by
-// UnitMovementSystem when traversing transition edges (Phase 7 M7.3).
+// GroundStickSystem clamps anchor + every unit Y to the terrain surface
+// using GroundHeight(). Anchor uses eye-height offset; units have foot at
+// surface (the unit cube draws upward from WorldPos). A unit whose WorldPos
+// lies on a building Floor uses the floor Y instead.
 type GroundStickSystem struct {
 	anchorFilter *ecs.Filter2[components.LODAnchor, components.WorldPos]
 	unitFilter   *ecs.Filter2[components.Unit, components.WorldPos]
@@ -45,8 +41,6 @@ func (sys GroundStickSystem) Update(ctx core.UpdateContext) {
 	if ctx.Tier != core.LODTierActive {
 		return
 	}
-	// Snapshot floor footprints once - Phase 7 has at most a handful of floors
-	// loaded at any time; the per-entity lookup stays trivial.
 	type floorRec struct {
 		minX, maxX, minZ, maxZ float32
 		y                      float32
@@ -66,12 +60,8 @@ func (sys GroundStickSystem) Update(ctx core.UpdateContext) {
 		})
 	}
 
-	// Anchor: floor-aware Y resolution. The anchor uses AnchorEyeHeight (1.5
-	// m above the surface), so when it stands on a floor its Y is floor.Y +
-	// AnchorEyeHeight; on bare ground it's GroundHeight + AnchorEyeHeight.
-	// Whichever target is closer to the current pos.Y wins - that lets a path
-	// walker drive Y up the stairs and have GS keep the anchor on the new
-	// floor next tick.
+	// Closest-Y rule lets a path walker drive Y up stairs and have GS keep
+	// the anchor on the new floor next tick.
 	qa := sys.anchorFilter.Query()
 	for qa.Next() {
 		_, pos := qa.Get()
@@ -94,7 +84,6 @@ func (sys GroundStickSystem) Update(ctx core.UpdateContext) {
 		pos.Local.Y = bestY
 	}
 
-	// Units: same logic but no eye-height offset (foot at the surface).
 	qu := sys.unitFilter.Query()
 	for qu.Next() {
 		_, pos := qu.Get()

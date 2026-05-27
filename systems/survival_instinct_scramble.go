@@ -10,13 +10,8 @@ import (
 )
 
 // runScatterProtocol walks every squad, lazy-adds SquadState when missing,
-// pushes the latest squad-average Threat.Total into the history ring, and
-// runs the Idle / Engaged / Scrambling transition logic. squadInfo is
-// repopulated from scratch each tick so Pass 2 reads a consistent view.
-//
-// Phase 17 M17.0.3: history tracks Total instead of raw Suppression, so a
-// far-fire-only spike (ShotsFired channel) can also flip a squad into
-// Scrambling once that producer ships.
+// pushes the squad-average Threat.Total into the history ring, and runs the
+// Idle / Engaged / Scrambling transition logic.
 func (sys *SurvivalInstinctSystem) runScatterProtocol(now float32) {
 	clear(sys.squadInfo)
 	sys.stateAdds = sys.stateAdds[:0]
@@ -33,14 +28,13 @@ func (sys *SurvivalInstinctSystem) runScatterProtocol(now float32) {
 
 		state := sys.squadStateMap.Get(squad)
 		if state == nil {
-			// Lazy add - the squad was spawned before this system existed.
+			// Lazy add for squads spawned before this system existed.
 			init := components.SquadState{Code: components.SquadStateIdle}
 			sys.stateAdds = append(sys.stateAdds, siStateAdd{squad: squad, init: init})
 			sys.squadInfo[squad] = siSquadInfo{code: components.SquadStateIdle, threatDir: threatDir}
 			continue
 		}
 
-		// Push current avg into history ring.
 		state.SuppHistory[state.HistHead] = avgSupp
 		state.HistHead = (state.HistHead + 1) % components.SquadSuppressionWindow
 		if state.HistCount < components.SquadSuppressionWindow {
@@ -49,7 +43,6 @@ func (sys *SurvivalInstinctSystem) runScatterProtocol(now float32) {
 
 		delta := sys.windowDelta(state)
 
-		// State transitions.
 		switch state.Code {
 		case components.SquadStateIdle:
 			if avgSupp > 0 {
@@ -94,9 +87,8 @@ func (sys *SurvivalInstinctSystem) runScatterProtocol(now float32) {
 	}
 }
 
-// aggregateSquadThreat walks the roster, returns the mean Threat.Total
-// across live members + the unit-length Total-weighted ThreatDir (XZ).
-// Members without a Threat component count as zero contribution.
+// aggregateSquadThreat returns the mean Threat.Total across live members +
+// the unit-length Total-weighted ThreatDir (XZ).
 func (sys *SurvivalInstinctSystem) aggregateSquadThreat(roster *components.CommandRoster) (float32, rl.Vector3) {
 	var sum, weight float32
 	var tx, tz float32
@@ -130,9 +122,8 @@ func (sys *SurvivalInstinctSystem) aggregateSquadThreat(roster *components.Comma
 	return avg, dir
 }
 
-// windowDelta returns history[newest] - history[oldest]. Both indices are
-// computed from HistHead with wrap-around. While the buffer is filling
-// (HistCount < window) the "oldest" sample is index 0.
+// windowDelta returns history[newest] - history[oldest]. While the buffer
+// is filling, oldest = index 0.
 func (sys *SurvivalInstinctSystem) windowDelta(state *components.SquadState) float32 {
 	if state.HistCount < 2 {
 		return 0

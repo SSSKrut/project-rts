@@ -7,27 +7,19 @@ import (
 	"rts-go/core"
 )
 
-// SpatialHashRebuildSystem snapshots every Unit's world XZ position into the
-// `core.SpatialHash` resource at the start of each tick. Phase 14.5 M14.5.2.
-//
-// Position is required by separation steering (UnitMovement) so this system
-// runs BEFORE unit_movement in the pipeline. WeaponSystem / VisionSystem /
-// SuppressionPropagation also read the same hash - they tolerate a 1-tick
-// stale frame because units move <= ~8 cm/tick at top speed and query radii
-// are 1.5 m+.
-//
-// Serial - building the hash from parallel workers is possible but
-// coordination with UnitMovement (which writes positions in parallel) makes
-// the win marginal for ~200 units. Phase 16 may revisit if vehicles balloon
-// the entry count.
+// SpatialHashRebuildSystem snapshots every Unit's world XZ into the
+// core.SpatialHash resource at the start of each tick. MUST run BEFORE
+// unit_movement (separation steering reads the hash). WeaponSystem /
+// VisionSystem tolerate 1-tick staleness — query radii are 1.5 m+ vs.
+// ~8 cm/tick top speed.
 type SpatialHashRebuildSystem struct {
 	hash       ecs.Resource[core.SpatialHash]
 	unitFilter *ecs.Filter2[components.Unit, components.WorldPos]
 	snapshot   []core.SpatialEntry
 }
 
-// NewSpatialHashRebuildSystem wires the system. The hash resource MUST be
-// added to the world via `ecs.AddResource(world, hash)` *before* InitUI.
+// NewSpatialHashRebuildSystem. The hash resource MUST be added to the world
+// via ecs.AddResource(world, hash) BEFORE InitUI.
 func NewSpatialHashRebuildSystem() *SpatialHashRebuildSystem {
 	return &SpatialHashRebuildSystem{
 		snapshot: make([]core.SpatialEntry, 0, 64),

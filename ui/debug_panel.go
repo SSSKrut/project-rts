@@ -4,17 +4,12 @@ import (
 	rl "github.com/gen2brain/raylib-go/raylib"
 )
 
-// DebugToggle is one checkbox row in the Debug widget. Label is the player-
-// facing text, On points at the bool the widget mutates on click. The widget
-// has no knowledge of which subsystem the bool drives — main.go owns the
-// state struct and builds the toggle list each frame.
+// DebugToggle: On points at the bool the widget mutates on click.
 type DebugToggle struct {
 	Label string
 	On    *bool
 }
 
-// Visual constants for the Debug panel — kept private to this file so the
-// rest of the UI palette isn't polluted.
 var (
 	debugPanelBG    = rl.Color{R: 20, G: 24, B: 30, A: 250}
 	debugRowHover   = rl.Color{R: 40, G: 50, B: 65, A: 200}
@@ -36,14 +31,8 @@ const (
 	debugFooterSize int32   = 11
 )
 
-// DrawDebugPanel paints the Debug toggles widget and returns nothing — any
-// click hit-test mutates `toggles[i].On` directly. Click input is gated by
-// `lmbPress` (the same edge-trigger the workspace passes around so we don't
-// double-toggle on a single mouse-down event).
-//
-// The `footer` string is rendered below the toggle list as a single-line
-// info hint; main.go uses it to surface the active overlay-radius (e.g.
-// "Radius: 2 chunks around camera").
+// DrawDebugPanel mutates `toggles[i].On` directly on click. The `footer`
+// string renders below as a single-line info hint.
 func DrawDebugPanel(panel Panel, font rl.Font, toggles []DebugToggle,
 	cursor rl.Vector2, lmbPress bool, footer string) {
 	content := ContentRect(panel)
@@ -55,19 +44,16 @@ func DrawDebugPanel(panel Panel, font rl.Font, toggles []DebugToggle,
 	x := content.X + debugPad
 	y := content.Y + debugPad
 
-	// Title.
 	title := "Overlays"
 	rl.DrawTextEx(font, title, rl.Vector2{X: x, Y: y},
 		float32(debugTitleSize), 1.0, debugTextOn)
 	y += float32(debugTitleSize) + debugPad
 
-	// Subtitle line.
 	sub := "Click a row to toggle"
 	rl.DrawTextEx(font, sub, rl.Vector2{X: x, Y: y},
 		float32(debugFooterSize), 1.0, debugSubtitle)
 	y += float32(debugFooterSize) + debugPad
 
-	// Rows.
 	rowW := content.Width - 2*debugPad
 	for i := range toggles {
 		row := rl.Rectangle{X: x, Y: y, Width: rowW, Height: debugRowHeight}
@@ -80,7 +66,6 @@ func DrawDebugPanel(panel Panel, font rl.Font, toggles []DebugToggle,
 			}
 		}
 
-		// Checkbox box.
 		boxY := row.Y + (debugRowHeight-debugCheckSize)*0.5
 		box := rl.Rectangle{X: row.X + 2, Y: boxY, Width: debugCheckSize, Height: debugCheckSize}
 		on := toggles[i].On != nil && *toggles[i].On
@@ -91,7 +76,6 @@ func DrawDebugPanel(panel Panel, font rl.Font, toggles []DebugToggle,
 		rl.DrawRectangleRec(box, fill)
 		rl.DrawRectangleLinesEx(box, 1, debugCheckEdge)
 
-		// Label.
 		textCol := debugTextOff
 		if on {
 			textCol = debugTextOn
@@ -104,7 +88,6 @@ func DrawDebugPanel(panel Panel, font rl.Font, toggles []DebugToggle,
 		y += debugRowHeight + 2
 	}
 
-	// Footer info.
 	if footer != "" {
 		y += debugPad
 		rl.DrawTextEx(font, footer, rl.Vector2{X: x, Y: y},

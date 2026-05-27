@@ -9,15 +9,15 @@ import (
 	"rts-go/core"
 )
 
-// Slope thresholds for NavCell.Cost (foot locomotion, Phase 6 P5):
+// Slope thresholds for NavCell.Cost (foot locomotion):
 //
-//	slope < 0.30  (~17 deg)  ->  Cost = navCostOpen
-//	0.30 <= slope < 0.60   ->  Cost = navCostRough
-//	slope >= 0.60  (~31 deg)  ->  Cost = 0    (impassable)
+//	slope < 0.30 (~17°)      →  navCostOpen
+//	0.30 ≤ slope < 0.60     →  navCostRough
+//	slope ≥ 0.60 (~31°)      →  Cost = 0 (impassable)
 //
-// Slope = max pairwise corner-height difference per 1 m cell (ChunkResolution
-// step is exactly 1 m). Diagonals are not divided by sqrt2 - the bake takes the
-// raw max so a sharp ridge-on-diagonal still flags as steep.
+// Slope = max pairwise corner-height delta per 1 m cell. Diagonals are NOT
+// divided by sqrt2 — bake takes the raw max so a ridge-on-diagonal still
+// flags as steep.
 const (
 	navSlopeOpen  float32 = 0.30
 	navSlopeRough float32 = 0.60
@@ -29,18 +29,15 @@ const (
 )
 
 // bakeNavPass is Pass 1: walks navFilter (chunks without NavBaked) and emits
-// one NavGrid per chunk. Bake order is calibrated for the cost-priority
-// hierarchy in P5:
+// one NavGrid per chunk. Bake order is calibrated for the priority hierarchy:
 //
-//	slope  <  OnRoad  <  InTrench  <  NearWater  <  Walls/Props
+//	slope < OnRoad < InTrench < NearWater < Walls/Props
 //
-// Apply lower priority first; later passes overwrite. Two intentional twists:
-//
-//   - River-block pass leaves Cost untouched on cells that are already OnRoad
-//     - this is how a bridge keeps Cost=2 over the river bed instead of
-//     falling back to "water = impassable".
-//   - Walls/props always win at the end with hard Cost=0; flags from earlier
-//     passes are kept so AI can see "this blocked cell is also on a road".
+// Apply lower priority first; later passes overwrite. Two twists:
+//   - River-block leaves Cost untouched on already-OnRoad cells (bridge keeps
+//     Cost=2 over the bed instead of "water = impassable").
+//   - Walls/props always win with hard Cost=0; flags from earlier passes are
+//     kept so AI can see "this blocked cell is also on a road".
 func (sys *SpatialBakeSystem) bakeNavPass(ctx core.UpdateContext) []spatialBakeChunkRec {
 	var navTodo []spatialBakeChunkRec
 	qN := sys.navFilter.Query()
@@ -52,8 +49,8 @@ func (sys *SpatialBakeSystem) bakeNavPass(ctx core.UpdateContext) []spatialBakeC
 		return navTodo
 	}
 
-	// Bucket walls by host chunk in one pass - avoids quadratic re-scanning
-	// when several pristine chunks bake in the same tick.
+	// Bucket walls once — avoids quadratic re-scanning when multiple chunks
+	// bake in the same tick.
 	wallsByChunk := map[components.ChunkCoord][]wallEntry{}
 	qW := sys.wallFilter.Query()
 	for qW.Next() {
@@ -64,9 +61,8 @@ func (sys *SpatialBakeSystem) bakeNavPass(ctx core.UpdateContext) []spatialBakeC
 				passable = true
 			}
 		}
-		// Phase 17.9 M2 — capture CoverDirection.Dir (outward XZ unit
-		// vector) so the post-bake NavInBuilding-clear sweep can compute
-		// the door's outside cell without re-querying the wall entity.
+		// Capture CoverDirection.Dir so the NavInBuilding-clear sweep can
+		// compute the door's outside cell without re-querying.
 		var outward rl.Vector3
 		if cd := sys.coverDirMap.Get(qW.Entity()); cd != nil {
 			outward = cd.Dir
@@ -85,9 +81,8 @@ func (sys *SpatialBakeSystem) bakeNavPass(ctx core.UpdateContext) []spatialBakeC
 	trenches := sys.trenchRes.Get()
 	rivers := sys.riversRes.Get()
 
-	// Phase 14.6 M14.6.1 - snapshot every Building's Footprint once for the
-	// NavInBuilding stamp pass. Building roots carry AlwaysActive, so a
-	// single filter sweep covers the whole world.
+	// Snapshot every Building's Footprint once for the NavInBuilding stamp.
+	// Building roots are AlwaysActive — one filter sweep covers the world.
 	var footprints []components.AABB2D
 	qB := sys.buildingFilter.Query()
 	for qB.Next() {
@@ -126,21 +121,17 @@ func (sys *SpatialBakeSystem) bakeNavPass(ctx core.UpdateContext) []spatialBakeC
 			}
 		}
 
-		// Phase 14.6 M14.6.1 - flag every cell whose centre falls inside any
-		// Building.Footprint. NavService.cellAt then refuses surface expansion
-		// into them; access remains only through TransitionEdges (Door/Stairs)
-		// that route into Floor NavNodes.
+		// Flag cells whose centre falls inside any Building.Footprint so
+		// NavService.cellAt refuses surface expansion through them; access
+		// remains only via TransitionEdges into Floor NavNodes.
 		applyNavBuildings(&grid, rec.cc, footprints)
 
-		// Phase 17.9 M2 — door outside cells are intentional transition
-		// points, not building interior. If a door's outside cell happens
-		// to fall inside ANOTHER building's footprint (compound case:
-		// flush-touching wings overlap each other's outside cells), the
-		// NavInBuilding bit makes it unreachable from open terrain via
-		// pure surface expansion. Clear the bit on door outside cells so
-		// pathfinder can approach any door from outside as plain surface
-		// (Cost=4 open). Sweep 9-chunk window — a door in a neighbour
-		// chunk can project its outside cell into rec.cc.
+		// Door outside cells are intentional transition points, not
+		// building interior. In a compound case where flush-touching wings
+		// overlap, a door's outside cell can fall inside the neighbour's
+		// footprint — the NavInBuilding bit would make it unreachable from
+		// open terrain. Clear the bit on door outside cells. Sweep 9-chunk
+		// window — a door in a neighbour chunk can project into rec.cc.
 		clearDoorOutsideNavInBuilding(&grid, rec.cc, wallsByChunk)
 
 		if existing := sys.navGridMap.Get(rec.id); existing != nil {
@@ -156,12 +147,9 @@ func (sys *SpatialBakeSystem) bakeNavPass(ctx core.UpdateContext) []spatialBakeC
 	return navTodo
 }
 
-// bakeNavSlope writes per-cell Cost from the heightmap. Each cell maps 1:1 to
-// one heightmap quad (NavGridSide == ChunkResolution-1). The Heightmap is
-// row-major along +Z (Heights[j*ChunkResolution + i] = column i, row j); same
-// row-major layout is mirrored on NavGrid.Cells for cache-coherent A*.
-//
-// "Slope" here is max pairwise corner-height delta (1 m cell, raw deltas).
+// bakeNavSlope writes per-cell Cost from the heightmap. Cell ↔ heightmap
+// quad 1:1 (NavGridSide == ChunkResolution-1). Row-major along +Z, mirrored
+// on NavGrid.Cells for cache-coherent A*.
 func bakeNavSlope(grid *components.NavGrid, hm *components.Heightmap) {
 	for cj := 0; cj < components.NavGridSide; cj++ {
 		row0 := cj * components.ChunkResolution
@@ -182,9 +170,8 @@ func bakeNavSlope(grid *components.NavGrid, hm *components.Heightmap) {
 			default:
 				cost = 0
 			}
-			// Phase 13 M13.4: CoverDistance defaults to "no cover within scan
-			// radius"; Pass 2 (CoverDistance bake) overwrites this for cells
-			// near slots.
+			// CoverDistance defaults to "no cover within scan radius"; Pass 2
+			// overwrites for cells near slots.
 			grid.Cells[cj*components.NavGridSide+ci] = components.NavCell{
 				Cost:          cost,
 				CoverDistance: components.CoverDistanceFar,
@@ -221,27 +208,18 @@ func absDelta(a, b float32) float32 {
 	return d
 }
 
-// rasterizeWall marks every NavCell whose centre lies inside the wall's
-// oriented rectangle (length x thickness, rotated by Yaw) as Cost=0. If the
-// wall has a passable opening (only OpeningDoor + Door.State == DoorOpen), the
-// opening segment along the wall axis is left untouched. Closed doors and
-// windows leave the opening at Cost=0 (windows block movement; closed doors
-// also block).
+// rasterizeWall marks every NavCell inside the wall's oriented rectangle
+// as Cost=0. Open doors carve a passable opening along the wall axis;
+// closed doors / windows leave Cost=0.
 //
-// Phase 17.9 note: this function effectively never stamps anything on the
-// surface NavGrid for the current 0.3 m wall thickness — cell centres sit
-// 0.5 m away from wall lines, while halfT = 0.15. We tried inflating halfT
-// by cell half-width so walls would stamp the row of cells they pass
-// through, but it over-blocked cells *immediately outside* building
-// footprints (the rows pathfinder relied on for tangential approach), so
-// compound_west / compound_north / office_front regressed. We're keeping
-// the function as-is for surface (a no-op for thin walls) and relying on
-// the `NavInBuilding` footprint flag — set by `applyNavBuildings` — to
-// block interior cells. The flag is the single source of truth for
-// "pathfinder must enter only through TransitionEdges (doors)" on the
-// surface grid. LevelNavGrid still inflates (see `rasterizeFloorWall`),
-// because interior walls partition rooms and the level grid has no
-// equivalent footprint flag.
+// On the surface grid this is effectively a no-op for current 0.3 m wall
+// thickness (cell centres are 0.5 m from wall lines, halfT = 0.15). Don't
+// inflate halfT — it over-blocked cells immediately outside footprints
+// (broken tangential approach in compound_west / compound_north /
+// office_front). Surface blocking relies on the NavInBuilding footprint
+// flag set by applyNavBuildings; LevelNavGrid still inflates (see
+// rasterizeFloorWall) because interior walls partition rooms and the level
+// grid has no footprint flag.
 func rasterizeWall(grid *components.NavGrid, e wallEntry) {
 	fromX, fromZ := e.local.X, e.local.Z
 	yaw := e.w.Yaw
@@ -311,10 +289,8 @@ func rasterizeWall(grid *components.NavGrid, e wallEntry) {
 	}
 }
 
-// rasterizePropCircle marks every NavCell within radius of (cx, cz) as Cost=0.
-// Used for tree-stems / rocks / any prop with PropMeta.BlocksMove. BBoxRadius
-// is a flat XZ approximation - fine for placeholder primitives, will be
-// replaced by per-prop swept bounds when real meshes land in Phase 15.
+// rasterizePropCircle marks every NavCell within radius of (cx, cz) as
+// Cost=0 — used for any prop with PropMeta.BlocksMove.
 func rasterizePropCircle(grid *components.NavGrid, cx, cz, r float32) {
 	if r <= 0 {
 		return
@@ -336,10 +312,9 @@ func rasterizePropCircle(grid *components.NavGrid, cx, cz, r float32) {
 	}
 }
 
-// applyNavRoads marks every cell whose centre lies within edge.Width/2 of any
-// edge centre line as OnRoad with Cost=navCostRoad. Bridge-edges are treated
-// the same as other roads - that's how the river-block pass later knows to
-// leave them passable.
+// applyNavRoads marks cells within edge.Width/2 of any edge centre line as
+// OnRoad with Cost=navCostRoad. Bridges share this — that's how the
+// river-block pass knows to leave them passable.
 func applyNavRoads(grid *components.NavGrid, cc components.ChunkCoord, g *components.RoadGraph) {
 	if g == nil || len(g.Edges) == 0 {
 		return
@@ -367,9 +342,8 @@ func applyNavRoads(grid *components.NavGrid, cc components.ChunkCoord, g *compon
 	}
 }
 
-// applyNavTrenches marks every cell within trench.Width/2 of any trench
-// segment as InTrench with Cost=navCostTrench. Trenches are not impassable -
-// just expensive - so AI prefers to skirt them on the open ground.
+// applyNavTrenches marks cells within trench.Width/2 as InTrench with
+// Cost=navCostTrench. Not impassable, just expensive — AI prefers to skirt.
 func applyNavTrenches(grid *components.NavGrid, cc components.ChunkCoord, tn *components.TrenchNetwork) {
 	if tn == nil || len(tn.Lines) == 0 {
 		return
@@ -399,10 +373,9 @@ func applyNavTrenches(grid *components.NavGrid, cc components.ChunkCoord, tn *co
 	}
 }
 
-// applyNavRiverBlock marks river cells as NearWater. Cost is forced to 0 only
-// when the cell is *not* already OnRoad - i.e. only river cells with no bridge
-// above become impassable. Bridge cells keep Cost=2 from the road pass and
-// gain the NearWater flag for downstream consumers ("we are over water").
+// applyNavRiverBlock marks river cells as NearWater. Cost is forced to 0
+// only when the cell is NOT already OnRoad — bridge cells keep Cost=2 and
+// gain the flag for downstream consumers.
 func applyNavRiverBlock(grid *components.NavGrid, cc components.ChunkCoord, rivers *components.Rivers) {
 	if rivers == nil || len(rivers.Polylines) == 0 {
 		return
@@ -434,13 +407,10 @@ func applyNavRiverBlock(grid *components.NavGrid, cc components.ChunkCoord, rive
 	}
 }
 
-// applyNavBuildings stamps NavInBuilding onto every surface cell whose centre
-// (XZ world coord) lies inside any building Footprint that intersects the
-// chunk. Cost is left alone so wall-rasterised Cost=0 cells stay impassable
-// and open cells keep their slope-derived Cost - the flag is the bit that
-// NavService.cellAt reads to refuse surface expansion through the interior.
-// Access to the inside is reserved for TransitionEdges (Door / Stairs) that
-// route into Floor NavNodes; pure surface paths must skirt the footprint.
+// applyNavBuildings stamps NavInBuilding onto cells whose centre lies inside
+// any building Footprint. Cost is left alone — the flag is what
+// NavService.cellAt reads to refuse surface expansion through interior;
+// access is reserved for TransitionEdges into Floor NavNodes.
 func applyNavBuildings(grid *components.NavGrid, cc components.ChunkCoord, footprints []components.AABB2D) {
 	if len(footprints) == 0 {
 		return
@@ -477,10 +447,9 @@ func applyNavBuildings(grid *components.NavGrid, cc components.ChunkCoord, footp
 	}
 }
 
-// stripCellPass - common driver for the road / trench / river polyline-strip
-// passes. Iterates exactly the cells whose AABB intersects the inflated edge
-// bbox, runs a point-to-segment distance test, and invokes mark(idx) for any
-// cell whose centre is within halfW of the segment.
+// stripCellPass — common driver for road / trench / river polyline-strip
+// passes. Iterates cells whose AABB intersects the inflated edge bbox,
+// runs a point-to-segment distance test, invokes mark(idx) on hits.
 func stripCellPass(grid *components.NavGrid, cc components.ChunkCoord,
 	worldMinX, worldMaxX, worldMinZ, worldMaxZ float32,
 	ax, az, bx, bz, halfW float32, mark func(idx int)) {
@@ -503,9 +472,8 @@ func stripCellPass(grid *components.NavGrid, cc components.ChunkCoord,
 	}
 }
 
-// clampCellRange - half-open [iMin, iMax) NavGrid cell indices that cover the
-// world-XZ range [a, b]. Returns an empty range when the input is fully
-// outside the chunk.
+// clampCellRange returns half-open [iMin, iMax) NavGrid cell indices that
+// cover the world-XZ range [a, b]. Empty range when fully outside.
 func clampCellRange(a, b float32) (int, int) {
 	if a > b {
 		a, b = b, a
@@ -541,20 +509,14 @@ func maxF32(a, b float32) float32 {
 	return b
 }
 
-// clearDoorOutsideNavInBuilding clears the NavInBuilding bit on the outside
-// surface cell of every Door in the 9-chunk window around `cc`. Phase 17.9 M2.
+// clearDoorOutsideNavInBuilding clears NavInBuilding on the outside surface
+// cell of every Door in the 9-chunk window around `cc`. The outside cell is
+// wallCentre + outward*0.7 (same offset Pass 4 transitions use).
 //
-// The door's outside cell is wallCentre + outward*0.7 (same offset Pass 4
-// transitions use). If that cell projects into the current chunk `cc`, we
-// drop the NavInBuilding flag so the pathfinder can reach the cell from
-// adjacent open-terrain cells via pure surface expansion. Without this, a
-// compound's inner doors (whose outside cells lie inside the neighbouring
-// wing's footprint) become walkable only via registry-override islands —
-// circular-reachable from each other but not from outside.
-//
-// The wall's Cost remains unchanged (rasterizeWall already stamped Cost=0
-// on the opening row except where openingPassable carved a gap). We touch
-// only the flag.
+// Without this, a compound's inner doors (whose outside cells lie inside the
+// neighbouring wing's footprint) become walkable only via registry-override
+// islands — circular-reachable from each other but not from outside. We
+// touch only the flag; Cost was already stamped by rasterizeWall.
 func clearDoorOutsideNavInBuilding(
 	grid *components.NavGrid,
 	cc components.ChunkCoord,
@@ -580,7 +542,6 @@ func clearDoorOutsideNavInBuilding(
 				czWorld := wallChunkBaseZ + we.local.Z + ca*centreT
 				outsideX := cxWorld + we.outward.X*0.7
 				outsideZ := czWorld + we.outward.Z*0.7
-				// Project into rec.cc chunk-local.
 				lx := outsideX - gridChunkBaseX
 				lz := outsideZ - gridChunkBaseZ
 				ci := int(math.Floor(float64(lx)))

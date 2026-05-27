@@ -7,24 +7,20 @@ import (
 	"rts-go/components"
 )
 
-// CreateFromUnits spawns a new Squad entity, attaches every unit in `units`
-// as a member (pulling them out of any prior squad first), and returns the
-// new entity. Excess members beyond SquadRosterSize stay outside the roster
-// as soloists. An empty (or all-invalid) input returns the zero Entity.
+// CreateFromUnits spawns a new Squad, attaches every unit in `units` as a
+// member (pulling out of any prior squad first), and returns the new entity.
+// Excess members beyond SquadRosterSize stay outside as soloists.
 //
-// The function is staged so no live pointer into the Squad archetype is held
-// across an operation that might destroy another squad entity in the same
-// archetype. Ark uses swap-on-remove storage compaction (storage.go:267),
-// which would silently invalidate such a pointer - and this was the cause of
-// the original "free(): invalid size" crash on repeated `T` presses.
+// Staged to avoid holding a pointer into the Squad archetype across an
+// operation that might destroy another squad in the same archetype — Ark
+// uses swap-on-remove storage compaction (cause of the original crash on
+// repeated `T` presses).
 func (s *SquadService) CreateFromUnits(units []ecs.Entity, kind components.FormationKind) ecs.Entity {
 	if len(units) == 0 {
 		return ecs.Entity{}
 	}
 
-	// Stage 1 - sanitise input: skip zero / dead / duplicate entities and
-	// clamp to the roster size. Doing this up front means later stages can
-	// trust every entry without re-checking.
+	// Stage 1 — sanitise: skip zero / dead / duplicate, clamp to roster size.
 	prepared := make([]ecs.Entity, 0, len(units))
 	seen := make(map[ecs.Entity]struct{}, len(units))
 	for _, u := range units {
@@ -47,18 +43,16 @@ func (s *SquadService) CreateFromUnits(units []ecs.Entity, kind components.Forma
 		return ecs.Entity{}
 	}
 
-	// Stage 2 - detach every prepared unit from its prior squad. May despawn
-	// old squads (cascading from Leave when their last member walks out), so
-	// we cannot have spawned the new squad yet - Ark's storage compaction
-	// would invalidate a held rosterMap pointer.
+	// Stage 2 — detach each unit from its prior squad. May despawn old squads
+	// via cascaded Leave; new squad must NOT be spawned yet, otherwise Ark's
+	// storage compaction would invalidate a held rosterMap pointer.
 	for _, u := range prepared {
 		if old := s.memberMap.Get(u); old != nil {
 			s.leaveInternal(u, *old)
 		}
 	}
 
-	// Stage 3 - spawn the new squad with the roster pre-populated as a value.
-	// rosterMap.Add takes a pointer-to-temporary, the ECS stores the value;
+	// Stage 3 — spawn the new squad with the roster pre-populated as a value;
 	// no long-lived pointer escapes this scope.
 	var roster components.CommandRoster
 	for i, u := range prepared {
@@ -82,9 +76,8 @@ func (s *SquadService) CreateFromUnits(units []ecs.Entity, kind components.Forma
 	s.orderQueueMap.Add(squad, &components.OrderQueueHead{})
 	s.alwaysActiveMap.Add(squad, &components.AlwaysActive{})
 
-	// Stage 4 - attach SquadMember on every member. Each Add mutates the
-	// unit's archetype; the Squad archetype is untouched, so no other squad
-	// row can shift underneath us here.
+	// Stage 4 — attach SquadMember on every member. Each Add mutates the
+	// unit archetype; the Squad archetype is untouched.
 	for i, u := range prepared {
 		sm := components.SquadMember{Squad: squad, SlotIndex: uint8(i)}
 		if s.memberMap.Has(u) {
@@ -96,13 +89,11 @@ func (s *SquadService) CreateFromUnits(units []ecs.Entity, kind components.Forma
 	return squad
 }
 
-// Join appends a unit to an existing squad. Returns false if the squad or
-// unit is missing/dead, or the roster is full. No-op when the unit is already
-// in this squad; transparently pulls it out of any other squad first.
+// Join appends a unit to an existing squad. Returns false on missing/dead
+// squad/unit or full roster. No-op when unit is already in this squad;
+// transparently pulls it out of any other squad first.
 //
-// Like CreateFromUnits, the implementation is staged to avoid holding a
-// pointer into the Squad archetype across a leaveInternal call that might
-// destroy another squad of the same archetype (see CreateFromUnits comment).
+// Staged like CreateFromUnits to avoid the Squad archetype pointer trap.
 func (s *SquadService) Join(squad, unit ecs.Entity) bool {
 	if squad == (ecs.Entity{}) || unit == (ecs.Entity{}) {
 		return false
@@ -110,15 +101,13 @@ func (s *SquadService) Join(squad, unit ecs.Entity) bool {
 	if !s.world.Alive(squad) || !s.world.Alive(unit) {
 		return false
 	}
-	// Stage 1 - detach from prior squad if any. May destroy that squad.
 	if old := s.memberMap.Get(unit); old != nil {
 		if old.Squad == squad {
 			return true
 		}
 		s.leaveInternal(unit, *old)
 	}
-	// Stage 2 - squad may itself have been the one destroyed (Leave cascaded
-	// to RemoveEntity); re-check after the call.
+	// Squad itself may have been destroyed via cascaded Leave; re-check.
 	if !s.world.Alive(squad) {
 		return false
 	}
@@ -154,9 +143,8 @@ func (s *SquadService) Leave(unit ecs.Entity) {
 }
 
 func (s *SquadService) leaveInternal(unit ecs.Entity, m components.SquadMember) {
-	// Defensive: SquadMember could point at a squad that was already torn
-	// down (resource lifecycle invariants can race during cascaded leaves).
-	// Don't trust m.Squad until we've confirmed it's alive.
+	// SquadMember could point at a squad already torn down (race during
+	// cascaded leaves); don't trust m.Squad until confirmed alive.
 	if m.Squad == (ecs.Entity{}) || !s.world.Alive(m.Squad) {
 		if s.world.Alive(unit) && s.memberMap.Has(unit) {
 			s.memberMap.Remove(unit)
@@ -170,8 +158,8 @@ func (s *SquadService) leaveInternal(unit ecs.Entity, m components.SquadMember) 
 		}
 		return
 	}
-	// Compact: slide the tail one slot left so Members[i<Count] stays packed.
-	// Clamp SlotIndex to the current Count to handle stale m values gracefully.
+	// Slide the tail one slot left so Members[i<Count] stays packed; clamp
+	// SlotIndex to current Count to handle stale m values.
 	start := int(m.SlotIndex)
 	if start >= int(r.Count) {
 		start = int(r.Count) - 1
@@ -202,8 +190,7 @@ func (s *SquadService) leaveInternal(unit ecs.Entity, m components.SquadMember) 
 	}
 }
 
-// Despawn detaches every member, then removes the squad entity. Use when the
-// caller explicitly wants the squad gone (Phase 11 wipeout, debug clear).
+// Despawn detaches every member, then removes the squad entity.
 func (s *SquadService) Despawn(squad ecs.Entity) {
 	if squad == (ecs.Entity{}) || !s.world.Alive(squad) {
 		return
@@ -213,8 +200,8 @@ func (s *SquadService) Despawn(squad ecs.Entity) {
 		s.world.RemoveEntity(squad)
 		return
 	}
-	// Copy roster off the squad's storage so we don't read freed memory after
-	// RemoveEntity. Members[i] is an entity ID; the copy is cheap (64 bytes).
+	// Copy roster off squad storage before RemoveEntity (avoid reading freed
+	// memory; entity IDs are cheap to copy).
 	count := int(r.Count)
 	members := r.Members
 	s.world.RemoveEntity(squad)
@@ -229,11 +216,8 @@ func (s *SquadService) Despawn(squad ecs.Entity) {
 	}
 }
 
-// hasRadiomanInRoster walks every unit and asks "does this soldier carry a
-// Radio in Equipment.Secondary?". Phase 12 ships the real implementation -
-// previously this was a Phase 9 placeholder returning false. The result goes
-// into RadioNetwork.HasRadioman; Phase 20 (Comms) will read that to gate
-// player input on radio-less squads.
+// hasRadiomanInRoster returns true if any unit's Equipment.Secondary is a
+// Radio. Goes into RadioNetwork.HasRadioman.
 func (s *SquadService) hasRadiomanInRoster(units []ecs.Entity) bool {
 	for _, u := range units {
 		if u == (ecs.Entity{}) || !s.world.Alive(u) {

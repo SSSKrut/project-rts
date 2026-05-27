@@ -11,16 +11,15 @@ import (
 	"rts-go/core"
 )
 
-// CoverMap raycast tunables. Plan P10:
+// CoverMap raycast tunables:
 //
 //	Length: 8 m fixed window
 //	Step:   1 m, 8 sample points per ray
-//	Observer eye height above terrain: 1.2 m (crouching infantryman)
-//	Terrain block threshold: 0.5 m above observer = LOS blocked.
+//	Observer eye height: 1.2 m (crouching infantryman)
+//	Terrain block threshold: 0.5 m above observer ⇒ LOS blocked.
 //
-// 8 directions on the compass starting at -Z (notional "north", though the
-// world has no fixed compass) and going clockwise. Encoding into DirMask bit
-// position lets future tactical AI ask "is this cell defended from the
+// 8 directions starting at -Z (notional "north"), clockwise. Encoding into
+// DirMask bit position lets tactical AI ask "is this cell defended from the
 // direction of the threat?" with a 1-bit lookup.
 const (
 	coverRayLen     float32 = 8.0
@@ -40,31 +39,30 @@ var coverDirs = [8][2]float32{
 	{-0.70710678, -0.70710678}, // 7: NW
 }
 
-// losWall is a per-bake LOS test record built once from a WallSegment + Door
-// state. World coords; trig pre-computed; openingTransparent collapses "is
-// this opening passable for a sight ray" into a single boolean.
+// losWall is a per-bake LOS test record built from a WallSegment + Door
+// state. World coords; trig pre-computed; openingTransparent collapses
+// "is this opening passable for a sight ray" into a single boolean.
 type losWall struct {
-	fromX, fromZ      float32
-	sa, ca            float32
-	length            float32
+	fromX, fromZ       float32
+	sa, ca             float32
+	length             float32
 	openStart, openEnd float32
 
 	openingPresent     bool
-	openingTransparent bool // window OR open door - sight ray passes
+	openingTransparent bool // window OR open door
 }
 
 // losProp is the LOS-blocking variant of a Prop in world coords with its
-// effective XZ radius (scale already folded in).
+// effective XZ radius (scale folded in).
 type losProp struct {
 	x, z, r float32
 }
 
 // bakeCoverPass is Pass 2: CoverMap + cover slots bake. Walks coverFilter
 // (chunks without CoverBaked), builds LOS wall / prop buckets for the
-// 9-chunk window around each, runs `bakeCoverCells` to produce CoverMap.Cells
-// and CoverCell.DirMask, then spawns cover-slot entities for any host
-// (prop / wall / corner) inside the chunk. Finally re-walks every coverTodo
-// chunk to write NavCell.CoverDistance.
+// 9-chunk window, produces CoverMap.Cells + CoverCell.DirMask, spawns
+// cover-slot entities, and re-walks every coverTodo chunk to write
+// NavCell.CoverDistance.
 func (sys *SpatialBakeSystem) bakeCoverPass(ctx core.UpdateContext) {
 	var coverTodo []spatialBakeChunkRec
 	qC := sys.coverFilter.Query()
@@ -77,8 +75,7 @@ func (sys *SpatialBakeSystem) bakeCoverPass(ctx core.UpdateContext) {
 	}
 	chunkIdx := sys.chunkIndexRes.Get()
 
-	// World-space LOS-walls bucketed by host chunk. Pre-computed once per
-	// tick and re-used for every chunk being baked.
+	// Bucket LOS-walls by host chunk once per tick; reused for every chunk.
 	losWallsByChunk := map[components.ChunkCoord][]losWall{}
 	qLW := sys.wallFilter.Query()
 	for qLW.Next() {
@@ -91,7 +88,6 @@ func (sys *SpatialBakeSystem) bakeCoverPass(ctx core.UpdateContext) {
 			makeLosWall(*pos, *w, doorState))
 	}
 
-	// LOS-blocking props (BlocksLOS=true in registry) by host chunk.
 	losPropsByChunk := map[components.ChunkCoord][]losProp{}
 	propIdx := sys.propIndexRes.Get()
 	registry := sys.registryRes.Get()
@@ -122,8 +118,8 @@ func (sys *SpatialBakeSystem) bakeCoverPass(ctx core.UpdateContext) {
 	buildingIdx := sys.buildingIndexRes.Get()
 
 	for _, rec := range coverTodo {
-		// Walls / props within ray-cast reach can sit in the eight surrounding
-		// chunks; pull all nine into the per-chunk working set.
+		// Walls / props within ray-cast reach can sit in any of the 8
+		// surrounding chunks.
 		var walls []losWall
 		var props []losProp
 		for dz := int32(-1); dz <= 1; dz++ {
@@ -148,8 +144,6 @@ func (sys *SpatialBakeSystem) bakeCoverPass(ctx core.UpdateContext) {
 		sys.spawnCoverSlots(ctx.World, rec.cc, propIdx, registry, coverIdx, buildingIdx)
 	}
 
-	// Phase 13 M13.4: CoverDistance bake for every chunk whose NavGrid is
-	// already built (chunks that completed Pass 1 in some earlier tick).
 	// Done here in Pass 2 so newly spawned cover slots are visible to the
 	// distance scan.
 	sys.bakeCoverDistance(coverTodo)
@@ -157,19 +151,17 @@ func (sys *SpatialBakeSystem) bakeCoverPass(ctx core.UpdateContext) {
 
 // spawnCoverSlots emits cover-slot entities for one chunk:
 //
-//   - Per prop with Cover > 0 -> 8 radial slots (propCoverSlots).
-//   - Per WallSegment with OpeningWindow -> 1 outward-facing slot
-//     (windowCoverSlots).
-//   - Per pair of walls of one building meeting at a corner -> 1 corner slot
-//     (wallCornerCoverSlots, deduped within the building).
+//   - Per prop with Cover > 0: 8 radial slots (propCoverSlots).
+//   - Per WallSegment with OpeningWindow: 1 outward-facing slot.
+//   - Per pair of walls of one building meeting at a corner: 1 corner slot
+//     (deduped within the building).
 //
 // Slots are dual-indexed:
-//
-//   - PropChunkIndex / BuildingChildIndex - chunk-life ownership; eviction
+//   - PropChunkIndex / BuildingChildIndex — chunk-life ownership; eviction
 //     tears them down with the host.
-//   - CoverSlotIndex.ByHost[host] - host-keyed for Phase 11 destruction.
+//   - CoverSlotIndex.ByHost[host] — host-keyed for destruction.
 //
-// Both indices must agree, otherwise eviction would leave dangling slots.
+// Both indices must agree or eviction leaves dangling slots.
 func (sys *SpatialBakeSystem) spawnCoverSlots(
 	world *ecs.World,
 	cc components.ChunkCoord,
@@ -178,11 +170,9 @@ func (sys *SpatialBakeSystem) spawnCoverSlots(
 	coverIdx *CoverSlotIndex,
 	buildingIdx *BuildingChildIndex,
 ) {
-	// -- Prop slots --
 	if propIdx != nil && registry != nil && coverIdx != nil {
-		// Snapshot the prop list - we'll be appending slot entities to the
-		// same bucket and don't want to iterate the new slots as if they were
-		// hosts.
+		// Snapshot — we'll append slot entities to the same bucket and don't
+		// want to iterate the new slots as if they were hosts.
 		hostProps := append([]ecs.Entity(nil), propIdx.Loaded[cc]...)
 		for _, propEnt := range hostProps {
 			prop := sys.propMap.Get(propEnt)
@@ -203,14 +193,12 @@ func (sys *SpatialBakeSystem) spawnCoverSlots(
 		}
 	}
 
-	// -- Wall-based slots (windows + corners) --
 	if coverIdx == nil || buildingIdx == nil {
 		return
 	}
 
-	// Ark forbids archetype mutations while a query iterates; the spawn step
-	// adds entities and components, so we MUST snapshot the wall set first
-	// and only spawn after closing the query.
+	// Ark forbids archetype mutations during a live query; snapshot first
+	// then spawn after closing.
 	type wallSnap struct {
 		ent     ecs.Entity
 		pos     components.WorldPos
@@ -276,9 +264,8 @@ func (sys *SpatialBakeSystem) spawnCoverSlots(
 
 func (sys *SpatialBakeSystem) spawnOneSlot(world *ecs.World, cc components.ChunkCoord, sp coverSlotSpec) ecs.Entity {
 	e := world.NewEntity()
-	// Normalize through Add - a slot generated near a chunk edge can have a
-	// Local component just outside [0, 64) and needs to fold into the
-	// neighbouring chunk to keep the WorldPos invariant.
+	// Normalize through Add — a slot near a chunk edge may have Local just
+	// outside [0, 64); fold into the neighbouring chunk for WorldPos invariant.
 	pos := (components.WorldPos{Chunk: cc}).Add(sp.Local)
 	sys.posMap.Add(e, &pos)
 	sys.coverSlotMap.Add(e, &components.CoverSlot{
@@ -329,11 +316,9 @@ func makeLosWall(pos components.WorldPos, w components.WallSegment, doorState co
 	}
 	switch w.OpeningKind {
 	case components.OpeningWindow:
-		// Plan: windows = LOS-transparent walls. Even at observer eye height
-		// the line passes through the glass.
+		// Windows = LOS-transparent walls.
 		wl.openingTransparent = true
 	case components.OpeningDoor:
-		// Closed = block both LOS and movement; open = pass.
 		if doorState == components.DoorOpen {
 			wl.openingTransparent = true
 		}
@@ -341,10 +326,9 @@ func makeLosWall(pos components.WorldPos, w components.WallSegment, doorState co
 	return wl
 }
 
-// bakeCoverCells walks every cell of one chunk, fires 8 raycasts of 8 m at
-// 1 m step, and emits CoverCell{BaseCover, DirMask}. Heightmap is sampled
-// with bilinear interpolation across chunk seams (neighbour chunk pulled
-// through chunkIdx; missing neighbour = "open" per plan).
+// bakeCoverCells fires 8 raycasts of 8 m at 1 m step per cell and emits
+// CoverCell{BaseCover, DirMask}. Heightmap is sampled with bilinear
+// interpolation across chunk seams (missing neighbour = "open").
 func bakeCoverCells(cov *components.CoverMap, cc components.ChunkCoord,
 	chunkIdx *TerrainChunkIndex, hmMap *ecs.Map[components.Heightmap],
 	walls []losWall, props []losProp) {
@@ -408,15 +392,8 @@ func bakeCoverCells(cov *components.CoverMap, cc components.ChunkCoord,
 	}
 }
 
-// sampleHeightmapBilinear returns the bilinearly-interpolated height at a
-// world XZ coord, pulling the appropriate chunk's Heightmap via chunkIdx.
-// (false, _) when the host chunk isn't loaded.
-//
-// Vertices live on integer world coords (ChunkResolution=65, step=1 m).
-// Inside a chunk we have 64x64 quads; outside the chunk we'd need the
-// neighbour for the (i=64, j) edge - fetched if loaded, otherwise we clamp
-// to the chunk's own edge so the function still returns a value rather than
-// failing on the boundary.
+// sampleHeightmapBilinear returns the bilinearly-interpolated height at
+// world XZ. (false, _) when the host chunk isn't loaded.
 func sampleHeightmapBilinear(chunkIdx *TerrainChunkIndex, hmMap *ecs.Map[components.Heightmap], wx, wz float32) (float32, bool) {
 	if chunkIdx == nil {
 		return 0, false
@@ -499,9 +476,8 @@ func anyLosWallBlocks(walls []losWall, ax, az, bx, bz float32) bool {
 	return false
 }
 
-// anyLosPropBlocks: the LOS segment crosses (within radius) any LOS-blocking
-// prop's column. Cylinder approximation - walls/columns are vertical
-// cylinders at observer height for Phase 6.
+// anyLosPropBlocks: LOS segment crosses (within radius) any LOS-blocking
+// prop's column. Cylinder approximation at observer height.
 func anyLosPropBlocks(props []losProp, ax, az, bx, bz float32) bool {
 	for i := range props {
 		if pointToSegment2D(props[i].x, props[i].z, ax, az, bx, bz) <= props[i].r {
@@ -511,9 +487,8 @@ func anyLosPropBlocks(props []losProp, ax, az, bx, bz float32) bool {
 	return false
 }
 
-// segmentSegmentIntersect2D - parametric line-line crossing test; t1 along
-// segment 1 (p1->p2), t2 along segment 2 (p3->p4). Caller must clamp both to
-// [0, 1] for actual segment intersection. (false, _, _) on parallel/colinear.
+// segmentSegmentIntersect2D — parametric line-line crossing. Caller must
+// clamp t1, t2 to [0, 1] for actual segment intersection.
 func segmentSegmentIntersect2D(p1x, p1z, p2x, p2z, p3x, p3z, p4x, p4z float32) (float32, float32, bool) {
 	d1x := p2x - p1x
 	d1z := p2z - p1z
@@ -530,14 +505,10 @@ func segmentSegmentIntersect2D(p1x, p1z, p2x, p2z, p3x, p3z, p4x, p4z float32) (
 	return t1, t2, true
 }
 
-// bakeCoverDistance writes NavCell.CoverDistance for every chunk in coverTodo
-// using cover-slot entities in the 9-chunk window. Scan radius is the same
-// as CoverSeekThreshold - slots beyond stay at CoverDistanceFar.
-//
-// Phase 13 M13.4: brute-force O(cells x slots-in-9-chunks) per chunk. On the
-// placeholder scene (50 slots / chunk x 4096 cells x 9 chunks ~ 1.8 M ops)
-// it fits in the spatial_bake budget; if Phase 14+ grows the slot population
-// a KD-tree / spatial-hash pass would replace this.
+// bakeCoverDistance writes NavCell.CoverDistance using cover-slot entities
+// in the 9-chunk window. Scan radius = CoverSeekThreshold; slots beyond
+// stay at CoverDistanceFar. Brute-force O(cells × slots); fits the budget
+// at current populations.
 func (sys *SpatialBakeSystem) bakeCoverDistance(coverTodo []spatialBakeChunkRec) {
 	if len(coverTodo) == 0 {
 		return

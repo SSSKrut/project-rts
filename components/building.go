@@ -5,9 +5,6 @@ import (
 	"github.com/mlange-42/ark/ecs"
 )
 
-// Shared geometric constants. Generator (Phase 16.5) and BuildingSystem
-// reference these so the runtime layout stays consistent with what the
-// loader / .glb meshes are expected to emit.
 const (
 	FloorHeight        float32 = 3.0
 	WallThickness      float32 = 0.3
@@ -15,22 +12,17 @@ const (
 	BunkerFalloffWidth float32 = 4.0
 	StairsLength       float32 = 3.0
 	StairsWidth        float32 = 1.5
-	// BuildingLevelingSkirtWidth (Phase 17.6 follow-up): cosine-blend
-	// distance (metres) outside a surface building's footprint where the
-	// heightmap fades from the building's floor Y back to the natural
-	// terrain. Keeps door thresholds flush with ground so units can walk in
-	// without clipping the wall.
+	// BuildingLevelingSkirtWidth: cosine-blend distance (metres) outside a
+	// surface building's footprint where the heightmap fades from the
+	// building's floor Y back to the natural terrain. Keeps door thresholds
+	// flush with ground so units can walk in without clipping the wall.
 	BuildingLevelingSkirtWidth float32 = 1.0
-	// BuildingLevelingDepthOffset (Phase 17.6 follow-up): how far below the
-	// building's floor Y the leveled terrain plate sits. Prevents Z-fighting
-	// between the grass/terrain mesh and the concrete floor when their Ys
-	// would otherwise coincide. ~5 cm is below any realistic camera distance
-	// at which Z-fighting becomes visible.
+	// BuildingLevelingDepthOffset: how far below the building's floor Y the
+	// leveled terrain plate sits. Prevents Z-fighting between the terrain mesh
+	// and the concrete floor.
 	BuildingLevelingDepthOffset float32 = 0.05
 )
 
-// BuildingKind drives layout (Bunker is sunken, House is surface) and
-// downstream gameplay attributes.
 type BuildingKind uint8
 
 const (
@@ -53,24 +45,21 @@ type Building struct {
 	Seed      uint64
 }
 
-// BuildingPlan is the per-building layout spec produced by either the
-// Phase 16.A .glb loader or the Phase 16.5 generator. BuildingSystem reads
-// the Walls / Floors / Stairs / Levels slices to spawn child entities.
-//
-// Pos / Size / Kind / Stories / Yaw / Seed are the legacy Phase 5 metadata
-// (still consumed by main.go for Building root placement and by the map
-// renderer for footprint rects). Empty Walls slice = "no full spec yet" -
-// useful for headless / tests that build a Building root without a layout.
+// BuildingPlan is the per-building layout spec produced by either the .glb
+// loader or the generator. BuildingSystem reads the Walls / Floors / Stairs /
+// Levels slices to spawn child entities. Empty Walls slice = "no full spec
+// yet" - useful for headless / tests that build a Building root without a
+// layout.
 type BuildingPlan struct {
 	Pos     WorldPos
 	Kind    BuildingKind
 	Stories uint8
-	Size    rl.Vector2 // SizeX, SizeZ in metres - top-down footprint
+	Size    rl.Vector2
 	Yaw     float32
 	Seed    uint64
 
-	// Phase 16.A.3 / 16.5.A. World-space coords. All Local fields on child
-	// specs are chunk-local of the building's host chunk (Pos.Chunk).
+	// World-space coords. All Local fields on child specs are chunk-local of
+	// the building's host chunk (Pos.Chunk).
 	Levels           []LevelSpec
 	Walls            []WallSpec
 	Floors           []FloorSpec
@@ -80,13 +69,12 @@ type BuildingPlan struct {
 	LevelTransitions []LevelTransitionSpec
 }
 
-// BuildingPlanList is the singleton resource read once at startup.
 type BuildingPlanList struct {
 	Plans []BuildingPlan
 }
 
 // NoLevelRef sentinel for spec LevelRef fields when the entity has no
-// level association (rare - legacy plans, validator skip).
+// level association.
 const NoLevelRef uint8 = 0xFF
 
 // LevelSpec is one level volume in a BuildingPlan. AABB is world-space.
@@ -100,9 +88,9 @@ type LevelSpec struct {
 
 // WallSpec is one external or internal wall. Local is the "from" endpoint
 // in chunk-local coords of the building's host chunk. OutwardNormal points
-// away from the interior (or +X for internal partitions; either side is
-// "outward"). LevelRefs are indices into BuildingPlan.Levels - a wall
-// straddling two storeys carries both.
+// away from the interior (or +X for internal partitions). LevelRefs are
+// indices into BuildingPlan.Levels - a wall straddling two storeys carries
+// both.
 type WallSpec struct {
 	Local         rl.Vector3
 	Segment       WallSegment
@@ -110,8 +98,6 @@ type WallSpec struct {
 	LevelRefs     []uint8
 }
 
-// FloorSpec is one Floor plate. LevelRef is the index of the Level this
-// plate belongs to (mandatory in extended plans).
 type FloorSpec struct {
 	Local    rl.Vector3
 	Floor    Floor
@@ -136,7 +122,6 @@ type StairSpec struct {
 	Anchors   []StairAnchor
 }
 
-// MarkerKind tags marker_<kind>_<name> annotations from .glb / generator.
 type MarkerKind uint8
 
 const (
@@ -146,9 +131,8 @@ const (
 	MarkerEntry
 )
 
-// FurnitureSpec is one interior prop (sandbags / table / crate / ...).
-// Distinct from outdoor PropSpawn: furniture lives as a BuildingMember
-// child and despawns with the host chunk eviction.
+// FurnitureSpec is one interior prop. Distinct from outdoor PropSpawn:
+// furniture lives as a BuildingMember child and despawns with the host chunk.
 type FurnitureSpec struct {
 	Local    rl.Vector3
 	Kind     PropType
@@ -156,7 +140,6 @@ type FurnitureSpec struct {
 	LevelRef uint8
 }
 
-// MarkerSpec is one point of interest (spawn / capture / sniper perch).
 type MarkerSpec struct {
 	Local    rl.Vector3
 	Kind     MarkerKind
@@ -172,33 +155,23 @@ type LevelTransitionSpec struct {
 	ViaWall int16
 }
 
-// Level is the per-Level ECS component. One entity per LevelSpec is spawned
-// by BuildingSystem alongside walls / floors / stairs. Phase 16.B reads
-// this to bake LevelNavGrid + LevelCoverMap; Phase 16.C reads it for
-// chip widgets and fog-of-war.
 type Level struct {
 	AABB         AABB3D
 	Name         string
 	DisplayOrder uint8
 }
 
-// LevelTransition is a per-door (or per-passage) link between two Level
-// entities. Phase 16.B uses it to thread cross-level pathfinding.
 type LevelTransition struct {
 	LevelA ecs.Entity
 	LevelB ecs.Entity
 }
 
-// Furniture is a sandbox / table / crate placed inside a building. Owned
-// by the host building via BuildingMember; level association via the
-// Level field (entity).
 type Furniture struct {
 	Kind  PropType
 	Yaw   float32
 	Level ecs.Entity
 }
 
-// Marker is a spawn / capture / sniperperch annotation attached to a level.
 type Marker struct {
 	Kind  MarkerKind
 	Level ecs.Entity
@@ -206,69 +179,59 @@ type Marker struct {
 
 // StairLevels names the two Level entities this stair connects. From is the
 // lower / starting anchor, To is the upper / terminal anchor (or both equal
-// for bunker entrances where the surface side has no Level entity yet -
-// Phase 16.B.0+ treats those uniformly until exterior pseudo-level lands).
-// Written by BuildingSystem.spawnBuilding from StairSpec.Anchors and read by
+// for bunker entrances where the surface side has no Level entity yet).
+// Written by BuildingSystem from StairSpec.Anchors and read by
 // SpatialBakeSystem to wire NavNode level endpoints without rescanning plans.
 type StairLevels struct {
 	From ecs.Entity
 	To   ecs.Entity
 }
 
-// LevelMember tags a child entity (wall / floor / furniture / marker) with
-// its owning Level entity. Resolved at spawn time from the spec's LevelRef
-// (Phase 16.B.0+). Walls spanning multiple levels carry their lowest level
-// here; multi-level cutaway logic queries the wall's bbox directly.
-// Stairs deliberately have no LevelMember - they connect two levels.
+// LevelMember tags a child entity with its owning Level entity. Walls
+// spanning multiple levels carry their lowest level here; multi-level
+// cutaway logic queries the wall's bbox directly. Stairs deliberately have
+// no LevelMember - they connect two levels.
 type LevelMember struct {
 	Level ecs.Entity
 }
 
 // WallRenderMode controls how external walls of the currently-viewed level
-// render under cutaway. Phase 16.C.0 wires the All variant only; C.4 fills
-// in CameraFacing alpha + Wireframe outline.
+// render under cutaway.
 type WallRenderMode uint8
 
 const (
-	WallRenderAll          WallRenderMode = iota // default - all walls solid
+	WallRenderAll          WallRenderMode = iota // all walls solid
 	WallRenderCameraFacing                       // camera-facing walls become semi-transparent
 	WallRenderWireframe                          // walls -> outline only
 )
 
-// LevelVisibility is Phase 16.C.2 fog-of-war state per Level entity.
-// Discovered flips true the first time any friendly unit (or, in smoke,
-// the camera anchor) enters the level's bbox. LastSeenAt is the session
-// clock of the most recent friendly presence; renderers fog the level
-// once (now - LastSeenAt) exceeds FogVisibleDuration.
+// LevelVisibility is fog-of-war state per Level entity. Discovered flips
+// true the first time any friendly unit enters the level's bbox. LastSeenAt
+// is the session clock of the most recent friendly presence; renderers fog
+// the level once (now - LastSeenAt) exceeds FogVisibleDuration.
 type LevelVisibility struct {
 	Discovered bool
 	LastSeenAt float32
 }
 
-// FogVisibleDuration is how long after the last friendly presence a level
-// stays "fresh" (full-colour render). Short for development; gameplay
-// tuning later in Phase 16+.
 const FogVisibleDuration float32 = 5.0
 
-// BuildingViewMode lives on the building root. It drives the Sims cutaway:
-// when InteriorOpen is true, the renderer hides every Level whose avgY is
-// above CurrentLevel.avgY, exposing CurrentLevel's interior. Default state
-// (InteriorOpen=false, WallMode=WallRenderAll) yields the regular building
-// silhouette. CurrentLevel = ecs.Entity{} means "fall back to lowest level"
-// at read time.
+// BuildingViewMode lives on the building root. When InteriorOpen is true,
+// the renderer hides every Level whose avgY is above CurrentLevel.avgY,
+// exposing CurrentLevel's interior. CurrentLevel = ecs.Entity{} means "fall
+// back to lowest level" at read time.
 type BuildingViewMode struct {
 	InteriorOpen bool
 	CurrentLevel ecs.Entity
 	WallMode     WallRenderMode
 }
 
-// BuildingMember marks a child entity (wall / floor / stairs / opening) as
-// belonging to a parent building. Damage / destruction bubbles to the root.
+// BuildingMember marks a child entity as belonging to a parent building.
+// Damage / destruction bubbles to the root.
 type BuildingMember struct {
 	Building ecs.Entity
 }
 
-// OpeningKind on a wall segment.
 type OpeningKind uint8
 
 const (
@@ -294,8 +257,6 @@ type WallSegment struct {
 	OpeningHeight  float32
 }
 
-// Door state on the wall-segment-with-door entity. Sits beside WallSegment
-// + (optionally) Occupancy / CoverDirection on the same entity.
 type Door struct {
 	State               DoorState
 	Material            DoorMaterial
@@ -316,8 +277,8 @@ const (
 	DoorMetal
 )
 
-// Window component on a wall-segment-with-window entity. BlocksLOS is
-// intentionally absent - windows are LOS-transparent walls by design.
+// Window: BlocksLOS is intentionally absent - windows are LOS-transparent
+// walls by design.
 type Window struct {
 	Glass bool
 }
@@ -341,8 +302,6 @@ type Stairs struct {
 	Rise      float32
 }
 
-// Smart Object data - written at spawn time. CoverEvaluation and TacticalAI
-// are the readers.
 type Occupancy struct {
 	Max     uint8
 	Current uint8
@@ -362,6 +321,5 @@ type ShootingArc struct {
 type BuildingsProcessed struct{}
 
 // BuildingTerrainProcessed marks a chunk whose bunker RectCut has been
-// applied. Gated by Without[Modified] - player edits win, the cut isn't
-// re-applied on top.
+// applied. Gated by Without[Modified] - player edits win.
 type BuildingTerrainProcessed struct{}

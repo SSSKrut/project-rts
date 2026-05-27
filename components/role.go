@@ -20,8 +20,6 @@ const (
 	RoleDemoMan
 )
 
-// UnitRole stamps a soldier with their role. Resolved at spawn by
-// RoleService.AssignRole and persists across squad merges / splits.
 type UnitRole struct {
 	Kind UnitRoleKind
 }
@@ -79,8 +77,6 @@ func (k UnitRoleKind) ShortLabel() string {
 	}
 }
 
-// RoleColor returns the cap / tint colour. Read by render_world (cap cube),
-// Inspector (roster-row tint), map_render (commander label).
 func RoleColor(k UnitRoleKind) rl.Color {
 	switch k {
 	case RoleLeader:

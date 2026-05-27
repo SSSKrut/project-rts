@@ -6,16 +6,12 @@ import (
 	"rts-go/components"
 )
 
-// RoleService is the sole authorised mutator of UnitRole / per-role Equipment
-// sub-entities (Primary weapon, Secondary gear). Mirrors the SquadService /
-// Stamper pattern - pre-built handles, no archetype mutations inside ECS
-// queries. main.go owns one instance and passes it into spawn helpers.
-//
-// Phase 13 extension: AssignRole also installs a per-Unit Stamina component
-// with role-specific MaxLevel (heavy-equipment carriers fatigue faster).
-// Squad-level standing rules (MovementProfile, EngagementRules, BehaviorRules)
-// are written by SquadService.CreateFromTemplate from per-role helper lookups
-// exposed here - RoleService does not touch the Squad archetype directly.
+// RoleService is the sole authorised mutator of UnitRole / per-role
+// Equipment sub-entities. Pre-built handle object; no archetype mutations
+// inside ECS queries. AssignRole also installs per-Unit Stamina and HP with
+// role-specific limits. Squad-level standing rules go through
+// SquadService.CreateFromTemplate, which reads the per-role default lookups
+// exposed here.
 type RoleService struct {
 	world *ecs.World
 
@@ -31,8 +27,6 @@ type RoleService struct {
 	hpMap        *ecs.Map[components.HP]
 }
 
-// NewRoleService wires the map handles. Must be called after world creation
-// (same constraint as every other ecs.NewMap call).
 func NewRoleService(w *ecs.World) *RoleService {
 	return &RoleService{
 		world:        w,
@@ -49,37 +43,31 @@ func NewRoleService(w *ecs.World) *RoleService {
 	}
 }
 
-// AssignRole stamps `unit` with `role`, replacing its Primary / Secondary
-// equipment with the role-appropriate kit. Idempotent: calling twice with
-// different roles destroys the previous equipment entities and respawns a
-// fresh loadout.
+// AssignRole stamps `unit` with `role`, replacing Primary / Secondary
+// equipment. Idempotent: calling twice destroys previous equipment entities
+// and respawns a fresh loadout, but preserves current Stamina / HP.
 //
-// Pre-condition: `unit` is alive and already has a WorldPos. Equipment will
-// be added if missing. UnitRole is added or overwritten.
+// Pre-condition: unit is alive and has a WorldPos.
 func (s *RoleService) AssignRole(unit ecs.Entity, role components.UnitRoleKind) {
 	if unit == (ecs.Entity{}) || !s.world.Alive(unit) {
 		return
 	}
 
-	// Stamp / overwrite the role marker.
 	if s.roleMap.Has(unit) {
 		s.roleMap.Get(unit).Kind = role
 	} else {
 		s.roleMap.Add(unit, &components.UnitRole{Kind: role})
 	}
 
-	// Snapshot current pos so the new sub-entities can sit alongside the
-	// soldier. WorldPos here is by-value - the equipment entity's pos isn't
-	// kept in sync after this (Phase 7 weapon entities never tracked the
-	// owner's pos either; consumer systems read the owner via OwnedBy).
+	// Snapshot pos so new sub-entities sit alongside the soldier. WorldPos
+	// is by-value; the equipment entity's pos isn't kept in sync — consumers
+	// read the owner via OwnedBy.
 	pos := s.posMap.Get(unit)
 	if pos == nil {
 		return
 	}
 	carryPos := *pos
 
-	// Destroy whatever Equipment already exists so AssignRole is idempotent.
-	// Same teardown is reused if we ever wire a "drop loadout on death" hook.
 	eq := s.equipmentMap.Get(unit)
 	if eq == nil {
 		s.equipmentMap.Add(unit, &components.Equipment{})
@@ -93,14 +81,10 @@ func (s *RoleService) AssignRole(unit ecs.Entity, role components.UnitRoleKind) 
 	secondary := s.spawnSecondary(unit, role, carryPos)
 	eq.Primary = primary
 	eq.Secondary = secondary
-	// Active defaults to Primary - Phase 7 used the same rule for AK47.
 	eq.Active = primary
 
-	// Phase 13 M13.2: install / refresh Stamina with the per-role MaxLevel.
-	// Idempotent - if a unit already carries Stamina (e.g. AssignRole was
-	// called twice with different roles), we keep its Current value so a
-	// fatigued soldier doesn't magically refill on a role swap. Only
-	// MaxLevel and RecoverRate are recomputed.
+	// Preserve Current value on role swap so a fatigued soldier doesn't
+	// refill; only refresh MaxLevel / RecoverRate.
 	maxLevel := StaminaMaxForRole(role)
 	if existing := s.staminaMap.Get(unit); existing != nil {
 		existing.MaxLevel = maxLevel
@@ -116,9 +100,7 @@ func (s *RoleService) AssignRole(unit ecs.Entity, role components.UnitRoleKind) 
 		})
 	}
 
-	// Phase 14 M14.1: per-role HP pool. Same idempotency rule as Stamina -
-	// don't refill a damaged unit because of a role swap; only refresh Max
-	// (and clamp Current down if the new Max is lower).
+	// Same preserve-Current rule as Stamina; clamp down if new Max is lower.
 	hpMax := HPMaxForRole(role)
 	if existing := s.hpMap.Get(unit); existing != nil {
 		existing.Max = hpMax
@@ -137,10 +119,8 @@ func (s *RoleService) destroyIfAlive(e ecs.Entity) {
 	s.world.RemoveEntity(e)
 }
 
-// spawnPrimary spawns the role's primary weapon entity. Phase 14.5 M14.5.1:
-// role -> WeaponKind mapping stays here (small switch); the per-WeaponKind
-// stats come from components.WeaponSpecs so adding a new weapon doesn't
-// require touching this file.
+// spawnPrimary spawns the role's primary weapon entity. Per-WeaponKind stats
+// come from components.WeaponSpecs (role → WeaponKind mapping lives here).
 func (s *RoleService) spawnPrimary(unit ecs.Entity, role components.UnitRoleKind, pos components.WorldPos) ecs.Entity {
 	weaponKind := primaryWeaponForRole(role)
 	spec := components.SpecForWeapon(weaponKind)
@@ -159,9 +139,8 @@ func (s *RoleService) spawnPrimary(unit ecs.Entity, role components.UnitRoleKind
 	return ent
 }
 
-// spawnSecondary picks the role's secondary item. Many roles share a simple
-// Makarov sidearm - distinct roles get the placeholder Radio / Medkit / Spade
-// markers so Phase 20 / 14 / 18 consumers have something concrete to read.
+// spawnSecondary picks the role's secondary item. Most roles share a
+// Makarov sidearm; distinct roles get Radio / Medkit / Spade markers.
 func (s *RoleService) spawnSecondary(unit ecs.Entity, role components.UnitRoleKind, pos components.WorldPos) ecs.Entity {
 	ent := s.world.NewEntity()
 	s.ownedByMap.Add(ent, &components.OwnedBy{Owner: unit})
@@ -176,8 +155,7 @@ func (s *RoleService) spawnSecondary(unit ecs.Entity, role components.UnitRoleKi
 	case components.RoleEngineer, components.RoleDemoMan:
 		s.spadeMap.Add(ent, &components.Spade{})
 	default:
-		// All other roles carry a Makarov sidearm. Phase 14.5 M14.5.1 -
-		// stats sourced from components.WeaponSpecs.
+		// All other roles carry a Makarov sidearm.
 		mk := components.SpecForWeapon(components.WeaponMakarov)
 		s.weaponMap.Add(ent, &components.Weapon{
 			Kind: mk.Kind, Ammo: mk.Ammo, RangeM: mk.RangeM, RoF: mk.RoF,
@@ -187,18 +165,14 @@ func (s *RoleService) spawnSecondary(unit ecs.Entity, role components.UnitRoleKi
 	return ent
 }
 
-// staminaRecoverRate is the per-second Stamina regen at Pace=Walk + Stance in
-// {Stand, Crouch}. PHASE-13.md P2 sets this as a fixed value across all roles;
-// Phase 15 doctrines may introduce per-doctrine scaling later.
+// staminaRecoverRate is the per-second Stamina regen at Pace=Walk +
+// Stance in {Stand, Crouch}. Same across roles for now.
 const staminaRecoverRate float32 = 0.05
 
-// HPMaxForRole returns the per-role HP pool. PHASE-14.md P1 table:
+// HPMaxForRole returns the per-role HP pool:
 //   - MachineGunner: 110 (vest + extra mass).
 //   - Sniper / ATGunner: 90 (lighter loadout).
-//   - everyone else: 100 (Rifleman / Leader / Grenadier / Medic /
-//     Radio / Engineer / Demo).
-//
-// Numbers are placeholders; final balance lands in M14.7 playtest.
+//   - everyone else: 100.
 func HPMaxForRole(role components.UnitRoleKind) float32 {
 	switch role {
 	case components.RoleMachineGunner:
@@ -211,8 +185,7 @@ func HPMaxForRole(role components.UnitRoleKind) float32 {
 }
 
 // StaminaMaxForRole returns the per-role MaxLevel modifier. Heavy-equipment
-// carriers (MG / AT / Engineer / DemoMan / Radio) have a smaller tank because
-// they're hauling more weight. PHASE-13.md P2 table.
+// carriers (MG / AT / Engineer / DemoMan / Radio) have smaller tanks.
 func StaminaMaxForRole(role components.UnitRoleKind) float32 {
 	switch role {
 	case components.RoleMachineGunner, components.RoleATGunner:
@@ -226,14 +199,12 @@ func StaminaMaxForRole(role components.UnitRoleKind) float32 {
 	}
 }
 
-// MovementDefaultForRole returns the per-role default MovementProfile applied
-// at squad creation. Squad-level aggregation pulls from the leader's role
-// (see SquadService.CreateFromTemplate), then template-specific tweaks may
-// override individual fields. PHASE-13.md P7 + COMMAND-MODEL.md sec 4 table.
+// MovementDefaultForRole returns the per-role default MovementProfile.
+// Squad-level aggregation pulls from the leader's role.
 func MovementDefaultForRole(role components.UnitRoleKind) components.MovementProfile {
 	switch role {
 	case components.RoleMachineGunner:
-		// Deployed weapon - squad sits crouched once setup.
+		// Deployed weapon — squad sits crouched once set up.
 		return components.MovementProfile{
 			Pace: components.PaceWalk, Stance: components.StanceCrouch,
 			Posture: components.PostureStandard, PathStyle: components.PathStyleDirect,
@@ -254,7 +225,6 @@ func MovementDefaultForRole(role components.UnitRoleKind) components.MovementPro
 			Posture: components.PostureStandard, PathStyle: components.PathStyleDirect,
 		}
 	default:
-		// Leader / Rifleman / Grenadier / Engineer / DemoMan - standing default.
 		return components.MovementProfile{
 			Pace: components.PaceWalk, Stance: components.StanceStand,
 			Posture: components.PostureStandard, PathStyle: components.PathStyleDirect,
@@ -263,8 +233,6 @@ func MovementDefaultForRole(role components.UnitRoleKind) components.MovementPro
 }
 
 // EngagementDefaultForRole returns the per-role default EngagementRules.
-// Same per-role table as COMMAND-MODEL.md sec 4. Phase 14 WeaponSystem is the
-// real reader; Phase 13 only surfaces these in the Inspector quick-bar.
 func EngagementDefaultForRole(role components.UnitRoleKind) components.EngagementRules {
 	switch role {
 	case components.RoleMachineGunner:
@@ -272,28 +240,24 @@ func EngagementDefaultForRole(role components.UnitRoleKind) components.Engagemen
 	case components.RoleGrenadier:
 		return components.EngagementRules{Mode: components.FreeFire, FireOnInf: true, FireOnArm: true, FireOnStruct: true}
 	case components.RoleSniper:
-		// Hold fire until ordered - sniper picks targets deliberately.
+		// Sniper picks targets deliberately.
 		return components.EngagementRules{Mode: components.HoldFire, FireOnInf: true, FireOnArm: false}
 	case components.RoleATGunner:
-		// Anti-armour only - wastes RPG on infantry otherwise.
+		// Anti-armour only — wastes RPG on infantry.
 		return components.EngagementRules{Mode: components.HoldFire, FireOnInf: false, FireOnArm: true}
 	case components.RoleMedic, components.RoleRadioOperator, components.RoleEngineer, components.RoleDemoMan:
 		return components.EngagementRules{Mode: components.ReturnFire, FireOnInf: true}
 	default:
-		// Leader / Rifleman.
 		return components.EngagementRules{Mode: components.FreeFire, FireOnInf: true, FireOnArm: true}
 	}
 }
 
-// BehaviorDefaultForRole returns the per-role default BehaviorRules. These
-// are gate flags; Phase 15 SurvivalInstinct will read them. SuppressionThreshold
-// stays at 0.30 for everyone (Phase 15 tunes empirically).
+// BehaviorDefaultForRole returns the per-role default BehaviorRules.
 func BehaviorDefaultForRole(role components.UnitRoleKind) components.BehaviorRules {
 	const defaultThreshold = 0.30
 	switch role {
 	case components.RoleMachineGunner:
-		// Deployed - don't reposition under fire (would lose Suppression
-		// effect). Auto-stance ok.
+		// Deployed — don't reposition under fire (would lose Suppression).
 		return components.BehaviorRules{
 			AllowAutoReposition:  false,
 			AllowAutoStance:      true,
@@ -342,7 +306,6 @@ func BehaviorDefaultForRole(role components.UnitRoleKind) components.BehaviorRul
 			SuppressionThreshold: defaultThreshold,
 		}
 	default:
-		// Leader / Rifleman / Grenadier - full reactive set.
 		return components.BehaviorRules{
 			AllowAutoReposition:  true,
 			AllowAutoStance:      true,
@@ -353,11 +316,9 @@ func BehaviorDefaultForRole(role components.UnitRoleKind) components.BehaviorRul
 	}
 }
 
-// primaryWeaponForRole maps a UnitRole to its primary WeaponKind. Phase 14.5
-// M14.5.1 - actual weapon stats now live in components.WeaponSpecs (read by
-// spawnPrimary). Keeping the role -> WeaponKind mapping here as a small
-// switch is intentional: roles and weapons are independent enums and we
-// don't want to bolt a `PrimaryFor RoleKind` field onto WeaponSpec.
+// primaryWeaponForRole maps a UnitRole to its primary WeaponKind. Keeping
+// the mapping as a small switch (vs. a field on WeaponSpec) — roles and
+// weapons are independent enums.
 func primaryWeaponForRole(role components.UnitRoleKind) components.WeaponKind {
 	switch role {
 	case components.RoleMachineGunner:
@@ -369,8 +330,6 @@ func primaryWeaponForRole(role components.UnitRoleKind) components.WeaponKind {
 	case components.RoleGrenadier:
 		return components.WeaponGP25
 	default:
-		// Leader / Rifleman / Medic / RadioOperator / Engineer / DemoMan
-		// all carry an AK47 as their primary.
 		return components.WeaponAK47
 	}
 }

@@ -4,100 +4,69 @@ import (
 	rl "github.com/gen2brain/raylib-go/raylib"
 )
 
-// Phase 18 floating panels - in-game overlay windows (not OS-level). A
-// reusable container: title bar (drag-to-move + X close), borders,
-// content callback. Used for the formation editor and any future dialog
-// that doesn't belong in the workspace tree (asset picker, doctrine
-// editor, etc.).
-//
-// FloatingState owns the slice of live panels in Z order (last = top).
-// Clicking a panel raises it. Drag of the title bar moves the panel,
-// clamped to screen edges. ESC closes the topmost panel.
+// In-game overlay windows (not OS-level). FloatingState holds panels in Z
+// order (last = top); clicking a panel raises it.
 
-// FloatingRenderFn is called once per frame inside a panel's content
-// rect. lmbPress is true on the frame the user pressed LMB inside this
-// panel (so widget code doesn't have to re-derive focus). Returning true
-// requests that the panel be closed at end of frame.
+// FloatingRenderFn returns true to request that the panel close at end of
+// frame. lmbPress is true on the frame the user pressed LMB inside this
+// panel.
 type FloatingRenderFn func(content rl.Rectangle, cursor rl.Vector2, font rl.Font, lmbPress bool) bool
 
-// FloatingPanel - one floating window.
 type FloatingPanel struct {
 	ID     string
 	Title  string
 	Bounds rl.Rectangle
-	// Min size for sanity / future resize. Defaults to 120x80 if zero.
+	// MinW/MinH default to 120x80 when zero.
 	MinW, MinH float32
 	Render     FloatingRenderFn
-	// OnClose fires when the panel is removed (X click, ESC, or
-	// programmatic Close). Useful for cleanup (e.g. clearing a selection).
-	OnClose func()
+	OnClose    func()
 
-	// PanelID identifies the widget currently shown in this floater. Used
-	// by the switch-content menu to mark the active item and decide what
-	// other widgets are available. Zero (PanelNone) hides the switch
-	// button so non-widget floaters (future asset picker, dialogs) don't
-	// pretend to be switchable.
+	// PanelID identifies the widget shown here; PanelNone hides the
+	// switch button so non-widget floaters don't pretend to be switchable.
 	PanelID PanelID
 
-	// RenderFor builds a FloatingRenderFn for a given PanelID. Set this
-	// to enable the switch button - the manager calls it on switch to
-	// produce the new Render closure. Title is auto-updated via
-	// WidgetTitle(newID).
+	// RenderFor enables the switch button by building a new Render
+	// closure for the chosen PanelID; Title is updated via WidgetTitle.
 	RenderFor func(id PanelID) FloatingRenderFn
 }
 
-// FloatingState - the manager.
 type FloatingState struct {
-	Panels []*FloatingPanel // last index = topmost Z
+	Panels []*FloatingPanel
 
-	// Active move drag. dragIdx = -1 when no drag in progress.
 	dragIdx       int
 	dragOffset    rl.Vector2
 	dragStartRect rl.Rectangle
 
-	// Active resize drag. resizeIdx = -1 when not resizing.
-	// resizeEdges tells which sides of the panel the drag mutates;
-	// resizeStart/resizeRect capture the press-time anchor so cursor
-	// delta translates linearly to a new bounds.
 	resizeIdx   int
 	resizeEdges resizeEdges
 	resizeStart rl.Vector2
 	resizeRect  rl.Rectangle
 
-	// Active switch-content menu. switchMenuIdx = panel index whose menu
-	// is open (-1 = closed). Anchor rect on the title bar drives popup
-	// placement (flips up / left when overflowing).
 	switchMenuIdx    int
 	switchMenuAnchor rl.Rectangle
 }
 
-// resizeEdges records which sides of a floating panel a resize drag is
-// pulling. Any combination is valid; corners set two flags, edges one.
+// resizeEdges: any combination valid; corners set two flags, edges one.
 type resizeEdges struct {
 	Left, Right, Top, Bottom bool
 }
 
-// any reports whether at least one side is engaged.
 func (e resizeEdges) any() bool { return e.Left || e.Right || e.Top || e.Bottom }
 
-// NewFloatingState constructs an empty manager.
 func NewFloatingState() *FloatingState {
 	return &FloatingState{dragIdx: -1, resizeIdx: -1, switchMenuIdx: -1}
 }
 
 const (
-	floatingTitleH    float32 = 24
-	floatingBorderPx  float32 = 1
-	floatingCloseSize float32 = 16
-	floatingClosePad  float32 = 4
-	// floatingSwitchSize and the layout below match floatingCloseSize so
-	// the title-bar buttons read as a single right-aligned tool group:
-	// [...Title...] [Switch] [X]
+	floatingTitleH     float32 = 24
+	floatingBorderPx   float32 = 1
+	floatingCloseSize  float32 = 16
+	floatingClosePad   float32 = 4
 	floatingSwitchSize float32 = 16
 	floatingSwitchPad  float32 = 2
-	// floatingResizeSz controls the BR corner-grip glyph (cosmetic only -
-	// the actual hit zone is computed by detectResizeEdges so every side
-	// + corner is grabable at floatingResizeBand pixels.)
+	// floatingResizeSz is the BR corner-grip glyph; the actual hit zone is
+	// every side + corner within floatingResizeBand pixels via
+	// detectResizeEdges.
 	floatingResizeSz   float32 = 14
 	floatingResizeBand float32 = 5
 )
@@ -117,9 +86,8 @@ var (
 	floatingResizeHot   = rl.Color{R: 220, G: 230, B: 245, A: 240}
 )
 
-// Open adds (or replaces) a panel by ID and raises it to the top.
-// When p.Render is nil but p.RenderFor + p.PanelID are set, the manager
-// resolves the renderer here so callers don't have to duplicate the call.
+// Open adds (or replaces) a panel by ID and raises it. When Render is nil
+// but RenderFor + PanelID are set, the manager resolves the renderer.
 func (s *FloatingState) Open(p *FloatingPanel) {
 	if p == nil || p.ID == "" {
 		return
@@ -133,7 +101,6 @@ func (s *FloatingState) Open(p *FloatingPanel) {
 	if p.Render == nil && p.RenderFor != nil && p.PanelID != PanelNone {
 		p.Render = p.RenderFor(p.PanelID)
 	}
-	// Replace if same ID already open.
 	for i, existing := range s.Panels {
 		if existing.ID == p.ID {
 			s.Panels = append(s.Panels[:i], s.Panels[i+1:]...)
@@ -143,10 +110,8 @@ func (s *FloatingState) Open(p *FloatingPanel) {
 	s.Panels = append(s.Panels, p)
 }
 
-// SwitchPanelContent swaps the widget shown in the floater at `idx` to
-// `newID`. Rebuilds Render via RenderFor and updates Title via
-// WidgetTitle. No-op when RenderFor is nil (panel wasn't built switchable)
-// or when the new ID equals the current one.
+// SwitchPanelContent is a no-op when RenderFor is nil or newID equals
+// the current PanelID.
 func (s *FloatingState) SwitchPanelContent(idx int, newID PanelID) {
 	if idx < 0 || idx >= len(s.Panels) {
 		return
@@ -160,7 +125,7 @@ func (s *FloatingState) SwitchPanelContent(idx int, newID PanelID) {
 	p.Render = p.RenderFor(newID)
 }
 
-// Close removes a panel by ID. Fires OnClose if defined.
+// Close fires OnClose if defined.
 func (s *FloatingState) Close(id string) {
 	for i, p := range s.Panels {
 		if p.ID == id {
@@ -178,7 +143,6 @@ func (s *FloatingState) Close(id string) {
 	}
 }
 
-// IsOpen reports whether `id` is currently shown.
 func (s *FloatingState) IsOpen(id string) bool {
 	for _, p := range s.Panels {
 		if p.ID == id {
@@ -188,7 +152,6 @@ func (s *FloatingState) IsOpen(id string) bool {
 	return false
 }
 
-// Get returns the panel by ID (or nil).
 func (s *FloatingState) Get(id string) *FloatingPanel {
 	for _, p := range s.Panels {
 		if p.ID == id {
@@ -198,10 +161,8 @@ func (s *FloatingState) Get(id string) *FloatingPanel {
 	return nil
 }
 
-// Count returns the live panel count.
 func (s *FloatingState) Count() int { return len(s.Panels) }
 
-// HitTest returns the topmost panel under cursor (nil if none).
 func (s *FloatingState) HitTest(cursor rl.Vector2) *FloatingPanel {
 	for i := len(s.Panels) - 1; i >= 0; i-- {
 		if pointInRect(cursor, s.Panels[i].Bounds) {
@@ -211,11 +172,9 @@ func (s *FloatingState) HitTest(cursor rl.Vector2) *FloatingPanel {
 	return nil
 }
 
-// IsBusy reports whether the user is currently interacting with a
-// floating panel (cursor over one, in an active drag/resize, or hovering
-// a resize edge that sticks slightly outside panel bounds). main.go folds
-// this into chromeBusy so content-layer LMB handlers skip while a floater
-// owns the cursor.
+// IsBusy folds into main.go's chromeBusy so content-layer LMB handlers
+// skip while a floater owns the cursor. Includes cursor-over-panel, active
+// drag/resize, and resize-edge hover (slightly outside panel bounds).
 func (s *FloatingState) IsBusy(cursor rl.Vector2) bool {
 	if s.dragIdx >= 0 || s.resizeIdx >= 0 {
 		return true
@@ -231,10 +190,8 @@ func (s *FloatingState) IsBusy(cursor rl.Vector2) bool {
 	return false
 }
 
-// IsDragging reports a title-bar drag in progress.
 func (s *FloatingState) IsDragging() bool { return s.dragIdx >= 0 }
 
-// titleRect returns the panel's title bar rect (full chrome strip).
 func floatingTitleRect(p *FloatingPanel) rl.Rectangle {
 	return rl.Rectangle{
 		X:      p.Bounds.X,
@@ -244,7 +201,6 @@ func floatingTitleRect(p *FloatingPanel) rl.Rectangle {
 	}
 }
 
-// closeRect returns the X-button rect at the title bar's right edge.
 func floatingCloseRect(p *FloatingPanel) rl.Rectangle {
 	return rl.Rectangle{
 		X:      p.Bounds.X + p.Bounds.Width - floatingCloseSize - floatingClosePad,
@@ -254,9 +210,7 @@ func floatingCloseRect(p *FloatingPanel) rl.Rectangle {
 	}
 }
 
-// switchRect returns the switch-content button rect sitting just left of
-// the X. Returns a zero-size rect when the panel isn't switchable (no
-// RenderFor / PanelID), so callers can skip drawing + hit-testing it.
+// floatingSwitchRect returns a zero-size rect when the panel isn't switchable.
 func floatingSwitchRect(p *FloatingPanel) rl.Rectangle {
 	if p.RenderFor == nil || p.PanelID == PanelNone {
 		return rl.Rectangle{}
@@ -270,8 +224,8 @@ func floatingSwitchRect(p *FloatingPanel) rl.Rectangle {
 	}
 }
 
-// floatingResizeRect returns the BR corner resize grip rect (cosmetic
-// glyph location only - the hit-test is wider, see detectResizeEdges).
+// floatingResizeRect is the BR grip glyph location; hit-test is wider
+// (see detectResizeEdges).
 func floatingResizeRect(p *FloatingPanel) rl.Rectangle {
 	return rl.Rectangle{
 		X:      p.Bounds.X + p.Bounds.Width - floatingResizeSz,
@@ -281,16 +235,14 @@ func floatingResizeRect(p *FloatingPanel) rl.Rectangle {
 	}
 }
 
-// detectResizeEdges returns which sides of `p` are under the cursor
-// (within floatingResizeBand). At most one side per axis; corners come
-// out as two flags. Returns the zero value when the cursor isn't near
-// any edge of `p`.
+// detectResizeEdges checks sides of `p` within floatingResizeBand of cursor.
+// At most one side per axis; corners come out as two flags.
 func detectResizeEdges(p *FloatingPanel, cursor rl.Vector2) resizeEdges {
 	if p == nil {
 		return resizeEdges{}
 	}
-	// Outer envelope: panel bounds expanded by floatingResizeBand so the
-	// cursor can grab even slightly outside the panel's pixels.
+	// Outer envelope expanded by floatingResizeBand so cursor can grab
+	// slightly outside the panel's pixels.
 	outer := rl.Rectangle{
 		X:      p.Bounds.X - floatingResizeBand,
 		Y:      p.Bounds.Y - floatingResizeBand,
@@ -314,9 +266,6 @@ func detectResizeEdges(p *FloatingPanel, cursor rl.Vector2) resizeEdges {
 	return e
 }
 
-// CursorForEdges maps a resize-edges combination to the appropriate
-// system cursor. main.go calls ResizeCursorAt(cursor) to drive cursor
-// swaps without knowing the edge details.
 func cursorForEdges(e resizeEdges) (rl.MouseCursor, bool) {
 	if !e.any() {
 		return rl.MouseCursorDefault, false
@@ -334,12 +283,9 @@ func cursorForEdges(e resizeEdges) (rl.MouseCursor, bool) {
 	return rl.MouseCursorDefault, false
 }
 
-// IsResizing reports an active edge / corner resize drag.
 func (s *FloatingState) IsResizing() bool { return s.resizeIdx >= 0 }
 
-// ResizeCursorAt returns the cursor that fits the topmost panel's resize
-// zone under `cursor`. Falls back to (Default,false) when no panel edge
-// is under the cursor. Drives main.go's system-cursor swap chain.
+// ResizeCursorAt drives main.go's system-cursor swap chain.
 func (s *FloatingState) ResizeCursorAt(cursor rl.Vector2) (rl.MouseCursor, bool) {
 	if s.resizeIdx >= 0 && s.resizeIdx < len(s.Panels) {
 		if c, ok := cursorForEdges(s.resizeEdges); ok {
@@ -350,8 +296,8 @@ func (s *FloatingState) ResizeCursorAt(cursor rl.Vector2) (rl.MouseCursor, bool)
 		if e := detectResizeEdges(s.Panels[i], cursor); e.any() {
 			return cursorForEdges(e)
 		}
-		// Don't fall through other panels: once cursor is inside this
-		// panel's outer envelope, lower panels are occluded.
+		// Once cursor is inside this panel's outer envelope, lower
+		// panels are occluded — don't fall through.
 		if pointInRect(cursor, s.Panels[i].Bounds) {
 			return rl.MouseCursorDefault, false
 		}
@@ -359,15 +305,11 @@ func (s *FloatingState) ResizeCursorAt(cursor rl.Vector2) (rl.MouseCursor, bool)
 	return rl.MouseCursorDefault, false
 }
 
-// ResizeHover reports whether the cursor is over any panel's edge or
-// corner (any resize zone). Kept for backwards compatibility with
-// main.go; new code should call ResizeCursorAt for the cursor too.
 func (s *FloatingState) ResizeHover(cursor rl.Vector2) bool {
 	_, ok := s.ResizeCursorAt(cursor)
 	return ok
 }
 
-// contentRect returns the inner draw area (excludes title + border).
 func floatingContentRect(p *FloatingPanel) rl.Rectangle {
 	w := p.Bounds.Width - 2*floatingBorderPx
 	h := p.Bounds.Height - floatingTitleH - 2*floatingBorderPx
@@ -385,15 +327,9 @@ func floatingContentRect(p *FloatingPanel) rl.Rectangle {
 	}
 }
 
-// HandleInput processes title-bar press/drag/release and X-button click.
-// Returns true if LMB this frame was consumed by floater chrome (raise,
-// drag-start, X click). Caller wires this BEFORE other LMB-press handlers.
-//
-//   - lmbPress = pressed this frame
-//   - lmbDown  = currently held
-//   - escPress = ESC pressed this frame (closes topmost)
-//
-// Called once per frame.
+// HandleInput must run BEFORE other LMB-press handlers; returns true when
+// LMB this frame was consumed by floater chrome (raise, drag-start, X
+// click). escPress closes the topmost panel.
 func (s *FloatingState) HandleInput(cursor rl.Vector2, lmbPress, lmbDown, escPress bool, screenW, screenH int32) bool {
 	if escPress && len(s.Panels) > 0 {
 		if s.switchMenuIdx >= 0 {
@@ -404,8 +340,7 @@ func (s *FloatingState) HandleInput(cursor rl.Vector2, lmbPress, lmbDown, escPre
 		return true
 	}
 
-	// Open switch menu wins LMB: hit-test items first, fall through to
-	// dismiss on outside click. Menu floats above panel chrome so we
+	// Open switch menu wins LMB — it floats above panel chrome, so
 	// process it before any per-panel zones.
 	if s.switchMenuIdx >= 0 && lmbPress {
 		if s.switchMenuIdx >= len(s.Panels) {
@@ -421,15 +356,14 @@ func (s *FloatingState) HandleInput(cursor rl.Vector2, lmbPress, lmbDown, escPre
 				s.switchMenuIdx = -1
 				return true
 			}
-			// Click inside the menu rect but on the disabled (current)
-			// row: absorb so it doesn't bleed into the panel below.
+			// Click inside menu but on the disabled (current) row:
+			// absorb so it doesn't bleed into the panel below.
 			if pointInRect(cursor, r) {
 				s.switchMenuIdx = -1
 				return true
 			}
-			// Click on the same switch button: toggle off; click elsewhere:
-			// dismiss and fall through so the press can start a panel
-			// drag / select / etc.
+			// Click on the switch button toggles; click elsewhere
+			// dismisses and falls through so the press can start a drag.
 			s.switchMenuIdx = -1
 			if pointInRect(cursor, floatingSwitchRect(p)) {
 				return true
@@ -437,7 +371,6 @@ func (s *FloatingState) HandleInput(cursor rl.Vector2, lmbPress, lmbDown, escPre
 		}
 	}
 
-	// In-flight move drag.
 	if s.dragIdx >= 0 {
 		if !lmbDown {
 			s.dragIdx = -1
@@ -454,7 +387,6 @@ func (s *FloatingState) HandleInput(cursor rl.Vector2, lmbPress, lmbDown, escPre
 		}
 	}
 
-	// In-flight resize drag.
 	if s.resizeIdx >= 0 {
 		if !lmbDown {
 			s.resizeIdx = -1
@@ -472,11 +404,10 @@ func (s *FloatingState) HandleInput(cursor rl.Vector2, lmbPress, lmbDown, escPre
 	}
 
 	consumed := false
-	// Walk top-down so the topmost panel wins. Test edge resize zones
-	// before move-drag / body so the title bar's top-pixel band still
-	// triggers vertical resize and the BR corner still starts the
-	// canonical resize even though it overlaps with the BR resize-grip
-	// glyph.
+	// Walk top-down so the topmost panel wins. Edge resize zones are
+	// tested before move-drag / body so the title bar's top-pixel band
+	// still triggers vertical resize and the BR corner overlap with the
+	// resize-grip glyph still starts a resize.
 	for i := len(s.Panels) - 1; i >= 0; i-- {
 		p := s.Panels[i]
 		envelope := rl.Rectangle{
@@ -489,13 +420,11 @@ func (s *FloatingState) HandleInput(cursor rl.Vector2, lmbPress, lmbDown, escPre
 			continue
 		}
 		if lmbPress {
-			// X close click wins over edges even at the panel's outer
-			// corner so a clean BR-X press still closes.
+			// X close wins over edges even at the panel's outer corner.
 			if pointInRect(cursor, floatingCloseRect(p)) {
 				s.Close(p.ID)
 				return true
 			}
-			// Switch-content button toggles the menu.
 			if swR := floatingSwitchRect(p); swR.Width > 0 && pointInRect(cursor, swR) {
 				s.raise(i)
 				newIdx := len(s.Panels) - 1
@@ -503,7 +432,6 @@ func (s *FloatingState) HandleInput(cursor rl.Vector2, lmbPress, lmbDown, escPre
 				s.switchMenuAnchor = floatingSwitchRect(s.Panels[newIdx])
 				return true
 			}
-			// Resize zone (any edge or corner).
 			if edges := detectResizeEdges(p, cursor); edges.any() {
 				s.raise(i)
 				newIdx := len(s.Panels) - 1
@@ -513,7 +441,6 @@ func (s *FloatingState) HandleInput(cursor rl.Vector2, lmbPress, lmbDown, escPre
 				s.resizeRect = s.Panels[newIdx].Bounds
 				return true
 			}
-			// Title-bar press starts a move drag and raises panel.
 			if pointInRect(cursor, floatingTitleRect(p)) {
 				s.raise(i)
 				newIdx := len(s.Panels) - 1
@@ -526,7 +453,6 @@ func (s *FloatingState) HandleInput(cursor rl.Vector2, lmbPress, lmbDown, escPre
 				s.dragStartRect = p2.Bounds
 				return true
 			}
-			// Body press just raises (no drag).
 			if pointInRect(cursor, p.Bounds) {
 				s.raise(i)
 			}
@@ -536,10 +462,7 @@ func (s *FloatingState) HandleInput(cursor rl.Vector2, lmbPress, lmbDown, escPre
 	return consumed
 }
 
-// applyResizeDrag mutates `p.Bounds` according to which edges the user is
-// dragging and the cursor delta from press time. Clamps to MinW/MinH and
-// to screen edges (the panel never grows past the window or shrinks below
-// its minimum size).
+// applyResizeDrag clamps to MinW/MinH and to screen edges.
 func (s *FloatingState) applyResizeDrag(p *FloatingPanel, cursor rl.Vector2, screenW, screenH int32) {
 	dx := cursor.X - s.resizeStart.X
 	dy := cursor.Y - s.resizeStart.Y
@@ -595,7 +518,6 @@ func (s *FloatingState) applyResizeDrag(p *FloatingPanel, cursor rl.Vector2, scr
 	p.Bounds = bounds
 }
 
-// raise moves Panels[i] to the end (topmost Z).
 func (s *FloatingState) raise(i int) {
 	if i < 0 || i >= len(s.Panels)-1 {
 		return
@@ -605,8 +527,8 @@ func (s *FloatingState) raise(i int) {
 	s.Panels = append(s.Panels, p)
 }
 
-// clampPanelToScreen keeps the panel's title bar at least partially on
-// screen so the user can always grab and drag it back.
+// clampPanelToScreen keeps the title bar at least partially on screen so
+// the user can always grab and drag the panel back.
 func clampPanelToScreen(p *FloatingPanel, screenW, screenH int32) {
 	sw, sh := float32(screenW), float32(screenH)
 	margin := float32(40)
@@ -624,8 +546,8 @@ func clampPanelToScreen(p *FloatingPanel, screenW, screenH int32) {
 	}
 }
 
-// DrawAll renders every panel bottom-up. content callbacks receive an
-// lmbPress flag scoped to whether the press happened inside this panel.
+// DrawAll renders every panel bottom-up; content callbacks receive
+// lmbPress scoped to whether the press happened inside this panel.
 func (s *FloatingState) DrawAll(font rl.Font, cursor rl.Vector2, lmbPress bool) {
 	// Snapshot pointers so a content callback that calls Close mid-draw
 	// doesn't shift the slice underneath us.
@@ -656,7 +578,6 @@ func (s *FloatingState) DrawAll(font rl.Font, cursor rl.Vector2, lmbPress bool) 
 }
 
 func drawFloatingChrome(p *FloatingPanel, font rl.Font, cursor rl.Vector2, isTop bool) {
-	// Drop shadow (cheap: two darker rectangles offset).
 	shadow := p.Bounds
 	shadow.X += 3
 	shadow.Y += 4
@@ -684,7 +605,6 @@ func drawFloatingChrome(p *FloatingPanel, font rl.Font, cursor rl.Vector2, isTop
 	}
 	rl.DrawRectangleRec(closeR, bgC)
 	rl.DrawRectangleLinesEx(closeR, 1, floatingBorder)
-	// X glyph - two diagonals.
 	pad := float32(4)
 	rl.DrawLineEx(
 		rl.Vector2{X: closeR.X + pad, Y: closeR.Y + pad},
@@ -695,7 +615,6 @@ func drawFloatingChrome(p *FloatingPanel, font rl.Font, cursor rl.Vector2, isTop
 		rl.Vector2{X: closeR.X + pad, Y: closeR.Y + closeR.Height - pad},
 		2, floatingCloseGlyph)
 
-	// Switch-content button (chevron glyph) just left of the X.
 	if swR := floatingSwitchRect(p); swR.Width > 0 {
 		bg := floatingSwitchBG
 		if pointInRect(cursor, swR) {
@@ -714,8 +633,6 @@ func drawFloatingChrome(p *FloatingPanel, font rl.Font, cursor rl.Vector2, isTop
 			floatingCloseGlyph)
 	}
 
-	// BR-corner resize grip - three diagonal strokes pointing into the
-	// panel. Brighter tint while cursor is over it.
 	resR := floatingResizeRect(p)
 	gripCol := floatingResizeGrip
 	if pointInRect(cursor, resR) {
@@ -732,9 +649,6 @@ func drawFloatingChrome(p *FloatingPanel, font rl.Font, cursor rl.Vector2, isTop
 	}
 }
 
-// Switch-content menu rendering. Lightweight popup anchored to the
-// floater's switch button; lists every WorkspacePanelKinds entry. Current
-// PanelID is shown as a disabled, bullet-prefixed row.
 const (
 	floatingMenuItemH float32 = 24
 	floatingMenuFontH int32   = 13
@@ -744,24 +658,21 @@ const (
 )
 
 var (
-	floatingMenuBG       = rl.Color{R: 26, G: 30, B: 38, A: 245}
-	floatingMenuBorder   = rl.Color{R: 70, G: 80, B: 95, A: 255}
-	floatingMenuHoverBG  = rl.Color{R: 50, G: 90, B: 130, A: 240}
-	floatingMenuText     = rl.Color{R: 220, G: 226, B: 232, A: 255}
-	floatingMenuTextDim  = rl.Color{R: 110, G: 120, B: 130, A: 255}
+	floatingMenuBG      = rl.Color{R: 26, G: 30, B: 38, A: 245}
+	floatingMenuBorder  = rl.Color{R: 70, G: 80, B: 95, A: 255}
+	floatingMenuHoverBG = rl.Color{R: 50, G: 90, B: 130, A: 240}
+	floatingMenuText    = rl.Color{R: 220, G: 226, B: 232, A: 255}
+	floatingMenuTextDim = rl.Color{R: 110, G: 120, B: 130, A: 255}
 )
 
-// floatingSwitchMenuRect computes the menu's screen rect, clamped to
-// stay on screen (flip up + right-align when needed).
 func floatingSwitchMenuRect(anchor rl.Rectangle) rl.Rectangle {
 	rows := len(WorkspacePanelKinds)
 	height := float32(rows)*floatingMenuItemH + 2*floatingMenuPadY
 	width := floatingMenuMinW
 	screenW := float32(rl.GetScreenWidth())
 	screenH := float32(rl.GetScreenHeight())
-	// Right-align with the anchor by default (button sits on the right
-	// edge of the title bar) so the menu doesn't drift past the screen
-	// edge for default panel placements.
+	// Right-align with the anchor (button sits on the right of the title
+	// bar) so default placements don't drift past the screen edge.
 	x := anchor.X + anchor.Width - width
 	if x < 2 {
 		x = 2
@@ -779,9 +690,8 @@ func floatingSwitchMenuRect(anchor rl.Rectangle) rl.Rectangle {
 	return rl.Rectangle{X: x, Y: y, Width: width, Height: height}
 }
 
-// floatingSwitchMenuHit returns the WorkspacePanelKinds index under the
-// cursor, or -1 when the cursor is outside the menu / over the current
-// (disabled) row.
+// floatingSwitchMenuHit returns -1 when cursor is outside the menu or
+// over the disabled (current) row.
 func floatingSwitchMenuHit(p *FloatingPanel, r rl.Rectangle, cursor rl.Vector2) int {
 	if !pointInRect(cursor, r) {
 		return -1
@@ -797,8 +707,6 @@ func floatingSwitchMenuHit(p *FloatingPanel, r rl.Rectangle, cursor rl.Vector2) 
 	return idx
 }
 
-// drawSwitchMenu paints the switch popup for the currently open menu (if
-// any). Drawn after DrawAll so it overlays every panel and the chrome.
 func (s *FloatingState) drawSwitchMenu(font rl.Font, cursor rl.Vector2) {
 	if s.switchMenuIdx < 0 || s.switchMenuIdx >= len(s.Panels) {
 		return
@@ -825,14 +733,12 @@ func (s *FloatingState) drawSwitchMenu(font rl.Font, cursor rl.Vector2) {
 	}
 }
 
-// DrawSwitchMenu is the public entry point - main.go calls it after
-// DrawAll so the menu overlays every panel chrome. No-op when no menu is
-// currently open.
+// DrawSwitchMenu must run after DrawAll so the menu overlays every panel
+// chrome.
 func (s *FloatingState) DrawSwitchMenu(font rl.Font, cursor rl.Vector2) {
 	s.drawSwitchMenu(font, cursor)
 }
 
-// SwitchMenuOpen reports whether the switch popup is currently visible.
-// Used by main.go to fold into chromeBusy so content layers stay quiet
-// while the menu owns the click.
+// SwitchMenuOpen folds into chromeBusy so content layers stay quiet while
+// the menu owns the click.
 func (s *FloatingState) SwitchMenuOpen() bool { return s.switchMenuIdx >= 0 }

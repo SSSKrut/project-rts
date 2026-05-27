@@ -10,18 +10,15 @@ import (
 	"rts-go/core"
 )
 
-// waterPropSpacing matches the PrimitivePlane size in PropTypeRegistry, so
+// waterPropSpacing matches the PrimitivePlane size in PropTypeRegistry so
 // consecutive plates tile the river without overlap or gap.
 const waterPropSpacing float32 = 4.0
 
 // RiverSystem applies river-cut + water-prop pass to every pristine chunk
-// that intersects a river polyline. Runs after terrain_load + terrain_gen
-// (heightmap is filled), before prop_spawn (trees see the eventual water
-// exclusion via nearestRiverDistance), and before terrain_mesh (cut is in
-// the mesh on first build).
-//
-// Filter excludes Modified - player edits aren't re-stamped. RiverProcessed
-// gates against re-running on the same chunk.
+// that intersects a river polyline. Runs after terrain_gen and before
+// prop_spawn (trees see the river exclusion) and terrain_mesh (cut is in
+// the mesh on first build). Filter excludes Modified so player edits aren't
+// re-stamped.
 type RiverSystem struct {
 	chunkFilter       *ecs.Filter3[components.ChunkCoord, components.Heightmap, components.WorldPos]
 	riversRes         ecs.Resource[components.Rivers]
@@ -86,8 +83,8 @@ func (sys RiverSystem) Update(ctx core.UpdateContext) {
 	bboxes := make([]plBBox, 0, len(rivers.Polylines))
 	for i := range rivers.Polylines {
 		minX, minZ, maxX, maxZ := polylineWorldBBox(rivers.Polylines[i])
-		// Inflate by Width so the rejection test doesn't miss segments whose
-		// strip clips into the chunk while their centre line is just outside.
+		// Inflate by Width so segments whose strip clips into the chunk while
+		// their centre line is outside still match.
 		w := rivers.Polylines[i].Width
 		bboxes = append(bboxes, plBBox{
 			minX: minX - w, minZ: minZ - w,
@@ -131,8 +128,8 @@ func (sys RiverSystem) Update(ctx core.UpdateContext) {
 			}
 		}
 
-		// Mark even non-intersecting chunks - keeps the filter cheap on later
-		// ticks. Without this we'd re-test every pristine chunk vs every river.
+		// Mark even non-intersecting chunks — keeps the filter cheap. Without
+		// this we'd re-test every pristine chunk vs every river each tick.
 		processed = append(processed, processedEnt{id: ent, cc: ccVal})
 	}
 
@@ -158,13 +155,9 @@ func (sys RiverSystem) Update(ctx core.UpdateContext) {
 	}
 }
 
-// addWaterPropsForSegment walks a single river segment and emits water-prop
-// pending-records for every sample point inside the chunk's XZ bbox. Sample
-// step is waterPropSpacing.
-//
-// Sample Y is set just below the procgen surface (-0.4 m) so the placeholder
-// plate reads as the floor of the cut. Works for shallow/wide rivers; deeper
-// cuts can override per-river later.
+// addWaterPropsForSegment walks a river segment and emits water-prop records
+// at waterPropSpacing intervals inside the chunk's XZ bbox. Sample Y is
+// 0.4 m below procgen surface so the plate reads as the cut floor.
 func addWaterPropsForSegment(
 	a, b components.WorldPos,
 	cc components.ChunkCoord,
@@ -181,7 +174,7 @@ func addWaterPropsForSegment(
 	if segLen <= 0 {
 		return
 	}
-	// Atan2(dx, dz) - yaw around +Y so yaw=0 points along +Z (matches the
+	// Atan2(dx, dz): yaw around +Y so yaw=0 points along +Z (matches the
 	// prop renderer's Rotatef-around-Y convention).
 	yaw := float32(math.Atan2(float64(dx), float64(dz)))
 

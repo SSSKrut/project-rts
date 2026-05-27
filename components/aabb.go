@@ -2,8 +2,7 @@ package components
 
 import "math"
 
-// AABB2D is an axis-aligned XZ rectangle in world coords. Used for building
-// footprints and any other "this region of the surface" mask. Y is ignored -
+// AABB2D is an axis-aligned XZ rectangle in world coords. Y is ignored -
 // terrain height is sampled separately.
 type AABB2D struct {
 	MinX, MinZ, MaxX, MaxZ float32
@@ -39,9 +38,6 @@ func (a AABB2D) CenterZ() float32 { return 0.5 * (a.MinZ + a.MaxZ) }
 func (a AABB2D) SizeX() float32   { return a.MaxX - a.MinX }
 func (a AABB2D) SizeZ() float32   { return a.MaxZ - a.MinZ }
 
-// AABB3D is an axis-aligned world-space box. Used by Level volumes (Phase
-// 16.A.3) - the loader reads it from a .glb level_<name> mesh bounds; the
-// Phase 16.5 generator emits one explicitly per level.
 type AABB3D struct {
 	MinX, MinY, MinZ, MaxX, MaxY, MaxZ float32
 }
@@ -61,7 +57,6 @@ func (a AABB3D) ContainsXZ(x, z float32) bool {
 	return x >= a.MinX && x <= a.MaxX && z >= a.MinZ && z <= a.MaxZ
 }
 
-// OverlapsXZ returns true when projections to the XZ plane intersect.
 func (a AABB3D) OverlapsXZ(b AABB3D) bool {
 	return a.MinX <= b.MaxX && a.MaxX >= b.MinX && a.MinZ <= b.MaxZ && a.MaxZ >= b.MinZ
 }

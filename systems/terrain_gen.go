@@ -7,13 +7,10 @@ import (
 	"rts-go/core"
 )
 
-// TerrainGenSystem fills the Heightmap of every chunk marked HeightmapDirty
-// by sampling GroundHeight at each vertex's world (X, Z). Doesn't touch LOD
-// markers or the GPU.
-//
-// Runs every tick: freshly-spawned chunks must have heights ready for the
-// mesh system on the same frame. ~4225 noise evals per chunk; world startup
-// at 25 chunks ~= 100k evals - acceptable one-time spike.
+// TerrainGenSystem fills the Heightmap of every HeightmapDirty chunk by
+// sampling GroundHeight. Doesn't touch LOD markers or the GPU. Runs every
+// tick — freshly-spawned chunks must have heights ready for the mesh system
+// on the same frame.
 type TerrainGenSystem struct {
 	dirtyFilter    *ecs.Filter2[components.ChunkCoord, components.HeightmapDirty]
 	heightmapMap   *ecs.Map[components.Heightmap]

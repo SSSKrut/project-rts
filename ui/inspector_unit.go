@@ -18,7 +18,6 @@ func drawInspectorUnit(ctx InspectorCtx, ent ecs.Entity, x, y int32) int32 {
 	drawText(ctx.Font, fmt.Sprintf("Unit #%X", ent.ID()&0xFFFF),
 		x, y, inspectorFontSize, inspectorText)
 	y += inspectorRowH
-	// Phase 12: role header. ShortLabel pill + full name, tinted by role.
 	role := roleOf(ctx, ent)
 	tint := components.RoleColor(role)
 	rl.DrawRectangle(x, y+2, 24, inspectorRowH-4, tint)
@@ -50,16 +49,13 @@ func drawInspectorUnit(ctx InspectorCtx, ent ecs.Entity, x, y int32) int32 {
 			x, y, inspectorFontSize, inspectorText)
 		y += inspectorRowH
 	}
-	// Phase 15 M15.C.1: Override / Reason / Resume block. Surfaces AI-driven
-	// control so the player understands why the unit just bolted from its
-	// formation slot.
+	// Override / Reason / Resume surfaces AI-driven control so the
+	// player understands why the unit just bolted from its formation slot.
 	if ctx.TacticalOverrideMap != nil {
 		if ov := ctx.TacticalOverrideMap.Get(ent); ov != nil {
 			y = drawOverrideBlock(ctx, ent, ov, x, y)
 		}
 	}
-	// Phase 13 M13.6: per-unit Stamina row. When the unit has no Stamina
-	// component (legacy / orphaned spawn) we skip rather than printing zeros.
 	if ctx.StaminaMap != nil {
 		if st := ctx.StaminaMap.Get(ent); st != nil && st.MaxLevel > 0 {
 			drawText(ctx.Font, fmt.Sprintf("Stamina:   %.2f / %.2f", st.Current, st.MaxLevel),
@@ -67,8 +63,6 @@ func drawInspectorUnit(ctx InspectorCtx, ent ecs.Entity, x, y int32) int32 {
 			y += inspectorRowH
 		}
 	}
-	// Phase 14 M14.1: HP row, sits below Stamina (same "tank" UX). Same
-	// nil-skip rule as Stamina.
 	if ctx.HPMap != nil {
 		if hp := ctx.HPMap.Get(ent); hp != nil && hp.Max > 0 {
 			drawText(ctx.Font, fmt.Sprintf("HP:        %.1f / %.1f", hp.Current, hp.Max),
@@ -76,9 +70,6 @@ func drawInspectorUnit(ctx InspectorCtx, ent ecs.Entity, x, y int32) int32 {
 			y += inspectorRowH
 		}
 	}
-	// Phase 14 M14.1: Faction badge. Player squads stay quiet ("Faction:
-	// Player"); enemy factions get a short label so the player can tell two
-	// MotorRifle squads (one player, one hostile) apart in the Inspector.
 	if ctx.FactionMap != nil {
 		if f := ctx.FactionMap.Get(ent); f != nil {
 			drawText(ctx.Font, "Faction:   "+factionLabel(f.ID),
@@ -95,10 +86,9 @@ func drawInspectorUnit(ctx InspectorCtx, ent ecs.Entity, x, y int32) int32 {
 			x, y, inspectorFontSize, inspectorTextDim)
 		y += inspectorRowH
 	}
-	// Phase 15 M15.B.1 - "Return to formation" chip surfaces only when the
-	// unit has been hand-placed (IndividualPosition present). Clicking removes
-	// the marker; FormationSystem snaps the unit back to its slot on the next
-	// tick.
+	// "Return to formation" only when the unit is hand-placed
+	// (IndividualPosition present). Click removes the marker;
+	// FormationSystem snaps the unit back on the next tick.
 	if ctx.IndividualPositionMap != nil && ctx.IndividualPositionMap.Has(ent) {
 		const chipW = 160
 		if drawChip(ctx, x, y, chipW, srChipH, "Return to formation", false) {
@@ -114,9 +104,8 @@ func drawInspectorUnit(ctx InspectorCtx, ent ecs.Entity, x, y int32) int32 {
 	return y
 }
 
-// contrastTextColor returns black or white depending on the perceived
-// luminance of `bg`, so the small chips / labels stay readable across the
-// full role palette.
+// contrastTextColor picks black or white by perceived luminance of `bg`
+// so chips / labels stay readable across the full role palette.
 func contrastTextColor(bg rl.Color) rl.Color {
 	lum := 0.299*float32(bg.R) + 0.587*float32(bg.G) + 0.114*float32(bg.B)
 	if lum < 140 {
@@ -125,8 +114,6 @@ func contrastTextColor(bg rl.Color) rl.Color {
 	return rl.Color{R: 0, G: 0, B: 0, A: 255}
 }
 
-// stanceLabel reads the canonical name from components.StanceSpecs. Phase
-// 14.5 M14.5.1 - switch replaced.
 func stanceLabel(s components.StanceCode) string {
 	return components.SpecForStance(s).Name
 }

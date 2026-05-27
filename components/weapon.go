@@ -1,7 +1,5 @@
 package components
 
-// WeaponKind enumerates available weapon archetypes. WeaponSpecs holds the
-// per-kind ballistic table.
 type WeaponKind uint16
 
 const (
@@ -34,9 +32,6 @@ type Weapon struct {
 // RadioOperator. Read by RadioNetwork.HasRadioman gating.
 type Radio struct{}
 
-// Medkit is the marker placed on the Equipment.Secondary entity of a Medic.
 type Medkit struct{}
 
-// Spade is the marker placed on the Equipment.Secondary entity of an
-// Engineer / DemoMan.
 type Spade struct{}

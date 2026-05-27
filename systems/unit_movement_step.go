@@ -20,40 +20,31 @@ const (
 )
 
 // step advances one unit by dt seconds. Race-safe: every write goes through
-// the snapshot's per-unit pointers and never touches shared maps / resources.
-// Returns the StaminaExhausted marker toggle decision (caller batches it into
-// the per-worker buffer for the serial post-pass).
-//
-// Phase 14.5 M14.5.2: separation queries the shared SpatialHash (read-only
-// during the parallel section).
+// the snapshot's per-unit pointers and never touches shared maps. Returns
+// the StaminaExhausted marker toggle decision (caller batches it for the
+// serial post-pass).
 func (sys *UnitMovementSystem) step(
 	w unitWork,
 	dt float32,
 	hash *core.SpatialHash,
 	walls map[components.ChunkCoord][]colWall,
 ) staminaMarkerOp {
-	// Pace selection: StaminaExhausted forces Walk (P3). Otherwise use the
-	// effective profile's Pace.
+	// StaminaExhausted forces Walk; otherwise use the profile's Pace.
 	effectivePace := w.profile.Pace
 	if w.exhausted {
 		effectivePace = components.PaceWalk
 	}
 
-	// Stance auto-transition (P9): when no explicit ActionStance is currently
-	// at the queue head, snap toward the squad's standing default. Phase 13
-	// transition is instant; Phase 25 may add a time cost.
-	//
-	// Phase 17 M17.C: respect StanceControllerSystem's animation lock - if it
-	// just dropped the unit into Prone under fire, the squad standing default
-	// would otherwise pop the unit back up next tick and Stance would flap.
+	// Stance auto-transition when no ActionStance is at the queue head; the
+	// LockUntil gate prevents flapping with StanceControllerSystem (which
+	// drops the unit into Prone under fire).
 	hasActiveStanceAction := w.queue.Count > 0 && w.queue.Actions[w.queue.Head].Kind == components.ActionStance
 	if !hasActiveStanceAction && w.stance.Code != w.profile.Stance && sys.elapsed >= w.stance.LockUntil {
 		w.stance.Code = w.profile.Stance
 	}
 
-	// Drain / regen Stamina each tick. Recovery only when Pace=Walk AND
-	// Stance in {Stand, Crouch} (Prone doesn't recover - P3). Open question 5
-	// answered: crouch allows regen.
+	// Drain / regen Stamina. Recovery only when Pace=Walk AND Stance ∈
+	// {Stand, Crouch}; Prone doesn't recover.
 	markerOp := staminaMarkerNone
 	if w.stamina != nil && w.stamina.MaxLevel > 0 {
 		drain := components.PaceStaminaDrain[effectivePace] * dt
@@ -71,9 +62,7 @@ func (sys *UnitMovementSystem) step(
 				w.stamina.Current = 0
 			}
 		}
-		// Marker decision: set when fully drained, clear once the unit has
-		// rested past the regen threshold. Hysteresis keeps the marker from
-		// flapping while the unit hovers at zero.
+		// Hysteresis: marker sets at zero, clears past regen threshold.
 		switch {
 		case !w.exhausted && w.stamina.Current <= 0:
 			markerOp = staminaMarkerAdd
@@ -82,17 +71,16 @@ func (sys *UnitMovementSystem) step(
 		}
 	}
 
-	// Speed lookup uses the unit's current Stance x effective Pace. Phase 15
-	// M15.B.5 - per-unit SpeedMul derived from a SplitMix hash of the entity
-	// ID; ~ +/- 5 % so squad members visibly drift instead of lock-stepping.
+	// Per-unit SpeedMul from a SplitMix hash of entity ID; ±5% so squad
+	// members visibly drift instead of lock-stepping.
 	maxSpeed := components.SpecForStance(w.stance.Code).MaxSpeed * components.PaceSpeedMul[effectivePace]
 	personalityHash := slotHash32(uint32(w.ent.ID()))
 	speedJitter := perUnitSpeedSpread * (2*float32(personalityHash&0xFFFF)/0xFFFF - 1)
 	maxSpeed *= 1 + speedJitter
 
 	if w.queue.Count == 0 {
-		// Phase 15 M15.B.5 - brake instead of instant zero so the unit
-		// decelerates visibly when the queue drains.
+		// Brake instead of instant zero so the unit decelerates visibly
+		// when the queue drains.
 		brake := stanceAccel[w.stance.Code] * dt
 		if w.mot.Speed > brake {
 			w.mot.Speed -= brake
@@ -104,12 +92,9 @@ func (sys *UnitMovementSystem) step(
 	action := &w.queue.Actions[w.queue.Head]
 	switch action.Kind {
 	case components.ActionMoveTo:
-		// M17.A: if MicroPath has unspent waypoints, steer at the current
-		// waypoint instead of the final goal so the unit follows the
-		// planner's route through doors / around obstacles. Falls back to
-		// action.Target when the path is empty (fresh unit, soloist with no
-		// formation, straight-line micro-distance, NavService.FindPath
-		// returned []).
+		// Steer at the current MicroPath waypoint when available so the
+		// unit follows the planner's route through doors / obstacles;
+		// fall back to action.Target when the path is empty.
 		shortTerm := action.Target
 		if w.microPath != nil && w.microPath.Count > 0 && w.microPath.Head < w.microPath.Count {
 			shortTerm = w.microPath.Waypoints[w.microPath.Head]
@@ -122,9 +107,8 @@ func (sys *UnitMovementSystem) step(
 		diff := shortTerm.Sub(*w.pos)
 		distSq := diff.X*diff.X + diff.Z*diff.Z
 		if distSq < arrivalRadius*arrivalRadius {
-			// Reached the short-term waypoint; the unit is mid-route so we
-			// don't popAction (the final-goal arrival check above handles
-			// that). MicroPathSystem advances Head next tick.
+			// Reached the short-term waypoint; don't pop (final-goal arrival
+			// already handled). MicroPathSystem advances Head next tick.
 			return markerOp
 		}
 		dist := float32(math.Sqrt(float64(distSq)))
@@ -132,11 +116,8 @@ func (sys *UnitMovementSystem) step(
 		desiredX := diff.X * invDist
 		desiredZ := diff.Z * invDist
 
-		// Phase 17.8 M17.8.5 — ORCA local avoidance replaces the
-		// inverse-square separation force. Build neighbour list via the
-		// SpatialHash, query agent-agent constraints, solve the 2D LP.
-		// reflectAgainstWalls (below) still handles wall obstacles; full
-		// wall ORCA constraints are M17.8.5b.
+		// ORCA agent-agent avoidance via SpatialHash neighbours; walls go
+		// through reflectAgainstWalls.
 		selfX := float32(w.pos.Chunk.X)*components.ChunkSize + w.pos.Local.X
 		selfZ := float32(w.pos.Chunk.Z)*components.ChunkSize + w.pos.Local.Z
 		var neighbours []orcaAgent
@@ -172,12 +153,11 @@ func (sys *UnitMovementSystem) step(
 			})
 		}
 
-		// Self radius — fall back to default if Collider absent.
 		selfRadius := float32(0.4)
 		if col := sys.colliderMap.Get(w.ent); col != nil && col.Radius > 0 {
 			selfRadius = col.Radius
 		}
-		// Current self velocity (used by ORCA to compute reciprocal share).
+		// Current self velocity for ORCA's reciprocal share.
 		selfVx, selfVz := float32(0), float32(0)
 		if w.mot.Speed > 0 {
 			selfVx = float32(math.Sin(float64(w.mot.VelocityYaw))) * w.mot.Speed
@@ -194,18 +174,11 @@ func (sys *UnitMovementSystem) step(
 		vz := adjusted.Z
 		desiredSpeed := float32(math.Sqrt(float64(vx*vx + vz*vz)))
 
-		// Phase 17.8 M17.8.6 — replan triggers. Two counters on the
-		// blackboard accumulate dt under stalling conditions; once they
-		// cross threshold, MicroPath.Dirty flips so the pathfinder
-		// reroutes around whatever's wedging the unit in place.
-		//
-		//   OvercrowdedSince — ORCA returned infeasible (no velocity
-		//     satisfies all neighbour half-planes). Unit is in a crowd
-		//     it can't escape with local steering alone.
-		//   StuckSince — unit's actual Speed stays low while prefVel
-		//     wants real movement. Catches the case where ORCA returns
-		//     a feasible-but-tiny velocity because every direction is
-		//     half-blocked.
+		// Replan triggers: two blackboard counters accumulate dt under
+		// stalling conditions; crossing threshold flips MicroPath.Dirty.
+		//   OvercrowdedSince — ORCA infeasible (unit in inescapable crowd).
+		//   StuckSince       — Speed stays low while prefVel wants movement
+		//                      (every direction half-blocked).
 		const stallReplanThresh float32 = 0.5
 		if bb := sys.blackboardMap.Get(w.ent); bb != nil {
 			if !orcaFeasible {
@@ -227,9 +200,9 @@ func (sys *UnitMovementSystem) step(
 			}
 		}
 
-		// Phase 15 M15.B.5 - acceleration ramp. Speed approaches the desired
-		// magnitude at most stanceAccel[Stance] m/s^2 per tick instead of
-		// snapping; units visibly spin up out of stop and brake on arrival.
+		// Acceleration ramp: speed approaches desired magnitude at most
+		// stanceAccel[Stance] m/s² per tick, so units visibly spin up and
+		// brake instead of snapping.
 		accel := stanceAccel[w.stance.Code]
 		maxDelta := accel * dt
 		speed := w.mot.Speed
@@ -248,16 +221,14 @@ func (sys *UnitMovementSystem) step(
 			vx, vz = 0, 0
 		}
 
-		// Wall sliding (M15.B.3). Velocity slides along the wall tangent
-		// when the predicted XZ step would cross a wall in the unit's 3x3
-		// chunk window.
+		// Slide along wall tangent when the predicted XZ step would cross
+		// a wall in the 3×3 chunk window.
 		if walls != nil {
 			vx, vz = reflectAgainstWalls(selfX, selfZ, w.pos.Local.Y, vx, vz, dt, walls, w.pos.Chunk)
 		}
 
-		// Y lerp toward target. Lets units climb stairs / drop into bunkers
-		// without teleporting; GroundStick then picks the floor whose Y is
-		// closest on the next tick.
+		// Y lerp lets units climb stairs / drop into bunkers without
+		// teleporting; GroundStick picks the closest-Y floor next tick.
 		dy := action.Target.Local.Y - w.pos.Local.Y
 		progress := float32(0)
 		if dist > 0 {
@@ -266,12 +237,10 @@ func (sys *UnitMovementSystem) step(
 				progress = 1
 			}
 		}
-		// Phase 17 M17.B.4 - combat-move: under Alerted/Threatened, the
-		// body faces the threat (so weapons stay on target) while the legs
-		// walk along VelocityYaw. The throttle below also keeps the unit
-		// from running backwards: when the body is > 90 deg off the
-		// desired motion direction and there's still > 3 m to cover, we
-		// cut speed to 0.3x so the turn lands before the sprint.
+		// Combat-move: under Alerted/Threatened the body faces the threat
+		// (weapons on target) while legs walk along VelocityYaw. Throttle
+		// to 0.3× when body > 90° off motion and > 3 m to cover, so the
+		// turn lands before the sprint.
 		velocityYaw := w.mot.VelocityYaw
 		if speed > 0.01 {
 			velocityYaw = float32(math.Atan2(float64(vx), float64(vz)))
@@ -301,9 +270,8 @@ func (sys *UnitMovementSystem) step(
 		w.mot.Speed = speed
 		w.mot.VelocityYaw = velocityYaw
 
-		// Phase 15 M15.B.5 - cap yaw rate so units don't snap-spin. Wrap the
-		// delta into [-pi, pi] before clamping so a 350 deg desired turn
-		// folds into -10 deg the short way around.
+		// Cap yaw rate so units don't snap-spin. wrapAngle folds 350° into
+		// -10° so the short-way turn lands.
 		delta := wrapAngle(desiredFacingYaw - w.mot.Yaw)
 		maxYawDelta := maxYawRate * dt
 		if delta > maxYawDelta {
@@ -329,8 +297,7 @@ func (sys *UnitMovementSystem) step(
 	return markerOp
 }
 
-// wrapAngle folds an angle in radians into [-pi, pi]. Used by yaw delta math
-// so a 350 deg "desired" turn becomes a -10 deg short-way turn.
+// wrapAngle folds an angle into [-π, π].
 func wrapAngle(a float32) float32 {
 	for a > math.Pi {
 		a -= 2 * math.Pi
@@ -341,7 +308,6 @@ func wrapAngle(a float32) float32 {
 	return a
 }
 
-// popAction advances the queue head past the current action.
 func popAction(q *components.ActionQueue) {
 	if q.Count == 0 {
 		return
@@ -352,13 +318,10 @@ func popAction(q *components.ActionQueue) {
 	q.StopUntil = 0
 }
 
-// PushAction appends an action to the queue. If the queue is full, the
-// oldest entry is dropped to make room (preserves the most recent intent).
-// Exposed so main.go can wire orders without re-implementing the ring-buffer
-// math.
+// PushAction appends an action; drops the oldest when full (preserves most
+// recent intent).
 func PushAction(q *components.ActionQueue, a components.Action) {
 	if q.Count == components.ActionQueueSize {
-		// Drop oldest.
 		q.Head = (q.Head + 1) % components.ActionQueueSize
 		q.Count--
 	}
@@ -367,7 +330,7 @@ func PushAction(q *components.ActionQueue, a components.Action) {
 	q.Count++
 }
 
-// ClearActions resets the queue to empty. Used by RMB immediate override.
+// ClearActions resets the queue to empty.
 func ClearActions(q *components.ActionQueue) {
 	for i := range q.Actions {
 		q.Actions[i] = components.Action{}

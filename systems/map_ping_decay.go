@@ -8,7 +8,6 @@ import (
 )
 
 // MapPingDecaySystem despawns MapPing entities once their TTL has expired.
-// Tiny serial pass; same shape as ThreatDecaySystem.
 type MapPingDecaySystem struct {
 	filter    *ecs.Filter1[components.MapPing]
 	despawned []ecs.Entity
@@ -51,9 +50,8 @@ func (sys *MapPingDecaySystem) Update(ctx core.UpdateContext) {
 	}
 }
 
-// MapPingService spawns MapPing entities. Used by DamageService (KIA),
-// VisionSystem hooks (EnemyContact - Phase 16), etc. Lives as a small handle
-// object so callers don't take a direct ecs.World dependency.
+// MapPingService spawns MapPing entities. Handle object so callers don't
+// take a direct ecs.World dependency.
 type MapPingService struct {
 	world   *ecs.World
 	posMap  *ecs.Map[components.WorldPos]
@@ -70,8 +68,7 @@ func NewMapPingService(w *ecs.World, clock func() float32) *MapPingService {
 	}
 }
 
-// Spawn places one ping at `at`. Caller picks kind / colour / TTL; helpers
-// SpawnKIA / SpawnContact wrap the common defaults.
+// Spawn places one ping at `at`. Caller picks kind / colour / TTL.
 func (s *MapPingService) Spawn(at components.WorldPos, ping components.MapPing) {
 	if s == nil {
 		return

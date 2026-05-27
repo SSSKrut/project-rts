@@ -8,45 +8,31 @@ import (
 	"rts-go/core"
 )
 
-// WeaponSystem - Phase 14 M14.2 combat loop. Per-tick, for every unit with a
-// primary weapon and a valid hostile awareness target, it fires one shot if
-// the RoF cooldown is ready. The shot resolves through walls (LOS) and
-// against any unit body crossing the ray (friendly fire allowed by design -
-// PHASE-14.md notes sec Friendly fire).
+// WeaponSystem fires one shot per ready unit per tick. Shot resolves through
+// walls (LOS) and against any unit body crossing the ray; friendly fire is
+// allowed by design.
 //
-// Pipeline shape mirrors VisionSystem / UnitMovementSystem (Phase 11.6
-// pattern):
+// Pipeline:
+//   1. Serial snapshot — walk seer filter, resolve targets via Awareness +
+//      Faction gate, pre-commit Ammo / LastFiredAt.
+//   2. Parallel raycast — per shot apply dispersion, test wall LOS + unit-
+//      vs-ray in the 3×3 chunk window. Workers write only to per-worker
+//      scratch buffers.
+//   3. Serial post-pass — merge buffers; DamageService.Apply, ThreatSource
+//      spawn, propagateSuppression, particle entities.
 //
-//  1. Serial snapshot - walk the seer filter, resolve each unit's chosen
-//     target via Awareness + Faction gate, decrement Ammo + bump
-//     LastFiredAt. Snapshot of all live units (candidates for raycast hits)
-//     stays read-only.
-//  2. Parallel raycast - per shot apply dispersion, test wall LOS, test
-//     unit-vs-ray distance against every candidate in the 3x3 chunk window.
-//     Workers write into their own scratch buffers (damage / tracer /
-//     impact); never into shared maps.
-//  3. Serial post-pass - merge worker buffers. Damage events run through
-//     DamageService.Apply (which despawns the unit if HP <= 0). Tracer +
-//     impact specs land in the VisualEvents resource.
-//
-// The bulk of the bodies lives in sibling files:
-//
-//	weapon_fire_gate.go - shouldFire + pickTarget (RoE / target selection)
-//	weapon_resolve.go   - resolveShot + ray / segment math (parallel pass)
-//	weapon_postpass.go  - applySplashDamage, propagateSuppression, particle bursts
+// Bodies split: weapon_fire_gate.go (shouldFire / pickTarget),
+// weapon_resolve.go (resolveShot + ray math), weapon_postpass.go (splash /
+// suppression / particle bursts).
 type WeaponSystem struct {
-	pool   *core.WorkerPool
-	damage *DamageService
-	// Phase 14.5 M14.5.4 - particles spawned via SpawnHandles in serial
-	// post-pass. Replaces the old VisualEvents resource.
+	pool      *core.WorkerPool
+	damage    *DamageService
 	particles *SpawnParticleHandles
 
-	// Filters.
 	seerFilter   *ecs.Filter6[components.Unit, components.WorldPos, components.Motion, components.Equipment, components.Awareness, components.Faction]
 	targetFilter *ecs.Filter4[components.Unit, components.WorldPos, components.Stance, components.Faction]
 	wallFilter   *ecs.Filter2[components.WorldPos, components.WallSegment]
 
-	// Map handles.
 	posMap      *ecs.Map[components.WorldPos]
 	stanceMap   *ecs.Map[components.Stance]
 	motionMap   *ecs.Map[components.Motion]
@@ -55,55 +41,41 @@ type WeaponSystem struct {
 	threatMap   *ecs.Map[components.Threat]
 	doorMap     *ecs.Map[components.Door]
 	colliderMap *ecs.Map[components.Collider]
-	// Phase 14 M14.3 - RoE + AttackMove gating. shouldFire walks the seer's
-	// SquadMember -> Squad -> EngagementRules + OrderQueueHead.First to check
-	// the standing fire mode and whether the active order carries the
-	// AttackMove flag.
-	squadMemberMap     *ecs.Map[components.SquadMember]
-	engagementRulesMap *ecs.Map[components.EngagementRules]
-	orderQueueMap      *ecs.Map[components.OrderQueueHead]
-	orderAttackMoveMap *ecs.Map[components.OrderParamAttackMove]
-	orderKindMap       *ecs.Map[components.OrderKind]
-	// Phase 17.6 M17.6.6 — per-order RoE override (Hidden position preset).
+	// shouldFire walks SquadMember → Squad → EngagementRules / order flags.
+	squadMemberMap             *ecs.Map[components.SquadMember]
+	engagementRulesMap         *ecs.Map[components.EngagementRules]
+	orderQueueMap              *ecs.Map[components.OrderQueueHead]
+	orderAttackMoveMap         *ecs.Map[components.OrderParamAttackMove]
+	orderKindMap               *ecs.Map[components.OrderKind]
 	orderEngagementOverrideMap *ecs.Map[components.OrderParamEngagementOverride]
-	// Phase 17.8 M17.8.3 — Utility evaluator Mode gate. Reloading and
-	// Suppressed silence the unit; other modes pass through.
+	// Utility Mode gate: Reloading and Suppressed silence the unit.
 	blackboardMap *ecs.Map[components.LocalBlackboard]
 
-	// Reusable snapshot buffers.
 	targetsBuf     []targetSnap
 	shotsBuf       []shotWork
 	wallsByChunk   map[components.ChunkCoord][]losWall
 	targetsByChunk map[components.ChunkCoord][]int32
 
-	// Per-worker scratch. TracerSpec / ImpactSpec are job-description structs
-	// (Phase 14.5 M14.5.4 - previously lived in components.VisualEvents
-	// before that resource was retired in favour of ECS-entity particles).
+	// Per-worker scratch.
 	workerDamage      [][]damageEvent
 	workerTracer      [][]tracerSpec
 	workerImpact      [][]impactSpec
-	workerThreat      [][]threatEvent      // M14.5: ThreatSource spawn queue
-	workerSuppression [][]suppressionEvent // M14.5: per-impact propagation
-	workerSplash      [][]splashEvent      // M14.5.5: AoE damage events
+	workerThreat      [][]threatEvent
+	workerSuppression [][]suppressionEvent
+	workerSplash      [][]splashEvent
 
-	// M14.5 - handles used by the serial post-pass for ThreatSource spawn
-	// and Suppression.Level decay. ecs.Map[ThreatSource] for archetype
-	// mutation in the post-pass; the decay walk uses the registered
-	// SuppressionFilter so the system stays serial.
 	threatSourceMap *ecs.Map[components.ThreatSource]
 	dangerBufMap    *ecs.Map[components.DangerBuffer]
 	worldRef        *ecs.World
 
-	// Phase 14.5 M14.5.3 - shared spatial hash for unit-vs-ray, propagateSuppression.
 	spatialHash ecs.Resource[core.SpatialHash]
 
 	elapsed  float32
-	lastTick float32 // session-time of the previous Update (for Suppression decay dt)
+	lastTick float32
 }
 
-// targetSnap - read-only snapshot of one candidate target. WorldPos is by
-// value (small struct, cache-friendly); Stance + Faction inlined so the
-// parallel pass doesn't have to dereference component pointers.
+// targetSnap is a read-only candidate-target snapshot. Stance + Faction
+// inlined so the parallel pass skips component dereferences.
 type targetSnap struct {
 	ent     ecs.Entity
 	pos     components.WorldPos
@@ -113,63 +85,49 @@ type targetSnap struct {
 	faction uint8
 }
 
-// shotWork - one queued shot resolved from the serial snapshot pass. The
-// parallel raycast pass reads this read-only and writes results to its
-// per-worker buffers indexed by shot.
+// shotWork is one queued shot for the parallel raycast pass.
 type shotWork struct {
 	shooter      ecs.Entity
-	muzzle       rl.Vector3 // world XYZ (chunk-base resolved)
-	aim          rl.Vector3 // world XYZ (target torso) - pre-dispersion
-	dispersion   float32    // effective angle in radians
-	rangeMax     float32    // weapon range cap
+	muzzle       rl.Vector3
+	aim          rl.Vector3
+	dispersion   float32
+	rangeMax     float32
 	damage       float32
-	targetEntity ecs.Entity // intended target - used for "best-effort" hit when geom check fails
+	targetEntity ecs.Entity
 	targetStance components.StanceCode
 	tracerColor  rl.Color
 	shooterChunk components.ChunkCoord
-	muzzlePos    components.WorldPos // chunk-aware copy for ThreatSource spawn
-	rngSeed      uint64              // deterministic per-shot RNG seed
-	// Phase 14.5 M14.5.5 - AoE knobs. SplashRadius > 0 turns the shot into a
-	// splash event: serial post-pass applies damage via the spatial hash +
-	// spawns debris/smoke particles. Falloff exponents the
-	// (1 - dSq/radiusSq) term.
+	muzzlePos    components.WorldPos
+	rngSeed      uint64 // deterministic per-shot RNG seed
+	// AoE knobs: SplashRadius > 0 turns the shot into a splash event.
 	splashRadius  float32
 	splashFalloff float32
 }
 
-// hitKind classifies what a shot ultimately struck. Workers tag the impact;
-// the serial post-pass dispatches per-kind particle spawns (dust on terrain,
-// debris on wall, no extra particles on unit beyond the impact sphere).
+// hitKind classifies what a shot struck. Drives per-kind particle spawn.
 type hitKind uint8
 
 const (
-	hitKindMiss     hitKind = iota // ray flew past everything (rare; goes to "aim" point)
-	hitKindTerrain                 // ground / out-of-range terminus
-	hitKindWall                    // wall block (LOS hit)
-	hitKindUnitFlag                // unit body
+	hitKindMiss hitKind = iota
+	hitKindTerrain
+	hitKindWall
+	hitKindUnitFlag
 )
 
-// splashEvent - Phase 14.5 M14.5.5 per-shot splash request handed from the
-// parallel pass to the serial post-pass. Damage application iterates the
-// spatial hash, so we need the impact position + radius + falloff + the
-// shot's nominal damage to compute per-target attenuation.
+// splashEvent is a per-shot splash request handed to the serial post-pass.
 type splashEvent struct {
 	pos      rl.Vector3
 	radius   float32
 	falloff  float32
 	damage   float32
-	excluded ecs.Entity // direct-hit target already damaged via dmgBuf; skip in splash to avoid double-count.
+	excluded ecs.Entity // direct-hit target — skip to avoid double-count
 }
 
-// damageEvent - per-worker damage write request, merged in serial post-pass.
 type damageEvent struct {
 	target ecs.Entity
 	amount float32
 }
 
-// tracerSpec / impactSpec - job-description structs handed from parallel
-// resolveShot workers to the serial post-pass that materialises ECS particle
-// entities via SpawnParticleHandles. Phase 14.5 M14.5.4.
 type tracerSpec struct {
 	From, To  rl.Vector3
 	Color     rl.Color
@@ -182,25 +140,16 @@ type impactSpec struct {
 	Color     rl.Color
 	SpawnTime float32
 	TTL       float32
-	// Phase 14.5 M14.5.5: tag for per-kind particle spawn in serial post-pass
-	// (dust on terrain, debris on wall, smoke + debris cluster on splash).
-	Hit hitKind
+	Hit       hitKind
 }
 
-// threatEvent - per-shot ThreatSource spawn request, applied in serial
-// post-pass. Phase 14 M14.5: one ThreatSource per shot; Phase 14.5 may dedupe
-// (multiple shots from same muzzle -> single merged entry).
 type threatEvent struct {
 	origin   components.WorldPos
 	severity float32
 }
 
-// suppressionEvent - per-impact propagation. Each shot generates one event;
-// the serial post-pass walks units within suppressionRadius of impact and
-// pushes DangerBulletImpact entries into their DangerBuffer (Phase 17
-// M17.0.2; previously wrote Suppression.Level directly). hitMul switches
-// between direct-hit (0.5) and miss-radius (0.2) coefficients per
-// PHASE-14.md P5.
+// suppressionEvent: per-impact propagation. hitMul = 0.5 on direct hit, 0.2
+// on miss (distance-scaled in the post-pass).
 type suppressionEvent struct {
 	impact  rl.Vector3
 	hitMul  float32
@@ -208,43 +157,29 @@ type suppressionEvent struct {
 }
 
 const (
-	// weaponEyeHeight - muzzle Y offset above the unit foot. Standing rifle
-	// fire roughly at chest height (1.35 m). Below visionEyeHeight (1.5 m)
-	// so muzzle flash sits below the role label.
+	// Muzzle Y above foot — standing rifle fire at chest height; below
+	// visionEyeHeight so muzzle flash sits below the role label.
 	weaponEyeHeight float32 = 1.35
-	// weaponMaxRange - system-wide range cap. Phase 14 P10: SVD/PKM go to
-	// 600..800 m but the 9-chunk LOS window is 64 m x 3 = 192 m max, so
-	// honest range stays bounded by that. Hard-cap here so a misconfigured
-	// Weapon.RangeM can't accidentally raycast across the whole map.
+	// System-wide range cap. LOS window is 3 chunks = 192 m; this hard-cap
+	// stops misconfigured Weapon.RangeM from raycasting across the map.
 	weaponMaxRange float32 = 192.0
-	// weaponAwarenessMaxAge - drop awareness entries older than this when
-	// picking a firing target. PHASE-14.md notes "prefers most recent
-	// target"; 3 s matches roughly the Phase 15 SurvivalInstinct contract.
+	// Drop awareness entries older than this when picking a firing target.
 	weaponAwarenessMaxAge float32 = 3.0
-	// weaponTracerTTL / weaponImpactTTL - visual fade durations (seconds).
+	// Visual fade durations (seconds).
 	weaponTracerTTL float32 = 0.15
 	weaponImpactTTL float32 = 0.25
-	// weaponDefaultRadius - fallback hit cylinder when a unit has no
-	// Collider component (legacy spawns).
+	// Fallback hit cylinder when a unit has no Collider component.
 	weaponDefaultRadius float32 = 0.4
-	// suppressionRadius - Phase 14 M14.5 propagation. Hits / misses raise
-	// Suppression.Level on every unit inside this XZ radius of the impact.
+	// Suppression propagation radius.
 	suppressionRadius float32 = 5.0
-	// suppressionHitMul / suppressionMissMul - per-PHASE-14.md P5 weights.
-	// Direct hit: 0.5 added to target's level. Near miss: 0.2 scaled down
-	// linearly with distance.
+	// Direct hit / miss weights.
 	suppressionHitMul  float32 = 0.5
 	suppressionMissMul float32 = 0.2
-	// threatTTL - ThreatSource entity lifetime in seconds. Phase 15
-	// SurvivalInstinct reads the cluster; longer TTL = stickier "I know
-	// where the danger came from" memory.
+	// ThreatSource entity lifetime (seconds).
 	threatTTL float32 = 3.0
 )
 
-// NewWeaponSystem wires the system. `damage` must be non-nil - the death
-// path runs through it during the serial post-pass. `particles` is the
-// shared spawn-handles object owned by main.go; must be non-nil after Phase
-// 14.5 M14.5.4.
+// NewWeaponSystem. `damage` and `particles` must both be non-nil.
 func NewWeaponSystem(pool *core.WorkerPool, damage *DamageService, particles *SpawnParticleHandles) *WeaponSystem {
 	workers := 1
 	if pool != nil && pool.Workers() > 0 {

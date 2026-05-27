@@ -12,9 +12,8 @@ import (
 	"rts-go/components"
 )
 
-// SaveDir holds per-chunk binary blobs under chunks/{x}_{z}.bin. When we
-// migrate to region-files, only WriteChunk/ReadChunk change - callers keep
-// the same API.
+// SaveDir holds per-chunk binary blobs under chunks/{x}_{z}.bin. Future
+// region-file migration touches only WriteChunk/ReadChunk; callers stay put.
 const SaveDir = "./save/world-default"
 
 // Binary format v1:
@@ -43,9 +42,9 @@ func chunkFilePath(saveDir string, cc components.ChunkCoord) string {
 	return filepath.Join(saveDir, "chunks", fmt.Sprintf("%d_%d.bin", cc.X, cc.Z))
 }
 
-// WriteChunk serializes heights to disk atomically (tmp + rename). No fsync -
-// eviction-time durability isn't worth the syscall cost. heights is taken by
-// pointer to avoid copying ~17 KB on every call.
+// WriteChunk serializes heights atomically (tmp + rename). No fsync —
+// eviction-time durability isn't worth the syscall cost. Heights taken by
+// pointer to avoid copying ~17 KB per call.
 func WriteChunk(saveDir string, cc components.ChunkCoord, heights *[persistHeightCount]float32) error {
 	dir := filepath.Join(saveDir, "chunks")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -78,9 +77,9 @@ func WriteChunk(saveDir string, cc components.ChunkCoord, heights *[persistHeigh
 
 // ReadChunk loads heights into *out.
 //
-//   - file missing  -> (false, nil); pristine, not an error.
-//   - corrupt/version -> (false, err); caller logs and falls back to procgen.
-//   - success       -> (true, nil).
+//   - file missing    → (false, nil); pristine, not an error.
+//   - corrupt/version → (false, err); caller falls back to procgen.
+//   - success         → (true, nil).
 func ReadChunk(saveDir string, cc components.ChunkCoord, out *[persistHeightCount]float32) (bool, error) {
 	path := chunkFilePath(saveDir, cc)
 	buf, err := os.ReadFile(path)
@@ -112,9 +111,8 @@ func ReadChunk(saveDir string, cc components.ChunkCoord, out *[persistHeightCoun
 	return true, nil
 }
 
-// FlushModifiedChunks writes every live Heightmap+Modified chunk to saveDir.
-// Called on clean shutdown so changes that haven't been evicted yet still
-// survive a restart.
+// FlushModifiedChunks writes every live Heightmap+Modified chunk. Called on
+// clean shutdown so unflushed changes survive a restart.
 func FlushModifiedChunks(w *ecs.World, saveDir string) {
 	filter := ecs.NewFilter3[components.ChunkCoord, components.Heightmap, components.Modified](w)
 	q := filter.Query()

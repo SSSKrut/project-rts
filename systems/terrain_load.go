@@ -10,12 +10,8 @@ import (
 )
 
 // TerrainLoadSystem fills HeightmapDirty chunks from disk if a saved blob
-// exists. Runs BEFORE TerrainGenSystem so loaded chunks override procgen -
-// the load system clears HeightmapDirty on hits, leaving only pristine chunks
-// for the gen pass.
-//
-// Misses leave HeightmapDirty set so gen handles them. Read errors (corrupt,
-// version mismatch) are logged and treated as misses - never panic.
+// exists. Runs BEFORE TerrainGenSystem so loaded chunks override procgen.
+// Misses leave HeightmapDirty set. Read errors are logged, never fatal.
 type TerrainLoadSystem struct {
 	dirtyFilter    *ecs.Filter2[components.ChunkCoord, components.HeightmapDirty]
 	heightmapMap   *ecs.Map[components.Heightmap]

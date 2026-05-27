@@ -10,21 +10,17 @@ import (
 	"rts-go/ui"
 )
 
-// Phase 18.C layout persistence v3 - serialises the workspace tree (Leaf /
-// Split + Ratio) plus the active preset. Old files (v1, v2) are silently
-// rejected; defaults apply so a stale on-disk layout never sticks the user
-// in a broken state.
+// Layout persistence: serialises the workspace tree + active preset.
+// Old file versions are silently rejected; defaults apply on miss/error.
 
 const layoutSavePath = "./save/layout.json"
 
-// layoutFileVersion identifies the on-disk schema. Bumped to 3 when the
-// flat 3-ratio model became a recursive tree.
 const layoutFileVersion uint16 = 3
 
 type nodeJSON struct {
-	Kind     string     `json:"kind"`            // "leaf" | "split"
-	Panel    string     `json:"panel,omitempty"` // leaf only
-	Title    string     `json:"title,omitempty"` // leaf only
+	Kind     string     `json:"kind"`             // "leaf" | "split"
+	Panel    string     `json:"panel,omitempty"`  // leaf only
+	Title    string     `json:"title,omitempty"`  // leaf only
 	Orient   string     `json:"orient,omitempty"` // split only: "v" | "h"
 	Ratio    float32    `json:"ratio,omitempty"`
 	Children []nodeJSON `json:"children,omitempty"`
@@ -84,10 +80,8 @@ func decodeNode(j nodeJSON) *ui.LayoutNode {
 	return nil
 }
 
-// loadLayout reads the layout file (if present) and installs the persisted
-// tree on the PanelManager BEFORE the first Recompute. Missing file =
-// no-op. Parse error / unknown version = no-op, log warning, defaults
-// (Field preset) stay.
+// loadLayout installs the persisted tree on the PanelManager BEFORE the
+// first Recompute. Missing / parse-fail / wrong version ⇒ defaults stay.
 func loadLayout(panelMgr *ui.PanelManager) {
 	if panelMgr == nil {
 		return
@@ -119,8 +113,7 @@ func loadLayout(panelMgr *ui.PanelManager) {
 }
 
 // saveLayout marshals the current workspace tree + active preset into
-// layout.json. Atomic via .tmp + os.Rename so a crash mid-Marshal can't
-// leave a corrupt file. Errors are logged, not returned.
+// layout.json. Atomic via .tmp + os.Rename. Errors are logged.
 func saveLayout(panelMgr *ui.PanelManager) {
 	if panelMgr == nil {
 		return

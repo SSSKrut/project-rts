@@ -6,26 +6,21 @@ import (
 	rl "github.com/gen2brain/raylib-go/raylib"
 )
 
-// TimeDisplay is the read-only snapshot of TimeScale state the top bar
-// renders. main.go builds this from core.App fields each frame.
+// TimeDisplay: Scale = 0 means paused; Elapsed is scaled game-time seconds.
 type TimeDisplay struct {
-	Scale   float32 // 0 = paused
-	Elapsed float32 // game-time seconds since start (scaled)
+	Scale   float32
+	Elapsed float32
 }
 
 var (
-	topBarBG       = rl.Color{R: 18, G: 22, B: 28, A: 255}
-	topBarPauseBG  = rl.Color{R: 70, G: 28, B: 28, A: 255}
-	topBarBorder   = rl.Color{R: 30, G: 30, B: 36, A: 255}
-	topBarText     = rl.Color{R: 230, G: 235, B: 240, A: 255}
-	topBarTextDim  = rl.Color{R: 140, G: 150, B: 160, A: 255}
-	topBarAccent   = rl.Color{R: 80, G: 180, B: 240, A: 255}
+	topBarBG      = rl.Color{R: 18, G: 22, B: 28, A: 255}
+	topBarPauseBG = rl.Color{R: 70, G: 28, B: 28, A: 255}
+	topBarBorder  = rl.Color{R: 30, G: 30, B: 36, A: 255}
+	topBarText    = rl.Color{R: 230, G: 235, B: 240, A: 255}
+	topBarTextDim = rl.Color{R: 140, G: 150, B: 160, A: 255}
+	topBarAccent  = rl.Color{R: 80, G: 180, B: 240, A: 255}
 )
 
-// TopBarHitKind labels the interactive zone the cursor is over (or LMB
-// pressed on). PanelManager dispatches LMB clicks via TopBarHitTest so
-// the top bar feels like a real toolbar without growing dedicated input
-// state.
 type TopBarHitKind uint8
 
 const (
@@ -35,10 +30,9 @@ const (
 	TopBarHitSpeedUp
 )
 
-// DrawTopBar renders the chromeless top toolbar: T+mm:ss clock on the left,
-// play/pause + speed buttons centred, hotkey hint on the right. Background
-// flips red when paused. Returns the four hit-rects so main.go can route
-// LMB clicks back to TimeScale mutations without re-deriving geometry.
+// DrawTopBar returns the four hit-rects so main.go can route LMB clicks
+// back to TimeScale mutations without re-deriving geometry. Background
+// flips red when paused.
 func DrawTopBar(panel Panel, font rl.Font, d TimeDisplay) (playPause, speedDown, speedUp rl.Rectangle) {
 	r := panel.Bounds
 	bg := topBarBG
@@ -58,8 +52,6 @@ func DrawTopBar(panel Panel, font rl.Font, d TimeDisplay) (playPause, speedDown,
 		rl.Vector2{X: r.X + 10, Y: cy - float32(clockSize)*0.5},
 		float32(clockSize), 1.0, topBarText)
 
-	// Centre cluster: [<<] [▶/⏸ label] [>>]. Buttons share a 26 px square,
-	// label between them.
 	const btnW float32 = 26
 	const gap float32 = 7
 	label := fmt.Sprintf("%.0fx", d.Scale)
@@ -91,7 +83,6 @@ func DrawTopBar(panel Panel, font rl.Font, d TimeDisplay) (playPause, speedDown,
 	speedUp = rl.Rectangle{X: labelX + labelW + gap, Y: btnY, Width: btnW, Height: btnW}
 	drawTopBarButton(speedUp, ">>", font)
 
-	// Right: hotkey hint.
 	const hintSize int32 = 13
 	hint := "Space pause   +/- speed   click buttons"
 	hintW := rl.MeasureTextEx(font, hint, float32(hintSize), 1.0).X
@@ -101,8 +92,7 @@ func DrawTopBar(panel Panel, font rl.Font, d TimeDisplay) (playPause, speedDown,
 	return
 }
 
-// TopBarHitTest returns which button (if any) sits under the cursor.
-// Caller passes the rects returned from DrawTopBar last frame.
+// TopBarHitTest uses the rects returned from DrawTopBar last frame.
 func TopBarHitTest(cursor rl.Vector2, playPause, speedDown, speedUp rl.Rectangle) TopBarHitKind {
 	if pointInRect(cursor, playPause) {
 		return TopBarHitPlayPause

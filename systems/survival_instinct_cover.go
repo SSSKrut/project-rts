@@ -9,30 +9,15 @@ import (
 	"rts-go/components"
 )
 
-// pickCover returns the best cover slot for a unit at `pos` threatened from
-// direction `threatDir`. Phase 17 M17.B.1/M17.B.2/M17.B.3 score formula:
+// pickCover returns the best cover slot for a unit. Score formula:
 //
 //	score = quality*100 + facing*20 - dist*5 - anglePenalty*30 - capacityPenalty*50
 //
-// facing = dot(slot.OriginDir, threatDir). In our convention OriginDir
-// points outward from the cover material toward the unit side (slot lives
-// just outside the cover), and threatDir = unit←from-threat also points
-// toward the unit side, so a "between threat and unit" slot has facing ~ +1.
-// Slots behind the unit relative to the threat get facing << 0; M17.B.1
-// rejects anything with facing < -0.3 (tolerance keeps side-cover viable
-// but kills "cover behind my back" picks).
-//
-// anglePenalty = 1 - dot(approach_forward, dir_to_slot). Approach forward is
-// the "away from threat" direction (-threatDir) - the unit should not be
-// running backwards toward a slot, so slots behind the unit get penalised.
-//
-// capacityPenalty grows with the persistent occupancyClaim count: 1 if any
-// other unit already holds the slot via TacticalOverride.AssignedSlot, 20 if
-// the slot is at the soft cap. Within-tick reservations from `claimed`
-// double-count for the same effect.
-//
-// Returns (slot, worldPos, true) on success or (_, _, false) when no slot
-// passes the validation gate.
+// facing = dot(slot.OriginDir, threatDir); slots with facing < -0.3 are
+// rejected (kills "cover behind my back" picks while keeping side-cover).
+// anglePenalty = 1 - dot(-threatDir, dirToSlot) so running backward to a
+// slot gets penalised. capacityPenalty grows with occupancyClaim: 1 if any
+// other unit holds it, 20 at the soft cap.
 func (sys *SurvivalInstinctSystem) pickCover(
 	unit ecs.Entity, pos *components.WorldPos, threatDir rl.Vector3,
 	claimed map[ecs.Entity]ecs.Entity,
@@ -45,8 +30,7 @@ func (sys *SurvivalInstinctSystem) pickCover(
 		tx /= l
 		tz /= l
 	}
-	// Approach forward: away from threat (the unit is bolting from danger,
-	// so "ahead" for utility purposes is the survive-away direction).
+	// Approach forward = away from threat.
 	fx, fz := -tx, -tz
 
 	unitX := float32(pos.Chunk.X)*components.ChunkSize + pos.Local.X

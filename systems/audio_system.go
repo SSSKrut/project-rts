@@ -71,7 +71,7 @@ func (SpatialAudioSystem) Name() string { return "spatial_audio" }
 
 func (SpatialAudioSystem) LODPolicy() core.LODPolicy {
 	return core.LODPolicy{
-		ActiveEvery:   0, // smooth panning/volume in near-field
+		ActiveEvery:   0,
 		RelevantEvery: core.LODDisabled,
 		DormantEvery:  core.LODDisabled,
 	}
@@ -103,7 +103,6 @@ func (sys SpatialAudioSystem) Update(ctx core.UpdateContext) {
 		return
 	}
 
-	// One bucket per chunk - voice-limit grain coupled to the world grid.
 	chunks := make(map[[2]int32]map[string][]audioCandidate)
 
 	q2 := sys.activeFilter.Query()

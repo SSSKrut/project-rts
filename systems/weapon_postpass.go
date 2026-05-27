@@ -10,10 +10,6 @@ import (
 	"rts-go/core"
 )
 
-// spawnDustBurst emits N small dust spheres around `pos` with downward +
-// slight outward velocity. Phase 14.5 M14.5.5 - terrain hit visual cue.
-// Deterministic-per-shot RNG would be ideal but the visual jitter is purely
-// cosmetic; we use the hash address as a cheap seed.
 func (sys *WeaponSystem) spawnDustBurst(pos rl.Vector3, now float32, n int, baseColor rl.Color) {
 	if sys.particles == nil {
 		return
@@ -31,8 +27,6 @@ func (sys *WeaponSystem) spawnDustBurst(pos rl.Vector3, now float32, n int, base
 	}
 }
 
-// spawnDebrisBurst emits N small debris cubes scattering from `pos`. Used
-// for wall hits (small N=4) and splash impacts (N=10). Phase 14.5 M14.5.5.
 func (sys *WeaponSystem) spawnDebrisBurst(pos rl.Vector3, now float32, n int) {
 	if sys.particles == nil {
 		return
@@ -51,21 +45,16 @@ func (sys *WeaponSystem) spawnDebrisBurst(pos rl.Vector3, now float32, n int) {
 	}
 }
 
-// applySplashDamage walks the spatial hash inside the splash radius and
-// submits per-target damage to DamageService. Damage falls off as
-// `(1 - dSq/radiusSq)^falloff` so a unit at the edge takes a fraction of the
-// baseline. Friendly fire enabled per Phase 14 design.
+// Damage falls off as `(1 - dSq/radiusSq)^falloff`; friendly fire enabled.
 func (sys *WeaponSystem) applySplashDamage(ev splashEvent, hash *core.SpatialHash) {
 	rSq := ev.radius * ev.radius
 	hash.ForEachInRadius(ev.pos.X, ev.pos.Z, ev.radius, func(ent ecs.Entity, dSq float32) {
 		if ent == ev.excluded {
-			return // direct-hit target already damaged.
+			return
 		}
 		if !sys.worldRef.Alive(ent) {
 			return
 		}
-		// Only damage Units (Threat component is on Units; we read HP
-		// through DamageService).
 		if sys.threatMap.Get(ent) == nil {
 			return
 		}
@@ -73,17 +62,12 @@ func (sys *WeaponSystem) applySplashDamage(ev splashEvent, hash *core.SpatialHas
 		if t <= 0 {
 			return
 		}
-		// Falloff exponent: 1 = linear, 2 = quadratic. Phase 14.5 ships with
-		// these two only; math.Pow only kicks in for arbitrary exponents
-		// (none currently configured) - most splash weapons match exactly.
 		mul := t
 		switch {
 		case ev.falloff >= 2:
 			mul = t * t
 		case ev.falloff <= 1:
-			// linear fallthrough
 		default:
-			// 1 < falloff < 2 - lerp between linear and quadratic.
 			mul = t*t*(ev.falloff-1) + t*(2-ev.falloff)
 		}
 		amt := ev.damage * mul
@@ -93,16 +77,9 @@ func (sys *WeaponSystem) applySplashDamage(ev splashEvent, hash *core.SpatialHas
 	})
 }
 
-// propagateSuppression pushes a DangerBulletImpact event into the
-// DangerBuffer of every unit within suppressionRadius of `ev.impact`.
-// Strength = hitMul * (1 - d/radius), matching the Phase 14 falloff curve.
-// ThreatSystem drains the buffer next tick and converts Strength +
-// impact-to-unit direction into Threat.Suppression + ThreatDir
-// (recency-weighted average across all events in the same tick).
-//
-// hitMul:
-//   - suppressionHitMul (0.5) - direct hit on a unit.
-//   - suppressionMissMul (0.2) - near miss, scaled linearly by distance.
+// Pushes DangerBulletImpact into each nearby unit's DangerBuffer with
+// Strength = hitMul * (1 - d/radius). ThreatSystem drains the buffer next
+// tick to update Threat.Suppression / ThreatDir.
 func (sys *WeaponSystem) propagateSuppression(ev suppressionEvent, now float32) {
 	hash := sys.spatialHash.Get()
 	if hash == nil {
@@ -117,7 +94,7 @@ func (sys *WeaponSystem) propagateSuppression(ev suppressionEvent, now float32) 
 		}
 		buf := sys.dangerBufMap.Get(ent)
 		if buf == nil {
-			return // not a Unit (no DangerBuffer component).
+			return
 		}
 		pos := sys.posMap.Get(ent)
 		if pos == nil {

@@ -5,15 +5,9 @@ import rl "github.com/gen2brain/raylib-go/raylib"
 // WeaponSpec collapses the per-WeaponKind tables that previously lived in
 // role_service.primaryStats and weapon.tracerColorFor, plus splash-damage
 // knobs (SplashRadius / SplashFalloff).
-//
-// Readers index by WeaponKind. RoleService.spawnPrimary reads the row to
-// construct a Weapon component; WeaponSystem.resolveShot reads tracer color
-// + splash flags directly.
-
-// WeaponSpec - per-weapon stats + visual + AoE parameters.
 type WeaponSpec struct {
 	Kind        WeaponKind
-	Name        string  // "AK47" / "PKM" / ...
+	Name        string
 	Ammo        uint16  // default magazine capacity
 	RangeM      float32 // effective range in metres
 	RoF         float32 // rounds per second
@@ -72,8 +66,6 @@ var WeaponSpecs = [WeaponKindCount]WeaponSpec{
 // Compile-time guard against WeaponKindCount drifting from table length.
 var _ = [WeaponKindCount]WeaponSpec(WeaponSpecs)
 
-// SpecForWeapon returns a pointer into the table. Defensive fallback to
-// WeaponAK47 if kind is out of range.
 func SpecForWeapon(kind WeaponKind) *WeaponSpec {
 	if int(kind) >= len(WeaponSpecs) {
 		return &WeaponSpecs[WeaponAK47]

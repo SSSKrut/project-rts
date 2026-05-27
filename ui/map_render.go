@@ -9,8 +9,7 @@ import (
 	"rts-go/components"
 )
 
-// MapRenderCtx bundles per-frame inputs the map needs. Built once in main.go
-// and passed to DrawMap. Same pattern as InspectorCtx.
+// MapRenderCtx is built once per frame and passed to DrawMap.
 type MapRenderCtx struct {
 	World          *ecs.World
 	Cam            MapCamera
@@ -22,43 +21,28 @@ type MapRenderCtx struct {
 	RosterMap      *ecs.Map[components.CommandRoster]
 	SquadMemberMap *ecs.Map[components.SquadMember]
 	SquadFilter    *ecs.Filter2[components.Squad, components.CommandRoster]
-	// SquadCenter resolves a roster to its centre WorldPos. Injected as func
-	// to keep the ui package free of a systems import. Used as the fallback
-	// when MapMarkerCache has no entry yet (e.g. fresh squad before the first
-	// MapMarkerCacheSystem tick).
-	SquadCenter func(world *ecs.World, roster *components.CommandRoster) (components.WorldPos, bool)
-	// MapMarkerCache is the per-squad position cache populated by
-	// MapMarkerCacheSystem @ 250 ms (Phase 11.5 P7). When non-nil drawSquadMarkers
-	// / drawOrderMarkers / PickSquadAt read from it; nil falls back to per-call
-	// SquadCenter.
+	// SquadCenter is injected to keep ui free of a systems import. Used
+	// as a fallback when MapMarkerCache has no entry (cold cache).
+	SquadCenter    func(world *ecs.World, roster *components.CommandRoster) (components.WorldPos, bool)
 	MapMarkerCache *components.MapMarkerCache
-	// Phase 12: commander role drives the ShortLabel rendered inside the
-	// squad marker. Nil -> marker stays a plain coloured dot.
+	// RoleMap nil -> markers stay a plain coloured dot (no ShortLabel).
 	RoleMap *ecs.Map[components.UnitRole]
 	Font    rl.Font
-	// SquadColor mirrors InspectorCtx.SquadColor.
-	SquadColor func(ent ecs.Entity) rl.Color
-	// Optional debug layers - checked by drawDebugLayers.
-	RoadGraph *components.RoadGraph
-	Rivers    *components.Rivers
-	Buildings *components.BuildingPlanList
-	// ShowDebugLayers toggles roads/rivers/buildings overlay.
+	// SquadColor is injected to avoid a UI -> render-package cycle.
+	SquadColor      func(ent ecs.Entity) rl.Color
+	RoadGraph       *components.RoadGraph
+	Rivers          *components.Rivers
+	Buildings       *components.BuildingPlanList
 	ShowDebugLayers bool
-	// Phase 11 order overlay maps. When non-nil DrawMap renders the head
-	// order's destination icon + line for each squad.
-	OrderQueueMap  *ecs.Map[components.OrderQueueHead]
-	OrderKindMap   *ecs.Map[components.OrderKind]
-	OrderTargetMap *ecs.Map[components.OrderTarget]
-	OrderChainMap  *ecs.Map[components.OrderChain]
-	// SmoothedSquadPos is the inter-frame lerp store for squad-marker
-	// positions on the map (ISSUES #1 fix). Owned by main.go so its lifetime
-	// matches the camera; DrawMap reads + writes per frame. Nil disables
-	// smoothing - markers snap to the raw squad center.
+	OrderQueueMap   *ecs.Map[components.OrderQueueHead]
+	OrderKindMap    *ecs.Map[components.OrderKind]
+	OrderTargetMap  *ecs.Map[components.OrderTarget]
+	OrderChainMap   *ecs.Map[components.OrderChain]
+	// SmoothedSquadPos inter-frame lerps marker positions. Nil disables
+	// smoothing — markers snap to the raw squad center.
 	SmoothedSquadPos map[ecs.Entity]components.WorldPos
-	// Phase 15 M15.C.3 - MapPing rendering. Filter + clock are nil-safe;
-	// nil filter just skips the pulsing-ring pass.
-	MapPingFilter *ecs.Filter2[components.WorldPos, components.MapPing]
-	Clock         float32
+	MapPingFilter    *ecs.Filter2[components.WorldPos, components.MapPing]
+	Clock            float32
 }
 
 var (
@@ -74,9 +58,6 @@ var (
 	mapBuildingColor    = rl.Color{R: 160, G: 150, B: 140, A: 220}
 )
 
-// DrawMap paints the map panel: underlay -> debug layers -> squad markers ->
-// anchor -> selection / hover overlays. Everything inside scissor so out-of-
-// panel pixels stay clean.
 func DrawMap(panel Panel, ctx MapRenderCtx) {
 	content := ContentRect(panel)
 	rl.DrawRectangleRec(content, mapBeyondUnderlayBG)
@@ -93,9 +74,6 @@ func DrawMap(panel Panel, ctx MapRenderCtx) {
 	drawAnchorMarker(content, ctx)
 }
 
-// drawMapPings paints every live MapPing as a pulsing ring + small dot at the
-// ping's world position. Radius = BaseRadM * (1 + 0.5*sin(t * 4)); alpha
-// fades linearly to zero across TTL so the ring softly dies.
 func drawMapPings(content rl.Rectangle, ctx MapRenderCtx) {
 	if ctx.MapPingFilter == nil {
 		return
@@ -114,7 +92,6 @@ func drawMapPings(content rl.Rectangle, ctx MapRenderCtx) {
 		pulse := 1 + 0.5*float32(math.Sin(float64(age*4)))
 		radM := ping.BaseRadM * pulse
 		screen := MapWorldToPanel(*pos, ctx.Cam, content)
-		// Convert metres to pixels via current camera zoom (pixels-per-metre).
 		radPx := radM * ctx.Cam.Zoom
 		alpha := uint8(life * 220)
 		col := ping.Color
@@ -126,11 +103,9 @@ func drawMapPings(content rl.Rectangle, ctx MapRenderCtx) {
 	}
 }
 
-// drawOrderMarkers draws, for every squad with an active head order, a thin
-// line from the squad center to the order's target Pos and a small icon at
-// the target. Icon shape encodes order kind (MoveTo dot, Defend diamond,
-// Garrison square, Trench down-triangle, Patrol circle). Colour is the
-// squad's palette colour.
+// drawOrderMarkers draws a thin line + per-kind icon at the order target
+// (MoveTo dot / Defend diamond / Garrison square / Trench down-triangle /
+// Patrol circle). Colour is the squad's palette colour.
 func drawOrderMarkers(content rl.Rectangle, ctx MapRenderCtx) {
 	if ctx.OrderQueueMap == nil || ctx.OrderKindMap == nil || ctx.OrderTargetMap == nil {
 		return
@@ -161,7 +136,7 @@ func drawOrderMarkers(content rl.Rectangle, ctx MapRenderCtx) {
 		rl.DrawLineEx(from, to, 1.5, col)
 		drawOrderIcon(to, kind.Code, col)
 
-		// Walk chain - paint queued orders' targets dimmed.
+		// Walk chain — queued orders dimmed.
 		cur := head.First
 		dim := rl.Color{R: col.R, G: col.G, B: col.B, A: 120}
 		prev := to
@@ -184,8 +159,6 @@ func drawOrderMarkers(content rl.Rectangle, ctx MapRenderCtx) {
 	}
 }
 
-// drawOrderIcon paints one per-kind glyph at `at`. Geometry kept tiny (~6 px)
-// so multiple orders don't crowd the map at default zoom.
 func drawOrderIcon(at rl.Vector2, k components.OrderKindCode, col rl.Color) {
 	const r float32 = 6
 	switch k {
@@ -202,7 +175,6 @@ func drawOrderIcon(at rl.Vector2, k components.OrderKindCode, col rl.Color) {
 		rl.DrawTriangle(v2, v1, v3, col)
 		rl.DrawTriangleLines(v2, v1, v3, rl.Black)
 	case components.OrderKindDefendPosition:
-		// Diamond - top / right / bottom / left.
 		v1 := rl.Vector2{X: at.X, Y: at.Y - r*0.7}
 		v2 := rl.Vector2{X: at.X + r*0.7, Y: at.Y}
 		v3 := rl.Vector2{X: at.X, Y: at.Y + r*0.7}
@@ -216,7 +188,6 @@ func drawOrderIcon(at rl.Vector2, k components.OrderKindCode, col rl.Color) {
 	case components.OrderKindPatrol:
 		rl.DrawCircleLines(int32(at.X), int32(at.Y), r*0.7, col)
 		rl.DrawCircleLines(int32(at.X), int32(at.Y), r*0.7+1, rl.Black)
-		// Arrow head - small triangle to the right.
 		v1 := rl.Vector2{X: at.X + r, Y: at.Y - r*0.4}
 		v2 := rl.Vector2{X: at.X + r, Y: at.Y + r*0.4}
 		v3 := rl.Vector2{X: at.X + r*1.6, Y: at.Y}
@@ -230,7 +201,6 @@ func drawUnderlay(content rl.Rectangle, ctx MapRenderCtx) {
 	}
 	u := ctx.Underlay
 	cam := ctx.Cam
-	// World-space corners of the underlay -> screen-space rectangle.
 	tl := components.WorldPos{}.Add(rl.Vector3{X: u.WorldOriginX, Z: u.WorldOriginZ})
 	br := components.WorldPos{}.Add(rl.Vector3{X: u.WorldOriginX + u.SizeM, Z: u.WorldOriginZ + u.SizeM})
 	tlS := MapWorldToPanel(tl, cam, content)
@@ -243,7 +213,6 @@ func drawUnderlay(content rl.Rectangle, ctx MapRenderCtx) {
 
 func drawDebugLayers(content rl.Rectangle, ctx MapRenderCtx) {
 	cam := ctx.Cam
-	// Rivers - polylines in blue.
 	if ctx.Rivers != nil {
 		for _, riv := range ctx.Rivers.Polylines {
 			thick := float32(math.Max(1.5, float64(riv.Width)*float64(cam.Zoom)*0.5))
@@ -254,7 +223,6 @@ func drawDebugLayers(content rl.Rectangle, ctx MapRenderCtx) {
 			}
 		}
 	}
-	// Roads - polylines colour-coded by kind.
 	if ctx.RoadGraph != nil {
 		for i := range ctx.RoadGraph.Edges {
 			e := &ctx.RoadGraph.Edges[i]
@@ -265,7 +233,6 @@ func drawDebugLayers(content rl.Rectangle, ctx MapRenderCtx) {
 			rl.DrawLineEx(a, b, thick, col)
 		}
 	}
-	// Buildings - small filled rectangles at footprint extent.
 	if ctx.Buildings != nil {
 		for i := range ctx.Buildings.Plans {
 			p := &ctx.Buildings.Plans[i]
@@ -294,10 +261,9 @@ func drawSquadMarkers(content rl.Rectangle, ctx MapRenderCtx) {
 		if !ok {
 			continue
 		}
-		// ISSUES #1: lerp toward the latest center in world space. UnitMovement
-		// at Relevant/Dormant tier writes pos only every 250-500 ms; raw
-		// markers jitter at the framerate gap. World-space lerp keeps the
-		// marker stable under map pan / zoom.
+		// World-space lerp keeps markers stable across map pan / zoom.
+		// UnitMovement at Relevant/Dormant writes pos only every
+		// 250-500 ms; raw markers would jitter at the framerate gap.
 		if ctx.SmoothedSquadPos != nil {
 			if prev, hadPrev := ctx.SmoothedSquadPos[ent]; hadPrev {
 				const factor float32 = 0.18 // ~6-frame settle at 60 FPS
@@ -314,15 +280,13 @@ func drawSquadMarkers(content rl.Rectangle, ctx MapRenderCtx) {
 		if ctx.SquadColor != nil {
 			col = ctx.SquadColor(ent)
 		}
-		// Phase 12 P6 / Note: marker radius bumped 7 -> 9 so 1-2 char commander
-		// ShortLabel ("L", "MG", "AT") fits inside the disc legibly.
+		// Radius 9 fits 1-2 char ShortLabel ("L", "MG", "AT") inside the disc.
 		const radius float32 = 9
 		rl.DrawCircleV(screen, radius, col)
 		rl.DrawCircleLines(int32(screen.X), int32(screen.Y), radius,
 			rl.Color{R: 20, G: 20, B: 20, A: 200})
-		// Commander ShortLabel inside the disc. Contrast colour picked off
-		// the squad's palette colour so 8 different squad tints all stay
-		// readable.
+		// Contrast picked off the squad's palette colour so all squad
+		// tints stay readable.
 		if ctx.RoleMap != nil && roster.Count > 0 {
 			commander := roster.Members[0]
 			if commander != (ecs.Entity{}) && ctx.World.Alive(commander) {
@@ -341,7 +305,6 @@ func drawSquadMarkers(content rl.Rectangle, ctx MapRenderCtx) {
 				}
 			}
 		}
-		// Hover & selection rings.
 		hoverHere := ctx.Hovered == ent
 		selectedHere := mapAnyMemberSelected(ctx.Selected, roster)
 		if selectedHere {
@@ -362,9 +325,7 @@ func drawAnchorMarker(content rl.Rectangle, ctx MapRenderCtx) {
 	rl.DrawCircleLines(int32(s.X), int32(s.Y), arm, mapAnchorColor)
 }
 
-// PickSquadAt returns the squad whose marker is nearest to `screenPos`
-// within `pickRadiusPx`. Returns zero entity when nothing matches. Used by
-// the map's LMB / hover.
+// PickSquadAt returns zero entity when nothing matches.
 func PickSquadAt(screenPos rl.Vector2, ctx MapRenderCtx, panel Panel,
 	pickRadiusPx float32) ecs.Entity {
 	content := ContentRect(panel)
@@ -396,9 +357,8 @@ func PickSquadAt(screenPos rl.Vector2, ctx MapRenderCtx, panel Panel,
 	return best
 }
 
-// lookupSquadCenter returns the cached position when MapMarkerCache has an
-// entry, otherwise falls back to the live SquadCenter call (covers
-// first-tick / cache-cold cases). Keeps every map draw path consistent.
+// lookupSquadCenter falls back to live SquadCenter when MapMarkerCache
+// is cold (e.g. first tick after spawn).
 func lookupSquadCenter(ctx MapRenderCtx, squad ecs.Entity,
 	roster *components.CommandRoster) (components.WorldPos, bool) {
 	if ctx.MapMarkerCache != nil {
@@ -439,9 +399,6 @@ func roadColor(k components.RoadKind) rl.Color {
 	}
 }
 
-// worldPosCenterXZ unwraps a WorldPos into its absolute world XZ pair. Used
-// when the map needs to lay out a building footprint that the plan stores as
-// (Pos + Size).
 func worldPosCenterXZ(wp components.WorldPos) (float32, float32) {
 	return float32(wp.Chunk.X)*components.ChunkSize + wp.Local.X,
 		float32(wp.Chunk.Z)*components.ChunkSize + wp.Local.Z

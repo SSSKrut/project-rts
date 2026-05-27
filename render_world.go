@@ -10,21 +10,6 @@ import (
 	"rts-go/systems"
 )
 
-// This file used to hold ~820 lines of mixed render helpers. The bodies have
-// moved to per-domain sibling files:
-//
-//	render_overlays.go   debug overlays (nav grid / cover / floor nav / road graph) + drawNavPath
-//	render_buildings.go  drawBuildingFloor / drawBuildingWall / drawBuildingStairs
-//	render_units.go      unit cubes, role labels, stamina / HP bars, ghost cube + arc, squad palettes
-//
-// What stays here:
-//
-//	drawProp        - prop primitives (cube / sphere / cylinder / cone / plane / tree)
-//	ParticleRenderCtx + drawParticles - particle pass (read-only ECS walk)
-
-// drawProp renders one placeholder prop primitive. Yaw radians around +Y;
-// scale uniform. Position is the prop's *foot* (ground contact), so
-// primitives lift themselves to sit on top.
 func drawProp(meta components.PropMeta, pos rl.Vector3, yaw, scale float32) {
 	switch meta.Primitive {
 	case components.PrimitiveCube:
@@ -74,7 +59,6 @@ func drawProp(meta components.PropMeta, pos rl.Vector3, yaw, scale float32) {
 		}
 
 	case components.PrimitiveTree:
-		// Trunk + canopy composite. 6-sided is enough at silhouette resolution.
 		trunkR := meta.Size.X * scale
 		trunkH := meta.Size.Y * scale
 		canopyR := meta.Size.Z * scale
@@ -87,21 +71,11 @@ func drawProp(meta components.PropMeta, pos rl.Vector3, yaw, scale float32) {
 	}
 }
 
-// ParticleRenderCtx bundles ECS handles needed to walk every live particle.
-// main.go builds one and passes to drawParticles each frame. Phase 14.5
-// M14.5.4.
 type ParticleRenderCtx struct {
 	Filter *ecs.Filter3[components.Particle, components.WorldPos, components.ParticleVisual]
 	EndMap *ecs.Map[components.ParticleEnd]
 }
 
-// drawParticles walks every live Particle entity and dispatches per-kind
-// draw calls. Replaces drawTracers + drawImpacts; the new kinds (smoke,
-// dust, debris, muzzle flash) share the same pipeline.
-//
-// Phase 14.5 M14.5.4: raylib's DrawLine3D / DrawSphere / DrawCube are not
-// instanced - each particle is its own draw call. Acceptable at the cap of
-// 2000 live entries; Phase 16 may revisit if firefight density grows.
 func drawParticles(ctx ParticleRenderCtx, now float32) {
 	if ctx.Filter == nil {
 		return
@@ -119,10 +93,8 @@ func drawParticles(ctx ParticleRenderCtx, now float32) {
 		fade := 1 - age/vis.TTL
 		col := rl.Color{R: vis.Color.R, G: vis.Color.G, B: vis.Color.B,
 			A: uint8(float32(vis.Color.A) * fade)}
-		// Particle WorldPos.Local is the absolute world-space position
-		// (writers set Chunk=0 to keep this simple); subtract the render
-		// origin to get camera-relative coords. This mirrors the old
-		// VisualEvents code path exactly.
+		// Particle WorldPos.Local is absolute world-space (writers set Chunk=0);
+		// subtract the render origin to get camera-relative coords.
 		from := rl.Vector3{
 			X: pos.Local.X - originBaseX,
 			Y: pos.Local.Y,

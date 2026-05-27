@@ -10,11 +10,8 @@ import (
 )
 
 // LevelVisibilitySystem flips LevelVisibility.Discovered to true and refreshes
-// LastSeenAt for every Level whose AABB currently contains a friendly's XZ
-// (with a small Y proximity gate). Phase 16.C.2 uses the LODAnchor as the
-// proxy "friendly" so fog can be tested without unit AI; once units enter
-// buildings (Phase 16.B.2 ClearBuilding / Garrison) they'll be the real
-// signal.
+// LastSeenAt for every Level whose AABB contains a friendly's XZ (with a
+// small Y proximity gate).
 type LevelVisibilitySystem struct {
 	anchorFilter *ecs.Filter2[components.LODAnchor, components.WorldPos]
 	unitFilter   *ecs.Filter2[components.Unit, components.WorldPos]
@@ -50,8 +47,6 @@ func (sys *LevelVisibilitySystem) Update(ctx core.UpdateContext) {
 	}
 	sys.clock += float32(ctx.Delta.Seconds())
 
-	// Collect friendly XYZ positions (anchor + units). Buildings rarely
-	// span more than a few chunks; the level loop below is small.
 	type pt struct{ x, y, z float32 }
 	var pts []pt
 	qa := sys.anchorFilter.Query()
@@ -98,8 +93,8 @@ func (sys *LevelVisibilitySystem) Update(ctx core.UpdateContext) {
 	}
 }
 
-// Clock exposes the system's session-time accumulator so readers (renderer)
-// can compare against LevelVisibility.LastSeenAt without a separate clock.
+// Clock exposes the session-time accumulator for readers comparing against
+// LevelVisibility.LastSeenAt.
 func (sys *LevelVisibilitySystem) Clock() float32 {
 	return sys.clock
 }
