@@ -42,6 +42,16 @@ const weaponMovingSpeedThreshold float32 = 1.0
 // the seer-loop snapshot avoids re-resolving pointers.
 func (sys *WeaponSystem) shouldFire(shooter ecs.Entity, motionSpeed float32,
 	shooterPos *components.WorldPos, targetPos components.WorldPos) bool {
+	// Phase 17.8 M17.8.3 — Utility AI Mode gate. Reloading and Suppressed
+	// silence the unit unconditionally (no fire even with FreeFire RoE or
+	// AttackTarget override — animation / shock state forbids firing).
+	if b := sys.blackboardMap.Get(shooter); b != nil {
+		switch b.CurrentMode {
+		case components.ModeReloading, components.ModeSuppressed:
+			return false
+		}
+	}
+
 	rules := components.EngagementRules{
 		Mode: components.FreeFire, FireOnInf: true, FireOnArm: true,
 	}

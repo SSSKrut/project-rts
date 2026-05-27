@@ -132,54 +132,99 @@ func (sys *UnitMovementSystem) step(
 		desiredX := diff.X * invDist
 		desiredZ := diff.Z * invDist
 
-		// Phase 14.5 M14.5.2: separation force pulled from the SpatialHash.
-		// Callback receives nearby entries inline - no intermediate slice
-		// allocation. Self is filtered via ent check; alive-check is cheap
-		// here (the hash may carry indices for entities removed since
-		// rebuild, but the world.Alive guard skips dead reads).
+		// Phase 17.8 M17.8.5 — ORCA local avoidance replaces the
+		// inverse-square separation force. Build neighbour list via the
+		// SpatialHash, query agent-agent constraints, solve the 2D LP.
+		// reflectAgainstWalls (below) still handles wall obstacles; full
+		// wall ORCA constraints are M17.8.5b.
 		selfX := float32(w.pos.Chunk.X)*components.ChunkSize + w.pos.Local.X
 		selfZ := float32(w.pos.Chunk.Z)*components.ChunkSize + w.pos.Local.Z
-		var sepX, sepZ float32
+		var neighbours []orcaAgent
 		if hash != nil {
-			hash.ForEachInRadius(selfX, selfZ, separationRadius, func(ent ecs.Entity, dSq float32) {
-				if ent == w.ent || dSq <= 1e-4 {
+			hash.ForEachInRadius(selfX, selfZ, orcaNeighbourRadius, func(ent ecs.Entity, _ float32) {
+				if ent == w.ent {
 					return
 				}
-				// Stale-entity guard: SpatialHash invariant - readers MUST
-				// alive-check every callback target before further work.
 				if !sys.world.Alive(ent) {
 					return
 				}
-				// Recompute dx/dz so the falloff direction is from the live
-				// position (SpatialEntry is a 1-tick stale snapshot, but the
-				// resolution mismatch is <= a few cm at top speed -
-				// irrelevant for separation force direction).
 				np := sys.posMap.Get(ent)
 				if np == nil {
 					return
 				}
+				nMot := sys.motionMap.Get(ent)
 				nx := float32(np.Chunk.X)*components.ChunkSize + np.Local.X
 				nz := float32(np.Chunk.Z)*components.ChunkSize + np.Local.Z
-				dx := selfX - nx
-				dz := selfZ - nz
-				dd := dx*dx + dz*dz
-				if dd <= 1e-4 {
-					return
+				var nVx, nVz float32
+				if nMot != nil && nMot.Speed > 0 {
+					nVx = float32(math.Sin(float64(nMot.VelocityYaw))) * nMot.Speed
+					nVz = float32(math.Cos(float64(nMot.VelocityYaw))) * nMot.Speed
 				}
-				inv := 1 / dd
-				sepX += dx * inv
-				sepZ += dz * inv
+				nRadius := float32(0.4)
+				if col := sys.colliderMap.Get(ent); col != nil && col.Radius > 0 {
+					nRadius = col.Radius
+				}
+				neighbours = append(neighbours, orcaAgent{
+					Pos:    orcaVec2{X: nx, Z: nz},
+					Vel:    orcaVec2{X: nVx, Z: nVz},
+					Radius: nRadius,
+				})
 			})
 		}
 
-		vx := desiredX*maxSpeed + sepX*separationWeight
-		vz := desiredZ*maxSpeed + sepZ*separationWeight
+		// Self radius — fall back to default if Collider absent.
+		selfRadius := float32(0.4)
+		if col := sys.colliderMap.Get(w.ent); col != nil && col.Radius > 0 {
+			selfRadius = col.Radius
+		}
+		// Current self velocity (used by ORCA to compute reciprocal share).
+		selfVx, selfVz := float32(0), float32(0)
+		if w.mot.Speed > 0 {
+			selfVx = float32(math.Sin(float64(w.mot.VelocityYaw))) * w.mot.Speed
+			selfVz = float32(math.Cos(float64(w.mot.VelocityYaw))) * w.mot.Speed
+		}
+		prefVel := orcaVec2{X: desiredX * maxSpeed, Z: desiredZ * maxSpeed}
+		self := orcaAgent{
+			Pos:    orcaVec2{X: selfX, Z: selfZ},
+			Vel:    orcaVec2{X: selfVx, Z: selfVz},
+			Radius: selfRadius,
+		}
+		adjusted, orcaFeasible := orcaAdjust(self, neighbours, prefVel, maxSpeed)
+		vx := adjusted.X
+		vz := adjusted.Z
 		desiredSpeed := float32(math.Sqrt(float64(vx*vx + vz*vz)))
-		if desiredSpeed > maxSpeed {
-			inv := maxSpeed / desiredSpeed
-			vx *= inv
-			vz *= inv
-			desiredSpeed = maxSpeed
+
+		// Phase 17.8 M17.8.6 — replan triggers. Two counters on the
+		// blackboard accumulate dt under stalling conditions; once they
+		// cross threshold, MicroPath.Dirty flips so the pathfinder
+		// reroutes around whatever's wedging the unit in place.
+		//
+		//   OvercrowdedSince — ORCA returned infeasible (no velocity
+		//     satisfies all neighbour half-planes). Unit is in a crowd
+		//     it can't escape with local steering alone.
+		//   StuckSince — unit's actual Speed stays low while prefVel
+		//     wants real movement. Catches the case where ORCA returns
+		//     a feasible-but-tiny velocity because every direction is
+		//     half-blocked.
+		const stallReplanThresh float32 = 0.5
+		if bb := sys.blackboardMap.Get(w.ent); bb != nil {
+			if !orcaFeasible {
+				bb.OvercrowdedSince += dt
+			} else {
+				bb.OvercrowdedSince = 0
+			}
+			wantsMove := prefVel.lenSq() > 1
+			if wantsMove && w.mot.Speed < 0.3 {
+				bb.StuckSince += dt
+			} else {
+				bb.StuckSince = 0
+			}
+			if (bb.OvercrowdedSince > stallReplanThresh || bb.StuckSince > stallReplanThresh) &&
+				w.microPath != nil {
+				w.microPath.Dirty = true
+				bb.OvercrowdedSince = 0
+				bb.StuckSince = 0
+			}
 		}
 
 		// Phase 15 M15.B.5 - acceleration ramp. Speed approaches the desired
@@ -207,7 +252,7 @@ func (sys *UnitMovementSystem) step(
 		// when the predicted XZ step would cross a wall in the unit's 3x3
 		// chunk window.
 		if walls != nil {
-			vx, vz = reflectAgainstWalls(selfX, selfZ, vx, vz, dt, walls, w.pos.Chunk)
+			vx, vz = reflectAgainstWalls(selfX, selfZ, w.pos.Local.Y, vx, vz, dt, walls, w.pos.Chunk)
 		}
 
 		// Y lerp toward target. Lets units climb stairs / drop into bunkers

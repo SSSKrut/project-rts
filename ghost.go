@@ -326,9 +326,14 @@ func drawGhostInBuilding(g *ghostContext, building ecs.Entity, count uint8, stan
 		if fp == nil {
 			continue
 		}
-		// Floor.WorldPos is the corner; centre = corner + (SizeX/2, 0, SizeZ/2).
-		centre := fp.Add(rl.Vector3{X: f.SizeX * 0.5, Y: 0, Z: f.SizeZ * 0.5})
-		floors = append(floors, floorCentre{pos: centre, level: f.Level})
+		// Phase 17.9 — Floor.WorldPos IS the plate centre (gen/buildings/house.go
+		// AddFloor(rl.Vector3{X: cx, Y: baseY, Z: cz}, ...) passes building's
+		// centre, not a corner). The previous "+SizeX/2 to get centre" was the
+		// inverse of the actual semantics — render_buildings.go DrawCubeV
+		// treats fp as centre, GroundStickSystem checks [centre±SizeX/2], so
+		// every other reader was consistent except this code and the old
+		// memberOnFloor.
+		floors = append(floors, floorCentre{pos: *fp, level: f.Level})
 	}
 	if len(floors) == 0 {
 		return false

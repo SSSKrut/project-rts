@@ -14,7 +14,7 @@ const ProfileWindow = 60
 
 // MaxSystems caps how many systems the Profiler can track. AddSystem panics
 // if exceeded so the panic fires once at startup, not silently mid-session.
-const MaxSystems = 32
+const MaxSystems = 64
 
 // profileFrame is one tick's worth of per-system timings plus the tick total.
 // Fixed-size array - no per-frame allocations.

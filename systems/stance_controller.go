@@ -42,7 +42,11 @@ type StanceControllerSystem struct {
 	movementMap    *ecs.Map[components.MovementProfile]
 	orderMoveOverr *ecs.Map[components.OrderParamMovementProfile]
 	orderQueueMap  *ecs.Map[components.OrderQueueHead]
-	elapsed        float32
+	// Phase 17.8 M17.8.3 — Utility AI ModeSuppressed forces Prone regardless
+	// of Threat.State band, animation lock, or doctrine. Reads CurrentMode
+	// from LocalBlackboard (UtilityEvaluatorSystem writes it).
+	blackboardMap *ecs.Map[components.LocalBlackboard]
+	elapsed       float32
 }
 
 func NewStanceControllerSystem() *StanceControllerSystem {
@@ -57,6 +61,7 @@ func (sys *StanceControllerSystem) InitUI(w *ecs.World) {
 	sys.movementMap = ecs.NewMap[components.MovementProfile](w)
 	sys.orderMoveOverr = ecs.NewMap[components.OrderParamMovementProfile](w)
 	sys.orderQueueMap = ecs.NewMap[components.OrderQueueHead](w)
+	sys.blackboardMap = ecs.NewMap[components.LocalBlackboard](w)
 }
 
 func (StanceControllerSystem) Name() string { return "stance_controller" }
@@ -86,13 +91,26 @@ func (sys *StanceControllerSystem) Update(ctx core.UpdateContext) {
 		if !sys.allowAutoStance(ent) {
 			continue
 		}
+		// Phase 17.8 M17.8.3 — Utility ModeSuppressed forces Prone. Bypasses
+		// the animation lock (suppression is reactive — must collapse to
+		// Prone immediately) but still respects the moving-too-fast gate
+		// below (Crouch fallback when speed > 1.5 m/s).
+		suppressedNow := false
+		if b := sys.blackboardMap.Get(ent); b != nil && b.CurrentMode == components.ModeSuppressed {
+			suppressedNow = true
+		}
+
 		// Gate: animation lock - hold the last change for at least
-		// stanceAnimLock seconds before flipping again.
-		if now < stance.LockUntil {
+		// stanceAnimLock seconds before flipping again. Bypassed when
+		// Suppressed (reactive collapse).
+		if !suppressedNow && now < stance.LockUntil {
 			continue
 		}
 
 		target := sys.targetStance(ent, threat.State)
+		if suppressedNow {
+			target = components.StanceProne
+		}
 
 		// Movement gate: prone is incompatible with > 1.5 m/s. If the unit
 		// is actually moving that fast, snap up to Crouch.

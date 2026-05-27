@@ -144,9 +144,10 @@ func (sys *SpatialBakeSystem) bakeLevelNavPass(ctx core.UpdateContext) {
 func rasterizeFloorWall(grid *components.LevelNavGrid, wallLocal rl.Vector3,
 	w components.WallSegment, openingPassable bool,
 	originX, originZ float32) {
+	const cellInflate float32 = 0.5 // same as surface NavGrid rasterizeWall
 	yaw := w.Yaw
 	length := w.Length
-	halfT := w.Thickness * 0.5
+	halfT := w.Thickness*0.5 + cellInflate
 	if length <= 0 || halfT <= 0 {
 		return
 	}
@@ -215,7 +216,7 @@ func rasterizeFloorWall(grid *components.LevelNavGrid, wallLocal rl.Vector3,
 			dz := cz - fromZ
 			t := dx*sa + dz*ca
 			n := dx*ca - dz*sa
-			if t < 0 || t > length || n < -halfT || n > halfT {
+			if t < -cellInflate || t > length+cellInflate || n < -halfT || n > halfT {
 				continue
 			}
 			if openingPassable && w.OpeningWidth > 0 {

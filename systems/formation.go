@@ -39,6 +39,17 @@ type FormationSystem struct {
 	// MicroPath.Dirty whenever the goal shifts; MicroPathSystem picks that up
 	// and replans through NavService.
 	microPathMap *ecs.Map[components.MicroPath]
+	// Phase 17.8 M17.8.4 — mirror per-unit slot target into the unit's
+	// LocalBlackboard.GoalSlot so UtilityEvaluator can read DistToSlot
+	// without duplicating the formation-offset math.
+	blackboardMap *ecs.Map[components.LocalBlackboard]
+	// Phase 17.8 M17.8.6 follow-up — read squad's head order kind to skip
+	// the outside-walkable clamp when the player wants the squad INSIDE
+	// (Garrison / OccupyBuilding / ClearBuilding). Without this gate the
+	// clamp pushes every inside-building slot back to outside surface, so
+	// units pile up against the wall instead of entering through the door.
+	orderQueueMap *ecs.Map[components.OrderQueueHead]
+	orderKindMap  *ecs.Map[components.OrderKind]
 
 	// Phase 15 M15.A.0 - members carrying a TacticalOverride are AI-driven
 	// (e.g. SurvivalInstinct moving them to cover). FormationSystem reads but
@@ -95,6 +106,9 @@ func (sys *FormationSystem) InitUI(w *ecs.World) {
 	sys.microPathMap = ecs.NewMap[components.MicroPath](w)
 	sys.orientMap = ecs.NewMap[components.FormationOrientation](w)
 	sys.customSlotsMap = ecs.NewMap[components.FormationCustomSlots](w)
+	sys.blackboardMap = ecs.NewMap[components.LocalBlackboard](w)
+	sys.orderQueueMap = ecs.NewMap[components.OrderQueueHead](w)
+	sys.orderKindMap = ecs.NewMap[components.OrderKind](w)
 }
 
 func (FormationSystem) Name() string { return "formation" }
@@ -252,6 +266,25 @@ func (sys *FormationSystem) processSquad(world *ecs.World, w formationWork, leav
 		haveTarget = true
 	}
 
+	// Phase 17.8 M17.8.6 follow-up — interior intent detection. When the
+	// squad's head order kind is Garrison / OccupyBuilding / ClearBuilding
+	// the slot clamp must be disabled, even while the squad is still
+	// outside the building. clampSlotXZ rejects NavInBuilding cells as
+	// "not walkable" and pushes them to the nearest outside surface;
+	// without this gate units stop at outside-the-wall slots instead of
+	// pathing through the door.
+	interiorIntent := false
+	if head := sys.orderQueueMap.Get(w.squad); head != nil && head.First != (ecs.Entity{}) {
+		if kind := sys.orderKindMap.Get(head.First); kind != nil {
+			switch kind.Code {
+			case components.OrderKindGarrison,
+				components.OrderKindOccupyBuilding,
+				components.OrderKindClearBuilding:
+				interiorIntent = true
+			}
+		}
+	}
+
 	// Update Forward toward the macro target - but only while the squad
 	// is still far enough out that the unit vector (target - center) /
 	// mag is geometrically stable. Once we're inside formationForwardLockDist
@@ -318,6 +351,22 @@ func (sys *FormationSystem) processSquad(world *ecs.World, w formationWork, leav
 				}
 				target = baseCenter.Add(rl.Vector3{X: ip.RelativeOffset.X, Y: 0, Z: ip.RelativeOffset.Y})
 			}
+		} else if interiorIntent {
+			// Phase 17.8 M17.8.6 follow-up — interior intent: each member
+			// targets a slightly-spread point around mp.Goal (firstFloorPos)
+			// in a Loose formation. Pure-collapse to mp.Goal would
+			// bottleneck all 8 units through the door at the same XZ →
+			// ORCA queues + corner sliding slows them to ~0 m/s. A small
+			// loose offset (1.2 m spacing) lets pathfinder give each unit
+			// a different route (spreading the bottleneck), and once
+			// inside the units naturally spread by the same offset.
+			if mp.HasGoal {
+				const interiorSpreadSpacing float32 = 1.2
+				offX, offZ := FormationOffset(components.FormationLoose, i, interiorSpreadSpacing, rl.Vector3{X: 0, Y: 0, Z: 1})
+				target = mp.Goal.Add(rl.Vector3{X: offX, Y: 0, Z: offZ})
+			} else {
+				target = centerTarget
+			}
 		} else {
 			// Phase 18 orientation lock: OrientNorth overrides the live
 			// motion-derived forward with the world +Z axis so the
@@ -357,17 +406,28 @@ func (sys *FormationSystem) processSquad(world *ecs.World, w formationWork, leav
 				}
 			}
 		}
-		// Phase 14.6 M14.6.1 / Phase 15 M15.B.4 - keep slot targets out of
-		// blocked cells when approaching from outside a building. Once the
-		// commander has entered, inside slots stand; MicroPathSystem then
-		// routes lagging members through the door rather than the funnel-hack
-		// scan we used pre-Phase-17.
-		if ip == nil && !sys.cellInsideBuilding(centerTarget) {
+		// Phase 14.6 M14.6.1 / Phase 15 M15.B.4 / Phase 17.8 M17.8.6 fix —
+		// keep slot targets out of blocked cells when approaching from
+		// outside a building, UNLESS the player explicitly wants the
+		// squad inside (Garrison / OccupyBuilding / ClearBuilding).
+		// Without the interiorIntent gate, the clamp pushed inside-
+		// building slots back to outside surface — squad arrived at
+		// outside cells and never entered. NavService routes through
+		// doors via TransitionEdge, so the raw inside slot is correct;
+		// MicroPath handles per-unit routing.
+		if !interiorIntent && ip == nil && !sys.cellInsideBuilding(centerTarget) {
 			if clamped, ok := sys.clampSlotXZ(target); ok {
 				target = clamped
 			} else {
 				target = center
 			}
+		}
+
+		// Phase 17.8 M17.8.4 — mirror the final per-unit slot target into
+		// the blackboard so UtilityEvaluator's DistToSlot signal sees the
+		// same goal MicroPath is pathing toward. Cheap (no extra math).
+		if bb := sys.blackboardMap.Get(mem); bb != nil {
+			bb.GoalSlot = target
 		}
 
 		// Phase 17 M17.A.2 - retarget the existing MoveTo head in place

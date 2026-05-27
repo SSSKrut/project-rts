@@ -66,6 +66,9 @@ type WeaponSystem struct {
 	orderKindMap       *ecs.Map[components.OrderKind]
 	// Phase 17.6 M17.6.6 — per-order RoE override (Hidden position preset).
 	orderEngagementOverrideMap *ecs.Map[components.OrderParamEngagementOverride]
+	// Phase 17.8 M17.8.3 — Utility evaluator Mode gate. Reloading and
+	// Suppressed silence the unit; other modes pass through.
+	blackboardMap *ecs.Map[components.LocalBlackboard]
 
 	// Reusable snapshot buffers.
 	targetsBuf     []targetSnap
@@ -283,6 +286,7 @@ func (sys *WeaponSystem) InitUI(w *ecs.World) {
 	sys.orderAttackMoveMap = ecs.NewMap[components.OrderParamAttackMove](w)
 	sys.orderKindMap = ecs.NewMap[components.OrderKind](w)
 	sys.orderEngagementOverrideMap = ecs.NewMap[components.OrderParamEngagementOverride](w)
+	sys.blackboardMap = ecs.NewMap[components.LocalBlackboard](w)
 	sys.threatSourceMap = ecs.NewMap[components.ThreatSource](w)
 	sys.dangerBufMap = ecs.NewMap[components.DangerBuffer](w)
 	sys.worldRef = w

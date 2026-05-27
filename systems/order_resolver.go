@@ -71,6 +71,14 @@ type OrderResolverSystem struct {
 	// resolves friend/foe relative to the issuing squad's Faction.
 	unitFilter *ecs.Filter2[components.Unit, components.WorldPos]
 	factionMap *ecs.Map[components.Faction]
+	// Phase 17.8 follow-up — interior-intent orders mark the target
+	// Building entity as an LODAnchor so its host chunks (and any chunk
+	// the footprint spans) stay loaded by TerrainStreamingSystem. Without
+	// this, doors of a building outside the player anchor's streaming
+	// radius don't exist as entities — NavService has no TransitionEdge
+	// for them and pathfinding into the building fails until the squad
+	// physically walks close enough for the chunks to activate.
+	lodAnchorMap *ecs.Map[components.LODAnchor]
 
 	// Phase 14.6 followup - Garrison target.Pos points at a Floor entity's
 	// WorldPos (NodeLevel in the multi-graph A*) so NavService.FindPath can
@@ -124,6 +132,7 @@ func (sys *OrderResolverSystem) InitUI(w *ecs.World) {
 	sys.eventLogRes = ecs.NewResource[components.EventLog](w)
 	sys.unitFilter = ecs.NewFilter2[components.Unit, components.WorldPos](w)
 	sys.factionMap = ecs.NewMap[components.Faction](w)
+	sys.lodAnchorMap = ecs.NewMap[components.LODAnchor](w)
 }
 
 // pushOrderEvent records an order-lifecycle event into the global log.
@@ -188,6 +197,7 @@ func (sys *OrderResolverSystem) Update(ctx core.UpdateContext) {
 		reissue       bool
 	}
 	var advances []advance
+	var pendingLODAnchors []ecs.Entity
 
 	q := sys.squadFilter.Query()
 	for q.Next() {
@@ -221,6 +231,17 @@ func (sys *OrderResolverSystem) Update(ctx core.UpdateContext) {
 			state.Code = components.OrderStateInProgress
 			if mp := sys.macroPathMap.Get(squad); mp != nil {
 				mp.ReplanAt = 0
+			}
+			// Phase 17.8 follow-up — interior intent: pin LODAnchor on
+			// target Building. Mutation deferred — archetype changes
+			// during live query are forbidden by Ark. Collect into
+			// `pendingLODAnchors` and apply after the query closes.
+			if target.Entity != (ecs.Entity{}) && ctx.World.Alive(target.Entity) {
+				spec := components.SpecForOrderKind(kind.Code)
+				if spec.Completion == components.CompletionEveryMemberOnFloor ||
+					spec.Completion == components.CompletionClearBuilding {
+					pendingLODAnchors = append(pendingLODAnchors, target.Entity)
+				}
 			}
 
 		case components.OrderStateInProgress:
@@ -276,6 +297,19 @@ func (sys *OrderResolverSystem) Update(ctx core.UpdateContext) {
 				adv.reissueEntity = target.Entity
 			}
 			advances = append(advances, adv)
+		}
+	}
+
+	// Phase 17.8 follow-up — apply LODAnchor adds after the squad query
+	// closes (Ark archetype-change rule).
+	if sys.lodAnchorMap != nil {
+		for _, ent := range pendingLODAnchors {
+			if ent == (ecs.Entity{}) || !ctx.World.Alive(ent) {
+				continue
+			}
+			if !sys.lodAnchorMap.Has(ent) {
+				sys.lodAnchorMap.Add(ent, &components.LODAnchor{})
+			}
 		}
 	}
 

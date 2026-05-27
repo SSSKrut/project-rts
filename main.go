@@ -200,6 +200,14 @@ func main() {
 	stanceSys := systems.NewStanceControllerSystem()
 	stanceSys.InitUI(app.World)
 
+	// Phase 17.8 M17.8.2 — Utility AI evaluator. Picks per-unit ActionMode
+	// (Following / Engaging / TakingCover / Repositioning / Reloading /
+	// Suppressed) every ~0.5s with hysteresis. Reads Threat / Awareness /
+	// Equipment / OrderQueue, writes LocalBlackboard.CurrentMode + Reason.
+	// Other executor systems (M17.8.3) will gate behavior on CurrentMode.
+	utilityEvalSys := systems.NewUtilityEvaluatorSystem()
+	utilityEvalSys.InitUI(app.World)
+
 	// Cleanup of expired ThreatSource entities. SurvivalInstinct reads
 	// Threat.Suppression (a faster signal); ThreatSource entities will become
 	// the primary input once M15.A.1 ScatterProtocol consumes the cluster.
@@ -278,6 +286,7 @@ func main() {
 	app.AddSystem(particleSys)
 	app.AddSystem(threatSys)
 	app.AddSystem(stanceSys)
+	app.AddSystem(utilityEvalSys)
 	app.AddSystem(threatDecaySys)
 	app.AddSystem(levelVisSys)
 	app.AddSystem(mapPingDecaySys)
@@ -302,6 +311,8 @@ func main() {
 	anchorPos := components.WorldPos{}
 	if isDoorScene() {
 		anchorPos = doorSceneAnchorPos()
+	} else if isAIScene() {
+		anchorPos = aiSceneAnchorPos()
 	}
 	posMap.Add(anchor, &anchorPos)
 	lodActiveMap.Add(anchor, &components.LODActive{})
@@ -489,7 +500,16 @@ func main() {
 	// visible immediately at startup. Phase 14 M14.1: stamped FactionPlayer.
 	playerFaction := components.Faction{ID: components.FactionPlayer}
 	var doorScene *doorSceneState
-	if isDoorScene() {
+	var aiTest *aiTestState
+	if isAIScene() {
+		// Phase 17.8 — automated AI test scene. Spawns 1 squad + selects
+		// target building, returns a state struct that auto-issues an
+		// OccupyBuilding order at t=2s and prints a PASS/FAIL verdict at
+		// t=30s. main.go's default test squads + enemies are skipped so
+		// only the scene under test is in the world.
+		aiTest = aiSceneSpawn(app.World, squadService, roleService, unitFactory,
+			playerFaction, posMap, rosterMap, buildingMap)
+	} else if isDoorScene() {
 		// Minimal test scene: one 5-unit Recon squad 12 m south of the
 		// single test house, no enemy. Building / Level entities were
 		// spawned above; capture the first ones into doorScene for the
@@ -589,6 +609,12 @@ func main() {
 	floorNavFilter := ecs.NewFilter3[components.WorldPos, components.Level, components.LevelNavGrid](app.World)
 	visionAwareFilter := ecs.NewFilter2[components.WorldPos, components.Awareness](app.World).
 		With(ecs.C[components.Unit]())
+	// Phase 17.9 — debug "Unit paths" overlay. Two filters: members of a
+	// squad (with SquadMember), and solo units (without SquadMember). The
+	// solo filter still includes SquadMember-having entities; drawUnitPaths
+	// dedupes via the squadMemberMap.Has check.
+	unitPathSquadFilter := ecs.NewFilter4[components.Unit, components.WorldPos, components.MicroPath, components.SquadMember](app.World)
+	unitPathSoloFilter := ecs.NewFilter3[components.Unit, components.WorldPos, components.MicroPath](app.World)
 
 	chunkAllFilter := ecs.NewFilter1[components.TerrainChunk](app.World)
 	weaponFilter := ecs.NewFilter1[components.Weapon](app.World)
@@ -880,6 +906,10 @@ func main() {
 			})
 		case ui.PanelTimeline:
 			ui.DrawTimelinePanel(syn("Timeline"), font, timelineData, &timelineView)
+		case ui.PanelDebug:
+			ui.DrawDebugPanel(syn("Debug"), font,
+				debugOverlayToggles(&debugOverlay), cursor, lmbPress,
+				"Radius: 2 chunks around camera")
 		case ui.Panel3D:
 			// Not floatable yet - see comment above. The chevron menu
 			// disables Float pane for the 3D leaf so this branch is
@@ -933,6 +963,7 @@ func main() {
 		// Session clock for OrderIssuedAt / progress timing. Scaled to match
 		// simulation time so pause freezes the clock with the rest of the sim.
 		squadService.SetClock(float32(app.Elapsed().Seconds()))
+		utilityEvalSys.SetClock(float32(app.Elapsed().Seconds()))
 
 		cursor := rl.GetMousePosition()
 		focused := panelMgr.FocusedAt(cursor)
@@ -1074,6 +1105,11 @@ func main() {
 			doorScene.EnsureInit()
 			doorScene.Update(float32(app.Elapsed().Seconds()))
 			doorScene.HandleHotkeys(focused == ui.Panel3D)
+		}
+
+		// -- AI test scene auto-verifier (Phase 17.8) --
+		if aiTest != nil {
+			aiTest.Update(float32(app.Elapsed().Seconds()))
 		}
 
 		// -- Space -> toggle pause; +/- -> cycle speed 1->2->4->8->1 --
@@ -2173,26 +2209,35 @@ func main() {
 		} else {
 			showMapDebugLy = false
 		}
-		if rl.IsKeyDown(rl.KeyN) {
+		if debugOverlay.NavGrid {
 			qNav := navOverlayFilter.Query()
 			for qNav.Next() {
 				pos, cc, grid, hm := qNav.Get()
+				if !debugChunkInRadius(*cc, systems.CurrentOriginChunk) {
+					continue
+				}
 				drawNavGridOverlay(*pos, *cc, grid, hm)
 			}
 		}
-		if rl.IsKeyDown(rl.KeyC) {
+		if debugOverlay.CoverMap {
 			qCov := coverOverlayFilter.Query()
 			for qCov.Next() {
 				pos, cc, cov, hm := qCov.Get()
+				if !debugChunkInRadius(*cc, systems.CurrentOriginChunk) {
+					continue
+				}
 				drawCoverMapOverlay(*pos, *cc, cov, hm)
 			}
 		}
 
 		visionPairs := 0
-		if rl.IsKeyDown(rl.KeyY) {
+		if debugOverlay.Vision {
 			qV := visionAwareFilter.Query()
 			for qV.Next() {
 				pos, aware := qV.Get()
+				if !debugChunkInRadius(pos.Chunk, systems.CurrentOriginChunk) {
+					continue
+				}
 				from := pos.ToRenderSpace(systems.CurrentOriginChunk)
 				from.Y += 1.0
 				for i := range aware.LastSeen {
@@ -2252,19 +2297,22 @@ func main() {
 			drawSquadConnections(centerRender, memberPos, squadColor(squadEnt))
 		}
 
-		if rl.IsKeyDown(rl.KeyF) {
+		if debugOverlay.LevelNavGrid {
 			qFloor := floorNavFilter.Query()
 			for qFloor.Next() {
 				pos, _, grid := qFloor.Get()
+				if !debugChunkInRadius(pos.Chunk, systems.CurrentOriginChunk) {
+					continue
+				}
 				drawFloorNavOverlay(*pos, grid)
 			}
 		}
 
-		// Phase 16.B.1.b debug: J shows every TransitionEdge in the registry
-		// as a coloured 3D line. Surface<->Level edges = green, Level<->Level
-		// = yellow. Missing lines through a door/stair = the bake failed to
-		// resolve LevelMember / StairLevels for that opening.
-		if rl.IsKeyDown(rl.KeyJ) {
+		// Phase 16.B.1.b debug: transition edges in the registry as coloured
+		// 3D lines. Surface<->Level edges = green, Level<->Level = yellow.
+		// Missing lines through a door/stair = the bake failed to resolve
+		// LevelMember / StairLevels for that opening. Toggle via Debug widget.
+		if debugOverlay.Transitions {
 			levelGridReadMap := ecs.NewMap[components.LevelNavGrid](app.World)
 			nodeWorld := func(n components.NavNode) (rl.Vector3, bool) {
 				switch n.Kind {
@@ -2307,10 +2355,13 @@ func main() {
 		}
 
 		coverSlotLive := 0
-		if rl.IsKeyDown(rl.KeyV) {
+		if debugOverlay.CoverSlots {
 			qSlot := coverSlotFilter.Query()
 			for qSlot.Next() {
 				pos, slot := qSlot.Get()
+				if !debugChunkInRadius(pos.Chunk, systems.CurrentOriginChunk) {
+					continue
+				}
 				render := pos.ToRenderSpace(systems.CurrentOriginChunk)
 				rl.DrawCubeV(render, rl.Vector3{X: 0.25, Y: 0.25, Z: 0.25}, rl.Yellow)
 				tip := rl.Vector3{
@@ -2330,6 +2381,17 @@ func main() {
 		}
 
 		drawNavPath(navPath, *anchorPos)
+
+		// Phase 17.9 — Unit paths overlay. Toggle from Debug widget; when
+		// a squad is selected, only its members' MicroPath stripes draw.
+		if debugOverlay.UnitPaths {
+			drawUnitPaths(unitPathRenderCtx{
+				filter:         unitPathSquadFilter,
+				soloFilter:     unitPathSoloFilter,
+				squadMemberMap: squadMemberMap,
+				selectedSquad:  unitPathsSelectedSquad(selected, squadMemberMap),
+			})
+		}
 
 		// Phase 13.6 M13.6.2 / M13.6.4: ghost-preview formation. Continuous
 		// render of where the selected squad would arrive if the player issued
@@ -2481,6 +2543,18 @@ func main() {
 				rl.IsMouseButtonPressed(rl.MouseButtonLeft)
 			formationEditor.DrawPanel(panelMgr.Get(ui.PanelFormation),
 				hudFont, cursor, formationLMB)
+		}
+
+		// Phase 17.9 — Debug overlays widget. Toggle state lives in
+		// `debugOverlay`; the actual overlay rendering happens later in the
+		// 3D pass, gated by the flags this widget mutates.
+		if leaf := panelMgr.LeafFor(ui.PanelDebug); leaf != nil {
+			debugLMB := !chromeBusy() && !scrollDragging &&
+				panelMgr.FocusedAt(cursor) == ui.PanelDebug &&
+				rl.IsMouseButtonPressed(rl.MouseButtonLeft)
+			ui.DrawDebugPanel(panelMgr.Get(ui.PanelDebug),
+				hudFont, debugOverlayToggles(&debugOverlay), cursor, debugLMB,
+				"Radius: 2 chunks around camera")
 		}
 
 		// 3D RT composite into Panel3D bounds.

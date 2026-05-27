@@ -95,6 +95,14 @@ type UnitMovementSystem struct {
 	posMap                   *ecs.Map[components.WorldPos]
 	// Phase 17 M17.B.4 - read for combat-move facing decoupling.
 	threatMap *ecs.Map[components.Threat]
+	// Phase 17.8 M17.8.5 — ORCA local avoidance reads neighbour velocity
+	// + collider radius for the agent constraint.
+	motionMap   *ecs.Map[components.Motion]
+	colliderMap *ecs.Map[components.Collider]
+	// Phase 17.8 M17.8.6 — replan-trigger counters live on the
+	// LocalBlackboard. step() accumulates Overcrowded / Stuck dt and
+	// flips MicroPath.Dirty when either crosses threshold.
+	blackboardMap *ecs.Map[components.LocalBlackboard]
 
 	// Phase 14.6 M14.6.1 - wall reflection. Walls snapshot bucketed by chunk
 	// once per tick in the serial pre-pass; step() reads the 3x3 chunk
@@ -144,6 +152,9 @@ func (sys *UnitMovementSystem) InitUI(w *ecs.World) {
 	sys.movementProfileMap = ecs.NewMap[components.MovementProfile](w)
 	sys.posMap = ecs.NewMap[components.WorldPos](w)
 	sys.threatMap = ecs.NewMap[components.Threat](w)
+	sys.motionMap = ecs.NewMap[components.Motion](w)
+	sys.colliderMap = ecs.NewMap[components.Collider](w)
+	sys.blackboardMap = ecs.NewMap[components.LocalBlackboard](w)
 	sys.spatialHash = ecs.NewResource[core.SpatialHash](w)
 	sys.world = w
 	sys.wallFilter = ecs.NewFilter2[components.WorldPos, components.WallSegment](w)

@@ -42,6 +42,9 @@ func makeStartingBuildings() []components.BuildingPlan {
 	if isDoorScene() {
 		return doorSceneBuildings()
 	}
+	if isAIScene() {
+		return aiSceneBuildings()
+	}
 	wp := func(wx, wz float32) components.WorldPos {
 		return components.WorldPos{}.Add(rl.Vector3{X: wx, Y: 0, Z: wz})
 	}

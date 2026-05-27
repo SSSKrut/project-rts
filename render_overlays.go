@@ -207,6 +207,83 @@ func pickLevelUnderRay(
 	return best, best != (ecs.Entity{})
 }
 
+// unitPathRenderCtx bundles the handles drawUnitPaths needs. Built once
+// per frame in main.go; the filters are reused across ticks.
+type unitPathRenderCtx struct {
+	filter         *ecs.Filter4[components.Unit, components.WorldPos, components.MicroPath, components.SquadMember]
+	soloFilter     *ecs.Filter3[components.Unit, components.WorldPos, components.MicroPath]
+	squadMemberMap *ecs.Map[components.SquadMember]
+	// selectedSquad narrows the draw to one squad's members. Zero =
+	// every unit gets a path (used when the player hasn't selected anyone).
+	selectedSquad ecs.Entity
+}
+
+// unitPathColour hashes the entity ID into a stable bright hue. 8 squad
+// members visibly diverge.
+func unitPathColour(e ecs.Entity) rl.Color {
+	h := uint32(e.ID()) * 2654435761
+	r := uint8(80 + (h>>0)&0x7F)
+	g := uint8(80 + (h>>8)&0x7F)
+	b := uint8(80 + (h>>16)&0x7F)
+	return rl.Color{R: r, G: g, B: b, A: 230}
+}
+
+// drawUnitPaths renders each eligible unit's MicroPath as a line strip from
+// the unit's current position through Waypoints[Head..Count). A small cube
+// marks the goal cell. Colour is per-unit hashed so overlapping paths in a
+// squad of 8 stay distinguishable.
+//
+// Selection-aware: if `ctx.selectedSquad` is set we draw only that squad's
+// members; otherwise every unit gets a path. This keeps the overlay readable
+// when the player is examining one squad's stragglers.
+func drawUnitPaths(ctx unitPathRenderCtx) {
+	originChunk := systems.CurrentOriginChunk
+	q := ctx.filter.Query()
+	for q.Next() {
+		_, pos, mp, member := q.Get()
+		ent := q.Entity()
+		if ctx.selectedSquad != (ecs.Entity{}) && member.Squad != ctx.selectedSquad {
+			continue
+		}
+		if mp.Count == 0 || mp.Head >= mp.Count {
+			continue
+		}
+		drawUnitPathLineStrip(ent, *pos, mp, originChunk)
+	}
+	// Soloists (units with no SquadMember). Skipped when a specific squad
+	// is selected — soloists by definition aren't in it.
+	if ctx.selectedSquad == (ecs.Entity{}) {
+		qs := ctx.soloFilter.Query()
+		for qs.Next() {
+			_, pos, mp := qs.Get()
+			ent := qs.Entity()
+			if ctx.squadMemberMap.Has(ent) {
+				continue
+			}
+			if mp.Count == 0 || mp.Head >= mp.Count {
+				continue
+			}
+			drawUnitPathLineStrip(ent, *pos, mp, originChunk)
+		}
+	}
+}
+
+// drawUnitPathLineStrip emits one polyline from unit pos through every live
+// waypoint plus a small goal-marker cube at the last waypoint.
+func drawUnitPathLineStrip(ent ecs.Entity, pos components.WorldPos,
+	mp *components.MicroPath, originChunk components.ChunkCoord) {
+	col := unitPathColour(ent)
+	prev := pos.ToRenderSpace(originChunk)
+	prev.Y += 0.3
+	for i := mp.Head; i < mp.Count; i++ {
+		p := mp.Waypoints[i].ToRenderSpace(originChunk)
+		p.Y += 0.3
+		rl.DrawLine3D(prev, p, col)
+		prev = p
+	}
+	rl.DrawCubeV(prev, rl.Vector3{X: 0.3, Y: 0.3, Z: 0.3}, col)
+}
+
 // drawNavPath renders the path from the anchor through every remaining
 // waypoint. Empty/nil paths render nothing. Lifted slightly so the line is
 // visible against the terrain.

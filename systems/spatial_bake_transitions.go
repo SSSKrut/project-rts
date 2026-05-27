@@ -11,6 +11,20 @@ import (
 	"rts-go/core"
 )
 
+// minF / maxF — float32 min/max helpers. math.Min / math.Max are float64.
+func minF(a, b float32) float32 {
+	if a < b {
+		return a
+	}
+	return b
+}
+func maxF(a, b float32) float32 {
+	if a > b {
+		return a
+	}
+	return b
+}
+
 // bakeTransitionsPass is Pass 4: rebuild TransitionRegistry from the live set
 // of Doors / Stairs / bunker entrances. They connect surface<->level and
 // level<->level NavNodes. We wipe the registry and re-emit on every tick that
@@ -269,6 +283,111 @@ func (sys *SpatialBakeSystem) bakeTransitionsPass(ctx core.UpdateContext) {
 		}
 		addEdge(fromNode, toNode, 4, st.ent)
 		addEdge(toNode, fromNode, 4, st.ent)
+	}
+
+	// Phase 17.8 M17.8.7 — same-storey Level↔Level junction edges.
+	// Multi-section buildings (Compound / Office wings) generate one Level
+	// per wing. Doors / stairs link a wing to the surface / other floors,
+	// but a unit standing in one wing has no edge to reach the next wing
+	// through an internal open junction — pathfinder treats them as
+	// disconnected islands. This pass walks every Level pair, and where
+	// the AABBs touch / nearly touch at compatible Y, it emits a
+	// NodeLevel↔NodeLevel edge between cells on each side of the junction.
+	const (
+		levelJunctionMaxYDiff float32 = 0.5
+		levelJunctionMaxXZGap float32 = 1.5
+		levelJunctionInset    float32 = 1.0 // sample this far inside each level (avoid degenerate boundary cells)
+		// Phase 17.9 M3 — bumped 1 → 10. The level-junction edge is a
+		// LOGICAL bridge between adjacent wings (same-storey, AABBs flush).
+		// Physically the unit still has to traverse two thin walls between
+		// them, even when there are real doors. Real Door edges cost 3 and
+		// route through the actual opening; if pathfinder picks the cheaper
+		// junction (cost=1), the unit lines up with the junction sample
+		// point, not the door opening, and gets stuck on the wall slide.
+		// Cost=10 keeps the junction as a fallback for wings without doors
+		// to each other but stops it from beating a real door route.
+		levelJunctionCost uint8 = 10
+	)
+	clampF := func(v, lo, hi float32) float32 {
+		if v < lo {
+			return lo
+		}
+		if v > hi {
+			return hi
+		}
+		return v
+	}
+	for i := 0; i < len(levels); i++ {
+		for j := i + 1; j < len(levels); j++ {
+			lvA := &levels[i]
+			lvB := &levels[j]
+			// Y compatibility — same storey only.
+			if math.Abs(float64(lvA.aabb.MinY-lvB.aabb.MinY)) > float64(levelJunctionMaxYDiff) {
+				continue
+			}
+			// XZ adjacency: AABBs must overlap or be within MaxXZGap on
+			// each axis (both X and Z gaps small means corner-touch only,
+			// which is fine for L/T/U-shape connectors).
+			gapX := maxF(lvA.aabb.MinX, lvB.aabb.MinX) - minF(lvA.aabb.MaxX, lvB.aabb.MaxX)
+			gapZ := maxF(lvA.aabb.MinZ, lvB.aabb.MinZ) - minF(lvA.aabb.MaxZ, lvB.aabb.MaxZ)
+			if gapX > levelJunctionMaxXZGap || gapZ > levelJunctionMaxXZGap {
+				continue
+			}
+			// Sample point INSIDE each level. For lvA pick a point inset
+			// from the junction toward lvA's centre — guarantees levelCell
+			// returns a valid in-range cell instead of edge-case rejection
+			// when the AABBs are flush-touching (zero-width overlap).
+			centreA := orcaVec2{X: lvA.aabb.CenterX(), Z: lvA.aabb.CenterZ()}
+			centreB := orcaVec2{X: lvB.aabb.CenterX(), Z: lvB.aabb.CenterZ()}
+			junctionX := (centreA.X + centreB.X) * 0.5
+			junctionZ := (centreA.Z + centreB.Z) * 0.5
+			// Toward A's centre, by levelJunctionInset.
+			dxA := centreA.X - junctionX
+			dzA := centreA.Z - junctionZ
+			magA := float32(math.Sqrt(float64(dxA*dxA + dzA*dzA)))
+			var sampleAX, sampleAZ float32
+			if magA > 1e-3 {
+				sampleAX = junctionX + dxA/magA*levelJunctionInset
+				sampleAZ = junctionZ + dzA/magA*levelJunctionInset
+			} else {
+				sampleAX = centreA.X
+				sampleAZ = centreA.Z
+			}
+			// Clamp into lvA's AABB so the sample is definitely inside.
+			sampleAX = clampF(sampleAX, lvA.aabb.MinX+0.5, lvA.aabb.MaxX-0.5)
+			sampleAZ = clampF(sampleAZ, lvA.aabb.MinZ+0.5, lvA.aabb.MaxZ-0.5)
+			// Same for B.
+			dxB := centreB.X - junctionX
+			dzB := centreB.Z - junctionZ
+			magB := float32(math.Sqrt(float64(dxB*dxB + dzB*dzB)))
+			var sampleBX, sampleBZ float32
+			if magB > 1e-3 {
+				sampleBX = junctionX + dxB/magB*levelJunctionInset
+				sampleBZ = junctionZ + dzB/magB*levelJunctionInset
+			} else {
+				sampleBX = centreB.X
+				sampleBZ = centreB.Z
+			}
+			sampleBX = clampF(sampleBX, lvB.aabb.MinX+0.5, lvB.aabb.MaxX-0.5)
+			sampleBZ = clampF(sampleBZ, lvB.aabb.MinZ+0.5, lvB.aabb.MaxZ-0.5)
+
+			aI, aJ, aOK := levelCell(lvA, sampleAX, sampleAZ)
+			if !aOK {
+				continue
+			}
+			bI, bJ, bOK := levelCell(lvB, sampleBX, sampleBZ)
+			if !bOK {
+				continue
+			}
+			nodeA := components.NavNode{Kind: components.NodeLevel, Level: lvA.ent, I: aI, J: aJ}
+			nodeB := components.NavNode{Kind: components.NodeLevel, Level: lvB.ent, I: bI, J: bJ}
+			addEdge(nodeA, nodeB, levelJunctionCost, ecs.Entity{})
+			addEdge(nodeB, nodeA, levelJunctionCost, ecs.Entity{})
+			if !bakeDebugReported {
+				fmt.Printf("[spatial_bake] level-junction edge ent=%v <-> ent=%v at (%.1f,%.1f) <-> (%.1f,%.1f)\n",
+					lvA.ent, lvB.ent, sampleAX, sampleAZ, sampleBX, sampleBZ)
+			}
+		}
 	}
 
 	if !bakeDebugReported && (len(doors) > 0 || len(stairs) > 0) {

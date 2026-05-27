@@ -390,6 +390,27 @@ func (s *NavService) cellAt(n components.NavNode, idx *TerrainChunkIndex, floors
 		}
 		cell := grid.Cells[int(n.J)*components.NavGridSide+int(n.I)]
 		if cell.Flags&components.NavInBuilding != 0 {
+			// Phase 17.8 follow-up — a surface cell stamped
+			// NavInBuilding by one building's footprint can still be
+			// the outside side of another building's door (compound
+			// case: wings touch / overlap; one wing's door exits onto
+			// a cell that's inside the neighbour wing's footprint).
+			// Treat the cell as walkable when the TransitionRegistry
+			// reports incoming/outgoing edges — pathfinder uses them
+			// to enter the building anyway.
+			if registry := s.transitionRes.Get(); registry != nil {
+				if len(registry.Out[n]) > 0 {
+					// Force walkable cost so FindPath's `cost == 0`
+					// guard doesn't skip this cell. NavInBuilding
+					// stamping commonly zeroes the cost; the
+					// transition edge tells us the cell is a
+					// legitimate traversal point.
+					if cell.Cost == 0 {
+						cell.Cost = 8
+					}
+					return cell, true
+				}
+			}
 			return cell, false
 		}
 		return cell, true

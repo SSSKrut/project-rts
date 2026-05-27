@@ -137,10 +137,16 @@ type spatialBakeChunkRec struct {
 // wallEntry is a per-wall snapshot used inside one bake tick. Captures the
 // passable-opening flag (door open) so the rasteriser doesn't need to peek
 // into Door state again.
+//
+// Phase 17.9 M2 — `outward` is the wall's CoverDirection.Dir (XZ unit vector
+// pointing away from the building interior). The NavInBuilding-clear sweep
+// after applyNavBuildings reads this to compute each door's outside cell
+// and unstamp the bit so pathfinder can approach the door from open terrain.
 type wallEntry struct {
 	local           rl.Vector3
 	w               components.WallSegment
 	openingPassable bool // true <-> open door; false otherwise (windows, closed doors, plain walls)
+	outward         rl.Vector3
 }
 
 func (sys *SpatialBakeSystem) Update(ctx core.UpdateContext) {

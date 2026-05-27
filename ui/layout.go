@@ -120,6 +120,8 @@ func WidgetTitle(id PanelID) string {
 		return "Timeline"
 	case PanelFormation:
 		return "Formation"
+	case PanelDebug:
+		return "Debug"
 	}
 	return string(id)
 }
@@ -127,4 +129,4 @@ func WidgetTitle(id PanelID) string {
 // WorkspacePanelKinds is the list of widget kinds the chevron menu can
 // switch a leaf to. TopBar is intentionally excluded — it's not a
 // workspace widget.
-var WorkspacePanelKinds = [...]PanelID{Panel3D, PanelMap, PanelInspect, PanelTimeline, PanelFormation}
+var WorkspacePanelKinds = [...]PanelID{Panel3D, PanelMap, PanelInspect, PanelTimeline, PanelFormation, PanelDebug}

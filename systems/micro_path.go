@@ -131,6 +131,21 @@ func (sys *MicroPathSystem) tickUnit(pos *components.WorldPos, mp *components.Mi
 		mp.LastProgressAt = now
 	}
 
+	// 4.5 Phase 17.9 — force replan when the stored path is exhausted but
+	// the unit still hasn't reached the final goal. Without this the unit
+	// drops into "walk blindly toward action.Target" mode for the rest of
+	// the route: pathfinder never refreshes the next chunk of waypoints,
+	// reflectAgainstWalls slides on walls instead of routing through doors,
+	// and the debug Unit-paths overlay shows nothing because Head==Count.
+	// Threshold 1 m is comfortably above arrivalRadius (0.6) so we don't
+	// trigger spurious replans on the final tick before the action pops.
+	if mp.Count == 0 || mp.Head >= mp.Count {
+		d := goal.Sub(*pos)
+		if d.X*d.X+d.Z*d.Z > 1.0*1.0 {
+			mp.Dirty = true
+		}
+	}
+
 	// 5. Replan if Dirty (with cooldown + budget).
 	if !mp.Dirty || now < mp.ReplanAt || *budget <= 0 {
 		return

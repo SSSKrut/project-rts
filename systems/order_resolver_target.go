@@ -197,6 +197,15 @@ func (sys *OrderResolverSystem) countInsideBuilding(
 // The Y proximity catches both surface stories (member Y ~ floor Y) and
 // bunkers (member Y dropped into the sunken floor). Cheap: 1-3 buildings x
 // 1-3 floors per scene = handful of plate checks per call.
+//
+// Phase 17.9 — Floor entity's WorldPos is the plate CENTRE (set by house.go
+// `b.AddFloor(rl.Vector3{X: cx, Y: baseY, Z: cz}, ...)` where cx/cz = building
+// centre). Plate extent is therefore [centre - Size/2, centre + Size/2], same
+// convention GroundStickSystem uses. Previous version treated fx/fz as the
+// corner and checked [fx, fx + Size], shifting the matched area by +Size/2 —
+// any unit physically inside the building but in the lower-X / lower-Z half
+// of the plate failed the floor check, so OccupyBuilding completion stalled
+// at "half the squad inside" even when all 8 were geometrically inside.
 func (sys *OrderResolverSystem) memberOnFloor(pos *components.WorldPos) bool {
 	mx := float32(pos.Chunk.X)*components.ChunkSize + pos.Local.X
 	mz := float32(pos.Chunk.Z)*components.ChunkSize + pos.Local.Z
@@ -205,7 +214,9 @@ func (sys *OrderResolverSystem) memberOnFloor(pos *components.WorldPos) bool {
 		fpos, floor := q.Get()
 		fx := float32(fpos.Chunk.X)*components.ChunkSize + fpos.Local.X
 		fz := float32(fpos.Chunk.Z)*components.ChunkSize + fpos.Local.Z
-		if mx < fx || mx > fx+floor.SizeX || mz < fz || mz > fz+floor.SizeZ {
+		halfX := floor.SizeX * 0.5
+		halfZ := floor.SizeZ * 0.5
+		if mx < fx-halfX || mx > fx+halfX || mz < fz-halfZ || mz > fz+halfZ {
 			continue
 		}
 		dy := pos.Local.Y - fpos.Local.Y

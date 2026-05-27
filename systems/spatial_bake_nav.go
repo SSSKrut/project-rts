@@ -3,6 +3,8 @@ package systems
 import (
 	"math"
 
+	rl "github.com/gen2brain/raylib-go/raylib"
+
 	"rts-go/components"
 	"rts-go/core"
 )
@@ -62,10 +64,18 @@ func (sys *SpatialBakeSystem) bakeNavPass(ctx core.UpdateContext) []spatialBakeC
 				passable = true
 			}
 		}
+		// Phase 17.9 M2 — capture CoverDirection.Dir (outward XZ unit
+		// vector) so the post-bake NavInBuilding-clear sweep can compute
+		// the door's outside cell without re-querying the wall entity.
+		var outward rl.Vector3
+		if cd := sys.coverDirMap.Get(qW.Entity()); cd != nil {
+			outward = cd.Dir
+		}
 		wallsByChunk[pos.Chunk] = append(wallsByChunk[pos.Chunk], wallEntry{
 			local:           pos.Local,
 			w:               *w,
 			openingPassable: passable,
+			outward:         outward,
 		})
 	}
 
@@ -121,6 +131,17 @@ func (sys *SpatialBakeSystem) bakeNavPass(ctx core.UpdateContext) []spatialBakeC
 		// into them; access remains only through TransitionEdges (Door/Stairs)
 		// that route into Floor NavNodes.
 		applyNavBuildings(&grid, rec.cc, footprints)
+
+		// Phase 17.9 M2 — door outside cells are intentional transition
+		// points, not building interior. If a door's outside cell happens
+		// to fall inside ANOTHER building's footprint (compound case:
+		// flush-touching wings overlap each other's outside cells), the
+		// NavInBuilding bit makes it unreachable from open terrain via
+		// pure surface expansion. Clear the bit on door outside cells so
+		// pathfinder can approach any door from outside as plain surface
+		// (Cost=4 open). Sweep 9-chunk window — a door in a neighbour
+		// chunk can project its outside cell into rec.cc.
+		clearDoorOutsideNavInBuilding(&grid, rec.cc, wallsByChunk)
 
 		if existing := sys.navGridMap.Get(rec.id); existing != nil {
 			existing.Cells = grid.Cells
@@ -206,6 +227,21 @@ func absDelta(a, b float32) float32 {
 // opening segment along the wall axis is left untouched. Closed doors and
 // windows leave the opening at Cost=0 (windows block movement; closed doors
 // also block).
+//
+// Phase 17.9 note: this function effectively never stamps anything on the
+// surface NavGrid for the current 0.3 m wall thickness — cell centres sit
+// 0.5 m away from wall lines, while halfT = 0.15. We tried inflating halfT
+// by cell half-width so walls would stamp the row of cells they pass
+// through, but it over-blocked cells *immediately outside* building
+// footprints (the rows pathfinder relied on for tangential approach), so
+// compound_west / compound_north / office_front regressed. We're keeping
+// the function as-is for surface (a no-op for thin walls) and relying on
+// the `NavInBuilding` footprint flag — set by `applyNavBuildings` — to
+// block interior cells. The flag is the single source of truth for
+// "pathfinder must enter only through TransitionEdges (doors)" on the
+// surface grid. LevelNavGrid still inflates (see `rasterizeFloorWall`),
+// because interior walls partition rooms and the level grid has no
+// equivalent footprint flag.
 func rasterizeWall(grid *components.NavGrid, e wallEntry) {
 	fromX, fromZ := e.local.X, e.local.Z
 	yaw := e.w.Yaw
@@ -503,5 +539,59 @@ func maxF32(a, b float32) float32 {
 		return a
 	}
 	return b
+}
+
+// clearDoorOutsideNavInBuilding clears the NavInBuilding bit on the outside
+// surface cell of every Door in the 9-chunk window around `cc`. Phase 17.9 M2.
+//
+// The door's outside cell is wallCentre + outward*0.7 (same offset Pass 4
+// transitions use). If that cell projects into the current chunk `cc`, we
+// drop the NavInBuilding flag so the pathfinder can reach the cell from
+// adjacent open-terrain cells via pure surface expansion. Without this, a
+// compound's inner doors (whose outside cells lie inside the neighbouring
+// wing's footprint) become walkable only via registry-override islands —
+// circular-reachable from each other but not from outside.
+//
+// The wall's Cost remains unchanged (rasterizeWall already stamped Cost=0
+// on the opening row except where openingPassable carved a gap). We touch
+// only the flag.
+func clearDoorOutsideNavInBuilding(
+	grid *components.NavGrid,
+	cc components.ChunkCoord,
+	wallsByChunk map[components.ChunkCoord][]wallEntry,
+) {
+	for dcZ := int32(-1); dcZ <= 1; dcZ++ {
+		for dcX := int32(-1); dcX <= 1; dcX++ {
+			ncc := components.ChunkCoord{X: cc.X + dcX, Z: cc.Z + dcZ}
+			bucket := wallsByChunk[ncc]
+			wallChunkBaseX := float32(ncc.X) * components.ChunkSize
+			wallChunkBaseZ := float32(ncc.Z) * components.ChunkSize
+			gridChunkBaseX := float32(cc.X) * components.ChunkSize
+			gridChunkBaseZ := float32(cc.Z) * components.ChunkSize
+			for i := range bucket {
+				we := &bucket[i]
+				if we.w.OpeningKind != components.OpeningDoor {
+					continue
+				}
+				sa := float32(math.Sin(float64(we.w.Yaw)))
+				ca := float32(math.Cos(float64(we.w.Yaw)))
+				centreT := we.w.OpeningCenterT * we.w.Length
+				cxWorld := wallChunkBaseX + we.local.X + sa*centreT
+				czWorld := wallChunkBaseZ + we.local.Z + ca*centreT
+				outsideX := cxWorld + we.outward.X*0.7
+				outsideZ := czWorld + we.outward.Z*0.7
+				// Project into rec.cc chunk-local.
+				lx := outsideX - gridChunkBaseX
+				lz := outsideZ - gridChunkBaseZ
+				ci := int(math.Floor(float64(lx)))
+				cj := int(math.Floor(float64(lz)))
+				if ci < 0 || ci >= components.NavGridSide ||
+					cj < 0 || cj >= components.NavGridSide {
+					continue
+				}
+				grid.Cells[cj*components.NavGridSide+ci].Flags &^= components.NavInBuilding
+			}
+		}
+	}
 }
 
