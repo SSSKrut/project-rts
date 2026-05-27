@@ -13,25 +13,15 @@ import (
 	"rts-go/gen/buildings"
 )
 
-// -scene=door spawns a minimal isolated world for reproducing the
-// "squad won't path through the door" bug: one 8x8 house with a
-// south-facing door, one 5-unit Recon squad 12 m south of it. No roads
-// / rivers / trenches / enemies.
-//
-// The Garrison order is auto-issued at t=2s; every second after that
-// the scene logs how many squad members are inside the Level AABB.
-// At t=30s a PASS/FAIL line is printed (PASS if all 5 inside; FAIL
-// otherwise plus a per-unit position dump).
-//
-// Hotkeys O / I / K / U still work for re-issuing the order or
-// dumping state manually.
+// -scene=door spawns a minimal isolated world: one 8×8 south-door house +
+// one 5-unit Recon squad 12 m south. Garrison auto-issued at t=2s; PASS/FAIL
+// printed at t=30s.
 var sceneFlag = flag.String("scene", "", "test scene id ('door' = door-entry isolation)")
 
 func isDoorScene() bool { return *sceneFlag == "door" }
 
-// Building / squad are placed deep inside chunk (0,0) so the whole test
-// runs inside a single NavGrid - eliminates the multi-chunk wall
-// rasterisation as a variable. World (32, 32) is dead-centre.
+// World (32, 32) is dead-centre of chunk (0,0) so the test runs inside a
+// single NavGrid — eliminates multi-chunk wall rasterisation as a variable.
 const (
 	doorSceneBuildingX float32 = 32
 	doorSceneBuildingZ float32 = 32
@@ -41,9 +31,8 @@ const (
 	doorSceneAnchorZ   float32 = 26
 )
 
-// doorSceneBuildings - single house with door on the south wall.
-// Seed 0xA0 gives DoorSide = seed%4 = 0 (south). Footprint X[28..36],
-// Z[28..36] - fully inside chunk (0,0).
+// doorSceneBuildings — single house with door on the south wall.
+// Seed 0xA0 ⇒ DoorSide = 0 (south). Footprint fully inside chunk (0,0).
 func doorSceneBuildings() []components.BuildingPlan {
 	wp := components.WorldPos{}.Add(rl.Vector3{X: doorSceneBuildingX, Z: doorSceneBuildingZ})
 	wp.Local.Y = systems.GroundHeight(
@@ -67,10 +56,9 @@ func doorSceneAnchorPos() components.WorldPos {
 	return components.WorldPos{}.Add(rl.Vector3{X: doorSceneAnchorX, Z: doorSceneAnchorZ})
 }
 
-// doorSceneState - captured handles + computed targets used by the auto-
-// verifier and the O/I/K/U hotkeys. Populated lazily on the first tick
-// where Wall entities exist (BuildingSystem spawns them when the host
-// chunk goes Active).
+// doorSceneState — captured handles + computed targets used by the auto-
+// verifier and the O/I/K/U hotkeys. Populated lazily once BuildingSystem
+// has spawned wall entities.
 type doorSceneState struct {
 	Squad     ecs.Entity
 	Building  ecs.Entity
@@ -88,11 +76,6 @@ type doorSceneState struct {
 
 	initialised bool
 
-	// Auto-test state. elapsedSec ticks up with the real-time dt fed in
-	// via Update; the verifier kicks the Garrison order at autoOrderAt,
-	// samples insiders at every secondsTickAt, and prints PASS/FAIL at
-	// verdictAt. Set autoOrderFired / verdictPrinted so the once-events
-	// only fire once.
 	elapsedSec      float32
 	autoOrderAt     float32
 	verdictAt       float32
@@ -102,9 +85,8 @@ type doorSceneState struct {
 	lastInsideCount int
 }
 
-// EnsureInit looks up the door entity (spawned by BuildingSystem on the
-// first tick that activates the host chunk) and prints the scene-ready
-// banner once. Safe to call every frame - no-op after the first success.
+// EnsureInit looks up the door entity once BuildingSystem has spawned walls,
+// then prints the scene banner. Safe to call every frame.
 func (s *doorSceneState) EnsureInit() {
 	if s.initialised || s.Building == (ecs.Entity{}) {
 		return
@@ -117,8 +99,6 @@ func (s *doorSceneState) EnsureInit() {
 	s.DoorPos = dp
 	s.initialised = true
 
-	// Defaults for the auto-verifier: order at +2 s, verdict at +30 s,
-	// first inside-count sample at +3 s (1 s after issuing the order).
 	if s.autoOrderAt == 0 {
 		s.autoOrderAt = 2.0
 	}
@@ -154,9 +134,8 @@ func (s *doorSceneState) EnsureInit() {
 	fmt.Println("=====================================================")
 }
 
-// findDoor scans Wall entities for the first OpeningDoor belonging to this
-// scene's building, computes its world position (along the wall at
-// OpeningCenterT), and returns it.
+// findDoor scans Wall entities for the first OpeningDoor of this building
+// and computes its world position at OpeningCenterT along the wall.
 func (s *doorSceneState) findDoor() (components.WorldPos, ecs.Entity, bool) {
 	f := ecs.NewFilter3[components.WorldPos, components.WallSegment, components.BuildingMember](s.World)
 	q := f.Query()
@@ -165,8 +144,7 @@ func (s *doorSceneState) findDoor() (components.WorldPos, ecs.Entity, bool) {
 		if m.Building != s.Building || ws.OpeningKind != components.OpeningDoor {
 			continue
 		}
-		// Wall.Yaw=0 = +Z direction (matches Builder.AddWall convention:
-		// yaw = atan2(dx, dz)). Step OpeningCenterT * Length along (sin, cos).
+		// Wall.Yaw=0 ⇒ +Z; step OpeningCenterT * Length along (sin, cos).
 		sinY, cosY := math.Sincos(float64(ws.Yaw))
 		dx := float32(sinY) * ws.Length * ws.OpeningCenterT
 		dz := float32(cosY) * ws.Length * ws.OpeningCenterT
@@ -181,11 +159,8 @@ func (s *doorSceneState) findDoor() (components.WorldPos, ecs.Entity, bool) {
 	return components.WorldPos{}, ecs.Entity{}, false
 }
 
-// Update is called once per frame from the main loop with the current
-// simulation time (app.Elapsed seconds). Using sim time means pause /
-// timescale Just Work - paused game keeps the verdict from firing
-// prematurely. Auto-verifier: issue Garrison at autoOrderAt, sample
-// insiders every second, print PASS/FAIL at verdictAt.
+// Update is called once per frame with sim time. Using sim time means pause /
+// timescale Just Work.
 func (s *doorSceneState) Update(simSec float32) {
 	if !s.initialised {
 		return
@@ -223,13 +198,9 @@ func (s *doorSceneState) Update(simSec float32) {
 	}
 }
 
-// countInside walks the roster and returns (insideCount, totalAlive).
-// A member is "inside" if their world XZ is in the Level AABB and their
-// Y is within [MinY - 0.6, MaxY + 0.6] (loose Y match for the floor).
-//
-// CommandRoster.Members has fixed size SquadRosterSize=8; only the
-// [:Count] prefix is meaningful (see components/squad.go). Reading past
-// Count returns zero / recycled IDs that crash PosMap.Get.
+// countInside walks roster.Members[:Count] and returns (inside, alive).
+// "Inside" = XZ in Level AABB AND Y within [MinY-0.6, MaxY+0.6].
+// Reading roster.Members past Count returns recycled IDs that crash PosMap.Get.
 func (s *doorSceneState) countInside() (int, int) {
 	roster := s.RosterMap.Get(s.Squad)
 	if roster == nil {
@@ -259,8 +230,6 @@ func (s *doorSceneState) countInside() (int, int) {
 }
 
 // HandleHotkeys reacts to O / I / K / U when the 3D panel is focused.
-// Each order is preceded by a state dump so the log shows squad / target
-// / door positions next to the [macro] replan and [nav] traces below.
 func (s *doorSceneState) HandleHotkeys(panel3DFocused bool) {
 	if !s.initialised || !panel3DFocused {
 		return

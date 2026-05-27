@@ -1,46 +1,8 @@
 package main
 
-// Phase 17.8 — automated AI test scenes. Run with `./bin/rts -scene=<id>`.
-//
-// Each scene spawns a minimal world (1 building or 1 compound + 1 player
-// squad, no enemies, no trenches), auto-issues an OccupyBuilding order
-// against the target building at t = aiOrderAt, samples insider count
-// every aiSampleEvery, and prints a single VERDICT line at t = aiVerdictAt
-// listing PASS / FAIL plus a per-unit position dump.
-//
-// The point is to ISOLATE pathfinding failures from movement / formation /
-// other systems by stripping the world to one specific layout. When a
-// scene fails, the stdout dump tells you exactly which cells the squad
-// landed in and what the pathfinder did or didn't do.
-//
-// Scenes:
-//
-//   ai_door_south       Control. 8×8 house with door on the south wall,
-//                       squad 12 m south. Squad walks 12 m straight to
-//                       the door. Trivial — should PASS in < 15 s.
-//
-//   ai_door_north       Same house but door is on the NORTH wall.
-//                       Squad still 12 m south. Squad must walk around
-//                       the building (~25 m perimeter). Tests surface
-//                       pathfinding around a footprint.
-//
-//   ai_compound_south   3-wing compound (main + east + north), squad 12 m
-//                       south of the main wing. Target = main wing. Same
-//                       complexity as ai_door_south but with adjacent
-//                       wings sharing walls — tests that doors stay
-//                       reachable despite NavInBuilding bits from
-//                       neighbours.
-//
-//   ai_compound_east    Same compound, squad 12 m EAST of the east wing.
-//                       Target = main wing. Squad must either traverse
-//                       east wing → main wing through level-junction
-//                       edges (M17.8.7) or walk around the compound
-//                       perimeter. This is the bug the user reported.
-//
-// Verdict criteria: PASS if every live roster member is inside the target
-// building's Building.Footprint AND on a Floor entity (Garrison-style
-// completion). FAIL otherwise; dump prints each member's world XZ and
-// whether they're inside footprint.
+// Automated AI test scenes. Run with `./bin/rts -scene=<id>`. Each scene
+// spawns a minimal isolated world, auto-issues OccupyBuilding at t=aiOrderAt,
+// samples insider count every aiSampleEvery, prints PASS/FAIL at aiVerdictAt.
 
 import (
 	"fmt"
@@ -53,7 +15,6 @@ import (
 	"rts-go/systems"
 )
 
-// aiUnitSpawn matches SquadService.CreateFromTemplate's unitFactory shape.
 type aiUnitSpawn = func(components.WorldPos) ecs.Entity
 
 const (
@@ -89,8 +50,6 @@ func aiSceneID() string {
 	return *sceneFlag
 }
 
-// aiSceneAnchorPos — where the player anchor / camera target sits at start.
-// Centred on the building so the test view loads framed.
 func aiSceneAnchorPos() components.WorldPos {
 	switch aiSceneID() {
 	case aiSceneDoorSouth, aiSceneDoorNorth, aiSceneDoorEast, aiSceneDoorWest:
@@ -101,32 +60,25 @@ func aiSceneAnchorPos() components.WorldPos {
 	case aiSceneOfficeFront:
 		return components.WorldPos{}.Add(rl.Vector3{X: 32, Z: 22})
 	case aiSceneFarBuilding:
-		// Far-building test — anchor stays at origin; squad walks ~50 m
-		// to target. LODAnchor on target should keep its chunks loaded
-		// so pathfinder can find a route from t=0.
 		return components.WorldPos{}.Add(rl.Vector3{X: 0, Z: 0})
 	}
 	return components.WorldPos{}
 }
 
-// aiSceneBuildings — building plans for the selected scene.
 func aiSceneBuildings() []components.BuildingPlan {
 	switch aiSceneID() {
 	case aiSceneDoorSouth:
-		return aiBuildingsSingleHouse(0 /*DoorSide south*/)
+		return aiBuildingsSingleHouse(0)
 	case aiSceneDoorNorth:
-		return aiBuildingsSingleHouse(2 /*DoorSide north*/)
+		return aiBuildingsSingleHouse(2)
 	case aiSceneDoorEast:
-		return aiBuildingsSingleHouse(1 /*DoorSide east*/)
+		return aiBuildingsSingleHouse(1)
 	case aiSceneDoorWest:
-		return aiBuildingsSingleHouse(3 /*DoorSide west*/)
+		return aiBuildingsSingleHouse(3)
 	case aiSceneCompoundSouth, aiSceneCompoundEast,
 		aiSceneCompoundNorth, aiSceneCompoundWest:
 		return aiBuildingsCompound()
 	case aiSceneOfficeFront:
-		// 3-storey Office 14×10 with interior partition. Tests the
-		// partition-aware path planning (interior wall, doors both
-		// sides).
 		pos := components.WorldPos{}.Add(rl.Vector3{X: 32, Z: 32})
 		pos.Local.Y = systems.GroundHeight(
 			pos.Local.X+float32(pos.Chunk.X)*components.ChunkSize,
@@ -134,8 +86,6 @@ func aiSceneBuildings() []components.BuildingPlan {
 		)
 		return []components.BuildingPlan{*buildings.GenerateOffice(0xE5, pos)}
 	case aiSceneFarBuilding:
-		// Building 50 m north of spawn — LODAnchor must activate its
-		// chunks for pathfinder to find a route immediately.
 		pos := components.WorldPos{}.Add(rl.Vector3{X: 0, Z: 50})
 		pos.Local.Y = systems.GroundHeight(
 			pos.Local.X+float32(pos.Chunk.X)*components.ChunkSize,
@@ -152,8 +102,8 @@ func aiSceneBuildings() []components.BuildingPlan {
 	return nil
 }
 
-// aiBuildingsSingleHouse returns one 8×8 1-storey house at (32, 32) with
-// the door on the requested side (0=south, 1=east, 2=north, 3=west).
+// aiBuildingsSingleHouse returns one 8×8 1-storey house at (32, 32).
+// doorSide: 0=south, 1=east, 2=north, 3=west.
 func aiBuildingsSingleHouse(doorSide uint8) []components.BuildingPlan {
 	pos := components.WorldPos{}.Add(rl.Vector3{X: 32, Z: 32})
 	pos.Local.Y = systems.GroundHeight(
@@ -170,7 +120,6 @@ func aiBuildingsSingleHouse(doorSide uint8) []components.BuildingPlan {
 }
 
 // aiBuildingsCompound returns a 3-wing L-shape compound centred at (32, 32).
-// Same layout as production-default compound but isolated for testing.
 func aiBuildingsCompound() []components.BuildingPlan {
 	centre := components.WorldPos{}.Add(rl.Vector3{X: 32, Z: 32})
 	centre.Local.Y = systems.GroundHeight(
@@ -184,41 +133,30 @@ func aiBuildingsCompound() []components.BuildingPlan {
 	return out
 }
 
-// aiSpawnPos — where the squad spawns. Tests squad approach from each
-// cardinal direction; squad always 12 m from the closest edge of the
-// target building.
+// aiSpawnPos returns the squad's start position for the active scene.
 func aiSpawnPos() components.WorldPos {
 	switch aiSceneID() {
 	case aiSceneDoorSouth, aiSceneDoorNorth,
 		aiSceneDoorEast, aiSceneDoorWest:
-		// 12 m south of the house centre (32, 32) regardless of door
-		// side — door-side variants test pathfinding around the walls.
 		return components.WorldPos{}.Add(rl.Vector3{X: 32, Z: 20})
 	case aiSceneCompoundSouth:
 		return components.WorldPos{}.Add(rl.Vector3{X: 32, Z: 20})
 	case aiSceneCompoundEast:
-		// East of east wing (X[38..46]/Z[28..36]). Spawn (58, 30).
 		return components.WorldPos{}.Add(rl.Vector3{X: 58, Z: 30})
 	case aiSceneCompoundNorth:
-		// North of north wing (X[28..36]/Z[38..46]). Spawn (32, 58).
 		return components.WorldPos{}.Add(rl.Vector3{X: 32, Z: 58})
 	case aiSceneCompoundWest:
-		// West of main wing (X[26..38]/Z[26..38]). Spawn (14, 30).
 		return components.WorldPos{}.Add(rl.Vector3{X: 14, Z: 30})
 	case aiSceneOfficeFront:
-		// 12 m south of Office (14×10 footprint at (32, 32)).
 		return components.WorldPos{}.Add(rl.Vector3{X: 32, Z: 18})
 	case aiSceneFarBuilding:
-		// Spawn at origin; building at (0, 50) → ~50 m walk.
 		return components.WorldPos{}.Add(rl.Vector3{X: 0, Z: 0})
 	}
 	return components.WorldPos{}
 }
 
 // aiSceneSpawn instantiates the squad + captures the entities the auto-
-// verifier needs. Returns the test state, or nil for non-AI scenes.
-//
-// Wired from main.go after BuildingPlanIndex is populated.
+// verifier needs. Returns nil for non-AI scenes.
 func aiSceneSpawn(
 	world *ecs.World,
 	squadService *systems.SquadService,
@@ -241,8 +179,7 @@ func aiSceneSpawn(
 		return nil
 	}
 
-	// Pick the target building: for door scenes there's one; for compound
-	// scenes pick main wing (largest footprint of the three).
+	// For compound scenes pick the main wing (largest footprint).
 	var target ecs.Entity
 	var targetFP components.AABB2D
 	maxArea := float32(0)
@@ -282,8 +219,6 @@ func aiSceneSpawn(
 	}
 }
 
-// aiTestState — per-scene auto-test state. Populated by aiSceneSpawn,
-// driven each frame by Update().
 type aiTestState struct {
 	sceneID         string
 	squad           ecs.Entity
@@ -308,14 +243,13 @@ type aiTestState struct {
 	MicroPathMap *ecs.Map[components.MicroPath]
 }
 
-// EnsureInit prints a one-time scene banner so the stdout log starts with
-// what scene + what to expect.
+// EnsureInit prints a one-time scene banner.
 func (s *aiTestState) EnsureInit() {
 	if s == nil || s.orderFired {
-		return // banner only before first order
+		return
 	}
 	if s.elapsed > 0.05 {
-		return // wait one frame so all systems are initialised
+		return
 	}
 	roster := s.RosterMap.Get(s.squad)
 	memN := 0
@@ -335,7 +269,6 @@ func (s *aiTestState) EnsureInit() {
 }
 
 // Update drives the auto-test lifecycle: issue order, sample, verdict.
-// Called from main.go each frame with elapsed session-time.
 func (s *aiTestState) Update(elapsed float32) {
 	if s == nil {
 		return
@@ -364,7 +297,6 @@ func (s *aiTestState) Update(elapsed float32) {
 
 	if s.orderFired && !s.verdictDone && elapsed >= s.nextSampleAt {
 		inside, alive := s.countInside()
-		// Member 0 (commander) diagnostic — speed + mode + path len.
 		roster := s.RosterMap.Get(s.squad)
 		var diag string
 		if roster != nil && roster.Count > 0 {
@@ -412,8 +344,7 @@ func (s *aiTestState) Update(elapsed float32) {
 	}
 }
 
-// countInside tallies how many live roster members sit inside the target
-// building's Footprint. Friendly approximation of CompletionEveryMemberOnFloor.
+// countInside tallies live roster members inside the target Footprint.
 func (s *aiTestState) countInside() (inside, alive uint8) {
 	roster := s.RosterMap.Get(s.squad)
 	if roster == nil {
@@ -439,8 +370,7 @@ func (s *aiTestState) countInside() (inside, alive uint8) {
 	return inside, alive
 }
 
-// dumpPositions prints each member's XZ world position + inside-footprint
-// flag. Used by the verdict block to make a FAIL diagnosable at a glance.
+// dumpPositions prints each member's XZ + inside-footprint flag.
 func (s *aiTestState) dumpPositions() {
 	roster := s.RosterMap.Get(s.squad)
 	if roster == nil {
