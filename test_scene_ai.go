@@ -26,6 +26,11 @@ const (
 	aiSceneCompoundEast  = "ai_compound_east"
 	aiSceneCompoundNorth = "ai_compound_north"
 	aiSceneCompoundWest  = "ai_compound_west"
+	aiSceneCompoundMain  = "ai_compound_main"
+	aiSceneCompoundPlusSouth = "ai_compound_plus_south"
+	aiSceneCompoundPlusEast  = "ai_compound_plus_east"
+	aiSceneCompoundPlusNorth = "ai_compound_plus_north"
+	aiSceneCompoundPlusWest  = "ai_compound_plus_west"
 	aiSceneOfficeFront   = "ai_office_front"
 	aiSceneFarBuilding   = "ai_far_building"
 )
@@ -57,6 +62,11 @@ func aiSceneAnchorPos() components.WorldPos {
 	case aiSceneCompoundSouth, aiSceneCompoundEast,
 		aiSceneCompoundNorth, aiSceneCompoundWest:
 		return components.WorldPos{}.Add(rl.Vector3{X: 32, Z: 26})
+	case aiSceneCompoundMain:
+		return components.WorldPos{}.Add(rl.Vector3{X: 0, Z: 0})
+	case aiSceneCompoundPlusSouth, aiSceneCompoundPlusEast,
+		aiSceneCompoundPlusNorth, aiSceneCompoundPlusWest:
+		return components.WorldPos{}.Add(rl.Vector3{X: 32, Z: 26})
 	case aiSceneOfficeFront:
 		return components.WorldPos{}.Add(rl.Vector3{X: 32, Z: 22})
 	case aiSceneFarBuilding:
@@ -78,6 +88,11 @@ func aiSceneBuildings() []components.BuildingPlan {
 	case aiSceneCompoundSouth, aiSceneCompoundEast,
 		aiSceneCompoundNorth, aiSceneCompoundWest:
 		return aiBuildingsCompound()
+	case aiSceneCompoundMain:
+		return aiBuildingsCompoundMain()
+	case aiSceneCompoundPlusSouth, aiSceneCompoundPlusEast,
+		aiSceneCompoundPlusNorth, aiSceneCompoundPlusWest:
+		return aiBuildingsCompoundPlus()
 	case aiSceneOfficeFront:
 		pos := components.WorldPos{}.Add(rl.Vector3{X: 32, Z: 32})
 		pos.Local.Y = systems.GroundHeight(
@@ -133,6 +148,34 @@ func aiBuildingsCompound() []components.BuildingPlan {
 	return out
 }
 
+// aiBuildingsCompoundMain mirrors the multi-chunk compound placement from main.go.
+func aiBuildingsCompoundMain() []components.BuildingPlan {
+	centre := components.WorldPos{}.Add(rl.Vector3{X: -60, Z: 10})
+	centre.Local.Y = systems.GroundHeight(
+		centre.Local.X+float32(centre.Chunk.X)*components.ChunkSize,
+		centre.Local.Z+float32(centre.Chunk.Z)*components.ChunkSize,
+	)
+	out := []components.BuildingPlan{}
+	for _, p := range buildings.GenerateCompound(0xF6, centre) {
+		out = append(out, *p)
+	}
+	return out
+}
+
+// aiBuildingsCompoundPlus returns a plus-shaped 5-wing compound centred at (32, 32).
+func aiBuildingsCompoundPlus() []components.BuildingPlan {
+	centre := components.WorldPos{}.Add(rl.Vector3{X: 32, Z: 32})
+	centre.Local.Y = systems.GroundHeight(
+		centre.Local.X+float32(centre.Chunk.X)*components.ChunkSize,
+		centre.Local.Z+float32(centre.Chunk.Z)*components.ChunkSize,
+	)
+	out := []components.BuildingPlan{}
+	for _, p := range buildings.GenerateCompoundPlus(0xF7, centre) {
+		out = append(out, *p)
+	}
+	return out
+}
+
 // aiSpawnPos returns the squad's start position for the active scene.
 func aiSpawnPos() components.WorldPos {
 	switch aiSceneID() {
@@ -147,6 +190,16 @@ func aiSpawnPos() components.WorldPos {
 		return components.WorldPos{}.Add(rl.Vector3{X: 32, Z: 58})
 	case aiSceneCompoundWest:
 		return components.WorldPos{}.Add(rl.Vector3{X: 14, Z: 30})
+	case aiSceneCompoundMain:
+		return components.WorldPos{}.Add(rl.Vector3{X: -20, Z: 0})
+	case aiSceneCompoundPlusSouth:
+		return components.WorldPos{}.Add(rl.Vector3{X: 32, Z: 18})
+	case aiSceneCompoundPlusEast:
+		return components.WorldPos{}.Add(rl.Vector3{X: 60, Z: 32})
+	case aiSceneCompoundPlusNorth:
+		return components.WorldPos{}.Add(rl.Vector3{X: 32, Z: 60})
+	case aiSceneCompoundPlusWest:
+		return components.WorldPos{}.Add(rl.Vector3{X: 10, Z: 32})
 	case aiSceneOfficeFront:
 		return components.WorldPos{}.Add(rl.Vector3{X: 32, Z: 18})
 	case aiSceneFarBuilding:
@@ -179,14 +232,39 @@ func aiSceneSpawn(
 		return nil
 	}
 
-	// For compound scenes pick the main wing (largest footprint).
+	// For compound scenes, target the closest wing to the spawn position so
+	// we can exercise multi-section interior pathing. Non-compound scenes
+	// keep the largest-footprint pick.
+	preferNearest := false
+	switch aiSceneID() {
+	case aiSceneCompoundSouth, aiSceneCompoundEast, aiSceneCompoundNorth, aiSceneCompoundWest,
+		aiSceneCompoundPlusSouth, aiSceneCompoundPlusEast, aiSceneCompoundPlusNorth, aiSceneCompoundPlusWest:
+		preferNearest = true
+	}
 	var target ecs.Entity
 	var targetFP components.AABB2D
+	bestDist := float32(0)
 	maxArea := float32(0)
+	spawn := aiSpawnPos()
+	spawnX := float32(spawn.Chunk.X)*components.ChunkSize + spawn.Local.X
+	spawnZ := float32(spawn.Chunk.Z)*components.ChunkSize + spawn.Local.Z
 	bf := ecs.NewFilter1[components.Building](world)
 	q := bf.Query()
 	for q.Next() {
 		b := q.Get()
+		if preferNearest {
+			cx := b.Footprint.CenterX()
+			cz := b.Footprint.CenterZ()
+			dx := cx - spawnX
+			dz := cz - spawnZ
+			dist := dx*dx + dz*dz
+			if target == (ecs.Entity{}) || dist < bestDist {
+				bestDist = dist
+				target = q.Entity()
+				targetFP = b.Footprint
+			}
+			continue
+		}
 		area := b.Footprint.SizeX() * b.Footprint.SizeZ()
 		if area > maxArea {
 			maxArea = area

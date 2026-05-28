@@ -45,3 +45,66 @@ func GenerateCompound(seed uint64, centre components.WorldPos) []*components.Bui
 
 	return []*components.BuildingPlan{main, east, north}
 }
+
+// GenerateCompoundPlus emits a plus-shaped compound: main + 4 wings
+// (east/west/north/south). Each wing connects to the main volume through
+// a doorway on the shared wall, giving a higher-wing-count interior test.
+func GenerateCompoundPlus(seed uint64, centre components.WorldPos) []*components.BuildingPlan {
+	const mainSize float32 = 12
+	const wingSize float32 = 8
+
+	mainPos := centre
+
+	eastPos := centre
+	eastPos.Local.X += mainSize*0.5 + wingSize*0.5
+	eastPos = components.Normalize(eastPos)
+
+	westPos := centre
+	westPos.Local.X -= mainSize*0.5 + wingSize*0.5
+	westPos = components.Normalize(westPos)
+
+	northPos := centre
+	northPos.Local.Z += mainSize*0.5 + wingSize*0.5
+	northPos = components.Normalize(northPos)
+
+	southPos := centre
+	southPos.Local.Z -= mainSize*0.5 + wingSize*0.5
+	southPos = components.Normalize(southPos)
+
+	main := GenerateHouse(seed, HouseParams{
+		Stories:   2,
+		SizeX:     mainSize,
+		SizeZ:     mainSize,
+		DoorSides: []uint8{0, 1, 2, 3}, // all sides connect to wings
+	}, mainPos, components.BuildingHouse)
+
+	east := GenerateHouse(seed^0xE0, HouseParams{
+		Stories:   1,
+		SizeX:     wingSize,
+		SizeZ:     wingSize,
+		DoorSides: []uint8{3}, // west — shared with main
+	}, eastPos, components.BuildingHouse)
+
+	west := GenerateHouse(seed^0xB0, HouseParams{
+		Stories:   1,
+		SizeX:     wingSize,
+		SizeZ:     wingSize,
+		DoorSides: []uint8{1}, // east — shared with main
+	}, westPos, components.BuildingHouse)
+
+	north := GenerateHouse(seed^0xA0, HouseParams{
+		Stories:   1,
+		SizeX:     wingSize,
+		SizeZ:     wingSize,
+		DoorSides: []uint8{0}, // south — shared with main
+	}, northPos, components.BuildingHouse)
+
+	south := GenerateHouse(seed^0xC0, HouseParams{
+		Stories:   1,
+		SizeX:     wingSize,
+		SizeZ:     wingSize,
+		DoorSides: []uint8{2}, // north — shared with main
+	}, southPos, components.BuildingHouse)
+
+	return []*components.BuildingPlan{main, east, west, north, south}
+}

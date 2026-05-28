@@ -59,6 +59,10 @@ const navArrivalRadius float32 = 0.5
 // FindPath returns waypoints (cell centres) along a least-cost path. Empty
 // result = no path; nil = both endpoints in the same cell.
 func (s *NavService) FindPath(from, to components.WorldPos, opts NavOpts) []components.WorldPos {
+	return s.findPath(from, to, opts, true)
+}
+
+func (s *NavService) findPath(from, to components.WorldPos, opts NavOpts, allowFallback bool) []components.WorldPos {
 	idx := s.indexRes.Get()
 	if idx == nil {
 		return []components.WorldPos{}
@@ -193,6 +197,12 @@ func (s *NavService) FindPath(from, to components.WorldPos, opts NavOpts) []comp
 	}
 
 	if !found {
+		if allowFallback && registry != nil && toNode.Kind == components.NodeLevel {
+			if entry, ok := s.closestSurfaceEntry(toNode.Level, registry, floors, from); ok {
+				entryPos := s.nodeWorldPos(entry, floors)
+				return s.findPath(from, entryPos, opts, false)
+			}
+		}
 		closedCount := len(closed)
 		statesCount := len(states)
 		surfaceClosed := 0
@@ -416,6 +426,55 @@ func (s *NavService) nodeWorldPos(n components.NavNode, floors []levelRec) compo
 		}
 	}
 	return components.WorldPos{}
+}
+
+// closestSurfaceEntry returns the surface NavNode closest to `from` that is
+// reachable from the target Level via TransitionEdges (doors / stairs).
+// Used as a fallback when A* fails to enter a building level directly.
+func (s *NavService) closestSurfaceEntry(level ecs.Entity, registry *components.TransitionRegistry, floors []levelRec, from components.WorldPos) (components.NavNode, bool) {
+	if registry == nil {
+		return components.NavNode{}, false
+	}
+	queue := make([]components.NavNode, 0, 16)
+	for n := range registry.Out {
+		if n.Kind == components.NodeLevel && n.Level == level {
+			queue = append(queue, n)
+		}
+	}
+	if len(queue) == 0 {
+		return components.NavNode{}, false
+	}
+	visited := map[components.NavNode]bool{}
+	bestDist := float32(math.MaxFloat32)
+	best := components.NavNode{}
+	for len(queue) > 0 {
+		n := queue[0]
+		queue = queue[1:]
+		if visited[n] {
+			continue
+		}
+		visited[n] = true
+		if n.Kind == components.NodeSurface {
+			wp := s.nodeWorldPos(n, floors)
+			d := wp.Sub(from)
+			dist := d.X*d.X + d.Z*d.Z
+			if dist < bestDist {
+				bestDist = dist
+				best = n
+			}
+			continue
+		}
+		for _, edge := range registry.Out[n] {
+			if edge.Cost == 0 {
+				continue
+			}
+			queue = append(queue, edge.To)
+		}
+	}
+	if bestDist == float32(math.MaxFloat32) {
+		return components.NavNode{}, false
+	}
+	return best, true
 }
 
 type gridNeighbour struct {

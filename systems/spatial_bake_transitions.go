@@ -200,6 +200,30 @@ func (sys *SpatialBakeSystem) bakeTransitionsPass(ctx core.UpdateContext) {
 
 		outsideX := cx + d.outward.X*0.7
 		outsideZ := cz + d.outward.Z*0.7
+
+		var cost uint8 = 3
+		if dc := sys.doorMap.Get(d.ent); dc != nil && dc.State == components.DoorClosed {
+			cost = 0
+		}
+
+		// If the door opens into another Level volume (compound wing or
+		// multi-section interior), wire a level<->level transition at the
+		// opening instead of surface<->level. For internal partitions within
+		// the same Level, skip transitions entirely — LevelNavGrid already
+		// models the opening.
+		if otherLv := findLevel(outsideX, outsideZ, d.pos.Local.Y); otherLv != nil {
+			if otherLv.ent == lv.ent {
+				continue
+			}
+			oi, oj, ok := levelCell(otherLv, outsideX, outsideZ)
+			if ok {
+				otherNode := components.NavNode{Kind: components.NodeLevel, Level: otherLv.ent, I: oi, J: oj}
+				addEdge(levelNode, otherNode, cost, d.ent)
+				addEdge(otherNode, levelNode, cost, d.ent)
+				continue
+			}
+		}
+
 		sgi := int32(math.Floor(float64(outsideX)))
 		sgj := int32(math.Floor(float64(outsideZ)))
 		surfChunk := components.ChunkCoord{X: sgi >> 6, Z: sgj >> 6}
@@ -208,11 +232,6 @@ func (sys *SpatialBakeSystem) bakeTransitionsPass(ctx core.UpdateContext) {
 			Chunk: surfChunk,
 			I:     int16(sgi & 63),
 			J:     int16(sgj & 63),
-		}
-
-		var cost uint8 = 3
-		if dc := sys.doorMap.Get(d.ent); dc != nil && dc.State == components.DoorClosed {
-			cost = 0
 		}
 		addEdge(surfNode, levelNode, cost, d.ent)
 		addEdge(levelNode, surfNode, cost, d.ent)
