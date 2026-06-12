@@ -34,6 +34,14 @@ type ContextMenuItem struct {
 	// HoldFireCrouchPreset is the "Hidden position" flag — caller attaches
 	// MovementProfile{Stance: Crouch, ...} + HoldFire RoE override.
 	HoldFireCrouchPreset bool
+	// Tag is a caller-defined opaque action code. Lets the same widget host
+	// the building popup, the contact popup, and any future variants without
+	// each one needing its own enum field. Zero = not set.
+	Tag uint16
+	// ContactSpec carries the SymbolSpec a contact-popup apply-preset row
+	// commits when clicked. Only meaningful when Tag tags this item as
+	// "apply preset" (caller-defined).
+	ContactSpec components.SymbolSpec
 }
 
 type ContextMenuResult struct {

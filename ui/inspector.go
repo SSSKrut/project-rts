@@ -46,6 +46,9 @@ type InspectorMaps struct {
 	ActiveDoctrineMap        *ecs.Map[components.ActiveDoctrine]
 	ActiveAutonomyMap        *ecs.Map[components.ActiveAutonomy]
 	BehaviorRulesEditMap     *ecs.Map[components.BehaviorRulesEdit]
+	ContactMap               *ecs.Map[components.Contact]
+	ContactOverrideMap       *ecs.Map[components.ContactSymbolOverride]
+	UnitOverrideMap          *ecs.Map[components.UnitSymbolOverride]
 }
 
 func NewInspectorMaps(world *ecs.World) InspectorMaps {
@@ -83,6 +86,9 @@ func NewInspectorMaps(world *ecs.World) InspectorMaps {
 		ActiveDoctrineMap:        ecs.NewMap[components.ActiveDoctrine](world),
 		ActiveAutonomyMap:        ecs.NewMap[components.ActiveAutonomy](world),
 		BehaviorRulesEditMap:     ecs.NewMap[components.BehaviorRulesEdit](world),
+		ContactMap:               ecs.NewMap[components.Contact](world),
+		ContactOverrideMap:       ecs.NewMap[components.ContactSymbolOverride](world),
+		UnitOverrideMap:          ecs.NewMap[components.UnitSymbolOverride](world),
 	}
 }
 
@@ -167,6 +173,8 @@ func DrawInspector(panel Panel, ctx InspectorCtx) {
 		} else {
 			endY = y
 		}
+	case selSingleContact:
+		endY = drawInspectorContact(ctx, ctx.Selected[0], x, y)
 	case selMulti:
 		endY = drawInspectorMulti(ctx, x, y)
 	default:
@@ -184,12 +192,18 @@ const (
 	selEmpty selectionKind = iota
 	selSingleUnit
 	selSingleSquad
+	selSingleContact
 	selMulti
 )
 
 func describeSelection(ctx InspectorCtx) selectionKind {
 	if len(ctx.Selected) == 0 {
 		return selEmpty
+	}
+	if len(ctx.Selected) == 1 && ctx.ContactMap != nil {
+		if ctx.ContactMap.Has(ctx.Selected[0]) {
+			return selSingleContact
+		}
 	}
 	commonSquad, homo := groupSelectedHelper(ctx.Selected, ctx.SquadMemberMap)
 	if !homo {

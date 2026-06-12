@@ -108,6 +108,13 @@ func main() {
 	eventLog := components.NewEventLog()
 	ecs.AddResource(app.World, eventLog)
 
+	contactRegistry := components.NewContactRegistry()
+	ecs.AddResource(app.World, &contactRegistry)
+
+	symbologyPresets := components.SymbologyPresets{All: ui.BuiltinSymbologyPresets()}
+	ecs.AddResource(app.World, &symbologyPresets)
+	_ = symbologyPresets // reserved for Track 18.5.F
+
 	defer systems.FlushModifiedChunks(app.World, systems.SaveDir)
 
 	stamper := systems.NewStamper(app.World)
@@ -158,8 +165,8 @@ func main() {
 	unitMovementSys := systems.NewUnitMovementSystem(workerPool)
 	unitMovementSys.InitUI(app.World)
 
-	visionSys := systems.NewVisionSystem(workerPool)
-	visionSys.InitUI(app.World)
+	contactSys := systems.NewContactSystem(workerPool)
+	contactSys.InitUI(app.World)
 
 	// Particle handles built before WeaponSystem so its constructor takes a non-nil ref.
 	particleHandles := systems.NewSpawnHandles(app.World)
@@ -177,6 +184,9 @@ func main() {
 
 	stanceSys := systems.NewStanceControllerSystem()
 	stanceSys.InitUI(app.World)
+
+	circlePatrolSys := systems.NewCirclePatrolSystem()
+	circlePatrolSys.InitUI(app.World)
 
 	utilityEvalSys := systems.NewUtilityEvaluatorSystem()
 	utilityEvalSys.InitUI(app.World)
@@ -244,8 +254,9 @@ func main() {
 	app.AddSystem(terrainMeshSys)
 	app.AddSystem(groundStickSys)
 	app.AddSystem(spatialHashRebuildSys)
+	app.AddSystem(circlePatrolSys)
 	app.AddSystem(unitMovementSys)
-	app.AddSystem(visionSys)
+	app.AddSystem(contactSys)
 	app.AddSystem(weaponSys)
 	app.AddSystem(particleSys)
 	app.AddSystem(threatSys)
@@ -411,6 +422,7 @@ func main() {
 	staminaMap := ecs.NewMap[components.Stamina](app.World)
 	hpMap := ecs.NewMap[components.HP](app.World)
 	factionMap := ecs.NewMap[components.Faction](app.World)
+	circlePatrolMap := ecs.NewMap[components.CirclePatrol](app.World)
 	individualPosMap := ecs.NewMap[components.IndividualPosition](app.World)
 
 	// Missing Faction (legacy spawns) falls through to FactionPlayer.
@@ -500,6 +512,35 @@ func main() {
 				components.OrderKindDefendPosition, enemySpawn, ecs.Entity{},
 				false, systems.OrderParams{})
 		}
+
+		// Phase 18.5 FoW test dummies: stationary + patrolling EnemyFaction +
+		// one WildlifeFaction circle-walker. Not in any squad — exercises
+		// per-unit Faction path. Replace with proper enemy spawners later.
+		spawnDummy := func(pos components.WorldPos, faction uint8, patrol *components.CirclePatrol) {
+			ent := unitFactory(pos)
+			if ent == (ecs.Entity{}) {
+				return
+			}
+			factionMap.Add(ent, &components.Faction{ID: faction})
+			if patrol != nil {
+				circlePatrolMap.Add(ent, patrol)
+			}
+		}
+		// 3 stationary enemies in a small cluster.
+		spawnDummy(components.WorldPos{}.Add(rl.Vector3{X: 200, Z: 200}), components.FactionEnemyRed, nil)
+		spawnDummy(components.WorldPos{}.Add(rl.Vector3{X: 210, Z: 195}), components.FactionEnemyRed, nil)
+		spawnDummy(components.WorldPos{}.Add(rl.Vector3{X: 220, Z: 205}), components.FactionEnemyRed, nil)
+		// 2 patrolling enemies around different centres.
+		enemyCenterA := components.WorldPos{}.Add(rl.Vector3{X: 180, Z: 180})
+		spawnDummy(enemyCenterA, components.FactionEnemyRed,
+			&components.CirclePatrol{Center: enemyCenterA, RadiusM: 15, Speed: 1.5})
+		enemyCenterB := components.WorldPos{}.Add(rl.Vector3{X: 250, Z: 220})
+		spawnDummy(enemyCenterB, components.FactionEnemyRed,
+			&components.CirclePatrol{Center: enemyCenterB, RadiusM: 20, Speed: 1.2, Phase: 1.5})
+		// 1 wildlife (deer placeholder) circling slowly.
+		wildCenter := components.WorldPos{}.Add(rl.Vector3{X: 200, Z: 260})
+		spawnDummy(wildCenter, components.FactionWildlife,
+			&components.CirclePatrol{Center: wildCenter, RadiusM: 30, Speed: 0.8})
 	}
 
 	unitRenderFilter := ecs.NewFilter3[components.WorldPos, components.Unit, components.Stance](app.World)
@@ -532,6 +573,11 @@ func main() {
 	unitFilter := ecs.NewFilter1[components.Unit](app.World)
 	stairsCountFilter := ecs.NewFilter1[components.Stairs](app.World)
 	squadFilter := ecs.NewFilter2[components.Squad, components.CommandRoster](app.World)
+	contactFilter := ecs.NewFilter1[components.Contact](app.World)
+	contactMap := ecs.NewMap[components.Contact](app.World)
+	contactOverrideMap := ecs.NewMap[components.ContactSymbolOverride](app.World)
+	contactPlayerSetMap := ecs.NewMap[components.ContactPlayerSet](app.World)
+	unitOverrideMap := ecs.NewMap[components.UnitSymbolOverride](app.World)
 
 	buildingFilter := ecs.NewFilter1[components.Building](app.World)
 	trenchRootFilter := ecs.NewFilter1[components.TrenchRoot](app.World)
@@ -609,6 +655,8 @@ func main() {
 	var mapPanning bool
 	var mapPanCursor rl.Vector2
 	var ctxMenu ui.ContextMenu
+	var contactCtxMenu ui.ContextMenu
+	var contactMenuTarget ecs.Entity
 	// rmbState bundles RMB-hold session state. Active set on press, cleared
 	// on release. PressOrigin / PressTarget are captured at press time so
 	// release commits don't drift with the cursor.
@@ -647,6 +695,9 @@ func main() {
 		marqueeStart     rl.Vector2
 		marqueeActive    bool
 		marqueeOrigin    ui.PanelID
+		// Double-click tracking for Map contact focus (Phase 18.5).
+		lastMapClickEnt  ecs.Entity
+		lastMapClickTime float32
 		expandedHUDOn    bool
 		showMapDebugLy   bool
 		binds            [5]bindEntry
@@ -655,9 +706,7 @@ func main() {
 		timelineHoverHit ui.TimelineHit
 		timelineHoverOK  bool
 		timelineHoverBlk ui.TimelineOrderBlock
-		topBarPlayPause  rl.Rectangle
-		topBarSpeedDown  rl.Rectangle
-		topBarSpeedUp    rl.Rectangle
+		topBarHits       ui.TopBarHits
 		chevronMenu      ui.ChevronMenu
 		floating         = ui.NewFloatingState()
 	)
@@ -711,6 +760,16 @@ func main() {
 	}
 	formationEditor := ui.NewFormationEditor(ecs.Entity{}, formationEditorCtx)
 
+	// Symbol Editor (Phase 18.5.D). Singleton shared between workspace leaf
+	// and any future floating instance. SelectionFn returns the single
+	// selected entity (Unit or Contact); Apply targets it.
+	symbolEditor := ui.NewSymbolEditor(func() ecs.Entity {
+		if len(selected) == 1 {
+			return selected[0]
+		}
+		return ecs.Entity{}
+	})
+
 	// ContentToPanel synthesises a Panel whose ContentRect recovers `content`
 	// so each widget's chrome-aware draw code lands in the right place.
 	// Panel3D is intentionally a no-op: the scene RT is sized to the
@@ -721,6 +780,8 @@ func main() {
 		switch id {
 		case ui.PanelFormation:
 			formationEditor.DrawPanel(syn("Formation"), font, cursor, lmbPress)
+		case ui.PanelSymbology:
+			symbolEditor.DrawPanel(syn("Symbology"), font, cursor, lmbPress, true)
 		case ui.PanelMap:
 			ui.DrawMap(syn("Map"), ui.MapRenderCtx{
 				World:            app.World,
@@ -749,6 +810,9 @@ func main() {
 				Font:             font,
 				MapPingFilter:    mapPingFilter,
 				Clock:            squadService.Clock(),
+				ContactFilter:      contactFilter,
+				ContactMap:         contactMap,
+				ContactOverrideMap: contactOverrideMap,
 			})
 		case ui.PanelInspect:
 			ui.DrawInspector(syn("Inspector"), ui.InspectorCtx{
@@ -1076,7 +1140,7 @@ func main() {
 
 		if focused == ui.PanelTopBar && !chromeBusy() && !scrollDragging &&
 			rl.IsMouseButtonPressed(rl.MouseButtonLeft) {
-			switch ui.TopBarHitTest(cursor, topBarPlayPause, topBarSpeedDown, topBarSpeedUp) {
+			switch ui.TopBarHitTest(cursor, topBarHits) {
 			case ui.TopBarHitPlayPause:
 				if app.TimeScale > 0 {
 					app.LastNonZeroScale = app.TimeScale
@@ -1093,6 +1157,17 @@ func main() {
 			case ui.TopBarHitSpeedUp:
 				app.TimeScale = nextTimeScale(app.TimeScale, +1)
 				app.LastNonZeroScale = app.TimeScale
+			case ui.TopBarHitToolSE:
+				floatSpawn(ui.PanelSymbology, "Symbology",
+					rl.Rectangle{X: 80, Y: 80, Width: 400, Height: 360})
+			case ui.TopBarHitToolFE:
+				_, homo := groupSelected(selected, squadMemberMap)
+				if homo {
+					floatSpawn(ui.PanelFormation, "Formation",
+						rl.Rectangle{X: 80, Y: 80, Width: 380, Height: 360})
+				}
+			case ui.TopBarHitToolSettings:
+				// Phase 18.5.E placeholder — Settings panel deferred.
 			}
 		}
 
@@ -1206,9 +1281,29 @@ func main() {
 					World: app.World, Cam: mapCam, SquadFilter: squadFilter,
 					SquadCenter:    squadCenter,
 					MapMarkerCache: &mapMarkerCache,
+					ContactFilter:  contactFilter,
+					ContactMap:     contactMap,
 				}
-				hit := ui.PickSquadAt(cursor, mapCtx, panelMap, 12)
-				if hit != (ecs.Entity{}) && app.World.Alive(hit) {
+				now := squadService.Clock()
+				const doubleClickWindow float32 = 0.35
+				if cHit := ui.PickContactAt(cursor, mapCtx, panelMap, 14); cHit != (ecs.Entity{}) && app.World.Alive(cHit) {
+					// Second consecutive click on the same contact within window → camera focus.
+					if cHit == lastMapClickEnt && now-lastMapClickTime <= doubleClickWindow {
+						if c := contactMap.Get(cHit); c != nil {
+							*posMap.Get(anchor) = c.EstimatedPos
+						}
+					} else {
+						if shiftHeld {
+							if isSelected(cHit) < 0 {
+								selected = append(selected, cHit)
+							}
+						} else {
+							selected = append(selected[:0], cHit)
+						}
+					}
+					lastMapClickEnt = cHit
+					lastMapClickTime = now
+				} else if hit := ui.PickSquadAt(cursor, mapCtx, panelMap, 12); hit != (ecs.Entity{}) && app.World.Alive(hit) {
 					if r := rosterMap.Get(hit); r != nil {
 						if shiftHeld {
 							for i := uint8(0); i < r.Count; i++ {
@@ -1220,8 +1315,10 @@ func main() {
 							selected = append(selected[:0], r.Members[:r.Count]...)
 						}
 					}
+					lastMapClickEnt = ecs.Entity{}
 				} else if !shiftHeld {
 					selected = nil
+					lastMapClickEnt = ecs.Entity{}
 				}
 			}
 		}
@@ -1281,7 +1378,25 @@ func main() {
 		// while held, drag>8px enters facing-drag mode and hold≥200ms over a
 		// building opens the ContextMenu popup; release commits hovered popup
 		// item / facing-drag yaw / tap; ESC closes the popup.
-		if rl.IsMouseButtonPressed(rl.MouseButtonRight) && !floating.IsBusy(cursor) {
+		// Phase 18.5.F: RMB on a Map contact opens the classification popup
+		// instead of going through the order pathway.
+		if rl.IsMouseButtonPressed(rl.MouseButtonRight) && !floating.IsBusy(cursor) &&
+			focused == ui.PanelMap && !ctxMenu.IsActive() && !contactCtxMenu.IsActive() {
+			mapCtx := ui.MapRenderCtx{
+				World: app.World, Cam: mapCam, SquadFilter: squadFilter,
+				SquadCenter:    squadCenter,
+				MapMarkerCache: &mapMarkerCache,
+				ContactFilter:  contactFilter,
+				ContactMap:     contactMap,
+			}
+			if hit := ui.PickContactAt(cursor, mapCtx, panelMap, 14); hit != (ecs.Entity{}) && app.World.Alive(hit) {
+				sections := ui.BuildContactContextSections(&symbologyPresets)
+				contactCtxMenu.Begin(cursor, sections, ui.PanelMap, panelMapContent)
+				contactMenuTarget = hit
+			}
+		}
+
+		if rl.IsMouseButtonPressed(rl.MouseButtonRight) && !floating.IsBusy(cursor) && !contactCtxMenu.IsActive() {
 			var (
 				pressTarget components.WorldPos
 				targetOK    bool
@@ -1640,8 +1755,15 @@ func main() {
 				World: app.World, Cam: mapCam, SquadFilter: squadFilter,
 				SquadCenter:    squadCenter,
 				MapMarkerCache: &mapMarkerCache,
+				ContactFilter:      contactFilter,
+				ContactMap:         contactMap,
+				ContactOverrideMap: contactOverrideMap,
 			}
-			hovered = ui.PickSquadAt(cursor, mapCtx, panelMap, 12)
+			if h := ui.PickContactAt(cursor, mapCtx, panelMap, 14); h != (ecs.Entity{}) {
+				hovered = h
+			} else {
+				hovered = ui.PickSquadAt(cursor, mapCtx, panelMap, 12)
+			}
 		}
 
 		var (
@@ -1767,6 +1889,7 @@ func main() {
 		rl.DrawCircle3D(anchorRender, 1, rl.Vector3{X: 1, Y: 0, Z: 0}, 90, rl.Blue)
 
 		unitsLive := 0
+		fowNow := squadService.Clock()
 		qu := unitRenderFilter.Query()
 		for qu.Next() {
 			pos, _, st := qu.Get()
@@ -1777,7 +1900,33 @@ func main() {
 			if r := roleMap.Get(ent); r != nil {
 				role = r.Kind
 			}
-			drawUnitCube(renderPos, *st, role)
+			// Phase 18.5.G FoW: non-PlayerFaction units render only when a
+			// recent sensor refresh covers them. 2 sec tail with linear
+			// alpha fade after LOS loss.
+			alpha := float32(1.0)
+			if f := factionMap.Get(ent); f != nil && f.ID != components.FactionPlayer {
+				contactEnt, ok := contactRegistry.Tracked[ent]
+				if !ok || !app.World.Alive(contactEnt) {
+					continue
+				}
+				c := contactMap.Get(contactEnt)
+				if c == nil {
+					continue
+				}
+				age := fowNow - c.LastSeenTime
+				const tailSec float32 = 2.0
+				if age >= tailSec {
+					continue
+				}
+				if age > 0 {
+					alpha = 1.0 - age/tailSec
+				}
+			}
+			if alpha >= 0.999 {
+				drawUnitCube(renderPos, *st, role)
+			} else {
+				drawUnitCubeAlpha(renderPos, *st, role, alpha)
+			}
 			if isSelected(ent) >= 0 {
 				height := unitStanceHeight(st.Code)
 				rl.DrawCircle3D(renderPos, 1.0, rl.Vector3{X: 1, Y: 0, Z: 0}, 90,
@@ -2188,6 +2337,9 @@ func main() {
 			Font:             hudFont,
 			MapPingFilter:    mapPingFilter,
 			Clock:            squadService.Clock(),
+			ContactFilter:      contactFilter,
+			ContactMap:         contactMap,
+			ContactOverrideMap: contactOverrideMap,
 		}
 		ui.DrawMap(panelMap, mapCtx)
 
@@ -2212,12 +2364,75 @@ func main() {
 			ui.ClampScrollOffset(inspectorPanel, inspectorScroll)
 			ui.DrawScrollbar(inspectorPanel, inspectorScroll)
 		}
+		// Consume Inspector button requests (Phase 18.5).
+		if ui.CameraFocusRequest.Active {
+			*posMap.Get(anchor) = ui.CameraFocusRequest.Pos
+			ui.CameraFocusRequest.Active = false
+		}
+		if ui.DeleteContactRequest.Active {
+			tgt := ui.DeleteContactRequest.Entity
+			if tgt != (ecs.Entity{}) && app.World.Alive(tgt) {
+				if c := contactMap.Get(tgt); c != nil {
+					delete(contactRegistry.Tracked, c.Tracked)
+				}
+				app.World.RemoveEntity(tgt)
+				for i, e := range selected {
+					if e == tgt {
+						selected = append(selected[:i], selected[i+1:]...)
+						break
+					}
+				}
+			}
+			ui.DeleteContactRequest.Active = false
+			ui.DeleteContactRequest.Entity = ecs.Entity{}
+		}
+		if ui.SymbolApplyRequest.Active {
+			if len(selected) == 1 {
+				tgt := selected[0]
+				if app.World.Alive(tgt) {
+					if contactMap.Has(tgt) {
+						if ov := contactOverrideMap.Get(tgt); ov != nil {
+							ov.Spec = ui.SymbolApplyRequest.Spec
+						} else {
+							contactOverrideMap.Add(tgt, &components.ContactSymbolOverride{Spec: ui.SymbolApplyRequest.Spec})
+						}
+						// Player-set classification → freeze auto-promote.
+						if !contactPlayerSetMap.Has(tgt) {
+							contactPlayerSetMap.Add(tgt, &components.ContactPlayerSet{})
+						}
+						if c := contactMap.Get(tgt); c != nil {
+							c.PerceivedAffil = ui.SymbolApplyRequest.Spec.Affiliation
+							c.PerceivedDim = ui.SymbolApplyRequest.Spec.Dimension
+							c.Source = components.SourcePlayerClassified
+						}
+					} else if ov := unitOverrideMap.Get(tgt); ov != nil {
+						ov.Spec = ui.SymbolApplyRequest.Spec
+					} else {
+						unitOverrideMap.Add(tgt, &components.UnitSymbolOverride{Spec: ui.SymbolApplyRequest.Spec})
+					}
+				}
+			}
+			ui.SymbolApplyRequest.Active = false
+		}
 
-		topBarPlayPause, topBarSpeedDown, topBarSpeedUp = ui.DrawTopBar(
+		seEnabled := len(selected) == 1
+		_, feHomo := groupSelected(selected, squadMemberMap)
+		feEnabled := feHomo && len(selected) > 0
+		seActive := panelMgr.LeafFor(ui.PanelSymbology) != nil ||
+			floating.Get("float:"+string(ui.PanelSymbology)) != nil
+		feActive := panelMgr.LeafFor(ui.PanelFormation) != nil ||
+			floating.Get("float:"+string(ui.PanelFormation)) != nil
+		topBarHits = ui.DrawTopBar(
 			panelMgr.Get(ui.PanelTopBar), hudFont, ui.TimeDisplay{
 				Scale:   app.TimeScale,
 				Elapsed: float32(app.Elapsed().Seconds()),
-			})
+			},
+			ui.TopBarToolCtx{
+				SEActive: seActive, SEEnabled: seEnabled,
+				FEActive: feActive, FEEnabled: feEnabled,
+				SettingsOn: false, SettingsCan: true,
+			},
+			cursor)
 
 		timelineData = buildTimelineData(app.World, squadFilter, posMap, factionMap,
 			orderQueueMap, orderChainMap, orderKindMap, orderTargetMap, orderStateMap,
@@ -2234,6 +2449,14 @@ func main() {
 				rl.IsMouseButtonPressed(rl.MouseButtonLeft)
 			formationEditor.DrawPanel(panelMgr.Get(ui.PanelFormation),
 				hudFont, cursor, formationLMB)
+		}
+
+		if panelMgr.LeafFor(ui.PanelSymbology) != nil {
+			focused := panelMgr.FocusedAt(cursor) == ui.PanelSymbology
+			symLMB := focused && !chromeBusy() && !scrollDragging &&
+				rl.IsMouseButtonPressed(rl.MouseButtonLeft)
+			symbolEditor.DrawPanel(panelMgr.Get(ui.PanelSymbology),
+				hudFont, cursor, symLMB, focused)
 		}
 
 		if leaf := panelMgr.LeafFor(ui.PanelDebug); leaf != nil {
@@ -2316,6 +2539,66 @@ func main() {
 		floating.DrawSwitchMenu(hudFont, cursor)
 
 		ctxMenu.Draw(hudFont, cursor)
+
+		// Phase 18.5.F: contact RMB menu — separate tick + draw lane so it
+		// never clashes with the order popup.
+		if contactCtxMenu.IsActive() {
+			escPressed := rl.IsKeyPressed(rl.KeyEscape)
+			lmbPressed := rl.IsMouseButtonPressed(rl.MouseButtonLeft)
+			res := contactCtxMenu.Tick(cursor, lmbPressed, escPressed)
+			if res.Committed && contactMenuTarget != (ecs.Entity{}) && app.World.Alive(contactMenuTarget) {
+				switch res.Item.Tag {
+				case ui.ContactMenuTagApplyPreset:
+					if ov := contactOverrideMap.Get(contactMenuTarget); ov != nil {
+						ov.Spec = res.Item.ContactSpec
+					} else {
+						contactOverrideMap.Add(contactMenuTarget, &components.ContactSymbolOverride{Spec: res.Item.ContactSpec})
+					}
+					if !contactPlayerSetMap.Has(contactMenuTarget) {
+						contactPlayerSetMap.Add(contactMenuTarget, &components.ContactPlayerSet{})
+					}
+					if c := contactMap.Get(contactMenuTarget); c != nil {
+						c.PerceivedAffil = res.Item.ContactSpec.Affiliation
+						c.PerceivedDim = res.Item.ContactSpec.Dimension
+						c.Source = components.SourcePlayerClassified
+					}
+				case ui.ContactMenuTagOpenBuilder:
+					if c := contactMap.Get(contactMenuTarget); c != nil {
+						symbolEditor.InProgress = ui.DefaultSpecForDimension(c.PerceivedAffil, c.PerceivedDim)
+					}
+					selected = append(selected[:0], contactMenuTarget)
+					floatSpawn(ui.PanelSymbology, "Symbology",
+						rl.Rectangle{X: cursor.X, Y: cursor.Y, Width: 420, Height: 380})
+				case ui.ContactMenuTagResetToAuto:
+					if contactOverrideMap.Has(contactMenuTarget) {
+						contactOverrideMap.Remove(contactMenuTarget)
+					}
+					if contactPlayerSetMap.Has(contactMenuTarget) {
+						contactPlayerSetMap.Remove(contactMenuTarget)
+					}
+					if c := contactMap.Get(contactMenuTarget); c != nil {
+						c.Source = components.SourceSensor
+						c.PerceivedAffil = components.AffilUnknown
+						c.PerceivedDim = components.DimUnknownClass
+					}
+				case ui.ContactMenuTagDelete:
+					if c := contactMap.Get(contactMenuTarget); c != nil {
+						delete(contactRegistry.Tracked, c.Tracked)
+					}
+					app.World.RemoveEntity(contactMenuTarget)
+					for i, e := range selected {
+						if e == contactMenuTarget {
+							selected = append(selected[:i], selected[i+1:]...)
+							break
+						}
+					}
+				}
+				contactMenuTarget = ecs.Entity{}
+			} else if res.Cancelled {
+				contactMenuTarget = ecs.Entity{}
+			}
+			contactCtxMenu.Draw(hudFont, cursor)
+		}
 
 		const heapInterval = time.Second
 		if app.Prof.HeapStale(app.Elapsed(), heapInterval) {

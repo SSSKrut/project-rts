@@ -14,22 +14,29 @@ import (
 // terrain at WorldPos. Height collapses with Stance; a small role-tinted cap
 // sits on top (taller for Leaders).
 func drawUnitCube(pos rl.Vector3, st components.Stance, role components.UnitRoleKind) {
+	drawUnitCubeAlpha(pos, st, role, 1.0)
+}
+
+// drawUnitCubeAlpha is the alpha-aware variant used by Phase 18.5.G tail
+// rendering when an enemy contact is fading out of 3D after LOS loss.
+func drawUnitCubeAlpha(pos rl.Vector3, st components.Stance, role components.UnitRoleKind, alpha float32) {
+	scale := func(c rl.Color) rl.Color {
+		c.A = uint8(float32(c.A) * alpha)
+		return c
+	}
 	height := unitStanceHeight(st.Code)
 	c := rl.Vector3{X: pos.X, Y: pos.Y + height*0.5, Z: pos.Z}
-	rl.DrawCubeV(c, rl.Vector3{X: 0.6, Y: height, Z: 0.6},
-		rl.Color{R: 80, G: 95, B: 55, A: 255})
-	rl.DrawCubeWiresV(c, rl.Vector3{X: 0.6, Y: height, Z: 0.6},
-		rl.Color{R: 40, G: 50, B: 30, A: 255})
+	rl.DrawCubeV(c, rl.Vector3{X: 0.6, Y: height, Z: 0.6}, scale(rl.Color{R: 80, G: 95, B: 55, A: 255}))
+	rl.DrawCubeWiresV(c, rl.Vector3{X: 0.6, Y: height, Z: 0.6}, scale(rl.Color{R: 40, G: 50, B: 30, A: 255}))
 
 	capHeight := float32(0.15)
 	if role == components.RoleLeader {
 		capHeight = 0.30
 	}
 	capPos := rl.Vector3{X: pos.X, Y: pos.Y + height + capHeight*0.5, Z: pos.Z}
-	capColor := components.RoleColor(role)
+	capColor := scale(components.RoleColor(role))
 	rl.DrawCubeV(capPos, rl.Vector3{X: 0.55, Y: capHeight, Z: 0.55}, capColor)
-	rl.DrawCubeWiresV(capPos, rl.Vector3{X: 0.55, Y: capHeight, Z: 0.55},
-		rl.Color{R: 20, G: 20, B: 20, A: 220})
+	rl.DrawCubeWiresV(capPos, rl.Vector3{X: 0.55, Y: capHeight, Z: 0.55}, scale(rl.Color{R: 20, G: 20, B: 20, A: 220}))
 }
 
 // drawUnitRoleLabel projects the unit's head-above-cap point into the 3D
@@ -276,12 +283,30 @@ var squadPaletteEnemy = [...]rl.Color{
 	{R: 220, G: 110, B: 50, A: 230}, // brick
 }
 
+var squadPaletteNeutral = [...]rl.Color{
+	{R: 200, G: 200, B: 80, A: 230},  // mustard
+	{R: 180, G: 180, B: 100, A: 230}, // olive
+}
+
+var squadPaletteWildlife = [...]rl.Color{
+	{R: 140, G: 95, B: 60, A: 230},  // brown
+	{R: 110, G: 80, B: 50, A: 230},  // dark brown
+	{R: 160, G: 120, B: 80, A: 230}, // tan
+}
+
 // squadColorFor picks a palette slot by faction then hashes the entity ID
 // for per-squad shade. Missing Faction falls back to Player palette.
 func squadColorFor(ent ecs.Entity, faction uint8) rl.Color {
-	palette := squadPalettePlayer[:]
-	if faction != components.FactionPlayer {
+	var palette []rl.Color
+	switch faction {
+	case components.FactionEnemyRed:
 		palette = squadPaletteEnemy[:]
+	case components.FactionNeutral:
+		palette = squadPaletteNeutral[:]
+	case components.FactionWildlife:
+		palette = squadPaletteWildlife[:]
+	default:
+		palette = squadPalettePlayer[:]
 	}
 	id := ent.ID()
 	x := id ^ 0x9e3779b9

@@ -28,7 +28,7 @@ type UnitFactory struct {
 	DangerBufMap    *ecs.Map[components.DangerBuffer]
 	BlackboardMap   *ecs.Map[components.LocalBlackboard]
 	ColliderMap     *ecs.Map[components.Collider]
-	VisionMap       *ecs.Map[components.Vision]
+	SensorsMap      *ecs.Map[components.Sensors]
 	UnitMap         *ecs.Map[components.Unit]
 }
 
@@ -48,9 +48,25 @@ func NewUnitFactory(world *ecs.World, posMap *ecs.Map[components.WorldPos]) *Uni
 		DangerBufMap:   ecs.NewMap[components.DangerBuffer](world),
 		BlackboardMap:  ecs.NewMap[components.LocalBlackboard](world),
 		ColliderMap:    ecs.NewMap[components.Collider](world),
-		VisionMap:      ecs.NewMap[components.Vision](world),
+		SensorsMap:     ecs.NewMap[components.Sensors](world),
 		UnitMap:        ecs.NewMap[components.Unit](world),
 	}
+}
+
+// defaultInfantrySensors - single Optical channel matching the legacy Vision
+// values (range 40 m, ~120° forward cone). Linear falloff so detection half-
+// range = 20 m at high concealment, full 40 m at no concealment.
+func defaultInfantrySensors() components.Sensors {
+	var s components.Sensors
+	s.Channels[0] = components.SensorChannel{
+		Kind:        components.SensorOptical,
+		BaseRangeM:  40,
+		FalloffKind: components.FalloffLinear,
+		Facing:      components.InfantryOpticalProfile,
+		DetectMask:  components.DimAll,
+	}
+	s.Count = 1
+	return s
 }
 
 // Spawn creates a unit at `pos` with the canonical starter set: standing,
@@ -63,7 +79,8 @@ func (f *UnitFactory) Spawn(pos components.WorldPos) ecs.Entity {
 	f.StanceMap.Add(ent, &components.Stance{Code: components.StanceStand})
 	f.MotionMap.Add(ent, &components.Motion{})
 	f.ColliderMap.Add(ent, &components.Collider{Radius: 0.35})
-	f.VisionMap.Add(ent, &components.Vision{RangeM: 40, AngleDot: 0.5})
+	sensors := defaultInfantrySensors()
+	f.SensorsMap.Add(ent, &sensors)
 	f.ThreatMap.Add(ent, &components.Threat{})
 	f.DangerBufMap.Add(ent, &components.DangerBuffer{})
 	f.MicroPathMap.Add(ent, &components.MicroPath{})

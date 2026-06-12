@@ -43,6 +43,10 @@ type MapRenderCtx struct {
 	SmoothedSquadPos map[ecs.Entity]components.WorldPos
 	MapPingFilter    *ecs.Filter2[components.WorldPos, components.MapPing]
 	Clock            float32
+	// Contacts — Phase 18.5 FoW. Nil filter → contact rendering skipped.
+	ContactFilter      *ecs.Filter1[components.Contact]
+	ContactMap         *ecs.Map[components.Contact]
+	ContactOverrideMap *ecs.Map[components.ContactSymbolOverride]
 }
 
 var (
@@ -71,6 +75,7 @@ func DrawMap(panel Panel, ctx MapRenderCtx) {
 	drawOrderMarkers(content, ctx)
 	drawMapPings(content, ctx)
 	drawSquadMarkers(content, ctx)
+	drawMapContacts(content, ctx)
 	drawAnchorMarker(content, ctx)
 }
 

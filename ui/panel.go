@@ -32,6 +32,7 @@ const (
 	PanelTopBar    PanelID = "topbar"
 	PanelTimeline  PanelID = "timeline"
 	PanelFormation PanelID = "formation"
+	PanelSymbology PanelID = "symbology"
 	PanelDebug     PanelID = "debug"
 	PanelNone      PanelID = ""
 )
