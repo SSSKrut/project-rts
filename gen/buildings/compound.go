@@ -78,32 +78,35 @@ func GenerateCompoundPlus(seed uint64, centre components.WorldPos) []*components
 		DoorSides: []uint8{0, 1, 2, 3}, // all sides connect to wings
 	}, mainPos, components.BuildingHouse)
 
+	// Every main-volume door opens into a wing, so each wing must carry an
+	// exterior door of its own — without one the compound has zero
+	// surface↔level transitions and units cannot enter it at all.
 	east := GenerateHouse(seed^0xE0, HouseParams{
 		Stories:   1,
 		SizeX:     wingSize,
 		SizeZ:     wingSize,
-		DoorSides: []uint8{3}, // west — shared with main
+		DoorSides: []uint8{3, 1}, // west — shared with main; east — exterior
 	}, eastPos, components.BuildingHouse)
 
 	west := GenerateHouse(seed^0xB0, HouseParams{
 		Stories:   1,
 		SizeX:     wingSize,
 		SizeZ:     wingSize,
-		DoorSides: []uint8{1}, // east — shared with main
+		DoorSides: []uint8{1, 3}, // east — shared with main; west — exterior
 	}, westPos, components.BuildingHouse)
 
 	north := GenerateHouse(seed^0xA0, HouseParams{
 		Stories:   1,
 		SizeX:     wingSize,
 		SizeZ:     wingSize,
-		DoorSides: []uint8{0}, // south — shared with main
+		DoorSides: []uint8{0, 2}, // south — shared with main; north — exterior
 	}, northPos, components.BuildingHouse)
 
 	south := GenerateHouse(seed^0xC0, HouseParams{
 		Stories:   1,
 		SizeX:     wingSize,
 		SizeZ:     wingSize,
-		DoorSides: []uint8{2}, // north — shared with main
+		DoorSides: []uint8{2, 0}, // north — shared with main; south — exterior
 	}, southPos, components.BuildingHouse)
 
 	return []*components.BuildingPlan{main, east, west, north, south}

@@ -32,6 +32,11 @@ const perUnitSpeedSpread float32 = 0.05
 // cell-centre dance to avoid jittering at the goal.
 const arrivalRadius float32 = 0.6
 
+// Max |Y delta| to the MoveTo target for XZ arrival to count while the
+// micro path still has waypoints — half a storey (3.0) with margin, so a
+// stair climber under its slot doesn't pop the action a floor early.
+const arrivalYBand float32 = 1.6
+
 // How long ActionStop holds the unit in place before it pops.
 const stopDuration float32 = 0.1
 

@@ -39,8 +39,10 @@ type FormationSystem struct {
 	// when the player wants the squad INSIDE (Garrison / OccupyBuilding /
 	// ClearBuilding); otherwise the clamp pushes inside slots back outside
 	// and units pile up against the wall instead of entering through the door.
-	orderQueueMap *ecs.Map[components.OrderQueueHead]
-	orderKindMap  *ecs.Map[components.OrderKind]
+	orderQueueMap  *ecs.Map[components.OrderQueueHead]
+	orderKindMap   *ecs.Map[components.OrderKind]
+	orderTargetMap *ecs.Map[components.OrderTarget]
+	levelMap       *ecs.Map[components.Level]
 
 	// Members carrying a TacticalOverride are AI-driven (e.g. SurvivalInstinct
 	// moving them to cover). FormationSystem reads but does not write their
@@ -95,6 +97,8 @@ func (sys *FormationSystem) InitUI(w *ecs.World) {
 	sys.blackboardMap = ecs.NewMap[components.LocalBlackboard](w)
 	sys.orderQueueMap = ecs.NewMap[components.OrderQueueHead](w)
 	sys.orderKindMap = ecs.NewMap[components.OrderKind](w)
+	sys.orderTargetMap = ecs.NewMap[components.OrderTarget](w)
+	sys.levelMap = ecs.NewMap[components.Level](w)
 }
 
 func (FormationSystem) Name() string { return "formation" }
@@ -241,6 +245,16 @@ func (sys *FormationSystem) processSquad(world *ecs.World, w formationWork, leav
 				components.OrderKindOccupyBuilding,
 				components.OrderKindClearBuilding:
 				interiorIntent = true
+			case components.OrderKindMoveTo:
+				// "Occupy L<n>" from the building popup is a MoveTo whose
+				// OrderTarget.Entity is a Level. Interior volumes are narrower
+				// than line/wedge spreads — without the compact spread the
+				// edge slots land beyond the walls and drag members out
+				// through doors into neighbouring wings.
+				if tgt := sys.orderTargetMap.Get(head.First); tgt != nil &&
+					tgt.Entity != (ecs.Entity{}) && sys.levelMap.Has(tgt.Entity) {
+					interiorIntent = true
+				}
 			}
 		}
 	}

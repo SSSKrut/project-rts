@@ -40,6 +40,13 @@ func makeStartingBuildings() []components.BuildingPlan {
 	if isAIScene() {
 		return aiSceneBuildings()
 	}
+	return mainWorldBuildings()
+}
+
+// mainWorldBuildings is the real main-map building set. The ai_main_* test
+// scenes reuse it verbatim so pathing regressions on the actual map are
+// caught by the headless suite.
+func mainWorldBuildings() []components.BuildingPlan {
 	wp := func(wx, wz float32) components.WorldPos {
 		return components.WorldPos{}.Add(rl.Vector3{X: wx, Y: 0, Z: wz})
 	}

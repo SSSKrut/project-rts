@@ -52,6 +52,9 @@ type OrderResolverSystem struct {
 	buildingMap    *ecs.Map[components.Building]
 	trenchRootMap  *ecs.Map[components.TrenchRoot]
 	trenchResource ecs.Resource[components.TrenchNetwork]
+	// MoveTo onto a Level entity ("Occupy L<n>") gates arrival on Y too —
+	// XZ-only arrival fires while the squad is still on the storey below.
+	levelMap *ecs.Map[components.Level]
 
 	// Garrison CompletionEveryMemberOnFloor reads Floor plates to confirm
 	// each roster member sits on a floor cell (not just inside the AABB).
@@ -108,6 +111,7 @@ func (sys *OrderResolverSystem) InitUI(w *ecs.World) {
 
 	sys.buildingMap = ecs.NewMap[components.Building](w)
 	sys.trenchRootMap = ecs.NewMap[components.TrenchRoot](w)
+	sys.levelMap = ecs.NewMap[components.Level](w)
 	sys.trenchResource = ecs.NewResource[components.TrenchNetwork](w)
 	sys.floorFilter = ecs.NewFilter2[components.WorldPos, components.Floor](w)
 	sys.buildingChildIndex = ecs.NewResource[BuildingChildIndex](w)

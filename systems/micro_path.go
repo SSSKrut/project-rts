@@ -1,6 +1,7 @@
 package systems
 
 import (
+	"math"
 	"time"
 
 	"github.com/mlange-42/ark/ecs"
@@ -17,9 +18,10 @@ const (
 	microPathGoalShift float32 = 2.0
 	// Max replans per tick across all units (caps NavService.FindPath load).
 	microPathReplanBudget int = 16
-	// Unit hasn't covered stuckDist in stuckTime → force replan.
-	microPathStuckDist float32 = 0.2
-	microPathStuckTime float32 = 1.0
+	// Unit hasn't closed distance to its waypoint by ProgressFrac within
+	// stuckTime → force replan.
+	microPathProgressFrac float32 = 0.9
+	microPathStuckTime    float32 = 1.0
 	// Per-unit minimum gap between replans.
 	microPathReplanCooldown float32 = 0.5
 )
@@ -73,12 +75,34 @@ func (sys *MicroPathSystem) Update(ctx core.UpdateContext) {
 // table-tests can exercise it without spinning a worker pool.
 func (sys *MicroPathSystem) tickUnit(pos *components.WorldPos, mp *components.MicroPath, aq *components.ActionQueue, now float32, budget *int) {
 	for mp.Head < mp.Count {
-		d := mp.Waypoints[mp.Head].Sub(*pos)
-		if d.X*d.X+d.Z*d.Z < microPathArrivalRadius*microPathArrivalRadius {
-			mp.Head++
-			continue
+		wp := mp.Waypoints[mp.Head]
+		d := wp.Sub(*pos)
+		distSq := d.X*d.X + d.Z*d.Z
+		if distSq >= microPathArrivalRadius*microPathArrivalRadius {
+			break
 		}
-		break
+		// Y-band: stacked storeys overlap in XZ (a cascade's upper flight
+		// returns above the lower one), so XZ proximity alone pops upper-
+		// floor waypoints from underneath and strands the climber.
+		if d.Y > arrivalYBand || d.Y < -arrivalYBand {
+			break
+		}
+		if mp.GateMask&(1<<mp.Head) != 0 && mp.Head > 0 {
+			// Far endpoint of a transition (door / stairs / junction):
+			// radius alone reaches across the wall from the wrong side and
+			// strands the walker steering at the next interior waypoint
+			// through solid wall beside the opening. Require crossing the
+			// opening plane: projection onto prev→gate beyond the midpoint.
+			prev := mp.Waypoints[mp.Head-1]
+			u := pos.Sub(prev)
+			v := wp.Sub(prev)
+			vlen2 := v.X*v.X + v.Z*v.Z
+			if u.X*v.X+u.Z*v.Z <= 0.5*vlen2 && vlen2 >= 1e-6 {
+				break
+			}
+		}
+		mp.Head++
+		mp.BestDistSq = float32(math.MaxFloat32)
 	}
 
 	if aq.Count == 0 {
@@ -99,19 +123,23 @@ func (sys *MicroPathSystem) tickUnit(pos *components.WorldPos, mp *components.Mi
 		}
 	}
 
-	// Stuck detection — only while we have waypoints to walk.
+	// Stuck detection — only while we have waypoints to walk. Progress =
+	// closing distance to the CURRENT waypoint; raw displacement lets a
+	// wall-pinned walker oscillate (±0.3 m of wall slide) hard enough to
+	// keep resetting the timer forever.
 	if mp.Count > 0 && mp.Head < mp.Count {
-		dx := pos.Local.X - mp.LastPos.X
-		dz := pos.Local.Z - mp.LastPos.Z
-		if dx*dx+dz*dz > microPathStuckDist*microPathStuckDist {
-			mp.LastPos = pos.Local
+		d := mp.Waypoints[mp.Head].Sub(*pos)
+		cur := d.X*d.X + d.Z*d.Z
+		if cur < mp.BestDistSq*microPathProgressFrac {
+			mp.BestDistSq = cur
 			mp.LastProgressAt = now
 		} else if now-mp.LastProgressAt > microPathStuckTime {
 			mp.Dirty = true
 			mp.LastProgressAt = now
+			mp.BestDistSq = float32(math.MaxFloat32)
 		}
 	} else {
-		mp.LastPos = pos.Local
+		mp.BestDistSq = float32(math.MaxFloat32)
 		mp.LastProgressAt = now
 	}
 
@@ -130,21 +158,25 @@ func (sys *MicroPathSystem) tickUnit(pos *components.WorldPos, mp *components.Mi
 	if !mp.Dirty || now < mp.ReplanAt || *budget <= 0 {
 		return
 	}
-	waypoints := sys.nav.FindPath(*pos, goal, NavOpts{})
+	waypoints, gates := sys.nav.FindPathGates(*pos, goal, NavOpts{})
 	mp.Head = 0
 	mp.Count = 0
+	mp.GateMask = 0
 	for i, wp := range waypoints {
 		if i >= components.MicroPathSize {
 			break
 		}
 		mp.Waypoints[i] = wp
+		if i < len(gates) && gates[i] {
+			mp.GateMask |= 1 << i
+		}
 		mp.Count++
 	}
 	mp.GoalSnap = goal
 	mp.Dirty = false
 	mp.ReplanAt = now + microPathReplanCooldown
 	mp.LastProgressAt = now
-	mp.LastPos = pos.Local
+	mp.BestDistSq = float32(math.MaxFloat32)
 	*budget--
 }
 
@@ -152,5 +184,6 @@ func clearMicroPath(mp *components.MicroPath) {
 	mp.Head = 0
 	mp.Count = 0
 	mp.Dirty = false
+	mp.GateMask = 0
 	mp.GoalSnap = components.WorldPos{}
 }

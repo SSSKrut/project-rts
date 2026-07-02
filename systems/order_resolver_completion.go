@@ -162,6 +162,15 @@ func (sys *OrderResolverSystem) evaluateCompletion(
 			r = 2.5
 		}
 		if centerXZDistSq(center, target.Pos) < r*r {
+			// Storey-target MoveTo ("Occupy L<n>"): the squad centre passes
+			// the goal XZ on the way to the stairs while still a floor below
+			// — require the centre's Y to match the target storey as well.
+			if target.Entity != (ecs.Entity{}) && sys.levelMap.Has(target.Entity) {
+				dy := center.Local.Y - target.Pos.Local.Y
+				if dy < -1.5 || dy > 1.5 {
+					return completionPending
+				}
+			}
 			return completionDone
 		}
 		return completionPending

@@ -1,6 +1,8 @@
 package systems
 
 import (
+	"math"
+
 	"github.com/mlange-42/ark/ecs"
 
 	"rts-go/components"
@@ -14,18 +16,29 @@ const AnchorEyeHeight float32 = 1.5
 // GroundStickSystem clamps anchor + every unit Y to the terrain surface
 // using GroundHeight(). Anchor uses eye-height offset; units have foot at
 // surface (the unit cube draws upward from WorldPos). A unit whose WorldPos
-// lies on a building Floor uses the floor Y instead.
+// lies on a building Floor uses the floor Y instead; inside a Stairs
+// footprint the ramp Y (bottom→top along the stair axis) joins the
+// closest-Y pool — that's what physically carries a walker between
+// storeys. Floor plates alone can't: the storey midpoint is ~1.5 m away
+// and per-tick Y-lerp gains are an order of magnitude smaller, so without
+// the ramp every climb snaps back to the lower plate.
 type GroundStickSystem struct {
 	anchorFilter *ecs.Filter2[components.LODAnchor, components.WorldPos]
 	unitFilter   *ecs.Filter2[components.Unit, components.WorldPos]
 	floorFilter  *ecs.Filter2[components.WorldPos, components.Floor]
+	stairsFilter *ecs.Filter2[components.WorldPos, components.Stairs]
 }
 
 func (sys *GroundStickSystem) InitUI(w *ecs.World) {
 	sys.anchorFilter = ecs.NewFilter2[components.LODAnchor, components.WorldPos](w)
 	sys.unitFilter = ecs.NewFilter2[components.Unit, components.WorldPos](w)
 	sys.floorFilter = ecs.NewFilter2[components.WorldPos, components.Floor](w)
+	sys.stairsFilter = ecs.NewFilter2[components.WorldPos, components.Stairs](w)
 }
+
+// stairEdgePad widens the ramp footprint so a unit hugging the stair edge
+// (collider radius ~0.3) is still carried.
+const stairEdgePad float32 = 0.4
 
 func (GroundStickSystem) Name() string { return "ground_stick" }
 
@@ -60,6 +73,57 @@ func (sys GroundStickSystem) Update(ctx core.UpdateContext) {
 		})
 	}
 
+	type stairRec struct {
+		bx, bz   float32 // bottom-anchor world XZ
+		sa, ca   float32 // stair axis (sin/cos yaw)
+		length   float32
+		halfW    float32
+		y0, rise float32
+	}
+	var stairs []stairRec
+	qs := sys.stairsFilter.Query()
+	for qs.Next() {
+		pos, s := qs.Get()
+		if s.Length <= 0 {
+			continue
+		}
+		stairs = append(stairs, stairRec{
+			bx:     float32(pos.Chunk.X)*components.ChunkSize + pos.Local.X,
+			bz:     float32(pos.Chunk.Z)*components.ChunkSize + pos.Local.Z,
+			sa:     float32(math.Sin(float64(s.Yaw))),
+			ca:     float32(math.Cos(float64(s.Yaw))),
+			length: s.Length,
+			halfW:  s.Width*0.5 + stairEdgePad,
+			y0:     pos.Local.Y,
+			rise:   s.Rise,
+		})
+	}
+	// stairRampY returns the ramp height under (wx, wz), ok=false outside
+	// every stair footprint.
+	stairRampY := func(wx, wz float32) (float32, bool) {
+		for i := range stairs {
+			sr := &stairs[i]
+			dx := wx - sr.bx
+			dz := wz - sr.bz
+			t := dx*sr.sa + dz*sr.ca
+			if t < -stairEdgePad || t > sr.length+stairEdgePad {
+				continue
+			}
+			n := dx*sr.ca - dz*sr.sa
+			if n < -sr.halfW || n > sr.halfW {
+				continue
+			}
+			tc := t
+			if tc < 0 {
+				tc = 0
+			} else if tc > sr.length {
+				tc = sr.length
+			}
+			return sr.y0 + sr.rise*tc/sr.length, true
+		}
+		return 0, false
+	}
+
 	// Closest-Y rule lets a path walker drive Y up stairs and have GS keep
 	// the anchor on the new floor next tick.
 	qa := sys.anchorFilter.Query()
@@ -77,6 +141,13 @@ func (sys GroundStickSystem) Update(ctx core.UpdateContext) {
 			candidateY := fr.y + AnchorEyeHeight
 			d := absDelta(pos.Local.Y, candidateY)
 			if d < bestD {
+				bestD = d
+				bestY = candidateY
+			}
+		}
+		if rampY, ok := stairRampY(wx, wz); ok {
+			candidateY := rampY + AnchorEyeHeight
+			if d := absDelta(pos.Local.Y, candidateY); d < bestD {
 				bestD = d
 				bestY = candidateY
 			}
@@ -100,6 +171,12 @@ func (sys GroundStickSystem) Update(ctx core.UpdateContext) {
 			if d < bestD {
 				bestD = d
 				bestY = fr.y
+			}
+		}
+		if rampY, ok := stairRampY(wx, wz); ok {
+			if d := absDelta(pos.Local.Y, rampY); d < bestD {
+				bestD = d
+				bestY = rampY
 			}
 		}
 		pos.Local.Y = bestY

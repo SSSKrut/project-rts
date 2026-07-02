@@ -33,7 +33,37 @@ const (
 	aiSceneCompoundPlusWest  = "ai_compound_plus_west"
 	aiSceneOfficeFront   = "ai_office_front"
 	aiSceneFarBuilding   = "ai_far_building"
+
+	// ai_main_* run on the REAL main-map world data (mainWorldBuildings +
+	// roads + trenches) and send the squad into one specific section / storey
+	// of the multi-wing compound at (-60, 10) — the building with the worst
+	// pathing history.
+	aiSceneMainM0 = "ai_main_m0" // main wing, ground floor
+	aiSceneMainM1 = "ai_main_m1" // main wing, second storey (via stairs)
+	aiSceneMainE  = "ai_main_e"  // east wing
+	aiSceneMainN  = "ai_main_n"  // north wing
 )
+
+// aiMainSpec selects the target wing (by expected footprint centre) and the
+// storey index for one ai_main_* scene.
+type aiMainSpec struct {
+	wingX, wingZ float32
+	levelIdx     int
+}
+
+func aiMainSpecFor(id string) (aiMainSpec, bool) {
+	switch id {
+	case aiSceneMainM0:
+		return aiMainSpec{wingX: -60, wingZ: 10, levelIdx: 0}, true
+	case aiSceneMainM1:
+		return aiMainSpec{wingX: -60, wingZ: 10, levelIdx: 1}, true
+	case aiSceneMainE:
+		return aiMainSpec{wingX: -50, wingZ: 10, levelIdx: 0}, true
+	case aiSceneMainN:
+		return aiMainSpec{wingX: -60, wingZ: 20, levelIdx: 0}, true
+	}
+	return aiMainSpec{}, false
+}
 
 const (
 	aiOrderAt     float32 = 2.0
@@ -71,11 +101,16 @@ func aiSceneAnchorPos() components.WorldPos {
 		return components.WorldPos{}.Add(rl.Vector3{X: 32, Z: 22})
 	case aiSceneFarBuilding:
 		return components.WorldPos{}.Add(rl.Vector3{X: 0, Z: 0})
+	case aiSceneMainM0, aiSceneMainM1, aiSceneMainE, aiSceneMainN:
+		return components.WorldPos{}.Add(rl.Vector3{X: -40, Z: 10})
 	}
 	return components.WorldPos{}
 }
 
 func aiSceneBuildings() []components.BuildingPlan {
+	if _, ok := aiMainSpecFor(aiSceneID()); ok {
+		return mainWorldBuildings()
+	}
 	switch aiSceneID() {
 	case aiSceneDoorSouth:
 		return aiBuildingsSingleHouse(0)
@@ -204,6 +239,8 @@ func aiSpawnPos() components.WorldPos {
 		return components.WorldPos{}.Add(rl.Vector3{X: 32, Z: 18})
 	case aiSceneFarBuilding:
 		return components.WorldPos{}.Add(rl.Vector3{X: 0, Z: 0})
+	case aiSceneMainM0, aiSceneMainM1, aiSceneMainE, aiSceneMainN:
+		return components.WorldPos{}.Add(rl.Vector3{X: -44, Z: -4})
 	}
 	return components.WorldPos{}
 }
@@ -233,8 +270,10 @@ func aiSceneSpawn(
 	}
 
 	// For compound scenes, target the closest wing to the spawn position so
-	// we can exercise multi-section interior pathing. Non-compound scenes
-	// keep the largest-footprint pick.
+	// we can exercise multi-section interior pathing. ai_main_* scenes pick
+	// an explicit wing by footprint centre. Non-compound scenes keep the
+	// largest-footprint pick.
+	mainSpec, isMainScene := aiMainSpecFor(aiSceneID())
 	preferNearest := false
 	switch aiSceneID() {
 	case aiSceneCompoundSouth, aiSceneCompoundEast, aiSceneCompoundNorth, aiSceneCompoundWest,
@@ -252,9 +291,18 @@ func aiSceneSpawn(
 	q := bf.Query()
 	for q.Next() {
 		b := q.Get()
+		cx := b.Footprint.CenterX()
+		cz := b.Footprint.CenterZ()
+		if isMainScene {
+			dx := cx - mainSpec.wingX
+			dz := cz - mainSpec.wingZ
+			if dx*dx+dz*dz < 2.25 {
+				target = q.Entity()
+				targetFP = b.Footprint
+			}
+			continue
+		}
 		if preferNearest {
-			cx := b.Footprint.CenterX()
-			cz := b.Footprint.CenterZ()
 			dx := cx - spawnX
 			dz := cz - spawnZ
 			dist := dx*dx + dz*dz
@@ -278,7 +326,7 @@ func aiSceneSpawn(
 		return nil
 	}
 
-	return &aiTestState{
+	st := &aiTestState{
 		sceneID:         aiSceneID(),
 		squad:           squad,
 		targetBuilding:  target,
@@ -295,6 +343,35 @@ func aiSceneSpawn(
 		verdictAt:       aiVerdictAt,
 		nextSampleAt:    aiOrderAt + 1,
 	}
+
+	// ai_main_* scenes target one storey: resolve the Level entity via
+	// BuildingPlanIndex (same path the in-game "Occupy L<n>" popup takes).
+	if isMainScene {
+		planIdxRes := ecs.NewResource[systems.BuildingPlanIndex](world)
+		planIdx := planIdxRes.Get()
+		levelMap := ecs.NewMap[components.Level](world)
+		if planIdx == nil {
+			fmt.Printf("[ai-test %s] NO BuildingPlanIndex — aborting\n", aiSceneID())
+			return nil
+		}
+		levels := planIdx.Levels[target]
+		if mainSpec.levelIdx >= len(levels) {
+			fmt.Printf("[ai-test %s] wing has %d levels, need idx %d — aborting\n",
+				aiSceneID(), len(levels), mainSpec.levelIdx)
+			return nil
+		}
+		levelEnt := levels[mainSpec.levelIdx]
+		lvl := levelMap.Get(levelEnt)
+		if lvl == nil {
+			fmt.Printf("[ai-test %s] level entity %v has no Level component — aborting\n",
+				aiSceneID(), levelEnt)
+			return nil
+		}
+		st.targetLevel = levelEnt
+		st.targetLevelMinY = lvl.AABB.MinY
+		st.targetLevelAABB = lvl.AABB
+	}
+	return st
 }
 
 type aiTestState struct {
@@ -302,6 +379,13 @@ type aiTestState struct {
 	squad           ecs.Entity
 	targetBuilding  ecs.Entity
 	targetFootprint components.AABB2D
+
+	// Set for ai_main_* scenes: the goal is one specific storey, the order
+	// is MoveTo on the Level entity, and the verdict additionally checks
+	// each member's Y against the level band.
+	targetLevel     ecs.Entity
+	targetLevelMinY float32
+	targetLevelAABB components.AABB3D
 
 	elapsed      float32
 	orderAt      float32
@@ -341,6 +425,10 @@ func (s *aiTestState) EnsureInit() {
 		s.squad, memN, s.targetBuilding)
 	fmt.Printf("== footprint X[%.1f..%.1f] Z[%.1f..%.1f]\n",
 		fp.MinX, fp.MaxX, fp.MinZ, fp.MaxZ)
+	if s.targetLevel != (ecs.Entity{}) {
+		fmt.Printf("== storey goal: level=%v floorY=%.2f\n",
+			s.targetLevel, s.targetLevelMinY)
+	}
 	fmt.Printf("== order at t=%.1fs, verdict at t=%.1fs\n",
 		s.orderAt, s.verdictAt)
 	fmt.Println("============================================================")
@@ -361,6 +449,23 @@ func (s *aiTestState) Update(elapsed float32) {
 			s.verdictDone = true
 			return
 		}
+		if s.targetLevel != (ecs.Entity{}) {
+			// Storey goal: MoveTo on the Level entity, target at the level
+			// AABB centre — the exact order the building-popup "Occupy L<n>"
+			// emits, so the test exercises the real player mechanic.
+			targetPos := components.WorldPos{}.Add(rl.Vector3{
+				X: s.targetLevelAABB.CenterX(),
+				Z: s.targetLevelAABB.CenterZ(),
+			})
+			targetPos.Local.Y = s.targetLevelMinY
+			s.SquadService.IssueOrder(s.squad,
+				components.OrderKindMoveTo, targetPos, s.targetLevel,
+				false, systems.OrderParams{})
+			s.orderFired = true
+			fmt.Printf("[ai-test %s] t=%.1fs ORDER ISSUED MoveTo level=%v Y=%.1f\n",
+				s.sceneID, elapsed, s.targetLevel, s.targetLevelMinY)
+			return
+		}
 		targetPos := components.WorldPos{}.Add(rl.Vector3{
 			X: bld.Footprint.CenterX(),
 			Z: bld.Footprint.CenterZ(),
@@ -378,12 +483,38 @@ func (s *aiTestState) Update(elapsed float32) {
 		roster := s.RosterMap.Get(s.squad)
 		var diag string
 		if roster != nil && roster.Count > 0 {
-			m0 := roster.Members[0]
-			if m0 != (ecs.Entity{}) && s.World.Alive(m0) {
-				pos := s.PosMap.Get(m0)
-				mot := s.MotionMap.Get(m0)
-				bb := s.BlackboardMap.Get(m0)
-				mp := s.MicroPathMap.Get(m0)
+			// Track the first member still outside the goal (the straggler
+			// is who needs diagnosing); fall back to the leader.
+			watch := roster.Members[0]
+			watchIdx := uint8(0)
+			fp := s.targetFootprint
+			for i := uint8(0); i < roster.Count; i++ {
+				mem := roster.Members[i]
+				if mem == (ecs.Entity{}) || !s.World.Alive(mem) {
+					continue
+				}
+				pos := s.PosMap.Get(mem)
+				if pos == nil {
+					continue
+				}
+				mx := float32(pos.Chunk.X)*components.ChunkSize + pos.Local.X
+				mz := float32(pos.Chunk.Z)*components.ChunkSize + pos.Local.Z
+				bad := !fp.Contains(mx, mz)
+				if !bad && s.targetLevel != (ecs.Entity{}) {
+					dy := pos.Local.Y - s.targetLevelMinY
+					bad = dy < -0.8 || dy > 0.8
+				}
+				if bad {
+					watch = mem
+					watchIdx = i
+					break
+				}
+			}
+			if watch != (ecs.Entity{}) && s.World.Alive(watch) {
+				pos := s.PosMap.Get(watch)
+				mot := s.MotionMap.Get(watch)
+				bb := s.BlackboardMap.Get(watch)
+				mp := s.MicroPathMap.Get(watch)
 				if pos != nil && mot != nil {
 					mx := float32(pos.Chunk.X)*components.ChunkSize + pos.Local.X
 					mz := float32(pos.Chunk.Z)*components.ChunkSize + pos.Local.Z
@@ -393,12 +524,20 @@ func (s *aiTestState) Update(elapsed float32) {
 					}
 					mpLen := uint8(0)
 					mpHead := uint8(0)
+					wps := ""
 					if mp != nil {
 						mpLen = mp.Count
 						mpHead = mp.Head
+						for k := mp.Head; k < mp.Count && k < mp.Head+3; k++ {
+							wp := mp.Waypoints[k]
+							wps += fmt.Sprintf(" wp%d=(%.1f,%.1f,Y%.1f)", k,
+								float32(wp.Chunk.X)*components.ChunkSize+wp.Local.X,
+								float32(wp.Chunk.Z)*components.ChunkSize+wp.Local.Z,
+								wp.Local.Y)
+						}
 					}
-					diag = fmt.Sprintf(" m0=(%.1f,%.1f) speed=%.2f mode=%s path=%d/%d",
-						mx, mz, mot.Speed, mode, mpHead, mpLen)
+					diag = fmt.Sprintf(" m%d=(%.1f,%.1f) speed=%.2f mode=%s path=%d/%d%s",
+						watchIdx, mx, mz, mot.Speed, mode, mpHead, mpLen, wps)
 				}
 			}
 		}
@@ -422,7 +561,8 @@ func (s *aiTestState) Update(elapsed float32) {
 	}
 }
 
-// countInside tallies live roster members inside the target Footprint.
+// countInside tallies live roster members inside the target Footprint (and,
+// for storey-goal scenes, standing on the target level: |Y - MinY| <= 0.8).
 func (s *aiTestState) countInside() (inside, alive uint8) {
 	roster := s.RosterMap.Get(s.squad)
 	if roster == nil {
@@ -441,9 +581,16 @@ func (s *aiTestState) countInside() (inside, alive uint8) {
 		}
 		mx := float32(pos.Chunk.X)*components.ChunkSize + pos.Local.X
 		mz := float32(pos.Chunk.Z)*components.ChunkSize + pos.Local.Z
-		if fp.Contains(mx, mz) {
-			inside++
+		if !fp.Contains(mx, mz) {
+			continue
 		}
+		if s.targetLevel != (ecs.Entity{}) {
+			dy := pos.Local.Y - s.targetLevelMinY
+			if dy < -0.8 || dy > 0.8 {
+				continue
+			}
+		}
+		inside++
 	}
 	return inside, alive
 }

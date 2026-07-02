@@ -112,17 +112,21 @@ func (sys *BuildingSystem) Update(ctx core.UpdateContext) {
 	planIdx := sys.planIdxRes.Get()
 
 	// Bucket each Building by EVERY chunk its footprint overlaps (not just the
-	// root chunk) so cross-boundary buildings get per-chunk passes.
+	// root chunk) so cross-boundary buildings get per-chunk passes. Inflate by
+	// the leveling skirt so a chunk that hosts only the cosine falloff (no
+	// footprint area) still gets its LevelTo / RectCut call — otherwise the
+	// blend stops dead at the chunk border and leaves a step.
+	skirt := maxF(components.BuildingLevelingSkirtWidth, components.BunkerFalloffWidth)
 	byChunk := make(map[components.ChunkCoord][]buildingRec)
 	qb := sys.buildingFilter.Query()
 	for qb.Next() {
 		b, pos := qb.Get()
 		root := qb.Entity()
 		fp := b.Footprint
-		minCX := int32(math.Floor(float64(fp.MinX) / float64(components.ChunkSize)))
-		maxCX := int32(math.Floor(float64(fp.MaxX) / float64(components.ChunkSize)))
-		minCZ := int32(math.Floor(float64(fp.MinZ) / float64(components.ChunkSize)))
-		maxCZ := int32(math.Floor(float64(fp.MaxZ) / float64(components.ChunkSize)))
+		minCX := int32(math.Floor(float64(fp.MinX-skirt) / float64(components.ChunkSize)))
+		maxCX := int32(math.Floor(float64(fp.MaxX+skirt) / float64(components.ChunkSize)))
+		minCZ := int32(math.Floor(float64(fp.MinZ-skirt) / float64(components.ChunkSize)))
+		maxCZ := int32(math.Floor(float64(fp.MaxZ+skirt) / float64(components.ChunkSize)))
 		for cx := minCX; cx <= maxCX; cx++ {
 			for cz := minCZ; cz <= maxCZ; cz++ {
 				cc := components.ChunkCoord{X: cx, Z: cz}

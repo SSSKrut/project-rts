@@ -166,6 +166,34 @@ func reflectAgainstWalls(curX, curZ, curY, velX, velZ, dt float32,
 						if wallT >= w.openStart && wallT <= w.openEnd {
 							continue
 						}
+						// Door funnel: the walker wants through THIS wall
+						// and an open door exists — head for the opening
+						// at full speed instead of sliding. The plain
+						// slide's tangential remainder is a few percent of
+						// speed when the goal sits nearly perpendicular
+						// behind the wall; a misaligned unit then takes
+						// tens of seconds to creep to the doorway.
+						openT := (w.openStart + w.openEnd) * 0.5
+						ox := w.fromX + w.sa*openT
+						oz := w.fromZ + w.ca*openT
+						nx, nz := w.ca, -w.sa
+						if (curX-ox)*nx+(curZ-oz)*nz < 0 {
+							nx, nz = -nx, -nz
+						}
+						// Aim slightly before the opening on the unit's
+						// side so the approach stays wall-parallel.
+						tx := ox + nx*0.45
+						tz := oz + nz*0.45
+						fdx := tx - curX
+						fdz := tz - curZ
+						fd := float32(math.Sqrt(float64(fdx*fdx + fdz*fdz)))
+						if fd > 1e-4 {
+							spd := float32(math.Sqrt(float64(rvx*rvx + rvz*rvz)))
+							rvx = fdx / fd * spd
+							rvz = fdz / fd * spd
+						}
+						hit = true
+						break
 					}
 					// Wall direction (sa, ca); normal (ca, -sa) flipped to
 					// point toward the moving unit.

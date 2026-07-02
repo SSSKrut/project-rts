@@ -3,6 +3,7 @@ package systems
 import (
 	"fmt"
 	"math"
+	"os"
 
 	rl "github.com/gen2brain/raylib-go/raylib"
 	"github.com/mlange-42/ark/ecs"
@@ -27,6 +28,7 @@ type NavService struct {
 	floorNavMap   *ecs.Map[components.LevelNavGrid]
 	levelMap      *ecs.Map[components.Level]
 	posMap        *ecs.Map[components.WorldPos]
+	heightmapMap  *ecs.Map[components.Heightmap]
 	levelFilter   *ecs.Filter2[components.Level, components.WorldPos]
 }
 
@@ -39,6 +41,7 @@ func NewNavService(w *ecs.World) *NavService {
 		floorNavMap:   ecs.NewMap[components.LevelNavGrid](w),
 		levelMap:      ecs.NewMap[components.Level](w),
 		posMap:        ecs.NewMap[components.WorldPos](w),
+		heightmapMap:  ecs.NewMap[components.Heightmap](w),
 		levelFilter:   ecs.NewFilter2[components.Level, components.WorldPos](w),
 	}
 }
@@ -59,35 +62,38 @@ const navArrivalRadius float32 = 0.5
 // FindPath returns waypoints (cell centres) along a least-cost path. Empty
 // result = no path; nil = both endpoints in the same cell.
 func (s *NavService) FindPath(from, to components.WorldPos, opts NavOpts) []components.WorldPos {
+	wps, _ := s.findPath(from, to, opts, true)
+	return wps
+}
+
+// FindPathGates additionally reports which waypoints are transition
+// endpoints (door / stairs / wing-junction edge ends): gates[i] pairs with
+// waypoints[i]. Walkers must reach gate waypoints tightly before advancing
+// — they thread wall openings.
+func (s *NavService) FindPathGates(from, to components.WorldPos, opts NavOpts) ([]components.WorldPos, []bool) {
 	return s.findPath(from, to, opts, true)
 }
 
-func (s *NavService) findPath(from, to components.WorldPos, opts NavOpts, allowFallback bool) []components.WorldPos {
+func (s *NavService) findPath(from, to components.WorldPos, opts NavOpts, allowFallback bool) ([]components.WorldPos, []bool) {
 	idx := s.indexRes.Get()
 	if idx == nil {
-		return []components.WorldPos{}
+		return []components.WorldPos{}, nil
 	}
 	registry := s.transitionRes.Get()
 
 	floors := s.snapshotLevels()
-	// Diagnostic: spot-check the door surface cell of House #0 (43, 24) in
-	// chunk(-1,-1).
+	// Diagnostic: RTS_NAV_PROBE="wx,wz" dumps a one-shot 13×13 surface-cell
+	// window (cost / flags) around a world point on the first FindPath call.
 	if !navSnapshotReported {
-		doorSurf := components.NavNode{Kind: components.NodeSurface,
-			Chunk: components.ChunkCoord{X: -1, Z: -1}, I: 43, J: 24}
-		doorCell, doorOK := s.cellAt(doorSurf, idx, floors)
-		fmt.Printf("[nav] doorSurfCell(43,24): ok=%v cost=%d flags=%d\n", doorOK, doorCell.Cost, doorCell.Flags)
-		for j := int16(19); j <= 25; j++ {
-			n := components.NavNode{Kind: components.NodeSurface,
-				Chunk: components.ChunkCoord{X: -1, Z: -1}, I: 43, J: j}
-			c, ok := s.cellAt(n, idx, floors)
-			fmt.Printf("[nav] cell I=43 J=%d ok=%v cost=%d flags=%d\n", j, ok, c.Cost, c.Flags)
-		}
-	}
-	if !navSnapshotReported {
-		for i, lr := range floors {
-			fmt.Printf("[nav] snapshot[%d] ent=%v chunk=%v origin=(%.1f,%.1f) size=%dx%d aabbY=[%.1f..%.1f]\n",
-				i, lr.ent, lr.chunk, lr.originX, lr.originZ, lr.sizeX, lr.sizeZ, lr.aabb.MinY, lr.aabb.MaxY)
+		if probe := os.Getenv("RTS_NAV_PROBE"); probe != "" {
+			var px, pz float32
+			if _, err := fmt.Sscanf(probe, "%f,%f", &px, &pz); err == nil {
+				s.dumpSurfaceWindow(px, pz, 6, idx, floors)
+			}
+			for i, lr := range floors {
+				fmt.Printf("[nav] snapshot[%d] ent=%v chunk=%v origin=(%.1f,%.1f) size=%dx%d aabbY=[%.1f..%.1f]\n",
+					i, lr.ent, lr.chunk, lr.originX, lr.originZ, lr.sizeX, lr.sizeZ, lr.aabb.MinY, lr.aabb.MaxY)
+			}
 		}
 		navSnapshotReported = true
 	}
@@ -99,19 +105,28 @@ func (s *NavService) findPath(from, to components.WorldPos, opts NavOpts, allowF
 			fromOK, toOK,
 			to.Local.X+float32(to.Chunk.X)*components.ChunkSize,
 			to.Local.Z+float32(to.Chunk.Z)*components.ChunkSize)
-		return []components.WorldPos{}
+		return []components.WorldPos{}, nil
 	}
 	if fromNode == toNode {
 		fmt.Printf("[nav] SAME node: kind=%d I=%d J=%d (from==to, no path needed)\n",
 			fromNode.Kind, fromNode.I, fromNode.J)
-		return nil
+		return nil, nil
 	}
 
 	fromCell, fromCellOK := s.cellAt(fromNode, idx, floors)
 	if !fromCellOK || fromCell.Cost == 0 {
-		fmt.Printf("[nav] EMPTY: from blocked kind=%d cost=%d flags=%d\n",
-			fromNode.Kind, fromCell.Cost, fromCell.Flags)
-		return []components.WorldPos{}
+		// Crowd pressure can wedge a walker onto a blocked cell (the
+		// NavInBuilding footprint ring on the wall line, a prop circle).
+		// Substitute the nearest walkable cell instead of giving up —
+		// EMPTY here leaves the unit pathless, walking blind into the
+		// wall until it pins.
+		if alt, ok := s.nearestWalkable(fromNode, from, idx, floors); ok {
+			fromNode = alt
+		} else {
+			fmt.Printf("[nav] EMPTY: from blocked kind=%d cost=%d flags=%d\n",
+				fromNode.Kind, fromCell.Cost, fromCell.Flags)
+			return []components.WorldPos{}, nil
+		}
 	}
 	toCell, toCellOK := s.cellAt(toNode, idx, floors)
 	if !toCellOK || toCell.Cost == 0 {
@@ -119,7 +134,7 @@ func (s *NavService) findPath(from, to components.WorldPos, opts NavOpts, allowF
 			toNode.Kind, toCell.Cost, toCell.Flags,
 			to.Local.X+float32(to.Chunk.X)*components.ChunkSize,
 			to.Local.Z+float32(to.Chunk.Z)*components.ChunkSize)
-		return []components.WorldPos{}
+		return []components.WorldPos{}, nil
 	}
 
 	type stateRec struct {
@@ -231,7 +246,7 @@ func (s *NavService) findPath(from, to components.WorldPos, opts NavOpts, allowF
 			closedCount, surfaceClosed, levelClosed, levelMatchClosed,
 			open.len(), doorSurfClosed, goalCellClosed)
 		fmt.Printf("[nav]     from=%+v to=%+v states=%d\n", fromNode, toNode, statesCount)
-		return []components.WorldPos{}
+		return []components.WorldPos{}, nil
 	}
 
 	// Reconstruct goal→start, then reverse.
@@ -245,18 +260,32 @@ func (s *NavService) findPath(from, to components.WorldPos, opts NavOpts, allowF
 		}
 		cur = st.parent
 	}
-	waypoints := make([]components.WorldPos, 0, len(nodes))
-	for i := len(nodes) - 1; i >= 0; i-- {
+	n := len(nodes)
+	waypoints := make([]components.WorldPos, 0, n)
+	for i := n - 1; i >= 0; i-- {
 		waypoints = append(waypoints, s.nodeWorldPos(nodes[i], floors))
+	}
+	// Transition edges (Kind or Level changes between consecutive steps —
+	// grid neighbours never change either) mark the FAR endpoint as a gate:
+	// the walker must actually cross the wall-opening plane between the
+	// pair before steering at anything deeper inside.
+	gates := make([]bool, n)
+	for k := 1; k < n; k++ {
+		a := nodes[n-k]   // waypoint k-1
+		b := nodes[n-1-k] // waypoint k
+		if a.Kind != b.Kind || (a.Kind == components.NodeLevel && a.Level != b.Level) {
+			gates[k] = true
+		}
 	}
 	// Drop the leading waypoint (start cell centre) — the agent is already
 	// there; otherwise the walker spends its first metres correcting onto it.
 	if len(waypoints) > 1 {
 		waypoints = waypoints[1:]
+		gates = gates[1:]
 	}
 	usesTransition := false
-	for _, n := range nodes {
-		if n.Kind == components.NodeLevel {
+	for _, nd := range nodes {
+		if nd.Kind == components.NodeLevel {
 			usesTransition = true
 			break
 		}
@@ -266,7 +295,75 @@ func (s *NavService) findPath(from, to components.WorldPos, opts NavOpts, allowF
 		to.Local.X+float32(to.Chunk.X)*components.ChunkSize,
 		to.Local.Z+float32(to.Chunk.Z)*components.ChunkSize,
 		toNode.Kind)
-	return waypoints
+	return waypoints, gates
+}
+
+// dumpSurfaceWindow prints cost/flags for surface cells in a ±half window
+// around world (px, pz), then the per-cell slope recomputed from the live
+// chunk Heightmap vs pure procgen GroundHeight. Debug aid behind
+// RTS_NAV_PROBE.
+func (s *NavService) dumpSurfaceWindow(px, pz float32, half int32, idx *TerrainChunkIndex, floors []levelRec) {
+	ci := int32(math.Floor(float64(px)))
+	cj := int32(math.Floor(float64(pz)))
+	fmt.Printf("[nav-probe] window around (%.1f, %.1f); rows z descending\n", px, pz)
+	for gj := cj + half; gj >= cj-half; gj-- {
+		fmt.Printf("[nav-probe] z=%4d |", gj)
+		for gi := ci - half; gi <= ci+half; gi++ {
+			n := components.NavNode{
+				Kind:  components.NodeSurface,
+				Chunk: components.ChunkCoord{X: gi >> navGridShift, Z: gj >> navGridShift},
+				I:     int16(gi & navGridMask),
+				J:     int16(gj & navGridMask),
+			}
+			c, ok := s.cellAt(n, idx, floors)
+			if !ok {
+				fmt.Printf("  ?/--")
+				continue
+			}
+			fmt.Printf(" %2d/%02x", c.Cost, c.Flags)
+		}
+		fmt.Println()
+	}
+	hmAt := func(gi, gj int32) (float32, bool) {
+		cc := components.ChunkCoord{X: gi >> navGridShift, Z: gj >> navGridShift}
+		ent, ok := idx.Loaded[cc]
+		if !ok {
+			return 0, false
+		}
+		hm := s.heightmapMap.Get(ent)
+		if hm == nil {
+			return 0, false
+		}
+		li := int(gi & navGridMask)
+		lj := int(gj & navGridMask)
+		return hm.Heights[lj*components.ChunkResolution+li], true
+	}
+	for gj := cj + 2; gj >= cj-2; gj-- {
+		fmt.Printf("[nav-probe-hm] z=%4d |", gj)
+		for gi := ci - half; gi <= ci+half; gi++ {
+			h00, ok0 := hmAt(gi, gj)
+			h10, ok1 := hmAt(gi+1, gj)
+			h01, ok2 := hmAt(gi, gj+1)
+			h11, ok3 := hmAt(gi+1, gj+1)
+			if !ok0 || !ok1 || !ok2 || !ok3 {
+				fmt.Printf("    ?      ")
+				continue
+			}
+			slope := maxF(maxF(absF(h00-h10), absF(h00-h01)),
+				maxF(maxF(absF(h00-h11), absF(h10-h01)),
+					maxF(absF(h10-h11), absF(h01-h11))))
+			gen := GroundHeight(float32(gi), float32(gj))
+			fmt.Printf(" %5.2f^%4.2f g%5.2f", h00, slope, gen)
+		}
+		fmt.Println()
+	}
+}
+
+func absF(v float32) float32 {
+	if v < 0 {
+		return -v
+	}
+	return v
 }
 
 // levelRec is a per-Level lookup record used during one FindPath call. The
@@ -312,10 +409,18 @@ func (s *NavService) snapshotLevels() []levelRec {
 
 // resolveNode maps a WorldPos to a NavNode. Inside a Level's AABB
 // (XZ + Y proximity) → NodeLevel; otherwise NodeSurface.
+//
+// Stacked storeys share a boundary plane (L0's MaxY == L1's MinY), so a
+// point at a floor plate matches BOTH levels' padded Y bands. Pick the
+// level whose floor (MinY) is nearest to the point's Y — first-match used
+// to bind an upper-storey goal to the storey below, making "Occupy L1"
+// resolve into the ground floor and the path degenerate to SAME-node.
 func (s *NavService) resolveNode(wp components.WorldPos, idx *TerrainChunkIndex, levels []levelRec) (components.NavNode, bool) {
 	worldX := wp.Local.X + float32(wp.Chunk.X)*components.ChunkSize
 	worldZ := wp.Local.Z + float32(wp.Chunk.Z)*components.ChunkSize
 	const yPad float32 = 0.6
+	best := components.NavNode{}
+	bestDY := float32(math.MaxFloat32)
 	for i := range levels {
 		lr := &levels[i]
 		if !lr.aabb.ContainsXZ(worldX, worldZ) {
@@ -336,7 +441,14 @@ func (s *NavService) resolveNode(wp components.WorldPos, idx *TerrainChunkIndex,
 		if ci < 0 || ci >= int16(lr.sizeX) || cj < 0 || cj >= int16(lr.sizeZ) {
 			continue
 		}
-		return components.NavNode{Kind: components.NodeLevel, Level: lr.ent, I: ci, J: cj}, true
+		dy := absF(wp.Local.Y - lr.aabb.MinY)
+		if dy < bestDY {
+			bestDY = dy
+			best = components.NavNode{Kind: components.NodeLevel, Level: lr.ent, I: ci, J: cj}
+		}
+	}
+	if best.Kind == components.NodeLevel {
+		return best, true
 	}
 	gi, gj := worldPosToCell(wp)
 	cc := components.ChunkCoord{X: gi >> navGridShift, Z: gj >> navGridShift}
@@ -426,6 +538,48 @@ func (s *NavService) nodeWorldPos(n components.NavNode, floors []levelRec) compo
 		}
 	}
 	return components.WorldPos{}
+}
+
+// nearestWalkable scans two neighbour rings around a blocked node and
+// returns the walkable cell closest to the walker's true position. Used to
+// recover a path start when the walker has been shoved onto a blocked cell.
+func (s *NavService) nearestWalkable(n components.NavNode, from components.WorldPos, idx *TerrainChunkIndex, floors []levelRec) (components.NavNode, bool) {
+	best := components.NavNode{}
+	bestDist := float32(math.MaxFloat32)
+	seen := map[components.NavNode]bool{n: true}
+	consider := func(c components.NavNode) {
+		if seen[c] {
+			return
+		}
+		seen[c] = true
+		cell, ok := s.cellAt(c, idx, floors)
+		if !ok || cell.Cost == 0 {
+			return
+		}
+		wp := s.nodeWorldPos(c, floors)
+		d := wp.Sub(from)
+		dist := d.X*d.X + d.Z*d.Z
+		if dist < bestDist {
+			bestDist = dist
+			best = c
+		}
+	}
+	ring1 := s.gridNeighbours(n)
+	for _, nb := range ring1 {
+		consider(nb.node)
+	}
+	if bestDist < float32(math.MaxFloat32) {
+		return best, true
+	}
+	for _, nb := range ring1 {
+		for _, nb2 := range s.gridNeighbours(nb.node) {
+			consider(nb2.node)
+		}
+	}
+	if bestDist < float32(math.MaxFloat32) {
+		return best, true
+	}
+	return components.NavNode{}, false
 }
 
 // closestSurfaceEntry returns the surface NavNode closest to `from` that is

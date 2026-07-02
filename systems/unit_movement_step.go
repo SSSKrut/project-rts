@@ -96,13 +96,23 @@ func (sys *UnitMovementSystem) step(
 		// unit follows the planner's route through doors / obstacles;
 		// fall back to action.Target when the path is empty.
 		shortTerm := action.Target
-		if w.microPath != nil && w.microPath.Count > 0 && w.microPath.Head < w.microPath.Count {
+		morePath := w.microPath != nil && w.microPath.Count > 0 && w.microPath.Head < w.microPath.Count
+		if morePath {
 			shortTerm = w.microPath.Waypoints[w.microPath.Head]
 		}
 		finalDiff := action.Target.Sub(*w.pos)
 		if finalDiff.X*finalDiff.X+finalDiff.Z*finalDiff.Z < arrivalRadius*arrivalRadius {
-			popAction(w.queue)
-			return markerOp
+			// XZ alone is not arrival for storey goals: stairs run under
+			// the upper-floor slots, so a climber matches the slot's XZ
+			// mid-ramp and would freeze a floor below. While the planner
+			// still has waypoints, require the Y to be within a storey's
+			// reach too; with the path exhausted, pop on XZ as before
+			// (ground orders may carry Y=0 vs. terrain at ±2 m).
+			dy := finalDiff.Y
+			if !morePath || (dy > -arrivalYBand && dy < arrivalYBand) {
+				popAction(w.queue)
+				return markerOp
+			}
 		}
 		diff := shortTerm.Sub(*w.pos)
 		distSq := diff.X*diff.X + diff.Z*diff.Z

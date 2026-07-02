@@ -16,7 +16,15 @@ const (
 	// surface building's footprint where the heightmap fades from the
 	// building's floor Y back to the natural terrain. Keeps door thresholds
 	// flush with ground so units can walk in without clipping the wall.
-	BuildingLevelingSkirtWidth float32 = 1.0
+	//
+	// Must span several heightmap cells (grid step = 1 m): a 1 m skirt
+	// touches zero vertices (d >= falloffWidth cuts exactly at the first
+	// ring), leaving a sheer step around buildings on sloped terrain. The
+	// step reads as slope >= 0.60 in the nav bake, which walls off the
+	// door approach cells and makes the whole building unreachable. 4 m
+	// keeps the worst ring-to-ring delta near 0.39 x total-step, walkable
+	// for pads up to ~1.5 m above/below natural terrain.
+	BuildingLevelingSkirtWidth float32 = 4.0
 	// BuildingLevelingDepthOffset: how far below the building's floor Y the
 	// leveled terrain plate sits. Prevents Z-fighting between the terrain mesh
 	// and the concrete floor.
