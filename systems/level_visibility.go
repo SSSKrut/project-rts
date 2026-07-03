@@ -17,6 +17,7 @@ type LevelVisibilitySystem struct {
 	unitFilter   *ecs.Filter2[components.Unit, components.WorldPos]
 	levelFilter  *ecs.Filter2[components.Level, components.LevelVisibility]
 	visMap       *ecs.Map[components.LevelVisibility]
+	factionMap   *ecs.Map[components.Faction]
 	clock        float32
 }
 
@@ -29,6 +30,7 @@ func (sys *LevelVisibilitySystem) InitUI(w *ecs.World) {
 	sys.unitFilter = ecs.NewFilter2[components.Unit, components.WorldPos](w)
 	sys.levelFilter = ecs.NewFilter2[components.Level, components.LevelVisibility](w)
 	sys.visMap = ecs.NewMap[components.LevelVisibility](w)
+	sys.factionMap = ecs.NewMap[components.Faction](w)
 }
 
 func (LevelVisibilitySystem) Name() string { return "level_visibility" }
@@ -61,6 +63,12 @@ func (sys *LevelVisibilitySystem) Update(ctx core.UpdateContext) {
 	qu := sys.unitFilter.Query()
 	for qu.Next() {
 		_, pos := qu.Get()
+		// Only player-faction units reveal interiors (missing Faction =
+		// player by the zero-value convention). An enemy patrol walking
+		// through a building must not defog it for the player.
+		if f := sys.factionMap.Get(qu.Entity()); f != nil && f.ID != components.FactionPlayer {
+			continue
+		}
 		pts = append(pts, pt{
 			x: pos.Local.X + float32(pos.Chunk.X)*components.ChunkSize,
 			y: pos.Local.Y,

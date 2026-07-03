@@ -96,7 +96,17 @@ func (app *App) Elapsed() time.Duration { return app.elapsed }
 
 func (app *App) FrameIndex() uint32 { return app.frameIndex }
 
+// maxTickDelta caps one frame's raw delta. A GPU realloc (Tab 3D↔map swap,
+// window resize) can stall a frame for hundreds of ms; passing that through
+// TimeScale would feed every dt-integrating system one giant step (units
+// lurch, Y-lerps overshoot). Game time slows for that frame instead. The
+// fixed-timestep accumulator (WS-B) will subsume this clamp.
+const maxTickDelta = 100 * time.Millisecond
+
 func (app *App) Tick(delta time.Duration) {
+	if delta > maxTickDelta {
+		delta = maxTickDelta
+	}
 	scaled := time.Duration(float64(delta) * float64(app.TimeScale))
 	delta = scaled
 	app.elapsed += delta

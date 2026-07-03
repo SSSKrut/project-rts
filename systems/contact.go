@@ -123,9 +123,12 @@ func (sys *ContactSystem) InitUI(w *ecs.World) {
 func (ContactSystem) Name() string { return "contact" }
 
 func (ContactSystem) LODPolicy() core.LODPolicy {
+	// Active-only: unitFilter is not tier-scoped, so the Active pass already
+	// covers every unit. A second Relevant-tier call would re-run the full
+	// detect pass and double-advance the elapsed clock (FoW fade at 2×).
 	return core.LODPolicy{
 		ActiveEvery:   250 * time.Millisecond,
-		RelevantEvery: 1 * time.Second,
+		RelevantEvery: core.LODDisabled,
 		DormantEvery:  core.LODDisabled,
 	}
 }
