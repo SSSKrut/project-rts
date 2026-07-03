@@ -31,6 +31,7 @@ type NavService struct {
 	posMap        *ecs.Map[components.WorldPos]
 	heightmapMap  *ecs.Map[components.Heightmap]
 	levelFilter   *ecs.Filter2[components.Level, components.WorldPos]
+	sampler       *HeightSampler
 }
 
 func NewNavService(w *ecs.World) *NavService {
@@ -44,6 +45,7 @@ func NewNavService(w *ecs.World) *NavService {
 		posMap:        ecs.NewMap[components.WorldPos](w),
 		heightmapMap:  ecs.NewMap[components.Heightmap](w),
 		levelFilter:   ecs.NewFilter2[components.Level, components.WorldPos](w),
+		sampler:       NewHeightSampler(w),
 	}
 }
 
@@ -529,7 +531,7 @@ func (s *NavService) nodeWorldPos(n components.NavNode, floors []levelRec) compo
 	case components.NodeSurface:
 		gi := int32(n.Chunk.X)<<navGridShift + int32(n.I)
 		gj := int32(n.Chunk.Z)<<navGridShift + int32(n.J)
-		return cellToWorldPos(gi, gj)
+		return s.cellToWorldPos(gi, gj)
 	case components.NodeLevel:
 		for i := range floors {
 			if floors[i].ent != n.Level {
@@ -823,8 +825,9 @@ func worldPosToCell(p components.WorldPos) (int32, int32) {
 }
 
 // cellToWorldPos returns the centre-of-cell WorldPos for a surface cell. Y
-// is the procgen surface; GroundStickSystem clamps later.
-func cellToWorldPos(gi, gj int32) components.WorldPos {
+// is the live surface (cuts included) so waypoint Y matches where
+// GroundStick actually puts the walker.
+func (s *NavService) cellToWorldPos(gi, gj int32) components.WorldPos {
 	cc := components.ChunkCoord{X: gi >> navGridShift, Z: gj >> navGridShift}
 	li := float32(gi&navGridMask) + 0.5
 	lj := float32(gj&navGridMask) + 0.5
@@ -832,6 +835,6 @@ func cellToWorldPos(gi, gj int32) components.WorldPos {
 	wz := float32(cc.Z)*components.ChunkSize + lj
 	return components.WorldPos{
 		Chunk: cc,
-		Local: rl.Vector3{X: li, Y: GroundHeight(wx, wz), Z: lj},
+		Local: rl.Vector3{X: li, Y: s.sampler.Sample(wx, wz), Z: lj},
 	}
 }

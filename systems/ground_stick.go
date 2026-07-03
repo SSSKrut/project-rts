@@ -14,8 +14,9 @@ import (
 const AnchorEyeHeight float32 = 1.5
 
 // GroundStickSystem clamps anchor + every unit Y to the terrain surface
-// using GroundHeight(). Anchor uses eye-height offset; units have foot at
-// surface (the unit cube draws upward from WorldPos). A unit whose WorldPos
+// using the live heightmap (HeightSampler — trenches, craters and bunker
+// cuts count). Anchor uses eye-height offset; units have foot at surface
+// (the unit cube draws upward from WorldPos). A unit whose WorldPos
 // lies on a building Floor uses the floor Y instead; inside a Stairs
 // footprint the ramp Y (bottom→top along the stair axis) joins the
 // closest-Y pool — that's what physically carries a walker between
@@ -27,6 +28,7 @@ type GroundStickSystem struct {
 	unitFilter   *ecs.Filter2[components.Unit, components.WorldPos]
 	floorFilter  *ecs.Filter2[components.WorldPos, components.Floor]
 	stairsFilter *ecs.Filter2[components.WorldPos, components.Stairs]
+	sampler      *HeightSampler
 }
 
 func (sys *GroundStickSystem) InitUI(w *ecs.World) {
@@ -34,6 +36,7 @@ func (sys *GroundStickSystem) InitUI(w *ecs.World) {
 	sys.unitFilter = ecs.NewFilter2[components.Unit, components.WorldPos](w)
 	sys.floorFilter = ecs.NewFilter2[components.WorldPos, components.Floor](w)
 	sys.stairsFilter = ecs.NewFilter2[components.WorldPos, components.Stairs](w)
+	sys.sampler = NewHeightSampler(w)
 }
 
 // stairEdgePad widens the ramp footprint so a unit hugging the stair edge
@@ -131,7 +134,7 @@ func (sys GroundStickSystem) Update(ctx core.UpdateContext) {
 		_, pos := qa.Get()
 		wx := float32(pos.Chunk.X)*components.ChunkSize + pos.Local.X
 		wz := float32(pos.Chunk.Z)*components.ChunkSize + pos.Local.Z
-		surfaceY := GroundHeight(wx, wz) + AnchorEyeHeight
+		surfaceY := sys.sampler.Sample(wx, wz) + AnchorEyeHeight
 		bestY := surfaceY
 		bestD := absDelta(pos.Local.Y, surfaceY)
 		for _, fr := range floors {
@@ -160,7 +163,7 @@ func (sys GroundStickSystem) Update(ctx core.UpdateContext) {
 		_, pos := qu.Get()
 		wx := float32(pos.Chunk.X)*components.ChunkSize + pos.Local.X
 		wz := float32(pos.Chunk.Z)*components.ChunkSize + pos.Local.Z
-		surfaceY := GroundHeight(wx, wz)
+		surfaceY := sys.sampler.Sample(wx, wz)
 		bestY := surfaceY
 		bestD := absDelta(pos.Local.Y, surfaceY)
 		for _, fr := range floors {
