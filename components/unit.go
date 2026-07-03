@@ -5,7 +5,7 @@ import (
 )
 
 // Unit marks an infantry entity. All state lives in adjacent components
-// (Stance, Motion, Vision, ActionQueue, ...) so different systems read
+// (Stance, Motion, Sensors, ActionQueue, ...) so different systems read
 // disjoint subsets.
 type Unit struct{}
 
@@ -34,7 +34,7 @@ type StanceOverride struct {
 }
 
 // Motion - current facing & speed. Yaw is the facing-yaw (radians around +Y),
-// what renderers and Vision read. Speed is |velocity| in m/s.
+// what renderers and the contact detect pass read. Speed is |velocity| in m/s.
 //
 // VelocityYaw is the direction of motion this frame, computed from the move
 // delta in UnitMovementSystem. Separated from Yaw so combat-move can decouple
@@ -43,7 +43,7 @@ type StanceOverride struct {
 //
 // Both yaws: 0 = +Z (north), increasing clockwise around +Y.
 type Motion struct {
-	Yaw          float32 // facing yaw - drives render + Vision cone
+	Yaw          float32 // facing yaw - drives render + sensor cone
 	VelocityYaw  float32 // direction of last frame's motion
 	Speed        float32
 }
@@ -52,12 +52,6 @@ type Motion struct {
 // Height comes from the Stance table at read time.
 type Collider struct {
 	Radius float32
-}
-
-// Vision - sight cone. AngleDot = cos(half-FOV) for cheap dot-product compares.
-type Vision struct {
-	RangeM   float32
-	AngleDot float32
 }
 
 const AwarenessSlots = 8

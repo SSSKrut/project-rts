@@ -101,15 +101,19 @@ func (s *NavService) findPath(from, to components.WorldPos, opts NavOpts, allowF
 	fromNode, fromOK := s.resolveNode(from, idx, floors)
 	toNode, toOK := s.resolveNode(to, idx, floors)
 	if !fromOK || !toOK {
-		fmt.Printf("[nav] EMPTY: resolve failed fromOK=%v toOK=%v to=(%.1f,%.1f)\n",
-			fromOK, toOK,
-			to.Local.X+float32(to.Chunk.X)*components.ChunkSize,
-			to.Local.Z+float32(to.Chunk.Z)*components.ChunkSize)
+		if debugLog {
+			fmt.Printf("[nav] EMPTY: resolve failed fromOK=%v toOK=%v to=(%.1f,%.1f)\n",
+				fromOK, toOK,
+				to.Local.X+float32(to.Chunk.X)*components.ChunkSize,
+				to.Local.Z+float32(to.Chunk.Z)*components.ChunkSize)
+		}
 		return []components.WorldPos{}, nil
 	}
 	if fromNode == toNode {
-		fmt.Printf("[nav] SAME node: kind=%d I=%d J=%d (from==to, no path needed)\n",
-			fromNode.Kind, fromNode.I, fromNode.J)
+		if debugLog {
+			fmt.Printf("[nav] SAME node: kind=%d I=%d J=%d (from==to, no path needed)\n",
+				fromNode.Kind, fromNode.I, fromNode.J)
+		}
 		return nil, nil
 	}
 
@@ -123,17 +127,21 @@ func (s *NavService) findPath(from, to components.WorldPos, opts NavOpts, allowF
 		if alt, ok := s.nearestWalkable(fromNode, from, idx, floors); ok {
 			fromNode = alt
 		} else {
-			fmt.Printf("[nav] EMPTY: from blocked kind=%d cost=%d flags=%d\n",
-				fromNode.Kind, fromCell.Cost, fromCell.Flags)
+			if debugLog {
+				fmt.Printf("[nav] EMPTY: from blocked kind=%d cost=%d flags=%d\n",
+					fromNode.Kind, fromCell.Cost, fromCell.Flags)
+			}
 			return []components.WorldPos{}, nil
 		}
 	}
 	toCell, toCellOK := s.cellAt(toNode, idx, floors)
 	if !toCellOK || toCell.Cost == 0 {
-		fmt.Printf("[nav] EMPTY: to blocked kind=%d cost=%d flags=%d to=(%.1f,%.1f)\n",
-			toNode.Kind, toCell.Cost, toCell.Flags,
-			to.Local.X+float32(to.Chunk.X)*components.ChunkSize,
-			to.Local.Z+float32(to.Chunk.Z)*components.ChunkSize)
+		if debugLog {
+			fmt.Printf("[nav] EMPTY: to blocked kind=%d cost=%d flags=%d to=(%.1f,%.1f)\n",
+				toNode.Kind, toCell.Cost, toCell.Flags,
+				to.Local.X+float32(to.Chunk.X)*components.ChunkSize,
+				to.Local.Z+float32(to.Chunk.Z)*components.ChunkSize)
+		}
 		return []components.WorldPos{}, nil
 	}
 
@@ -218,34 +226,30 @@ func (s *NavService) findPath(from, to components.WorldPos, opts NavOpts, allowF
 				return s.findPath(from, entryPos, opts, false)
 			}
 		}
-		closedCount := len(closed)
-		statesCount := len(states)
-		surfaceClosed := 0
-		levelClosed := 0
-		levelMatchClosed := 0
-		doorSurfClosed := false
-		goalCellClosed := false
-		for n := range closed {
-			switch n.Kind {
-			case components.NodeSurface:
-				surfaceClosed++
-				if n.I == 43 && n.J == 24 && n.Chunk.X == -1 && n.Chunk.Z == -1 {
-					doorSurfClosed = true
-				}
-			case components.NodeLevel:
-				levelClosed++
-				if n.Level == toNode.Level {
-					levelMatchClosed++
-					if n.I == toNode.I && n.J == toNode.J {
-						goalCellClosed = true
+		if debugLog {
+			surfaceClosed := 0
+			levelClosed := 0
+			levelMatchClosed := 0
+			goalCellClosed := false
+			for n := range closed {
+				switch n.Kind {
+				case components.NodeSurface:
+					surfaceClosed++
+				case components.NodeLevel:
+					levelClosed++
+					if n.Level == toNode.Level {
+						levelMatchClosed++
+						if n.I == toNode.I && n.J == toNode.J {
+							goalCellClosed = true
+						}
 					}
 				}
 			}
+			fmt.Printf("[nav] NOT FOUND closed=%d (surf=%d level=%d sameLevel=%d) openLen=%d goalClosed=%v\n",
+				len(closed), surfaceClosed, levelClosed, levelMatchClosed,
+				open.len(), goalCellClosed)
+			fmt.Printf("[nav]     from=%+v to=%+v states=%d\n", fromNode, toNode, len(states))
 		}
-		fmt.Printf("[nav] NOT FOUND closed=%d (surf=%d level=%d sameLevel=%d) openLen=%d doorSurfClosed=%v goalClosed=%v\n",
-			closedCount, surfaceClosed, levelClosed, levelMatchClosed,
-			open.len(), doorSurfClosed, goalCellClosed)
-		fmt.Printf("[nav]     from=%+v to=%+v states=%d\n", fromNode, toNode, statesCount)
 		return []components.WorldPos{}, nil
 	}
 
@@ -283,18 +287,20 @@ func (s *NavService) findPath(from, to components.WorldPos, opts NavOpts, allowF
 		waypoints = waypoints[1:]
 		gates = gates[1:]
 	}
-	usesTransition := false
-	for _, nd := range nodes {
-		if nd.Kind == components.NodeLevel {
-			usesTransition = true
-			break
+	if debugLog {
+		usesTransition := false
+		for _, nd := range nodes {
+			if nd.Kind == components.NodeLevel {
+				usesTransition = true
+				break
+			}
 		}
+		fmt.Printf("[nav] OK len=%d via-level=%v to=(%.1f,%.1f) toKind=%d\n",
+			len(waypoints), usesTransition,
+			to.Local.X+float32(to.Chunk.X)*components.ChunkSize,
+			to.Local.Z+float32(to.Chunk.Z)*components.ChunkSize,
+			toNode.Kind)
 	}
-	fmt.Printf("[nav] OK len=%d via-level=%v to=(%.1f,%.1f) toKind=%d\n",
-		len(waypoints), usesTransition,
-		to.Local.X+float32(to.Chunk.X)*components.ChunkSize,
-		to.Local.Z+float32(to.Chunk.Z)*components.ChunkSize,
-		toNode.Kind)
 	return waypoints, gates
 }
 

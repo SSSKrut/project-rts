@@ -28,7 +28,7 @@ func (sys *SpatialBakeSystem) bakeLevelNavPass(ctx core.UpdateContext) {
 		lvl, pos := qL.Get()
 		levelTodo = append(levelTodo, levelRec{ent: qL.Entity(), pos: *pos, lvl: *lvl})
 	}
-	if len(levelTodo) > 0 && !bakeDebugReported {
+	if debugLog && len(levelTodo) > 0 && !bakeDebugReported {
 		total := 0
 		qLAll := sys.levelFilterAll.Query()
 		for qLAll.Next() {

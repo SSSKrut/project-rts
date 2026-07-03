@@ -376,14 +376,14 @@ func (sys *SpatialBakeSystem) bakeTransitionsPass(ctx core.UpdateContext) {
 			nodeB := components.NavNode{Kind: components.NodeLevel, Level: lvB.ent, I: bI, J: bJ}
 			addEdge(nodeA, nodeB, levelJunctionCost, ecs.Entity{})
 			addEdge(nodeB, nodeA, levelJunctionCost, ecs.Entity{})
-			if !bakeDebugReported {
+			if debugLog && !bakeDebugReported {
 				fmt.Printf("[spatial_bake] level-junction edge ent=%v <-> ent=%v at (%.1f,%.1f) <-> (%.1f,%.1f)\n",
 					lvA.ent, lvB.ent, sampleAX, sampleAZ, sampleBX, sampleBZ)
 			}
 		}
 	}
 
-	if !bakeDebugReported && (len(doors) > 0 || len(stairs) > 0) {
+	if debugLog && !bakeDebugReported && (len(doors) > 0 || len(stairs) > 0) {
 		for i, d := range doors {
 			fmt.Printf("[spatial_bake] door[%d] ent=%v levelMember=%v wallChunk=%v wallLocal=(%.1f,%.1f)\n",
 				i, d.ent, d.level, d.pos.Chunk, d.pos.Local.X, d.pos.Local.Z)

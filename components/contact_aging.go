@@ -1,4 +1,4 @@
-package systems
+package components
 
 // Aging parameters for rendered contact alpha. Contacts never auto-delete on
 // Phase 18.5 — they only fade. Player removes them manually via the RMB
@@ -11,6 +11,7 @@ const (
 
 // ContactAgeAlpha returns 1.0 for fresh contacts, lerps to ContactFloorAlpha
 // over the GhostAfter..GhostAfter+FadeDuration window, floors after that.
+// Lives in components so systems and ui share one definition.
 func ContactAgeAlpha(lastSeen, now float32) float32 {
 	age := now - lastSeen
 	if age <= ContactGhostAfter {

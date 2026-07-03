@@ -3,11 +3,13 @@ package ui
 import (
 	rl "github.com/gen2brain/raylib-go/raylib"
 	"github.com/mlange-42/ark/ecs"
+
+	"rts-go/components"
 )
 
 // drawMapContacts iterates ContactFilter and renders an APP-6-style symbol at
-// each EstimatedPos via DrawSymbol. Alpha decays with age via contactAlphaFor
-// (mirror of systems.ContactAgeAlpha — ui must not import systems).
+// each EstimatedPos via DrawSymbol. Alpha decays with age via
+// components.ContactAgeAlpha.
 func drawMapContacts(content rl.Rectangle, ctx MapRenderCtx) {
 	if ctx.ContactFilter == nil {
 		return
@@ -16,7 +18,7 @@ func drawMapContacts(content rl.Rectangle, ctx MapRenderCtx) {
 	for q.Next() {
 		c := q.Get()
 		ent := q.Entity()
-		alpha := contactAlphaFor(c.LastSeenTime, ctx.Clock)
+		alpha := components.ContactAgeAlpha(c.LastSeenTime, ctx.Clock)
 		screen := MapWorldToPanel(c.EstimatedPos, ctx.Cam, content)
 		spec := DefaultSpecForDimension(c.PerceivedAffil, c.PerceivedDim)
 		if ctx.ContactOverrideMap != nil {
@@ -31,23 +33,6 @@ func drawMapContacts(content rl.Rectangle, ctx MapRenderCtx) {
 		}
 	}
 	q.Close()
-}
-
-// contactAlphaFor mirrors systems.ContactAgeAlpha; duplicated to keep ui
-// package free of systems-import cycles.
-func contactAlphaFor(lastSeen, now float32) float32 {
-	const ghostAfter float32 = 5.0
-	const fadeDur float32 = 25.0
-	const floor float32 = 0.3
-	age := now - lastSeen
-	if age <= ghostAfter {
-		return 1.0
-	}
-	if age >= ghostAfter+fadeDur {
-		return floor
-	}
-	t := (age - ghostAfter) / fadeDur
-	return 1.0 - (1.0-floor)*t
 }
 
 func isSelectedEntity(selected []ecs.Entity, ent ecs.Entity) bool {

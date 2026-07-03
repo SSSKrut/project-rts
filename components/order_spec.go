@@ -2,9 +2,9 @@ package components
 
 // Spec table pattern. Each OrderKindCode gets a typed OrderKindSpec row in
 // OrderKindSpecs, replacing scattered switch dispatch across resolver /
-// weapon / pie_menu / inspector / map_render / command. Readers index by
-// enum-code; the compile-time assert below catches a new enum value that
-// forgot to extend the table.
+// weapon / inspector / map_render / command. Readers index by enum-code;
+// the compile-time assert below catches a new enum value that forgot to
+// extend the table.
 //
 // Pattern rules:
 //   - One spec table per enum. Split into a sibling table when fields
@@ -44,13 +44,11 @@ const (
 // previously hard-coded a switch on OrderKindCode. Sparse fields are
 // intentional (e.g. ArrivalRadius is meaningless for SuppressFire).
 type OrderKindSpec struct {
-	Code            OrderKindCode
-	Name            string
-	MapIconGlyph    rune
-	InPieMenu       bool
-	PieSegmentOrder uint8
+	Code         OrderKindCode
+	Name         string
+	MapIconGlyph rune
 	// NeedsEntity / NeedsTerrain - hit-test compatibility.
-	// resolveTargetIntoOrder falls back to MoveTo when a pie kind override
+	// resolveTargetIntoOrder falls back to MoveTo when a kind override
 	// clashes with the hit type.
 	NeedsEntity  bool
 	NeedsTerrain bool
@@ -79,42 +77,37 @@ const OrderKindCount OrderKindCode = OrderKindClearBuilding + 1
 var OrderKindSpecs = [OrderKindCount]OrderKindSpec{
 	OrderKindMoveTo: {
 		Code: OrderKindMoveTo, Name: "Move", MapIconGlyph: 'M',
-		InPieMenu: true, PieSegmentOrder: 0,
 		NeedsTerrain:    true,
 		DrivesMacroPath: true,
 		Completion:      CompletionArrivalRadius, ArrivalRadius: 2.5,
 	},
 	OrderKindGarrison: {
 		Code: OrderKindGarrison, Name: "Garrison", MapIconGlyph: 'G',
-		InPieMenu: true, PieSegmentOrder: 1,
 		NeedsEntity:     true,
 		DrivesMacroPath: true,
 		Completion:      CompletionEveryMemberOnFloor, ArrivalRadius: 4.0,
 	},
 	OrderKindOccupyTrench: {
 		Code: OrderKindOccupyTrench, Name: "Trench", MapIconGlyph: 'T',
-		InPieMenu: true, PieSegmentOrder: 2,
 		NeedsEntity:     true,
 		DrivesMacroPath: true,
 		Completion:      CompletionArrivalRadius, ArrivalRadius: 3.0,
 	},
 	OrderKindDefendPosition: {
 		Code: OrderKindDefendPosition, Name: "Defend", MapIconGlyph: 'D',
-		InPieMenu: true, PieSegmentOrder: 3,
 		NeedsTerrain:    true,
 		DrivesMacroPath: true,
 		Completion:      CompletionNever,
 	},
 	OrderKindPatrol: {
 		Code: OrderKindPatrol, Name: "Patrol", MapIconGlyph: 'P',
-		InPieMenu: true, PieSegmentOrder: 4,
 		NeedsTerrain:    true,
 		DrivesMacroPath: true,
 		Completion:      CompletionArrivalRadius, ArrivalRadius: 2.5,
 	},
 	OrderKindAttackTarget: {
 		Code: OrderKindAttackTarget, Name: "Attack", MapIconGlyph: 'A',
-		// No pie segment - RMB-on-enemy resolves this kind directly.
+		// RMB-on-enemy resolves this kind directly.
 		NeedsEntity:          true,
 		OverridesHoldFire:    true,
 		DrivesMacroPath:      false,
@@ -123,7 +116,6 @@ var OrderKindSpecs = [OrderKindCount]OrderKindSpec{
 	},
 	OrderKindSuppressFire: {
 		Code: OrderKindSuppressFire, Name: "Suppress", MapIconGlyph: 'S',
-		InPieMenu: true, PieSegmentOrder: 5,
 		NeedsTerrain:      true,
 		OverridesHoldFire: true,
 		DrivesMacroPath:   false,

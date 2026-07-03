@@ -100,8 +100,7 @@ func main() {
 	ecs.AddResource(app.World, &formationPresets)
 	// SpatialHash for Unit XZ positions; rebuilt serially before UnitMovement
 	// so this tick's separation steering reads fresh positions. Consumers:
-	// UnitMovement.separation, WeaponSystem.resolveShot/propagateSuppression,
-	// VisionSystem.processVisionSeer.
+	// UnitMovement.separation, WeaponSystem.resolveShot/propagateSuppression.
 	unitSpatialHash := core.NewSpatialHash(32.0)
 	ecs.AddResource(app.World, unitSpatialHash)
 

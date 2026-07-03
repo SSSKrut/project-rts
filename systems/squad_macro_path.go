@@ -208,12 +208,14 @@ func (sys *SquadMacroPathSystem) processSquad(world *ecs.World, w macroPathWork,
 		return
 	}
 
-	fmt.Printf("[macro] replan squad kind=%d goal=(%.1f,%.1f) center=(%.1f,%.1f)\n",
-		orderKind,
-		mp.Goal.Local.X+float32(mp.Goal.Chunk.X)*components.ChunkSize,
-		mp.Goal.Local.Z+float32(mp.Goal.Chunk.Z)*components.ChunkSize,
-		center.Local.X+float32(center.Chunk.X)*components.ChunkSize,
-		center.Local.Z+float32(center.Chunk.Z)*components.ChunkSize)
+	if debugLog {
+		fmt.Printf("[macro] replan squad kind=%d goal=(%.1f,%.1f) center=(%.1f,%.1f)\n",
+			orderKind,
+			mp.Goal.Local.X+float32(mp.Goal.Chunk.X)*components.ChunkSize,
+			mp.Goal.Local.Z+float32(mp.Goal.Chunk.Z)*components.ChunkSize,
+			center.Local.X+float32(center.Chunk.X)*components.ChunkSize,
+			center.Local.Z+float32(center.Chunk.Z)*components.ChunkSize)
+	}
 
 	path := sys.nav.FindPath(center, mp.Goal, NavOpts{
 		Locomotion: components.LocomotionFoot,

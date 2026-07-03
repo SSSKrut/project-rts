@@ -158,7 +158,7 @@ type suppressionEvent struct {
 
 const (
 	// Muzzle Y above foot — standing rifle fire at chest height; below
-	// visionEyeHeight so muzzle flash sits below the role label.
+	// the 1.5 m eye height so muzzle flash sits below the role label.
 	weaponEyeHeight float32 = 1.35
 	// System-wide range cap. LOS window is 3 chunks = 192 m; this hard-cap
 	// stops misconfigured Weapon.RangeM from raycasting across the map.

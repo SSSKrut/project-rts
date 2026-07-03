@@ -337,3 +337,28 @@ func clamp32(v, lo, hi float32) float32 {
 	}
 	return v
 }
+
+// recordSighting refreshes the FIFO entry for `target`, evicting the oldest
+// slot for new targets.
+func recordSighting(aware *components.Awareness, target ecs.Entity, pos components.WorldPos, t float32) {
+	for i := range aware.LastSeen {
+		if aware.LastSeen[i].Time != 0 && aware.LastSeen[i].Target == target {
+			aware.LastSeen[i].Pos = pos
+			aware.LastSeen[i].Time = t
+			return
+		}
+	}
+	oldest := 0
+	oldestT := aware.LastSeen[0].Time
+	for i := 1; i < components.AwarenessSlots; i++ {
+		if aware.LastSeen[i].Time == 0 {
+			oldest = i
+			break
+		}
+		if aware.LastSeen[i].Time < oldestT {
+			oldestT = aware.LastSeen[i].Time
+			oldest = i
+		}
+	}
+	aware.LastSeen[oldest] = components.AwarenessEntry{Target: target, Pos: pos, Time: t}
+}
