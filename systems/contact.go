@@ -51,6 +51,9 @@ type ContactSystem struct {
 	seersBuf     []contactSeer
 	wallsByChunk map[components.ChunkCoord][]losWall
 	contactsBuf  []contactRec
+	// Per-worker collectors (indexed by ParallelForIndexed chunkIdx),
+	// drained in worker order → deterministic contactsBuf ordering.
+	workerContacts [][]contactRec
 
 	elapsed float32
 }
@@ -91,12 +94,17 @@ type contactRec struct {
 }
 
 func NewContactSystem(pool *core.WorkerPool) *ContactSystem {
+	workers := 1
+	if pool != nil && pool.Workers() > 0 {
+		workers = pool.Workers()
+	}
 	return &ContactSystem{
-		pool:         pool,
-		unitsBuf:     make([]contactUnit, 0, 64),
-		seersBuf:     make([]contactSeer, 0, 64),
-		wallsByChunk: make(map[components.ChunkCoord][]losWall, 32),
-		contactsBuf:  make([]contactRec, 0, 64),
+		pool:           pool,
+		unitsBuf:       make([]contactUnit, 0, 64),
+		seersBuf:       make([]contactSeer, 0, 64),
+		wallsByChunk:   make(map[components.ChunkCoord][]losWall, 32),
+		contactsBuf:    make([]contactRec, 0, 64),
+		workerContacts: make([][]contactRec, workers),
 	}
 }
 

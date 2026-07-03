@@ -2,7 +2,6 @@ package systems
 
 import (
 	"math"
-	"sync"
 
 	"github.com/mlange-42/ark/ecs"
 
@@ -82,20 +81,27 @@ func (sys *ContactSystem) runDetectPass() {
 	wallsByChunk := sys.wallsByChunk
 	elapsed := sys.elapsed
 
-	// Per-worker contact-record collectors, merged after the parallel pass.
-	var mu sync.Mutex
-	sys.pool.ParallelFor(len(seers), func(start, end int) {
-		var local []contactRec
+	// Per-worker collectors indexed by chunkIdx, drained in worker order:
+	// chunk ranges are assigned sequentially, so the concatenation restores
+	// seer order and contactsBuf (→ Contact entity creation order) is
+	// deterministic run-to-run. The old mutex merge appended in lock-win
+	// order (WS-B M2).
+	for i := range sys.workerContacts {
+		sys.workerContacts[i] = sys.workerContacts[i][:0]
+	}
+	sys.pool.ParallelForIndexed(len(seers), func(chunkIdx, start, end int) {
+		if chunkIdx >= len(sys.workerContacts) {
+			chunkIdx = 0
+		}
+		local := sys.workerContacts[chunkIdx]
 		for i := start; i < end; i++ {
-			s := seers[i]
-			local = processContactSeer(s, units, wallsByChunk, elapsed, local)
+			local = processContactSeer(seers[i], units, wallsByChunk, elapsed, local)
 		}
-		if len(local) > 0 {
-			mu.Lock()
-			sys.contactsBuf = append(sys.contactsBuf, local...)
-			mu.Unlock()
-		}
+		sys.workerContacts[chunkIdx] = local
 	})
+	for i := range sys.workerContacts {
+		sys.contactsBuf = append(sys.contactsBuf, sys.workerContacts[i]...)
+	}
 }
 
 // processContactSeer is the per-seer hot loop. Awareness is written directly
