@@ -26,7 +26,6 @@ type ParticleSystem struct {
 	world     *ecs.World
 	removeBuf []ecs.Entity
 	sortBuf   []particleAge
-	elapsed   float32
 }
 
 type particleAge struct {
@@ -75,8 +74,7 @@ func (sys *ParticleSystem) Update(ctx core.UpdateContext) {
 	if dt < 0 {
 		dt = 0
 	}
-	sys.elapsed += dt
-	now := sys.elapsed
+	now := float32(ctx.SimNow)
 
 	sys.removeBuf = sys.removeBuf[:0]
 	sys.sortBuf = sys.sortBuf[:0]

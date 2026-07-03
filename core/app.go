@@ -43,6 +43,9 @@ type UpdateContext struct {
 	// FrameIndex always grows; paused ticks still increment so render-time
 	// animations stay live. Used by ShouldProcessBucket for time-slicing.
 	FrameIndex uint32
+	// SimNow is the canonical game-time clock (seconds, TimeScale-scaled).
+	SimNow    float64
+	TickIndex uint64
 }
 
 type System interface {
@@ -61,6 +64,7 @@ type App struct {
 	systems    []systemEntry
 	elapsed    time.Duration
 	frameIndex uint32
+	tickIndex  uint64
 
 	Prof  Profiler
 	Trace Tracer
@@ -96,11 +100,7 @@ func (app *App) Elapsed() time.Duration { return app.elapsed }
 
 func (app *App) FrameIndex() uint32 { return app.frameIndex }
 
-// maxTickDelta caps one frame's raw delta. A GPU realloc (Tab 3D↔map swap,
-// window resize) can stall a frame for hundreds of ms; passing that through
-// TimeScale would feed every dt-integrating system one giant step (units
-// lurch, Y-lerps overshoot). Game time slows for that frame instead. The
-// fixed-timestep accumulator (WS-B) will subsume this clamp.
+// maxTickDelta: a GPU-stall frame (Tab swap, resize) must not lurch the sim.
 const maxTickDelta = 100 * time.Millisecond
 
 func (app *App) Tick(delta time.Duration) {
@@ -111,6 +111,8 @@ func (app *App) Tick(delta time.Duration) {
 	delta = scaled
 	app.elapsed += delta
 	app.frameIndex++
+	app.tickIndex++
+	simNow := app.elapsed.Seconds()
 
 	tickStart := time.Now()
 	app.Prof.BeginTick()
@@ -133,6 +135,8 @@ func (app *App) Tick(delta time.Duration) {
 					Delta:      app.elapsed - last,
 					Tier:       tier,
 					FrameIndex: app.frameIndex,
+					SimNow:     simNow,
+					TickIndex:  app.tickIndex,
 				})
 				app.Prof.RecordSystem(i, time.Since(sysStart))
 				entry.lastRun[tier] = app.elapsed

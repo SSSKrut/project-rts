@@ -81,11 +81,7 @@ func (sys *ContactSystem) runDetectPass() {
 	wallsByChunk := sys.wallsByChunk
 	elapsed := sys.elapsed
 
-	// Per-worker collectors indexed by chunkIdx, drained in worker order:
-	// chunk ranges are assigned sequentially, so the concatenation restores
-	// seer order and contactsBuf (→ Contact entity creation order) is
-	// deterministic run-to-run. The old mutex merge appended in lock-win
-	// order (WS-B M2).
+	// Drained in worker order so contact creation order is deterministic.
 	for i := range sys.workerContacts {
 		sys.workerContacts[i] = sys.workerContacts[i][:0]
 	}

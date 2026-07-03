@@ -61,16 +61,11 @@ func (UtilityEvaluatorSystem) LODPolicy() core.LODPolicy {
 	}
 }
 
-// SetClock updates the session clock used for hysteresis. Same pattern as
-// SquadService.SetClock — called once per frame before Tick.
-func (sys *UtilityEvaluatorSystem) SetClock(t float32) {
-	sys.clock = t
-}
-
 func (sys *UtilityEvaluatorSystem) Update(ctx core.UpdateContext) {
 	if ctx.Tier != core.LODTierActive {
 		return
 	}
+	sys.clock = float32(ctx.SimNow)
 	q := sys.filter.Query()
 	for q.Next() {
 		_, blackboard := q.Get()

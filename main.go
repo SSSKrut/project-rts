@@ -881,7 +881,6 @@ func main() {
 			dtReal = time.Duration(float64(rl.GetFrameTime()) * float64(time.Second))
 		}
 		squadService.SetClock(float32(app.Elapsed().Seconds()))
-		utilityEvalSys.SetClock(float32(app.Elapsed().Seconds()))
 
 		cursor := rl.GetMousePosition()
 		focused := panelMgr.FocusedAt(cursor)
@@ -1979,7 +1978,7 @@ func main() {
 		}
 
 		// A level is fogged when never discovered OR last seen >FogVisibleDuration ago.
-		now := levelVisSys.Clock()
+		now := float32(app.Elapsed().Seconds())
 		levelFogged := func(level ecs.Entity) bool {
 			if level == (ecs.Entity{}) {
 				return false

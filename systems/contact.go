@@ -131,9 +131,7 @@ func (sys *ContactSystem) InitUI(w *ecs.World) {
 func (ContactSystem) Name() string { return "contact" }
 
 func (ContactSystem) LODPolicy() core.LODPolicy {
-	// Active-only: unitFilter is not tier-scoped, so the Active pass already
-	// covers every unit. A second Relevant-tier call would re-run the full
-	// detect pass and double-advance the elapsed clock (FoW fade at 2×).
+	// Active-only: the filter is not tier-scoped, a second tier doubles work.
 	return core.LODPolicy{
 		ActiveEvery:   250 * time.Millisecond,
 		RelevantEvery: core.LODDisabled,
@@ -142,7 +140,7 @@ func (ContactSystem) LODPolicy() core.LODPolicy {
 }
 
 func (sys *ContactSystem) Update(ctx core.UpdateContext) {
-	sys.elapsed += float32(ctx.Delta.Seconds())
+	sys.elapsed = float32(ctx.SimNow)
 	sys.runDetectPass()
 	sys.applyContactUpsert()
 	sys.applyCombatEvidence()

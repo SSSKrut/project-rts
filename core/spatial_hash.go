@@ -14,22 +14,15 @@ import "github.com/mlange-42/ark/ecs"
 //     positions.
 //   - Backing slices are reused between rebuilds (cells map values are
 //     truncated, not replaced) so steady-state runs allocate zero per tick.
-//   - Stale-entity guard is the reader's responsibility. Between rebuild
-//     and query an entity may have been removed; callbacks MUST check
-//     world.Alive(ent) before dereferencing the entity's components.
-//     Callbacks that consume only snapshot fields (SpatialEntry) need no
-//     alive check — a one-tick-stale entry is harmless data.
-//   - Parallel reader sections must NOT read other entities' live
-//     components inside callbacks (data race with the owner worker's
-//     writes) — consume the SpatialEntry snapshot instead.
+//   - Callbacks that dereference components MUST check world.Alive(ent);
+//     snapshot-only callbacks (SpatialEntry fields) need no alive check.
+//   - Parallel readers must use the SpatialEntry snapshot, never live
+//     component maps of other entities (races with owner-worker writes).
 //   - The cells map is read concurrently by parallel-aware reader systems.
 //     Reads are race-safe because no writes happen during the parallel
 //     section. Reader callbacks must not mutate the hash.
 
-// SpatialEntry inlines the per-tick snapshot (position, velocity, radius)
-// so callers never need a component Map.Get inside the radius callback —
-// live reads of other units' components from a parallel section race with
-// the owner worker's writes (WS-B M1).
+// SpatialEntry is the per-tick snapshot consumed by radius callbacks.
 type SpatialEntry struct {
 	Ent        ecs.Entity
 	X, Z       float32
@@ -138,11 +131,8 @@ func (h *SpatialHash) ForEachInRadius(x, z, r float32, fn func(ent ecs.Entity, d
 	}
 }
 
-// ForEachEntryInRadius is the snapshot-consuming variant of
-// ForEachInRadius: fn receives the full SpatialEntry (position / velocity /
-// radius frozen at rebuild time). Safe to call from parallel worker
-// sections — no component access, no alive check required. The pointer is
-// valid only for the duration of the callback.
+// ForEachEntryInRadius passes the frozen SpatialEntry — safe from parallel
+// sections; the pointer is valid only inside the callback.
 func (h *SpatialHash) ForEachEntryInRadius(x, z, r float32, fn func(e *SpatialEntry, distSq float32)) {
 	if fn == nil || r <= 0 || len(h.entries) == 0 {
 		return

@@ -61,9 +61,7 @@ const staminaRegenThreshold float32 = 0.30
 type UnitMovementSystem struct {
 	unitFilter *ecs.Filter6[components.Unit, components.WorldPos, components.Motion, components.ActionQueue, components.Stance, components.MicroPath]
 	pool       *core.WorkerPool
-	// Separation / ORCA read SpatialHash (rebuilt by SpatialHashRebuildSystem
-	// before this system). Neighbour pos / velocity / radius come from the
-	// frozen SpatialEntry snapshot — never from live component maps (WS-B M1).
+	// Neighbour data comes from the frozen SpatialEntry snapshot, never live maps.
 	spatialHash ecs.Resource[core.SpatialHash]
 
 	memberMap                *ecs.Map[components.SquadMember]
@@ -91,8 +89,6 @@ type UnitMovementSystem struct {
 	// applies them (workers can't mutate archetypes concurrently).
 	workerExhaustedAdds    [][]ecs.Entity
 	workerExhaustedRemoves [][]ecs.Entity
-
-	elapsed float32
 }
 
 // NewUnitMovementSystem. nil pool falls back to serial execution.
@@ -156,7 +152,7 @@ func (sys *UnitMovementSystem) Update(ctx core.UpdateContext) {
 	if dt <= 0 {
 		return
 	}
-	sys.elapsed += dt
+	now := float32(ctx.SimNow)
 
 	hash := sys.spatialHash.Get()
 
@@ -216,7 +212,7 @@ func (sys *UnitMovementSystem) Update(ctx core.UpdateContext) {
 		}
 		for i := start; i < end; i++ {
 			w := work[i]
-			markerOp := sys.step(w, dt, hash, walls)
+			markerOp := sys.step(w, dt, now, hash, walls)
 			switch markerOp {
 			case staminaMarkerAdd:
 				sys.workerExhaustedAdds[chunkIdx] = append(sys.workerExhaustedAdds[chunkIdx], w.ent)

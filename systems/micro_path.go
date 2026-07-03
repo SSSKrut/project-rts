@@ -33,10 +33,9 @@ const (
 // Lives between FormationSystem (writer of ActionQueue.Head.Target) and the
 // next UnitMovement tick (reader of MicroPath.Waypoints[Head]).
 type MicroPathSystem struct {
-	filter  *ecs.Filter4[components.Unit, components.WorldPos, components.MicroPath, components.ActionQueue]
-	nav     *NavService
-	pool    *core.WorkerPool
-	elapsed float32
+	filter *ecs.Filter4[components.Unit, components.WorldPos, components.MicroPath, components.ActionQueue]
+	nav    *NavService
+	pool   *core.WorkerPool
 }
 
 func NewMicroPathSystem(nav *NavService, pool *core.WorkerPool) *MicroPathSystem {
@@ -58,9 +57,7 @@ func (MicroPathSystem) LODPolicy() core.LODPolicy {
 }
 
 func (sys *MicroPathSystem) Update(ctx core.UpdateContext) {
-	dt := float32(ctx.Delta.Seconds())
-	sys.elapsed += dt
-	now := sys.elapsed
+	now := float32(ctx.SimNow)
 
 	budget := microPathReplanBudget
 

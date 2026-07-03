@@ -33,7 +33,6 @@ type StanceControllerSystem struct {
 	orderQueueMap *ecs.Map[components.OrderQueueHead]
 	// ModeSuppressed forces Prone regardless of band / lock / doctrine.
 	blackboardMap *ecs.Map[components.LocalBlackboard]
-	elapsed       float32
 }
 
 func NewStanceControllerSystem() *StanceControllerSystem {
@@ -62,8 +61,7 @@ func (StanceControllerSystem) LODPolicy() core.LODPolicy {
 }
 
 func (sys *StanceControllerSystem) Update(ctx core.UpdateContext) {
-	sys.elapsed += float32(ctx.Delta.Seconds())
-	now := sys.elapsed
+	now := float32(ctx.SimNow)
 
 	q := sys.filter.Query()
 	for q.Next() {

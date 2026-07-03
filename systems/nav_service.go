@@ -605,9 +605,7 @@ func (s *NavService) closestSurfaceEntry(level ecs.Entity, registry *components.
 	if len(queue) == 0 {
 		return components.NavNode{}, false
 	}
-	// Map iteration order is random; all seeds share this Level, so (I, J)
-	// is a total key. Sorting makes BFS order and equal-distance tie-breaks
-	// stable run-to-run (WS-B M2).
+	// Stable seed order: map iteration is random, (I, J) is total per level.
 	sort.Slice(queue, func(a, b int) bool {
 		if queue[a].I != queue[b].I {
 			return queue[a].I < queue[b].I

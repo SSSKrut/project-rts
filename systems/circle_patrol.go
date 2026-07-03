@@ -15,8 +15,7 @@ import (
 // queue head so the unit smoothly follows the moving waypoint. Phase 18.5
 // test utility — used by wildlife and hostile-dummy spawns.
 type CirclePatrolSystem struct {
-	filter  *ecs.Filter3[components.CirclePatrol, components.WorldPos, components.ActionQueue]
-	elapsed float32
+	filter *ecs.Filter3[components.CirclePatrol, components.WorldPos, components.ActionQueue]
 }
 
 func NewCirclePatrolSystem() *CirclePatrolSystem { return &CirclePatrolSystem{} }
@@ -36,7 +35,7 @@ func (CirclePatrolSystem) LODPolicy() core.LODPolicy {
 }
 
 func (sys *CirclePatrolSystem) Update(ctx core.UpdateContext) {
-	sys.elapsed += float32(ctx.Delta.Seconds())
+	now := float32(ctx.SimNow)
 	q := sys.filter.Query()
 	for q.Next() {
 		patrol, _, queue := q.Get()
@@ -44,7 +43,7 @@ func (sys *CirclePatrolSystem) Update(ctx core.UpdateContext) {
 			continue
 		}
 		angVel := patrol.Speed / patrol.RadiusM
-		angle := patrol.Phase + sys.elapsed*angVel
+		angle := patrol.Phase + now*angVel
 		target := patrol.Center
 		target.Local.X += patrol.RadiusM * float32(math.Cos(float64(angle)))
 		target.Local.Z += patrol.RadiusM * float32(math.Sin(float64(angle)))

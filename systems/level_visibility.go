@@ -18,7 +18,6 @@ type LevelVisibilitySystem struct {
 	levelFilter  *ecs.Filter2[components.Level, components.LevelVisibility]
 	visMap       *ecs.Map[components.LevelVisibility]
 	factionMap   *ecs.Map[components.Faction]
-	clock        float32
 }
 
 func NewLevelVisibilitySystem() *LevelVisibilitySystem {
@@ -47,7 +46,7 @@ func (sys *LevelVisibilitySystem) Update(ctx core.UpdateContext) {
 	if ctx.Tier != core.LODTierActive {
 		return
 	}
-	sys.clock += float32(ctx.Delta.Seconds())
+	now := float32(ctx.SimNow)
 
 	type pt struct{ x, y, z float32 }
 	var pts []pt
@@ -63,9 +62,7 @@ func (sys *LevelVisibilitySystem) Update(ctx core.UpdateContext) {
 	qu := sys.unitFilter.Query()
 	for qu.Next() {
 		_, pos := qu.Get()
-		// Only player-faction units reveal interiors (missing Faction =
-		// player by the zero-value convention). An enemy patrol walking
-		// through a building must not defog it for the player.
+		// Enemy units must not defog interiors; missing Faction = player.
 		if f := sys.factionMap.Get(qu.Entity()); f != nil && f.ID != components.FactionPlayer {
 			continue
 		}
@@ -96,13 +93,7 @@ func (sys *LevelVisibilitySystem) Update(ctx core.UpdateContext) {
 		}
 		if seen {
 			vis.Discovered = true
-			vis.LastSeenAt = sys.clock
+			vis.LastSeenAt = now
 		}
 	}
-}
-
-// Clock exposes the session-time accumulator for readers comparing against
-// LevelVisibility.LastSeenAt.
-func (sys *LevelVisibilitySystem) Clock() float32 {
-	return sys.clock
 }

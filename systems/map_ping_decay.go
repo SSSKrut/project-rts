@@ -11,7 +11,6 @@ import (
 type MapPingDecaySystem struct {
 	filter    *ecs.Filter1[components.MapPing]
 	despawned []ecs.Entity
-	elapsed   float32
 }
 
 func NewMapPingDecaySystem() *MapPingDecaySystem {
@@ -33,8 +32,7 @@ func (MapPingDecaySystem) LODPolicy() core.LODPolicy {
 }
 
 func (sys *MapPingDecaySystem) Update(ctx core.UpdateContext) {
-	sys.elapsed += float32(ctx.Delta.Seconds())
-	now := sys.elapsed
+	now := float32(ctx.SimNow)
 	sys.despawned = sys.despawned[:0]
 	q := sys.filter.Query()
 	for q.Next() {

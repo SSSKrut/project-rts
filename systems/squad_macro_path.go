@@ -36,7 +36,6 @@ type SquadMacroPathSystem struct {
 	pool                     *core.WorkerPool
 
 	workBuf []macroPathWork
-	elapsed float32
 }
 
 // NewSquadMacroPathSystem. nil pool falls back to serial execution.
@@ -90,8 +89,6 @@ type macroPathWork struct {
 }
 
 func (sys *SquadMacroPathSystem) Update(ctx core.UpdateContext) {
-	sys.elapsed += float32(ctx.Delta.Seconds())
-
 	sys.workBuf = sys.workBuf[:0]
 	q := sys.filter.Query()
 	for q.Next() {
@@ -115,7 +112,7 @@ func (sys *SquadMacroPathSystem) Update(ctx core.UpdateContext) {
 	work := sys.workBuf
 
 	world := ctx.World
-	elapsed := sys.elapsed
+	elapsed := float32(ctx.SimNow)
 	sys.pool.ParallelFor(len(work), func(start, end int) {
 		for i := start; i < end; i++ {
 			sys.processSquad(world, work[i], elapsed)

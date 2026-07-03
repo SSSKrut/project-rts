@@ -12,7 +12,6 @@ import (
 type ThreatDecaySystem struct {
 	filter    *ecs.Filter1[components.ThreatSource]
 	despawned []ecs.Entity
-	elapsed   float32
 }
 
 func NewThreatDecaySystem() *ThreatDecaySystem {
@@ -37,8 +36,7 @@ func (ThreatDecaySystem) LODPolicy() core.LODPolicy {
 }
 
 func (sys *ThreatDecaySystem) Update(ctx core.UpdateContext) {
-	sys.elapsed += float32(ctx.Delta.Seconds())
-	now := sys.elapsed
+	now := float32(ctx.SimNow)
 	sys.despawned = sys.despawned[:0]
 
 	q := sys.filter.Query()

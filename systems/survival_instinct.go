@@ -57,8 +57,6 @@ type SurvivalInstinctSystem struct {
 	// holding it. pickCover uses it to penalise full slots without hard
 	// rejecting them.
 	occupancyClaim map[ecs.Entity]uint8
-
-	elapsed float32
 }
 
 // siCoverSlot is the per-tick snapshot of one live CoverSlot entity.
@@ -154,8 +152,7 @@ func (SurvivalInstinctSystem) LODPolicy() core.LODPolicy {
 }
 
 func (sys *SurvivalInstinctSystem) Update(ctx core.UpdateContext) {
-	sys.elapsed += float32(ctx.Delta.Seconds())
-	now := sys.elapsed
+	now := float32(ctx.SimNow)
 
 	// Pass 1 — snapshot live cover slots.
 	sys.slots = sys.slots[:0]

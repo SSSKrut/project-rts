@@ -70,7 +70,6 @@ type WeaponSystem struct {
 
 	spatialHash ecs.Resource[core.SpatialHash]
 
-	elapsed  float32
 	lastTick float32
 }
 
@@ -243,8 +242,7 @@ func (WeaponSystem) LODPolicy() core.LODPolicy {
 }
 
 func (sys *WeaponSystem) Update(ctx core.UpdateContext) {
-	sys.elapsed += float32(ctx.Delta.Seconds())
-	now := sys.elapsed
+	now := float32(ctx.SimNow)
 	dt := now - sys.lastTick
 	if dt < 0 || dt > 1.0 {
 		// First tick or large gap (paused) - bound the decay so we don't

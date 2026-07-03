@@ -18,14 +18,11 @@ const (
 	staminaMarkerRemove
 )
 
-// step advances one unit by dt seconds. Race-safe: every write goes through
-// the snapshot's per-unit pointers, and neighbour reads consume the frozen
-// SpatialEntry snapshot — no live component maps are touched. Returns the
-// StaminaExhausted marker toggle decision (caller batches it for the serial
-// post-pass).
+// step advances one unit by dt seconds. Race-safe: writes go through the
+// snapshot's per-unit pointers, neighbour reads through the hash snapshot.
 func (sys *UnitMovementSystem) step(
 	w unitWork,
-	dt float32,
+	dt, now float32,
 	hash *core.SpatialHash,
 	walls map[components.ChunkCoord][]colWall,
 ) staminaMarkerOp {
@@ -39,7 +36,7 @@ func (sys *UnitMovementSystem) step(
 	// LockUntil gate prevents flapping with StanceControllerSystem (which
 	// drops the unit into Prone under fire).
 	hasActiveStanceAction := w.queue.Count > 0 && w.queue.Actions[w.queue.Head].Kind == components.ActionStance
-	if !hasActiveStanceAction && w.stance.Code != w.profile.Stance && sys.elapsed >= w.stance.LockUntil {
+	if !hasActiveStanceAction && w.stance.Code != w.profile.Stance && now >= w.stance.LockUntil {
 		w.stance.Code = w.profile.Stance
 	}
 
@@ -132,11 +129,7 @@ func (sys *UnitMovementSystem) step(
 		selfZ := float32(w.pos.Chunk.Z)*components.ChunkSize + w.pos.Local.Z
 		var neighbours []orcaAgent
 		if hash != nil {
-			// Snapshot-only neighbour read (WS-B M1): live posMap/motionMap/
-			// colliderMap lookups here raced with the owner worker's writes.
-			// SpatialEntry carries position / velocity / radius frozen at the
-			// serial rebuild. No alive check — nothing is dereferenced, and a
-			// one-tick phantom of a despawned unit is a harmless obstacle.
+			// Snapshot-only: live neighbour map reads race with owner workers.
 			hash.ForEachEntryInRadius(selfX, selfZ, orcaNeighbourRadius, func(e *core.SpatialEntry, _ float32) {
 				if e.Ent == w.ent {
 					return
@@ -280,8 +273,8 @@ func (sys *UnitMovementSystem) step(
 	case components.ActionStop:
 		w.mot.Speed = 0
 		if w.queue.StopUntil == 0 {
-			w.queue.StopUntil = sys.elapsed + stopDuration
-		} else if sys.elapsed >= w.queue.StopUntil {
+			w.queue.StopUntil = now + stopDuration
+		} else if now >= w.queue.StopUntil {
 			w.queue.StopUntil = 0
 			popAction(w.queue)
 		}

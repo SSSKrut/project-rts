@@ -9,13 +9,9 @@ import (
 	"rts-go/core"
 )
 
-// SpatialHashRebuildSystem snapshots every Unit's world XZ + velocity +
-// collider radius into the core.SpatialHash resource at the start of each
-// tick. MUST run BEFORE unit_movement (separation / ORCA read the hash).
-// This serial pass is the ONLY place that reads live Motion/Collider for
-// neighbour purposes — parallel readers consume the frozen SpatialEntry
-// (WS-B M1). WeaponSystem tolerates 1-tick staleness — query radii are
-// 1.5 m+ vs. ~8 cm/tick top speed.
+// SpatialHashRebuildSystem snapshots every Unit's world XZ / velocity /
+// radius into the core.SpatialHash resource. MUST run BEFORE unit_movement;
+// this serial pass is the only live Motion/Collider read for neighbours.
 type SpatialHashRebuildSystem struct {
 	hash        ecs.Resource[core.SpatialHash]
 	unitFilter  *ecs.Filter2[components.Unit, components.WorldPos]
@@ -24,8 +20,6 @@ type SpatialHashRebuildSystem struct {
 	snapshot    []core.SpatialEntry
 }
 
-// defaultUnitRadius backs SpatialEntry.Radius when a unit has no Collider —
-// matches the historical ORCA fallback.
 const defaultUnitRadius float32 = 0.4
 
 // NewSpatialHashRebuildSystem. The hash resource MUST be added to the world
