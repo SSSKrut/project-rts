@@ -4,7 +4,6 @@ import (
 	"math"
 
 	rl "github.com/gen2brain/raylib-go/raylib"
-	"github.com/mlange-42/ark/ecs"
 
 	"rts-go/components"
 	"rts-go/core"
@@ -20,9 +19,10 @@ const (
 )
 
 // step advances one unit by dt seconds. Race-safe: every write goes through
-// the snapshot's per-unit pointers and never touches shared maps. Returns
-// the StaminaExhausted marker toggle decision (caller batches it for the
-// serial post-pass).
+// the snapshot's per-unit pointers, and neighbour reads consume the frozen
+// SpatialEntry snapshot — no live component maps are touched. Returns the
+// StaminaExhausted marker toggle decision (caller batches it for the serial
+// post-pass).
 func (sys *UnitMovementSystem) step(
 	w unitWork,
 	dt float32,
@@ -132,33 +132,19 @@ func (sys *UnitMovementSystem) step(
 		selfZ := float32(w.pos.Chunk.Z)*components.ChunkSize + w.pos.Local.Z
 		var neighbours []orcaAgent
 		if hash != nil {
-			hash.ForEachInRadius(selfX, selfZ, orcaNeighbourRadius, func(ent ecs.Entity, _ float32) {
-				if ent == w.ent {
+			// Snapshot-only neighbour read (WS-B M1): live posMap/motionMap/
+			// colliderMap lookups here raced with the owner worker's writes.
+			// SpatialEntry carries position / velocity / radius frozen at the
+			// serial rebuild. No alive check — nothing is dereferenced, and a
+			// one-tick phantom of a despawned unit is a harmless obstacle.
+			hash.ForEachEntryInRadius(selfX, selfZ, orcaNeighbourRadius, func(e *core.SpatialEntry, _ float32) {
+				if e.Ent == w.ent {
 					return
-				}
-				if !sys.world.Alive(ent) {
-					return
-				}
-				np := sys.posMap.Get(ent)
-				if np == nil {
-					return
-				}
-				nMot := sys.motionMap.Get(ent)
-				nx := float32(np.Chunk.X)*components.ChunkSize + np.Local.X
-				nz := float32(np.Chunk.Z)*components.ChunkSize + np.Local.Z
-				var nVx, nVz float32
-				if nMot != nil && nMot.Speed > 0 {
-					nVx = float32(math.Sin(float64(nMot.VelocityYaw))) * nMot.Speed
-					nVz = float32(math.Cos(float64(nMot.VelocityYaw))) * nMot.Speed
-				}
-				nRadius := float32(0.4)
-				if col := sys.colliderMap.Get(ent); col != nil && col.Radius > 0 {
-					nRadius = col.Radius
 				}
 				neighbours = append(neighbours, orcaAgent{
-					Pos:    orcaVec2{X: nx, Z: nz},
-					Vel:    orcaVec2{X: nVx, Z: nVz},
-					Radius: nRadius,
+					Pos:    orcaVec2{X: e.X, Z: e.Z},
+					Vel:    orcaVec2{X: e.VelX, Z: e.VelZ},
+					Radius: e.Radius,
 				})
 			})
 		}

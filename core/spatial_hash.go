@@ -16,16 +16,25 @@ import "github.com/mlange-42/ark/ecs"
 //     truncated, not replaced) so steady-state runs allocate zero per tick.
 //   - Stale-entity guard is the reader's responsibility. Between rebuild
 //     and query an entity may have been removed; callbacks MUST check
-//     world.Alive(ent) before using the entity.
+//     world.Alive(ent) before dereferencing the entity's components.
+//     Callbacks that consume only snapshot fields (SpatialEntry) need no
+//     alive check — a one-tick-stale entry is harmless data.
+//   - Parallel reader sections must NOT read other entities' live
+//     components inside callbacks (data race with the owner worker's
+//     writes) — consume the SpatialEntry snapshot instead.
 //   - The cells map is read concurrently by parallel-aware reader systems.
 //     Reads are race-safe because no writes happen during the parallel
 //     section. Reader callbacks must not mutate the hash.
 
-// SpatialEntry inlines position so callers don't need a posMap.Get inside
-// the radius callback.
+// SpatialEntry inlines the per-tick snapshot (position, velocity, radius)
+// so callers never need a component Map.Get inside the radius callback —
+// live reads of other units' components from a parallel section race with
+// the owner worker's writes (WS-B M1).
 type SpatialEntry struct {
-	Ent  ecs.Entity
-	X, Z float32
+	Ent        ecs.Entity
+	X, Z       float32
+	VelX, VelZ float32 // world-space XZ velocity (m/s) at snapshot time
+	Radius     float32 // collider radius (default pre-applied by rebuild)
 }
 
 type SpatialHash struct {
@@ -129,6 +138,37 @@ func (h *SpatialHash) ForEachInRadius(x, z, r float32, fn func(ent ecs.Entity, d
 	}
 }
 
+// ForEachEntryInRadius is the snapshot-consuming variant of
+// ForEachInRadius: fn receives the full SpatialEntry (position / velocity /
+// radius frozen at rebuild time). Safe to call from parallel worker
+// sections — no component access, no alive check required. The pointer is
+// valid only for the duration of the callback.
+func (h *SpatialHash) ForEachEntryInRadius(x, z, r float32, fn func(e *SpatialEntry, distSq float32)) {
+	if fn == nil || r <= 0 || len(h.entries) == 0 {
+		return
+	}
+	rSq := r * r
+	minCX := h.cellOf(x - r)
+	maxCX := h.cellOf(x + r)
+	minCZ := h.cellOf(z - r)
+	maxCZ := h.cellOf(z + r)
+	for cz := minCZ; cz <= maxCZ; cz++ {
+		for cx := minCX; cx <= maxCX; cx++ {
+			indices := h.cells[packKey(cx, cz)]
+			for _, idx := range indices {
+				e := &h.entries[idx]
+				dx := e.X - x
+				dz := e.Z - z
+				dSq := dx*dx + dz*dz
+				if dSq > rSq {
+					continue
+				}
+				fn(e, dSq)
+			}
+		}
+	}
+}
+
 // QueryInto appends every entity within r metres of (x, z) onto buf and
 // returns the resulting slice. Same alive-check rule as ForEachInRadius -
 // the returned slice may contain stale entries if Rebuild ran before
@@ -143,7 +183,7 @@ func (h *SpatialHash) QueryInto(x, z, r float32, buf []ecs.Entity) []ecs.Entity 
 // ApproximateMemory returns a rough byte-count for debug HUD use.
 func (h *SpatialHash) ApproximateMemory() int {
 	const (
-		sizeofEntry = 4 + 4 + 8
+		sizeofEntry = 8 + 6*4 // Ent + X/Z/VelX/VelZ/Radius
 		sizeofIdx   = 4
 	)
 	bytes := len(h.entries) * sizeofEntry

@@ -61,10 +61,10 @@ const staminaRegenThreshold float32 = 0.30
 type UnitMovementSystem struct {
 	unitFilter *ecs.Filter6[components.Unit, components.WorldPos, components.Motion, components.ActionQueue, components.Stance, components.MicroPath]
 	pool       *core.WorkerPool
-	// Separation reads SpatialHash (rebuilt by SpatialHashRebuildSystem
-	// before this system).
+	// Separation / ORCA read SpatialHash (rebuilt by SpatialHashRebuildSystem
+	// before this system). Neighbour pos / velocity / radius come from the
+	// frozen SpatialEntry snapshot — never from live component maps (WS-B M1).
 	spatialHash ecs.Resource[core.SpatialHash]
-	world       *ecs.World
 
 	memberMap                *ecs.Map[components.SquadMember]
 	staminaMap               *ecs.Map[components.Stamina]
@@ -72,10 +72,8 @@ type UnitMovementSystem struct {
 	orderQueueMap            *ecs.Map[components.OrderQueueHead]
 	orderMovementOverrideMap *ecs.Map[components.OrderParamMovementProfile]
 	movementProfileMap       *ecs.Map[components.MovementProfile]
-	posMap                   *ecs.Map[components.WorldPos]
 	threatMap                *ecs.Map[components.Threat]
-	// ORCA reads neighbour velocity + collider radius.
-	motionMap   *ecs.Map[components.Motion]
+	// step() reads the unit's OWN collider for the ORCA self radius.
 	colliderMap *ecs.Map[components.Collider]
 	// Replan-trigger counters: step() accumulates Overcrowded / Stuck dt and
 	// flips MicroPath.Dirty when either crosses threshold.
@@ -120,13 +118,10 @@ func (sys *UnitMovementSystem) InitUI(w *ecs.World) {
 	sys.orderQueueMap = ecs.NewMap[components.OrderQueueHead](w)
 	sys.orderMovementOverrideMap = ecs.NewMap[components.OrderParamMovementProfile](w)
 	sys.movementProfileMap = ecs.NewMap[components.MovementProfile](w)
-	sys.posMap = ecs.NewMap[components.WorldPos](w)
 	sys.threatMap = ecs.NewMap[components.Threat](w)
-	sys.motionMap = ecs.NewMap[components.Motion](w)
 	sys.colliderMap = ecs.NewMap[components.Collider](w)
 	sys.blackboardMap = ecs.NewMap[components.LocalBlackboard](w)
 	sys.spatialHash = ecs.NewResource[core.SpatialHash](w)
-	sys.world = w
 	sys.wallFilter = ecs.NewFilter2[components.WorldPos, components.WallSegment](w)
 	sys.doorMap = ecs.NewMap[components.Door](w)
 }
