@@ -96,6 +96,9 @@ func makeStartingTrenches() []components.Trench {
 	if isDoorScene() {
 		return nil
 	}
+	if isAIScene() {
+		return aiSceneTrenches()
+	}
 	wp := func(wx, wz float32) components.WorldPos {
 		return components.WorldPos{}.Add(rl.Vector3{X: wx, Y: 0, Z: wz})
 	}

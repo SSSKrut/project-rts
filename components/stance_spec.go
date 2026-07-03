@@ -11,6 +11,7 @@ type StanceSpec struct {
 	BodyHeight       float32 // render cube height (m)
 	DamageMultiplier float32 // hit silhouette factor (smaller stance -> less damage)
 	TargetCenterY    float32 // weapon aim point Y above foot for opposing shooters
+	EyeHeight        float32 // sensor eye Y above foot (terrain-LOS origin)
 }
 
 const StanceCount StanceCode = StanceProne + 1
@@ -19,17 +20,17 @@ var StanceSpecs = [StanceCount]StanceSpec{
 	StanceStand: {
 		Code: StanceStand, Name: "Stand",
 		MaxSpeed: 5.0, BodyHeight: 1.8,
-		DamageMultiplier: 1.0, TargetCenterY: 0.9,
+		DamageMultiplier: 1.0, TargetCenterY: 0.9, EyeHeight: 1.5,
 	},
 	StanceCrouch: {
 		Code: StanceCrouch, Name: "Crouch",
 		MaxSpeed: 3.0, BodyHeight: 1.1,
-		DamageMultiplier: 0.8, TargetCenterY: 0.55,
+		DamageMultiplier: 0.8, TargetCenterY: 0.55, EyeHeight: 1.0,
 	},
 	StanceProne: {
 		Code: StanceProne, Name: "Prone",
 		MaxSpeed: 1.5, BodyHeight: 0.4,
-		DamageMultiplier: 0.5, TargetCenterY: 0.25,
+		DamageMultiplier: 0.5, TargetCenterY: 0.25, EyeHeight: 0.35,
 	},
 }
 

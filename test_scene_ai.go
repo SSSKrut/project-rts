@@ -42,6 +42,13 @@ const (
 	aiSceneMainM1 = "ai_main_m1" // main wing, second storey (via stairs)
 	aiSceneMainE  = "ai_main_e"  // east wing
 	aiSceneMainN  = "ai_main_n"  // north wing
+
+	// ai_los_* validate terrain-LOS + squad shared vision: one hostile 13 m
+	// north of a HoldFire squad (optical: linear falloff over 40 m ⇒
+	// detection needs ≤ ~20 m) — on open ground (contact + shared awareness
+	// expected) or standing inside a trench cut (defilade, zero contacts).
+	aiSceneLosOpen     = "ai_los_open"
+	aiSceneLosDefilade = "ai_los_defilade"
 )
 
 // aiMainSpec selects the target wing (by expected footprint centre) and the
@@ -103,8 +110,30 @@ func aiSceneAnchorPos() components.WorldPos {
 		return components.WorldPos{}.Add(rl.Vector3{X: 0, Z: 0})
 	case aiSceneMainM0, aiSceneMainM1, aiSceneMainE, aiSceneMainN:
 		return components.WorldPos{}.Add(rl.Vector3{X: -40, Z: 10})
+	case aiSceneLosOpen, aiSceneLosDefilade:
+		return components.WorldPos{}.Add(rl.Vector3{X: 30, Z: 20})
 	}
 	return components.WorldPos{}
+}
+
+// aiSceneTrenches: the defilade scene digs its own line under the enemy;
+// other ai scenes keep the main-map trench (far away from all of them).
+func aiSceneTrenches() []components.Trench {
+	wp := func(wx, wz float32) components.WorldPos {
+		return components.WorldPos{}.Add(rl.Vector3{X: wx, Y: 0, Z: wz})
+	}
+	if aiSceneID() == aiSceneLosDefilade {
+		return []components.Trench{{
+			Points: []components.WorldPos{wp(20, 25), wp(40, 25)},
+			Width:  2.0,
+			Depth:  1.5,
+		}}
+	}
+	return []components.Trench{{
+		Points: []components.WorldPos{wp(-50, 40), wp(-35, 50), wp(-15, 55)},
+		Width:  1.5,
+		Depth:  1.5,
+	}}
 }
 
 func aiSceneBuildings() []components.BuildingPlan {
@@ -112,6 +141,8 @@ func aiSceneBuildings() []components.BuildingPlan {
 		return mainWorldBuildings()
 	}
 	switch aiSceneID() {
+	case aiSceneLosOpen, aiSceneLosDefilade:
+		return nil
 	case aiSceneDoorSouth:
 		return aiBuildingsSingleHouse(0)
 	case aiSceneDoorNorth:
@@ -241,6 +272,8 @@ func aiSpawnPos() components.WorldPos {
 		return components.WorldPos{}.Add(rl.Vector3{X: 0, Z: 0})
 	case aiSceneMainM0, aiSceneMainM1, aiSceneMainE, aiSceneMainN:
 		return components.WorldPos{}.Add(rl.Vector3{X: -44, Z: -4})
+	case aiSceneLosOpen, aiSceneLosDefilade:
+		return components.WorldPos{}.Add(rl.Vector3{X: 30, Z: 10})
 	}
 	return components.WorldPos{}
 }
@@ -267,6 +300,45 @@ func aiSceneSpawn(
 	if squad == (ecs.Entity{}) {
 		fmt.Printf("[ai-test %s] FAILED TO SPAWN SQUAD — aborting\n", aiSceneID())
 		return nil
+	}
+
+	if id := aiSceneID(); id == aiSceneLosOpen || id == aiSceneLosDefilade {
+		// HoldFire keeps the enemy alive: sweepAwareness on death would wipe
+		// the very entries the verdict inspects.
+		if rules := ecs.NewMap[components.EngagementRules](world).Get(squad); rules != nil {
+			rules.Mode = components.HoldFire
+		}
+		enemyPos := components.WorldPos{}.Add(rl.Vector3{X: 30, Z: 25})
+		enemyPos.Local.Y = systems.GroundHeight(30, 25)
+		enemy := unitFactory(enemyPos)
+		ecs.NewMap[components.Faction](world).Add(enemy, &components.Faction{ID: components.FactionEnemyRed})
+		ecs.NewMap[components.HP](world).Add(enemy, &components.HP{Current: 100, Max: 100})
+		// Short northward march so the settled formation faces the enemy —
+		// the optical cone must not decide the verdict.
+		squadService.IssueOrder(squad, components.OrderKindMoveTo,
+			components.WorldPos{}.Add(rl.Vector3{X: 30, Z: 12}), ecs.Entity{},
+			false, systems.OrderParams{})
+		fmt.Println("============================================================")
+		fmt.Printf("== AI LOS SCENE: %s  squad=%v enemy=%v expectVisible=%v\n",
+			id, squad, enemy, id == aiSceneLosOpen)
+		fmt.Println("============================================================")
+		return &aiTestState{
+			sceneID:          id,
+			squad:            squad,
+			losTarget:        enemy,
+			losExpectVisible: id == aiSceneLosOpen,
+			World:            world,
+			SquadService:     squadService,
+			PosMap:           posMap,
+			RosterMap:        rosterMap,
+			BuildingMap:      buildingMap,
+			MotionMap:        ecs.NewMap[components.Motion](world),
+			BlackboardMap:    ecs.NewMap[components.LocalBlackboard](world),
+			MicroPathMap:     ecs.NewMap[components.MicroPath](world),
+			orderFired:       true,
+			verdictAt:        20,
+			nextSampleAt:     5,
+		}
 	}
 
 	// For compound scenes, target the closest wing to the spawn position so
@@ -387,6 +459,11 @@ type aiTestState struct {
 	targetLevelMinY float32
 	targetLevelAABB components.AABB3D
 
+	// Set for ai_los_* scenes: verdict counts Contacts on this entity and
+	// tallies Direct/Shared awareness across the roster.
+	losTarget        ecs.Entity
+	losExpectVisible bool
+
 	elapsed      float32
 	orderAt      float32
 	verdictAt    float32
@@ -441,6 +518,11 @@ func (s *aiTestState) Update(elapsed float32) {
 	}
 	s.elapsed = elapsed
 	s.EnsureInit()
+
+	if s.losTarget != (ecs.Entity{}) {
+		s.updateLos(elapsed)
+		return
+	}
 
 	if !s.orderFired && elapsed >= s.orderAt {
 		bld := s.BuildingMap.Get(s.targetBuilding)
@@ -559,6 +641,82 @@ func (s *aiTestState) Update(elapsed float32) {
 		fmt.Println("============================================================")
 		s.verdictDone = true
 	}
+}
+
+func (s *aiTestState) updateLos(elapsed float32) {
+	if s.verdictDone {
+		return
+	}
+	if elapsed >= s.nextSampleAt && elapsed < s.verdictAt {
+		s.nextSampleAt += aiSampleEvery
+		fmt.Printf("[ai-test %s] t=%.1fs sample: contacts=%d\n",
+			s.sceneID, elapsed, s.losContactCount())
+	}
+	if elapsed < s.verdictAt {
+		return
+	}
+	s.verdictDone = true
+	contacts := s.losContactCount()
+	direct, shared, members := s.losAwarenessTally()
+	pass := contacts == 0
+	if s.losExpectVisible {
+		pass = contacts >= 1 && direct >= 1 && direct+shared == members
+	}
+	verdict := "FAIL"
+	if pass {
+		verdict = "PASS"
+	}
+	fmt.Println("============================================================")
+	fmt.Printf("== VERDICT [%s]: %s  (contacts=%d direct=%d shared=%d members=%d expectVisible=%v)\n",
+		s.sceneID, verdict, contacts, direct, shared, members, s.losExpectVisible)
+	fmt.Println("============================================================")
+}
+
+func (s *aiTestState) losContactCount() int {
+	regRes := ecs.NewResource[components.ContactRegistry](s.World)
+	reg := regRes.Get()
+	if reg == nil || reg.Tracked == nil {
+		return 0
+	}
+	n := 0
+	for tracked := range reg.Tracked {
+		if tracked == s.losTarget {
+			n++
+		}
+	}
+	return n
+}
+
+func (s *aiTestState) losAwarenessTally() (direct, shared, members int) {
+	awareMap := ecs.NewMap[components.Awareness](s.World)
+	roster := s.RosterMap.Get(s.squad)
+	if roster == nil {
+		return
+	}
+	for i := uint8(0); i < roster.Count; i++ {
+		mem := roster.Members[i]
+		if mem == (ecs.Entity{}) || !s.World.Alive(mem) {
+			continue
+		}
+		members++
+		aw := awareMap.Get(mem)
+		if aw == nil {
+			continue
+		}
+		for j := range aw.LastSeen {
+			e := &aw.LastSeen[j]
+			if e.Time == 0 || e.Target != s.losTarget {
+				continue
+			}
+			if e.Flags&components.AwareDirect != 0 {
+				direct++
+			} else {
+				shared++
+			}
+			break
+		}
+	}
+	return
 }
 
 // countInside tallies live roster members inside the target Footprint (and,

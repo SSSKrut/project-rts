@@ -43,6 +43,8 @@ type ContactSystem struct {
 	equipMap           *ecs.Map[components.Equipment]
 
 	registryRes *ecs.Resource[components.ContactRegistry]
+	indexRes    ecs.Resource[TerrainChunkIndex]
+	hmMap       *ecs.Map[components.Heightmap]
 	pool        *core.WorkerPool
 	worldRef    *ecs.World
 
@@ -50,6 +52,9 @@ type ContactSystem struct {
 	unitsBuf     []contactUnit
 	seersBuf     []contactSeer
 	wallsByChunk map[components.ChunkCoord][]losWall
+	heightmaps   map[components.ChunkCoord][]float32
+	groupsBuf    []detectGroup
+	groupIdx     map[ecs.Entity]int32
 	contactsBuf  []contactRec
 	// Per-worker collectors (indexed by ParallelForIndexed chunkIdx),
 	// drained in worker order → deterministic contactsBuf ordering.
@@ -63,6 +68,8 @@ type contactUnit struct {
 	ent         ecs.Entity
 	pos         components.WorldPos
 	chunk       components.ChunkCoord
+	x, z        float32 // world XZ
+	targetY     float32 // stance-aware silhouette Y for terrain-LOS
 	faction     uint8
 	dimMask     components.DimensionMask
 	concealment float32 // 0..1, lower = harder to spot
@@ -71,13 +78,25 @@ type contactUnit struct {
 
 // contactSeer is the per-tick observer snapshot.
 type contactSeer struct {
-	ent      ecs.Entity
-	pos      components.WorldPos
-	yaw      float32
-	faction  uint8
-	sensors  *components.Sensors
-	aware    *components.Awareness
-	maxRange float32 // max BaseRange across channels — used for cull
+	ent        ecs.Entity
+	pos        components.WorldPos
+	x, z       float32
+	eyeY       float32
+	fwdX, fwdZ float32
+	yaw        float32
+	faction    uint8
+	sensors    *components.Sensors
+	aware      *components.Awareness
+	maxRange   float32 // max BaseRange across channels — used for cull
+}
+
+// detectGroup is one squad (or one solo unit) processed as a unit: one cull
+// gate per candidate, up to two member-origins per LOS attempt, sightings
+// shared to every member.
+type detectGroup struct {
+	members                    []int32 // indices into seersBuf
+	cx, cz, cullR              float32
+	minCX, maxCX, minCZ, maxCZ int32 // member chunk bounds for the wall window
 }
 
 // contactRec is one detection event from the detect pass; the serial post-
@@ -103,6 +122,9 @@ func NewContactSystem(pool *core.WorkerPool) *ContactSystem {
 		unitsBuf:       make([]contactUnit, 0, 64),
 		seersBuf:       make([]contactSeer, 0, 64),
 		wallsByChunk:   make(map[components.ChunkCoord][]losWall, 32),
+		heightmaps:     make(map[components.ChunkCoord][]float32, 64),
+		groupsBuf:      make([]detectGroup, 0, 16),
+		groupIdx:       make(map[ecs.Entity]int32, 16),
 		contactsBuf:    make([]contactRec, 0, 64),
 		workerContacts: make([][]contactRec, workers),
 	}
@@ -126,6 +148,8 @@ func (sys *ContactSystem) InitUI(w *ecs.World) {
 	sys.equipMap = ecs.NewMap[components.Equipment](w)
 	r := ecs.NewResource[components.ContactRegistry](w)
 	sys.registryRes = &r
+	sys.indexRes = ecs.NewResource[TerrainChunkIndex](w)
+	sys.hmMap = ecs.NewMap[components.Heightmap](w)
 }
 
 func (ContactSystem) Name() string { return "contact" }

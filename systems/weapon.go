@@ -69,6 +69,9 @@ type WeaponSystem struct {
 	worldRef        *ecs.World
 
 	spatialHash ecs.Resource[core.SpatialHash]
+	indexRes    ecs.Resource[TerrainChunkIndex]
+	hmMap       *ecs.Map[components.Heightmap]
+	heightmaps  map[components.ChunkCoord][]float32
 
 	lastTick float32
 }
@@ -192,6 +195,7 @@ func NewWeaponSystem(pool *core.WorkerPool, damage *DamageService, particles *Sp
 		shotsBuf:          make([]shotWork, 0, 32),
 		wallsByChunk:      make(map[components.ChunkCoord][]losWall, 32),
 		targetsByChunk:    make(map[components.ChunkCoord][]int32, 32),
+		heightmaps:        make(map[components.ChunkCoord][]float32, 64),
 		workerDamage:      make([][]damageEvent, workers),
 		workerTracer:      make([][]tracerSpec, workers),
 		workerImpact:      make([][]impactSpec, workers),
@@ -226,6 +230,8 @@ func (sys *WeaponSystem) InitUI(w *ecs.World) {
 	sys.worldRef = w
 
 	sys.spatialHash = ecs.NewResource[core.SpatialHash](w)
+	sys.indexRes = ecs.NewResource[TerrainChunkIndex](w)
+	sys.hmMap = ecs.NewMap[components.Heightmap](w)
 }
 
 func (WeaponSystem) Name() string { return "weapon" }
@@ -271,6 +277,7 @@ func (sys *WeaponSystem) Update(ctx core.UpdateContext) {
 	_ = dt
 
 	sys.snapshotTargetsAndWalls()
+	snapshotHeightmaps(sys.indexRes.Get(), sys.hmMap, sys.heightmaps)
 	sys.snapshotShots(now)
 
 	if len(sys.shotsBuf) > 0 {
@@ -401,6 +408,7 @@ func (sys *WeaponSystem) runParallelResolve(now float32) {
 	targets := sys.targetsBuf
 	targetsByChunk := sys.targetsByChunk
 	wallsByChunk := sys.wallsByChunk
+	heightmaps := sys.heightmaps
 	workerDamage := sys.workerDamage
 	workerTracer := sys.workerTracer
 	workerImpact := sys.workerImpact
@@ -410,7 +418,7 @@ func (sys *WeaponSystem) runParallelResolve(now float32) {
 
 	sys.pool.ParallelForIndexed(len(shots), func(wIdx, start, end int) {
 		for i := start; i < end; i++ {
-			resolveShot(&shots[i], targets, targetsByChunk, wallsByChunk, now,
+			resolveShot(&shots[i], targets, targetsByChunk, wallsByChunk, heightmaps, now,
 				&workerDamage[wIdx], &workerTracer[wIdx], &workerImpact[wIdx],
 				&workerThreat[wIdx], &workerSuppression[wIdx], &workerSplash[wIdx])
 		}

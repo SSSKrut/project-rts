@@ -56,11 +56,16 @@ type Collider struct {
 
 const AwarenessSlots = 8
 
+// AwareDirect: the unit saw/heard the target itself; clear = a squadmate
+// shared it. Weapons fire at Direct entries; Shared needs an own-LOS confirm.
+const AwareDirect uint8 = 1
+
 // AwarenessEntry - one sighting record. Time == 0 means the slot is empty.
 type AwarenessEntry struct {
 	Target ecs.Entity
 	Pos    WorldPos
 	Time   float32
+	Flags  uint8
 }
 
 // Awareness - FIFO of recent sightings. Fixed array, no slice (DOD).

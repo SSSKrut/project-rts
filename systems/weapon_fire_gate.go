@@ -129,6 +129,11 @@ func (sys *WeaponSystem) pickTarget(
 		if dSq > rngSq {
 			continue
 		}
+		// A squadmate-shared sighting needs an own-LOS confirm before the
+		// unit commits ammo to it; Direct sightings fire straight away.
+		if e.Flags&components.AwareDirect == 0 && sys.sharedLosBlocked(selfPos, e.Target, pos) {
+			continue
+		}
 		if e.Time > bestTime {
 			bestTime = e.Time
 			bestEnt = e.Target
@@ -139,4 +144,21 @@ func (sys *WeaponSystem) pickTarget(
 		return ecs.Entity{}, components.WorldPos{}, false
 	}
 	return bestEnt, bestPos, true
+}
+
+// sharedLosBlocked checks walls + terrain from the shooter to a shared
+// sighting. Serial (snapshotShots) — live map reads are safe here.
+func (sys *WeaponSystem) sharedLosBlocked(selfPos *components.WorldPos, target ecs.Entity, targetPos components.WorldPos) bool {
+	sx := float32(selfPos.Chunk.X)*components.ChunkSize + selfPos.Local.X
+	sz := float32(selfPos.Chunk.Z)*components.ChunkSize + selfPos.Local.Z
+	tx := float32(targetPos.Chunk.X)*components.ChunkSize + targetPos.Local.X
+	tz := float32(targetPos.Chunk.Z)*components.ChunkSize + targetPos.Local.Z
+	if anyLosWallBlocks(localWalls(sys.wallsByChunk, selfPos.Chunk), sx, sz, tx, tz) {
+		return true
+	}
+	targetY := targetPos.Local.Y + components.SpecForStance(components.StanceStand).TargetCenterY
+	if st := sys.stanceMap.Get(target); st != nil {
+		targetY = targetPos.Local.Y + components.SpecForStance(st.Code).TargetCenterY
+	}
+	return terrainBlocksLOS(sys.heightmaps, sx, sz, selfPos.Local.Y+weaponEyeHeight, tx, tz, targetY)
 }

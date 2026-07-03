@@ -27,11 +27,10 @@ func dimensionMaskFor(_ ecs.Entity) components.DimensionMask {
 	return components.DimInfantry
 }
 
-// runDetectPass collects all unit/seer snapshots once, buckets walls by
-// chunk, then runs per-seer detection in parallel. Each worker writes to its
-// own seer's Awareness + appends to a per-worker contactRec slice; the
-// orchestrator then drains those into ContactSystem.contactsBuf for serial
-// upsert in applyContactUpsert.
+// runDetectPass collects unit/seer snapshots, buckets walls + heightmaps by
+// chunk, groups seers by squad, then runs per-group detection in parallel.
+// A group's worker owns all its members' Awareness writes; contactRecs go to
+// per-worker slices drained in order for the serial upsert.
 func (sys *ContactSystem) runDetectPass() {
 	sys.unitsBuf = sys.unitsBuf[:0]
 	sys.seersBuf = sys.seersBuf[:0]
@@ -42,14 +41,18 @@ func (sys *ContactSystem) runDetectPass() {
 		ent := q.Entity()
 		_, pos, mot, sensors, aware, faction := q.Get()
 		audio := sys.audioEmissionRadius(ent, mot.Speed)
-		conceal := float32(1.0)
+		stance := components.StanceStand
 		if st := sys.stanceMap.Get(ent); st != nil {
-			conceal = stanceConcealmentMul(st.Code)
+			stance = st.Code
 		}
+		spec := components.SpecForStance(stance)
+		wx := float32(pos.Chunk.X)*components.ChunkSize + pos.Local.X
+		wz := float32(pos.Chunk.Z)*components.ChunkSize + pos.Local.Z
 		sys.unitsBuf = append(sys.unitsBuf, contactUnit{
 			ent: ent, pos: *pos, chunk: pos.Chunk,
+			x: wx, z: wz, targetY: pos.Local.Y + spec.TargetCenterY,
 			faction: faction.ID, dimMask: dimensionMaskFor(ent),
-			concealment: conceal, audioRadius: audio,
+			concealment: stanceConcealmentMul(stance), audioRadius: audio,
 		})
 		maxR := float32(0)
 		for i := uint8(0); i < sensors.Count; i++ {
@@ -58,7 +61,11 @@ func (sys *ContactSystem) runDetectPass() {
 			}
 		}
 		sys.seersBuf = append(sys.seersBuf, contactSeer{
-			ent: ent, pos: *pos, yaw: mot.Yaw, faction: faction.ID,
+			ent: ent, pos: *pos,
+			x: wx, z: wz, eyeY: pos.Local.Y + spec.EyeHeight,
+			fwdX: float32(math.Sin(float64(mot.Yaw))),
+			fwdZ: float32(math.Cos(float64(mot.Yaw))),
+			yaw:  mot.Yaw, faction: faction.ID,
 			sensors: sensors, aware: aware, maxRange: maxR,
 		})
 	}
@@ -76,22 +83,27 @@ func (sys *ContactSystem) runDetectPass() {
 	}
 	qW.Close()
 
+	snapshotHeightmaps(sys.indexRes.Get(), sys.hmMap, sys.heightmaps)
+	sys.buildDetectGroups()
+
 	units := sys.unitsBuf
 	seers := sys.seersBuf
+	groups := sys.groupsBuf
 	wallsByChunk := sys.wallsByChunk
+	hm := sys.heightmaps
 	elapsed := sys.elapsed
 
 	// Drained in worker order so contact creation order is deterministic.
 	for i := range sys.workerContacts {
 		sys.workerContacts[i] = sys.workerContacts[i][:0]
 	}
-	sys.pool.ParallelForIndexed(len(seers), func(chunkIdx, start, end int) {
+	sys.pool.ParallelForIndexed(len(groups), func(chunkIdx, start, end int) {
 		if chunkIdx >= len(sys.workerContacts) {
 			chunkIdx = 0
 		}
 		local := sys.workerContacts[chunkIdx]
 		for i := start; i < end; i++ {
-			local = processContactSeer(seers[i], units, wallsByChunk, elapsed, local)
+			local = processDetectGroup(&groups[i], seers, units, wallsByChunk, hm, elapsed, local)
 		}
 		sys.workerContacts[chunkIdx] = local
 	})
@@ -100,97 +112,214 @@ func (sys *ContactSystem) runDetectPass() {
 	}
 }
 
-// processContactSeer is the per-seer hot loop. Awareness is written directly
-// (each seer owns its own slot, no shared write). Contact records returned to
-// caller for serial upsert.
-func processContactSeer(
-	s contactSeer,
+// buildDetectGroups groups seers by squad (solo unit = its own group), in
+// seer order so processing stays deterministic.
+func (sys *ContactSystem) buildDetectGroups() {
+	sys.groupsBuf = sys.groupsBuf[:0]
+	clear(sys.groupIdx)
+	seers := sys.seersBuf
+	for i := range seers {
+		var sq ecs.Entity
+		if sm := sys.squadMemberMap.Get(seers[i].ent); sm != nil {
+			sq = sm.Squad
+		}
+		if sq == (ecs.Entity{}) {
+			sys.groupsBuf = append(sys.groupsBuf, detectGroup{members: []int32{int32(i)}})
+			continue
+		}
+		gi, ok := sys.groupIdx[sq]
+		if !ok {
+			gi = int32(len(sys.groupsBuf))
+			sys.groupIdx[sq] = gi
+			sys.groupsBuf = append(sys.groupsBuf, detectGroup{})
+		}
+		g := &sys.groupsBuf[gi]
+		g.members = append(g.members, int32(i))
+	}
+	for gi := range sys.groupsBuf {
+		g := &sys.groupsBuf[gi]
+		var sx, sz float32
+		for k, mi := range g.members {
+			s := &seers[mi]
+			sx += s.x
+			sz += s.z
+			if k == 0 {
+				g.minCX, g.maxCX = s.pos.Chunk.X, s.pos.Chunk.X
+				g.minCZ, g.maxCZ = s.pos.Chunk.Z, s.pos.Chunk.Z
+				continue
+			}
+			g.minCX = min(g.minCX, s.pos.Chunk.X)
+			g.maxCX = max(g.maxCX, s.pos.Chunk.X)
+			g.minCZ = min(g.minCZ, s.pos.Chunk.Z)
+			g.maxCZ = max(g.maxCZ, s.pos.Chunk.Z)
+		}
+		inv := 1 / float32(len(g.members))
+		g.cx = sx * inv
+		g.cz = sz * inv
+		reach := visionMaxRange // audio bubbles are clamped to this
+		spreadSq := float32(0)
+		for _, mi := range g.members {
+			s := &seers[mi]
+			dx := s.x - g.cx
+			dz := s.z - g.cz
+			if d := dx*dx + dz*dz; d > spreadSq {
+				spreadSq = d
+			}
+			if s.maxRange > reach {
+				reach = s.maxRange
+			}
+		}
+		g.cullR = float32(math.Sqrt(float64(spreadSq))) + reach
+	}
+}
+
+// processDetectGroup is the per-group hot loop: one cull gate per candidate,
+// audio per member, then up to two best-positioned members attempt the full
+// visual pipeline; a success is shared to every member's Awareness. The
+// group's worker owns all member Awareness writes.
+func processDetectGroup(
+	g *detectGroup,
+	seers []contactSeer,
 	units []contactUnit,
 	wallsByChunk map[components.ChunkCoord][]losWall,
+	hm map[components.ChunkCoord][]float32,
 	elapsed float32,
 	out []contactRec,
 ) []contactRec {
 	var localWalls []losWall
-	for dz := int32(-1); dz <= 1; dz++ {
-		for dx := int32(-1); dx <= 1; dx++ {
-			nb := components.ChunkCoord{X: s.pos.Chunk.X + dx, Z: s.pos.Chunk.Z + dz}
-			localWalls = append(localWalls, wallsByChunk[nb]...)
+	for cz := g.minCZ - 1; cz <= g.maxCZ+1; cz++ {
+		for cx := g.minCX - 1; cx <= g.maxCX+1; cx++ {
+			localWalls = append(localWalls, wallsByChunk[components.ChunkCoord{X: cx, Z: cz}]...)
 		}
 	}
+	cullSq := g.cullR * g.cullR
 
-	seerX := float32(s.pos.Chunk.X)*components.ChunkSize + s.pos.Local.X
-	seerZ := float32(s.pos.Chunk.Z)*components.ChunkSize + s.pos.Local.Z
-	fwdX := float32(math.Sin(float64(s.yaw)))
-	fwdZ := float32(math.Cos(float64(s.yaw)))
-	maxRng := s.maxRange
-
-	for _, cand := range units {
-		if cand.ent == s.ent {
-			continue
-		}
-		dcx := cand.chunk.X - s.pos.Chunk.X
-		if dcx < -1 || dcx > 1 {
-			continue
-		}
-		dcz := cand.chunk.Z - s.pos.Chunk.Z
-		if dcz < -1 || dcz > 1 {
-			continue
-		}
-		candX := float32(cand.pos.Chunk.X)*components.ChunkSize + cand.pos.Local.X
-		candZ := float32(cand.pos.Chunk.Z)*components.ChunkSize + cand.pos.Local.Z
-		dx := candX - seerX
-		dz := candZ - seerZ
-		dSq := dx*dx + dz*dz
-		if dSq < 1e-4 {
+	for ci := range units {
+		cand := &units[ci]
+		dxc := cand.x - g.cx
+		dzc := cand.z - g.cz
+		if dxc*dxc+dzc*dzc > cullSq {
 			continue
 		}
 
-		// Audio bubble - ignores FOV and LOS, satisfied any sensor channel.
-		audibleSq := cand.audioRadius * cand.audioRadius
-		if cand.audioRadius > 0 && dSq <= audibleSq {
-			recordSighting(s.aware, cand.ent, cand.pos, elapsed)
-			out = appendContactIfHostile(out, s, cand, false)
-			continue
+		// Audio bubble — personal, ignores FOV / LOS.
+		if cand.audioRadius > 0 {
+			audSq := cand.audioRadius * cand.audioRadius
+			for _, mi := range g.members {
+				s := &seers[mi]
+				if s.ent == cand.ent {
+					continue
+				}
+				dx := cand.x - s.x
+				dz := cand.z - s.z
+				dSq := dx*dx + dz*dz
+				if dSq < 1e-4 || dSq > audSq {
+					continue
+				}
+				recordSighting(s.aware, cand.ent, cand.pos, elapsed, components.AwareDirect)
+				out = appendContactIfHostile(out, *s, *cand, false)
+			}
 		}
 
-		if dSq > maxRng*maxRng {
-			continue
-		}
-		d := float32(math.Sqrt(float64(dSq)))
-		invD := 1 / d
-		dotF := (dx*fwdX + dz*fwdZ) * invD
-		angle := float32(math.Acos(float64(clamp32(dotF, -1, 1))))
-
-		// Walk channels — first satisfying channel wins.
-		detected := false
-		for i := uint8(0); i < s.sensors.Count; i++ {
-			c := &s.sensors.Channels[i]
-			if c.DetectMask&cand.dimMask == 0 {
+		// Visual: pick up to two best origins (near + roughly facing wins).
+		var b0, b1 int32 = -1, -1
+		s0, s1 := float32(math.MaxFloat32), float32(math.MaxFloat32)
+		for _, mi := range g.members {
+			s := &seers[mi]
+			if s.ent == cand.ent {
 				continue
 			}
-			if d > c.BaseRangeM {
+			dcx := cand.chunk.X - s.pos.Chunk.X
+			dcz := cand.chunk.Z - s.pos.Chunk.Z
+			if dcx < -1 || dcx > 1 || dcz < -1 || dcz > 1 {
 				continue
 			}
-			strength := components.Falloff(c.FalloffKind, d, c.BaseRangeM)
-			strength *= components.FacingMul(angle, c.Facing)
-			strength *= cand.concealment
-			if strength < detectionThreshold {
+			dx := cand.x - s.x
+			dz := cand.z - s.z
+			dSq := dx*dx + dz*dz
+			if dSq < 1e-4 || dSq > s.maxRange*s.maxRange {
 				continue
 			}
-			detected = true
-			break
+			score := dSq
+			if dx*s.fwdX+dz*s.fwdZ < 0 {
+				score *= 4
+			}
+			if score < s0 {
+				b1, s1 = b0, s0
+				b0, s0 = mi, score
+			} else if score < s1 {
+				b1, s1 = mi, score
+			}
 		}
-		if !detected {
+		spotter := int32(-1)
+		for _, mi := range [2]int32{b0, b1} {
+			if mi < 0 {
+				continue
+			}
+			if visualDetect(&seers[mi], cand, localWalls, hm) {
+				spotter = mi
+				break
+			}
+		}
+		if spotter < 0 {
 			continue
 		}
-		if anyLosWallBlocks(localWalls, seerX, seerZ, candX, candZ) {
-			continue
+		sp := &seers[spotter]
+		recordSighting(sp.aware, cand.ent, cand.pos, elapsed, components.AwareDirect)
+		for _, mi := range g.members {
+			if mi == spotter {
+				continue
+			}
+			s := &seers[mi]
+			if s.ent == cand.ent {
+				continue
+			}
+			recordSighting(s.aware, cand.ent, cand.pos, elapsed, 0)
 		}
-		recordSighting(s.aware, cand.ent, cand.pos, elapsed)
-		closeLOS := d <= contactCloseRangeM
-		out = appendContactIfHostile(out, s, cand, closeLOS)
+		dx := cand.x - sp.x
+		dz := cand.z - sp.z
+		closeLOS := dx*dx+dz*dz <= contactCloseRangeM*contactCloseRangeM
+		out = appendContactIfHostile(out, *sp, *cand, closeLOS)
 	}
 	return out
+}
+
+// visualDetect runs the full per-pair sensor pipeline: channel gates →
+// walls → terrain.
+func visualDetect(s *contactSeer, cand *contactUnit, walls []losWall, hm map[components.ChunkCoord][]float32) bool {
+	dx := cand.x - s.x
+	dz := cand.z - s.z
+	d := float32(math.Sqrt(float64(dx*dx + dz*dz)))
+	if d < 1e-2 {
+		return false
+	}
+	dotF := (dx*s.fwdX + dz*s.fwdZ) / d
+	angle := float32(math.Acos(float64(clamp32(dotF, -1, 1))))
+	detected := false
+	for i := uint8(0); i < s.sensors.Count; i++ {
+		c := &s.sensors.Channels[i]
+		if c.DetectMask&cand.dimMask == 0 {
+			continue
+		}
+		if d > c.BaseRangeM {
+			continue
+		}
+		strength := components.Falloff(c.FalloffKind, d, c.BaseRangeM)
+		strength *= components.FacingMul(angle, c.Facing)
+		strength *= cand.concealment
+		if strength < detectionThreshold {
+			continue
+		}
+		detected = true
+		break
+	}
+	if !detected {
+		return false
+	}
+	if anyLosWallBlocks(walls, s.x, s.z, cand.x, cand.z) {
+		return false
+	}
+	return !terrainBlocksLOS(hm, s.x, s.z, s.eyeY, cand.x, cand.z, cand.targetY)
 }
 
 // appendContactIfHostile records a hostile-side detection for serial upsert.
@@ -341,12 +470,18 @@ func clamp32(v, lo, hi float32) float32 {
 }
 
 // recordSighting refreshes the FIFO entry for `target`, evicting the oldest
-// slot for new targets.
-func recordSighting(aware *components.Awareness, target ecs.Entity, pos components.WorldPos, t float32) {
+// slot for new targets. A Direct flag never downgrades to Shared within the
+// same timestamp.
+func recordSighting(aware *components.Awareness, target ecs.Entity, pos components.WorldPos, t float32, flags uint8) {
 	for i := range aware.LastSeen {
 		if aware.LastSeen[i].Time != 0 && aware.LastSeen[i].Target == target {
-			aware.LastSeen[i].Pos = pos
-			aware.LastSeen[i].Time = t
+			e := &aware.LastSeen[i]
+			if e.Time == t {
+				flags |= e.Flags
+			}
+			e.Pos = pos
+			e.Time = t
+			e.Flags = flags
 			return
 		}
 	}
@@ -362,5 +497,5 @@ func recordSighting(aware *components.Awareness, target ecs.Entity, pos componen
 			oldest = i
 		}
 	}
-	aware.LastSeen[oldest] = components.AwarenessEntry{Target: target, Pos: pos, Time: t}
+	aware.LastSeen[oldest] = components.AwarenessEntry{Target: target, Pos: pos, Time: t, Flags: flags}
 }

@@ -13,7 +13,8 @@ import (
 // and must only write to per-worker scratch buffers (the buf pointers).
 func resolveShot(
 	s *shotWork, targets []targetSnap, targetsByChunk map[components.ChunkCoord][]int32,
-	wallsByChunk map[components.ChunkCoord][]losWall, now float32,
+	wallsByChunk map[components.ChunkCoord][]losWall,
+	heightmaps map[components.ChunkCoord][]float32, now float32,
 	dmgBuf *[]damageEvent, tracerBuf *[]tracerSpec, impactBuf *[]impactSpec,
 	threatBuf *[]threatEvent, suppBuf *[]suppressionEvent, splashBuf *[]splashEvent,
 ) {
@@ -42,6 +43,7 @@ func resolveShot(
 
 	walls := localWalls(wallsByChunk, s.shooterChunk)
 	wallT, wallBlocks := segmentToWallsT(walls, s.muzzle.X, s.muzzle.Z, aim.X, aim.Z)
+	terrT, terrBlocks := terrainHitT(heightmaps, s.muzzle.X, s.muzzle.Z, s.muzzle.Y, aim.X, aim.Z, aim.Y)
 
 	bestHitT := float32(1.5)
 	var bestHit ecs.Entity
@@ -71,8 +73,9 @@ func resolveShot(
 		}
 	}
 
-	hitWall := wallBlocks && wallT < bestHitT
-	hitUnit := bestHit != (ecs.Entity{}) && !hitWall
+	hitWall := wallBlocks && wallT < bestHitT && (!terrBlocks || wallT <= terrT)
+	hitGround := terrBlocks && !hitWall && terrT < bestHitT
+	hitUnit := bestHit != (ecs.Entity{}) && !hitWall && !hitGround
 
 	var impact rl.Vector3
 	var hk hitKind
@@ -80,6 +83,9 @@ func resolveShot(
 	case hitWall:
 		impact = lerpVec3(s.muzzle, aim, wallT)
 		hk = hitKindWall
+	case hitGround:
+		impact = lerpVec3(s.muzzle, aim, terrT)
+		hk = hitKindTerrain
 	case hitUnit:
 		impact = rl.Vector3{
 			X: float32(bestPos.Chunk.X)*components.ChunkSize + bestPos.Local.X,

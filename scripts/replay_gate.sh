@@ -8,7 +8,8 @@ SCENES=${@:-"ai_door_south ai_door_north ai_door_east ai_door_west \
 ai_compound_south ai_compound_east ai_compound_north ai_compound_west \
 ai_compound_main ai_compound_plus_south ai_compound_plus_east \
 ai_compound_plus_north ai_compound_plus_west ai_office_front \
-ai_far_building ai_main_m0 ai_main_m1 ai_main_e ai_main_n"}
+ai_far_building ai_main_m0 ai_main_m1 ai_main_e ai_main_n \
+ai_los_open ai_los_defilade"}
 
 go build -o bin/rts . || exit 1
 mkdir -p /tmp/rts-replay
