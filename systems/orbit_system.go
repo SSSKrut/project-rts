@@ -16,8 +16,9 @@ import (
 var OrbitInputEnabled = true
 
 type OrbitSystem struct {
-	filter *ecs.Filter2[components.OrbitController, components.WorldPos]
-	posMap *ecs.Map[components.WorldPos]
+	filter    *ecs.Filter2[components.OrbitController, components.WorldPos]
+	posMap    *ecs.Map[components.WorldPos]
+	lastFrame uint32
 }
 
 func (sys *OrbitSystem) InitUI(w *ecs.World) {
@@ -31,10 +32,12 @@ func (OrbitSystem) LODPolicy() core.LODPolicy {
 	return core.LODPolicy{ActiveEvery: 0, RelevantEvery: core.LODDisabled, DormantEvery: core.LODDisabled}
 }
 
-func (sys OrbitSystem) Update(ctx core.UpdateContext) {
-	if ctx.Tier != core.LODTierActive {
+func (sys *OrbitSystem) Update(ctx core.UpdateContext) {
+	// Mouse input must apply once per frame, not once per sim tick.
+	if ctx.Tier != core.LODTierActive || ctx.FrameIndex == sys.lastFrame {
 		return
 	}
+	sys.lastFrame = ctx.FrameIndex
 
 	var mouseDelta rl.Vector2
 	var wheel float32

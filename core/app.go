@@ -69,10 +69,9 @@ type App struct {
 	Prof  Profiler
 	Trace Tracer
 
-	// TimeScale multiplies the real-time delta passed to Tick. 0 = paused
-	// (render loop keeps going); 1 = real-time; 2/4/8 = compressed. app.elapsed
-	// accumulates scaled delta so LOD intervals are in game-time. Profiler /
-	// Trace use time.Now() so perf numbers stay in real-time even when paused.
+	// TimeScale is the number of fixed sim ticks Advance runs per frame:
+	// 0 = paused (render keeps going), 1 = real-time at 60 fps, 2/4/8 =
+	// compressed. Profiler / Trace stay real-time.
 	TimeScale float32
 
 	// LastNonZeroScale remembers the pre-pause speed so unpause restores it
@@ -100,18 +99,36 @@ func (app *App) Elapsed() time.Duration { return app.elapsed }
 
 func (app *App) FrameIndex() uint32 { return app.frameIndex }
 
-// maxTickDelta: a GPU-stall frame (Tab swap, resize) must not lurch the sim.
-const maxTickDelta = 100 * time.Millisecond
+func (app *App) TickIndex() uint64 { return app.tickIndex }
 
-func (app *App) Tick(delta time.Duration) {
-	if delta > maxTickDelta {
-		delta = maxTickDelta
-	}
-	scaled := time.Duration(float64(delta) * float64(app.TimeScale))
-	delta = scaled
-	app.elapsed += delta
+// SimDt is the fixed simulation timestep (60 Hz).
+const SimDt = time.Second / 60
+
+// Advance runs int(TimeScale) fixed sim ticks for this frame; paused runs
+// one zero-delta pass so input-coupled systems (camera orbit) stay live.
+func (app *App) Advance() {
 	app.frameIndex++
-	app.tickIndex++
+	n := int(app.TimeScale + 0.5)
+	if n <= 0 {
+		app.step(0, false)
+		return
+	}
+	for i := 0; i < n; i++ {
+		app.step(SimDt, true)
+	}
+}
+
+// Tick advances one raw-delta step (sandbox / test entry).
+func (app *App) Tick(delta time.Duration) {
+	app.frameIndex++
+	app.step(delta, true)
+}
+
+func (app *App) step(delta time.Duration, sim bool) {
+	app.elapsed += delta
+	if sim {
+		app.tickIndex++
+	}
 	simNow := app.elapsed.Seconds()
 
 	tickStart := time.Now()

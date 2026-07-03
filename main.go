@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"math"
+	"os"
 	"runtime"
 	"time"
 
@@ -25,6 +26,33 @@ const (
 
 // workersFlag picks the worker-pool size. 0 (default) -> runtime.NumCPU().
 var workersFlag = flag.Int("workers", 0, "worker pool size (default = NumCPU)")
+
+var replayHashFlag = flag.String("replay-hash", "", "write per-100-tick state hashes to path (headless scenes)")
+
+var (
+	replayHasher   *systems.ReplayHasher
+	replayHashFile *os.File
+	replayLastTick = ^uint64(0)
+)
+
+func writeReplayHash(app *core.App) {
+	path := *replayHashFlag
+	if path == "" || app.TickIndex()%100 != 0 || app.TickIndex() == replayLastTick {
+		return
+	}
+	if replayHasher == nil {
+		replayHasher = systems.NewReplayHasher(app.World)
+		f, err := os.Create(path)
+		if err != nil {
+			fmt.Printf("replay-hash: %v\n", err)
+			*replayHashFlag = ""
+			return
+		}
+		replayHashFile = f
+	}
+	replayLastTick = app.TickIndex()
+	fmt.Fprintf(replayHashFile, "%d %016x\n", app.TickIndex(), replayHasher.Hash())
+}
 
 func main() {
 	flag.Parse()
@@ -870,13 +898,11 @@ func main() {
 			scene3DRT.EnsureSize(panelMgr.Get(ui.Panel3D))
 		}
 
-		// Real-time dt for input / camera-orbit; the simulation tick scales
-		// this by app.TimeScale inside App.Tick.
+		// Real-time dt for input-side stepping; the sim advances in fixed
+		// 60 Hz ticks inside app.Advance.
 		var dtReal time.Duration
 		if headless {
-			// Fixed sim dt so headless AI tests are deterministic and don't
-			// depend on whatever the uncapped CPU frame time happens to be.
-			dtReal = time.Second / 60
+			dtReal = core.SimDt
 		} else {
 			dtReal = time.Duration(float64(rl.GetFrameTime()) * float64(time.Second))
 		}
@@ -1843,9 +1869,10 @@ func main() {
 		systems.OrbitInputEnabled = (focused == ui.Panel3D || focused == ui.PanelNone) &&
 			!floating.IsBusy(cursor)
 
-		app.Tick(dtReal)
+		app.Advance()
 
 		if headless {
+			writeReplayHash(app)
 			if aiTest != nil && aiTest.verdictDone {
 				break
 			}
