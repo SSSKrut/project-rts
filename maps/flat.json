@@ -1,0 +1,22 @@
+{
+  "name": "flat",
+  "terrain": {"seed": 1001, "wavelengthM": 140, "octaves": 3, "lacunarity": 2.0, "persistence": 0.45, "amplitudeM": 1.5},
+  "buildings": [
+    {"template": "house", "seed": 17, "x": 20, "z": 30, "stories": 1, "sizeX": 8, "sizeZ": 8, "doorSide": 4},
+    {"template": "house", "seed": 23, "x": -35, "z": 25, "stories": 2, "sizeX": 12, "sizeZ": 10, "doorSide": 4},
+    {"template": "office", "seed": 33, "x": -40, "z": -30},
+    {"template": "compound", "seed": 49, "x": 55, "z": -40}
+  ],
+  "roads": {
+    "nodes": [[-90, 0], [0, 0], [90, 0], [0, -80]],
+    "edges": [
+      {"from": 0, "to": 1, "kind": "highway", "width": 4},
+      {"from": 1, "to": 2, "kind": "highway", "width": 4},
+      {"from": 1, "to": 3, "kind": "local", "width": 3}
+    ]
+  },
+  "trenches": [
+    {"points": [[-20, 50], [10, 55], [30, 50]], "width": 1.5, "depth": 1.5}
+  ],
+  "rivers": []
+}

@@ -1,0 +1,21 @@
+{
+  "name": "hills",
+  "terrain": {"seed": 2002, "wavelengthM": 90, "octaves": 5, "lacunarity": 2.0, "persistence": 0.5, "amplitudeM": 12},
+  "buildings": [
+    {"template": "house", "seed": 61, "x": 15, "z": 20, "stories": 1, "sizeX": 8, "sizeZ": 8, "doorSide": 4},
+    {"template": "house", "seed": 67, "x": -30, "z": -25, "stories": 1, "sizeX": 10, "sizeZ": 8, "doorSide": 4},
+    {"template": "compound", "seed": 83, "x": -70, "z": 30}
+  ],
+  "roads": {
+    "nodes": [[-80, -60], [-20, -10], [30, 40], [90, 60]],
+    "edges": [
+      {"from": 0, "to": 1, "kind": "local", "width": 3},
+      {"from": 1, "to": 2, "kind": "local", "width": 3},
+      {"from": 2, "to": 3, "kind": "dirt", "width": 2.5}
+    ]
+  },
+  "trenches": [
+    {"points": [[40, -20], [55, -10], [65, 5]], "width": 1.5, "depth": 1.5}
+  ],
+  "rivers": []
+}

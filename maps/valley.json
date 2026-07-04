@@ -1,0 +1,25 @@
+{
+  "name": "valley",
+  "terrain": {"seed": 4004, "wavelengthM": 110, "octaves": 4, "lacunarity": 2.0, "persistence": 0.5, "amplitudeM": 10},
+  "buildings": [
+    {"template": "house", "seed": 151, "x": -30, "z": -35, "stories": 1, "sizeX": 8, "sizeZ": 8, "doorSide": 4},
+    {"template": "house", "seed": 157, "x": 45, "z": 30, "stories": 2, "sizeX": 12, "sizeZ": 10, "doorSide": 4},
+    {"template": "office", "seed": 163, "x": -55, "z": 40},
+    {"template": "compound", "seed": 179, "x": 70, "z": -35}
+  ],
+  "roads": {
+    "nodes": [[-90, -20], [-10, -15], [60, 0], [90, 40]],
+    "edges": [
+      {"from": 0, "to": 1, "kind": "highway", "width": 4},
+      {"from": 1, "to": 2, "kind": "highway", "width": 4},
+      {"from": 2, "to": 3, "kind": "local", "width": 3}
+    ]
+  },
+  "trenches": [
+    {"points": [[-40, 20], [-25, 28], [-5, 30]], "width": 1.5, "depth": 1.5},
+    {"points": [[30, -50], [45, -45]], "width": 1.5, "depth": 1.2}
+  ],
+  "rivers": [
+    {"points": [[20, -90], [22, -40], [18, 10], [25, 60], [20, 90]], "width": 6, "depth": 1.2}
+  ]
+}

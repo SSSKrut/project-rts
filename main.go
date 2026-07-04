@@ -57,6 +57,12 @@ func writeReplayHash(app *core.App) {
 func main() {
 	flag.Parse()
 
+	worldMap = loadMapDef()
+	systems.SetTerrainParams(worldMap.Terrain)
+	if *mapFlag != "" && !isAIScene() && !isDoorScene() {
+		systems.SaveDir = "./save/" + worldMap.Name
+	}
+
 	rl.SetConfigFlags(rl.FlagWindowResizable)
 	rl.InitWindow(initialScreenWidth, initialScreenHeight, "RTS/FPS 3D ECS Prototype")
 	defer rl.CloseWindow()

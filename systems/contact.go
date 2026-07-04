@@ -18,6 +18,10 @@ const detectionThreshold float32 = 0.5
 // shared constant on Phase 18.5; later phases can dimension-tune.
 const contactCloseRangeM float32 = 25.0
 
+// contactCap bounds the live Contact population (WS-E ш.2). Oldest Unknown
+// contacts are evicted first; player-classified pins are never evicted.
+const contactCap = 128
+
 // ContactSystem absorbs Phase 7 VisionSystem. One pass does sensor math
 // (effRange × facing × concealment) + audio detection (legacy carry-over) +
 // Awareness writeback (preserves the contract WeaponSystem / UtilityEvaluator

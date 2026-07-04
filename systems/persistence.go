@@ -12,9 +12,10 @@ import (
 	"rts-go/components"
 )
 
-// SaveDir holds per-chunk binary blobs under chunks/{x}_{z}.bin. Future
-// region-file migration touches only WriteChunk/ReadChunk; callers stay put.
-const SaveDir = "./save/world-default"
+// SaveDir holds per-chunk binary blobs under chunks/{x}_{z}.bin. Set once at
+// startup (per-map dir for -map runs). Future region-file migration touches
+// only WriteChunk/ReadChunk; callers stay put.
+var SaveDir = "./save/world-default"
 
 // Binary format v1:
 //

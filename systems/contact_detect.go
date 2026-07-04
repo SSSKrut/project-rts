@@ -2,6 +2,7 @@ package systems
 
 import (
 	"math"
+	"sort"
 
 	"github.com/mlange-42/ark/ecs"
 
@@ -392,6 +393,49 @@ func (sys *ContactSystem) applyContactUpsert() {
 		reg.Tracked[rec.target] = newEnt
 	}
 	sys.contactsBuf = sys.contactsBuf[:0]
+	sys.enforceContactCap(reg)
+}
+
+// enforceContactCap evicts contacts past contactCap: oldest Unknown first,
+// then oldest others; PlayerSet pins survive. Candidates come in Filter
+// order and the sort is stable, so eviction is deterministic.
+func (sys *ContactSystem) enforceContactCap(reg *components.ContactRegistry) {
+	over := len(reg.Tracked) - contactCap
+	if over <= 0 {
+		return
+	}
+	type victim struct {
+		ent     ecs.Entity
+		tracked ecs.Entity
+		seen    float32
+		unknown bool
+	}
+	victims := make([]victim, 0, len(reg.Tracked))
+	q := sys.contactFilter.Query()
+	for q.Next() {
+		ent := q.Entity()
+		if sys.contactPlayerSet.Has(ent) {
+			continue
+		}
+		c := q.Get()
+		victims = append(victims, victim{
+			ent: ent, tracked: c.Tracked, seen: c.LastSeenTime,
+			unknown: c.PerceivedAffil == components.AffilUnknown,
+		})
+	}
+	sort.SliceStable(victims, func(a, b int) bool {
+		if victims[a].unknown != victims[b].unknown {
+			return victims[a].unknown
+		}
+		return victims[a].seen < victims[b].seen
+	})
+	if over > len(victims) {
+		over = len(victims)
+	}
+	for i := 0; i < over; i++ {
+		delete(reg.Tracked, victims[i].tracked)
+		sys.worldRef.RemoveEntity(victims[i].ent)
+	}
 }
 
 // promoteOnRefresh upgrades an existing contact when a close-LOS observation

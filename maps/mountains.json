@@ -1,0 +1,17 @@
+{
+  "name": "mountains",
+  "terrain": {"seed": 3003, "wavelengthM": 230, "octaves": 6, "lacunarity": 2.1, "persistence": 0.55, "amplitudeM": 40},
+  "buildings": [
+    {"template": "house", "seed": 101, "x": 10, "z": 10, "stories": 1, "sizeX": 8, "sizeZ": 8, "doorSide": 4},
+    {"template": "house", "seed": 107, "x": -25, "z": 35, "stories": 1, "sizeX": 8, "sizeZ": 8, "doorSide": 4}
+  ],
+  "roads": {
+    "nodes": [[-100, 0], [0, 20], [100, -10]],
+    "edges": [
+      {"from": 0, "to": 1, "kind": "dirt", "width": 2.5},
+      {"from": 1, "to": 2, "kind": "dirt", "width": 2.5}
+    ]
+  },
+  "trenches": [],
+  "rivers": []
+}

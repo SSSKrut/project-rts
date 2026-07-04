@@ -11,20 +11,65 @@ import (
 
 const terrainSeed int64 = 0x434F4C4457415221 // "COLD WAR!"
 
-const (
-	noiseScale       = 1.0 / 96.0 // ~96 m wavelength
-	fbmOctaves       = 4
-	fbmLacunarity    = 2.0
-	fbmPersistence   = 0.5
-	terrainAmplitude = 8.0 // peak-to-trough envelope, metres
+// TerrainParams parameterises procgen so maps can span flat plains to
+// mountains. Startup-only: set before the world exists.
+type TerrainParams struct {
+	Seed        int64   `json:"seed"`
+	WavelengthM float64 `json:"wavelengthM"`
+	Octaves     int     `json:"octaves"`
+	Lacunarity  float64 `json:"lacunarity"`
+	Persistence float64 `json:"persistence"`
+	AmplitudeM  float64 `json:"amplitudeM"`
+}
+
+func DefaultTerrainParams() TerrainParams {
+	return TerrainParams{
+		Seed:        terrainSeed,
+		WavelengthM: 96,
+		Octaves:     4,
+		Lacunarity:  2.0,
+		Persistence: 0.5,
+		AmplitudeM:  8.0,
+	}
+}
+
+var (
+	terrainCfg = DefaultTerrainParams()
+	noiseScale = 1.0 / 96.0
 )
 
+// SetTerrainParams reconfigures procgen; zero fields fall back to defaults.
+func SetTerrainParams(p TerrainParams) {
+	d := DefaultTerrainParams()
+	if p.Seed == 0 {
+		p.Seed = d.Seed
+	}
+	if p.WavelengthM <= 0 {
+		p.WavelengthM = d.WavelengthM
+	}
+	if p.Octaves <= 0 {
+		p.Octaves = d.Octaves
+	}
+	if p.Lacunarity <= 0 {
+		p.Lacunarity = d.Lacunarity
+	}
+	if p.Persistence <= 0 {
+		p.Persistence = d.Persistence
+	}
+	if p.AmplitudeM == 0 {
+		p.AmplitudeM = d.AmplitudeM
+	}
+	terrainCfg = p
+	noiseScale = 1.0 / p.WavelengthM
+	buildPermTable(p.Seed)
+}
+
 // 256-entry permutation doubled to 512 to avoid wrap-around in the gradient
-// lookup. Built once from terrainSeed at init.
+// lookup.
 var permTable [512]int
 
-func init() {
-	r := rand.New(rand.NewSource(terrainSeed))
+func buildPermTable(seed int64) {
+	r := rand.New(rand.NewSource(seed))
 	var p [256]int
 	for i := 0; i < 256; i++ {
 		p[i] = i
@@ -36,6 +81,10 @@ func init() {
 	for i := 0; i < 512; i++ {
 		permTable[i] = p[i&255]
 	}
+}
+
+func init() {
+	buildPermTable(terrainSeed)
 }
 
 // fade is Perlin's quintic ease curve: 6t⁵ - 15t⁴ + 10t³.
@@ -90,17 +139,17 @@ func perlin2(x, y float64) float64 {
 	return lerp(x1, x2, v)
 }
 
-// fbm2 sums fbmOctaves, doubling frequency / halving amplitude per octave.
-// Normalised to ~[-1, 1] via cumulative amplitude.
+// fbm2 sums octaves, scaling frequency by lacunarity / amplitude by
+// persistence per octave. Normalised to ~[-1, 1] via cumulative amplitude.
 func fbm2(x, y float64) float64 {
 	var sum, amp, totalAmp float64
 	freq := 1.0
 	amp = 1.0
-	for i := 0; i < fbmOctaves; i++ {
+	for i := 0; i < terrainCfg.Octaves; i++ {
 		sum += perlin2(x*freq, y*freq) * amp
 		totalAmp += amp
-		freq *= fbmLacunarity
-		amp *= fbmPersistence
+		freq *= terrainCfg.Lacunarity
+		amp *= terrainCfg.Persistence
 	}
 	if totalAmp == 0 {
 		return 0
@@ -111,5 +160,5 @@ func fbm2(x, y float64) float64 {
 // GroundHeight returns the terrain height (Y, metres) at world (X, Z).
 func GroundHeight(worldX, worldZ float32) float32 {
 	h := fbm2(float64(worldX)*noiseScale, float64(worldZ)*noiseScale)
-	return float32(h * terrainAmplitude)
+	return float32(h * terrainCfg.AmplitudeM)
 }
