@@ -32,7 +32,7 @@ func dimensionMaskFor(_ ecs.Entity) components.DimensionMask {
 // chunk, groups seers by squad, then runs per-group detection in parallel.
 // A group's worker owns all its members' Awareness writes; contactRecs go to
 // per-worker slices drained in order for the serial upsert.
-func (sys *ContactSystem) runDetectPass() {
+func (sys *ContactSystem) runDetectPass(dt float32) {
 	sys.unitsBuf = sys.unitsBuf[:0]
 	sys.seersBuf = sys.seersBuf[:0]
 	sys.contactsBuf = sys.contactsBuf[:0]
@@ -49,11 +49,24 @@ func (sys *ContactSystem) runDetectPass() {
 		spec := components.SpecForStance(stance)
 		wx := float32(pos.Chunk.X)*components.ChunkSize + pos.Local.X
 		wz := float32(pos.Chunk.Z)*components.ChunkSize + pos.Local.Z
+		conceal := stanceConcealmentMul(stance)
+		switch {
+		case mot.Speed < detectStillSpeed:
+			conceal *= detectStillMul
+		case mot.Speed > detectRunSpeed:
+			conceal *= detectRunMul
+		}
+		det := sys.dtMap.Get(ent)
+		meter := [components.FactionCount]float32{1, 1, 1, 1}
+		if det != nil {
+			meter = det.Meter
+		}
 		sys.unitsBuf = append(sys.unitsBuf, contactUnit{
 			ent: ent, pos: *pos, chunk: pos.Chunk,
 			x: wx, z: wz, targetY: pos.Local.Y + spec.TargetCenterY,
 			faction: faction.ID, dimMask: dimensionMaskFor(ent),
-			concealment: stanceConcealmentMul(stance), audioRadius: audio,
+			concealment: conceal, audioRadius: audio,
+			meter: meter, det: det,
 		})
 		maxR := float32(0)
 		for i := uint8(0); i < sensors.Count; i++ {
@@ -97,6 +110,7 @@ func (sys *ContactSystem) runDetectPass() {
 	// Drained in worker order so contact creation order is deterministic.
 	for i := range sys.workerContacts {
 		sys.workerContacts[i] = sys.workerContacts[i][:0]
+		sys.workerMeter[i] = sys.workerMeter[i][:0]
 	}
 	sys.pool.ParallelForIndexed(len(groups), func(chunkIdx, start, end int) {
 		if chunkIdx >= len(sys.workerContacts) {
@@ -104,12 +118,79 @@ func (sys *ContactSystem) runDetectPass() {
 		}
 		local := sys.workerContacts[chunkIdx]
 		for i := start; i < end; i++ {
-			local = processDetectGroup(&groups[i], seers, units, wallsByChunk, hm, elapsed, local)
+			local = processDetectGroup(int32(i), &groups[i], seers, units, wallsByChunk, hm, elapsed, dt, local, &sys.workerMeter[chunkIdx])
 		}
 		sys.workerContacts[chunkIdx] = local
 	})
 	for i := range sys.workerContacts {
 		sys.contactsBuf = append(sys.contactsBuf, sys.workerContacts[i]...)
+	}
+	sys.applyDetectMeters(dt)
+}
+
+// applyDetectMeters is the serial meter pass: max fill per (target, faction)
+// wins, a 0→1 crossing fires the sighting, unobserved slots decay.
+func (sys *ContactSystem) applyDetectMeters(dt float32) {
+	units := sys.unitsBuf
+	seers := sys.seersBuf
+	groups := sys.groupsBuf
+	n := len(units)
+	if cap(sys.meterFill) < n {
+		sys.meterFill = make([][components.FactionCount]float32, n)
+		sys.meterSrc = make([][components.FactionCount]int32, n)
+	}
+	sys.meterFill = sys.meterFill[:n]
+	sys.meterSrc = sys.meterSrc[:n]
+	for i := 0; i < n; i++ {
+		sys.meterFill[i] = [components.FactionCount]float32{}
+		sys.meterSrc[i] = [components.FactionCount]int32{-1, -1, -1, -1}
+	}
+	sys.meterEvents = sys.meterEvents[:0]
+	for w := range sys.workerMeter {
+		sys.meterEvents = append(sys.meterEvents, sys.workerMeter[w]...)
+	}
+	for ei := range sys.meterEvents {
+		ev := &sys.meterEvents[ei]
+		if ev.fill > sys.meterFill[ev.target][ev.faction] {
+			sys.meterFill[ev.target][ev.faction] = ev.fill
+			sys.meterSrc[ev.target][ev.faction] = int32(ei)
+		}
+	}
+	for i := 0; i < n; i++ {
+		det := units[i].det
+		if det == nil {
+			continue
+		}
+		for fac := 0; fac < components.FactionCount; fac++ {
+			fill := sys.meterFill[i][fac]
+			m := det.Meter[fac]
+			if fill > 0 {
+				nm := m + fill
+				if nm > 1 {
+					nm = 1
+				}
+				det.Meter[fac] = nm
+				if m < 1 && nm >= 1 {
+					ev := &sys.meterEvents[sys.meterSrc[i][fac]]
+					g := &groups[ev.group]
+					sp := &seers[ev.spotter]
+					recordSighting(sp.aware, units[i].ent, units[i].pos, sys.elapsed, components.AwareDirect)
+					for _, mi := range g.members {
+						if mi == ev.spotter || seers[mi].ent == units[i].ent {
+							continue
+						}
+						recordSighting(seers[mi].aware, units[i].ent, units[i].pos, sys.elapsed, 0)
+					}
+					sys.contactsBuf = appendContactIfHostile(sys.contactsBuf, *sp, units[i], ev.closeLOS)
+				}
+			} else if m > 0 {
+				m -= detectDecayPerSec * dt
+				if m < 0 {
+					m = 0
+				}
+				det.Meter[fac] = m
+			}
+		}
 	}
 }
 
@@ -179,13 +260,15 @@ func (sys *ContactSystem) buildDetectGroups() {
 // visual pipeline; a success is shared to every member's Awareness. The
 // group's worker owns all member Awareness writes.
 func processDetectGroup(
+	gIdx int32,
 	g *detectGroup,
 	seers []contactSeer,
 	units []contactUnit,
 	wallsByChunk map[components.ChunkCoord][]losWall,
 	hm map[components.ChunkCoord][]float32,
-	elapsed float32,
+	elapsed, dt float32,
 	out []contactRec,
+	meterOut *[]meterEvent,
 ) []contactRec {
 	var localWalls []losWall
 	for cz := g.minCZ - 1; cz <= g.maxCZ+1; cz++ {
@@ -253,12 +336,13 @@ func processDetectGroup(
 			}
 		}
 		spotter := int32(-1)
+		var mag float32
 		for _, mi := range [2]int32{b0, b1} {
 			if mi < 0 {
 				continue
 			}
-			if visualDetect(&seers[mi], cand, localWalls, hm) {
-				spotter = mi
+			if m, ok := visualMagnitude(&seers[mi], cand, localWalls, hm); ok {
+				spotter, mag = mi, m
 				break
 			}
 		}
@@ -266,37 +350,44 @@ func processDetectGroup(
 			continue
 		}
 		sp := &seers[spotter]
-		recordSighting(sp.aware, cand.ent, cand.pos, elapsed, components.AwareDirect)
-		for _, mi := range g.members {
-			if mi == spotter {
-				continue
-			}
-			s := &seers[mi]
-			if s.ent == cand.ent {
-				continue
-			}
-			recordSighting(s.aware, cand.ent, cand.pos, elapsed, 0)
-		}
 		dx := cand.x - sp.x
 		dz := cand.z - sp.z
 		closeLOS := dx*dx+dz*dz <= contactCloseRangeM*contactCloseRangeM
-		out = appendContactIfHostile(out, *sp, *cand, closeLOS)
+		if cand.meter[sp.faction] >= 1 {
+			recordSighting(sp.aware, cand.ent, cand.pos, elapsed, components.AwareDirect)
+			for _, mi := range g.members {
+				if mi == spotter {
+					continue
+				}
+				s := &seers[mi]
+				if s.ent == cand.ent {
+					continue
+				}
+				recordSighting(s.aware, cand.ent, cand.pos, elapsed, 0)
+			}
+			out = appendContactIfHostile(out, *sp, *cand, closeLOS)
+		}
+		*meterOut = append(*meterOut, meterEvent{
+			group: gIdx, spotter: spotter, target: int32(ci),
+			faction: sp.faction, closeLOS: closeLOS,
+			fill: detectFillRate * mag * mag * dt,
+		})
 	}
 	return out
 }
 
-// visualDetect runs the full per-pair sensor pipeline: channel gates →
-// walls → terrain.
-func visualDetect(s *contactSeer, cand *contactUnit, walls []losWall, hm map[components.ChunkCoord][]float32) bool {
+// visualMagnitude runs the per-pair sensor pipeline (channel gates → walls
+// → terrain) and returns the best channel magnitude.
+func visualMagnitude(s *contactSeer, cand *contactUnit, walls []losWall, hm map[components.ChunkCoord][]float32) (float32, bool) {
 	dx := cand.x - s.x
 	dz := cand.z - s.z
 	d := float32(math.Sqrt(float64(dx*dx + dz*dz)))
 	if d < 1e-2 {
-		return false
+		return 0, false
 	}
 	dotF := (dx*s.fwdX + dz*s.fwdZ) / d
 	angle := float32(math.Acos(float64(clamp32(dotF, -1, 1))))
-	detected := false
+	best := float32(0)
 	for i := uint8(0); i < s.sensors.Count; i++ {
 		c := &s.sensors.Channels[i]
 		if c.DetectMask&cand.dimMask == 0 {
@@ -308,19 +399,23 @@ func visualDetect(s *contactSeer, cand *contactUnit, walls []losWall, hm map[com
 		strength := components.Falloff(c.FalloffKind, d, c.BaseRangeM)
 		strength *= components.FacingMul(angle, c.Facing)
 		strength *= cand.concealment
-		if strength < detectionThreshold {
-			continue
+		if strength > best {
+			best = strength
 		}
-		detected = true
-		break
 	}
-	if !detected {
-		return false
+	if best < detectMinMagnitude {
+		return 0, false
+	}
+	if best > 1 {
+		best = 1
 	}
 	if anyLosWallBlocks(walls, s.x, s.z, cand.x, cand.z) {
-		return false
+		return 0, false
 	}
-	return !terrainBlocksLOS(hm, s.x, s.z, s.eyeY, cand.x, cand.z, cand.targetY)
+	if terrainBlocksLOS(hm, s.x, s.z, s.eyeY, cand.x, cand.z, cand.targetY) {
+		return 0, false
+	}
+	return best, true
 }
 
 // appendContactIfHostile records a hostile-side detection for serial upsert.

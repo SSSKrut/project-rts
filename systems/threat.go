@@ -37,6 +37,10 @@ func (ThreatSystem) LODPolicy() core.LODPolicy {
 	}
 }
 
+// PostLoad re-seeds lastTick so the first post-load dt is the same float32
+// subtraction a continuous run would compute.
+func (sys *ThreatSystem) PostLoad(simNow float64) { sys.lastTick = float32(simNow) }
+
 func (sys *ThreatSystem) Update(ctx core.UpdateContext) {
 	now := float32(ctx.SimNow)
 	dt := now - sys.lastTick

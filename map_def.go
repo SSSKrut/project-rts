@@ -70,7 +70,19 @@ func loadMapDef() mapDef {
 	if *mapFlag == "" || isAIScene() || isDoorScene() {
 		return defaultMapDef()
 	}
-	path := filepath.Join("maps", *mapFlag+".json")
+	return readMapFile(*mapFlag)
+}
+
+// loadMapDefByName resolves a map by the name stored in a snapshot header.
+func loadMapDefByName(name string) mapDef {
+	if name == "" || name == "world-default" {
+		return defaultMapDef()
+	}
+	return readMapFile(name)
+}
+
+func readMapFile(name string) mapDef {
+	path := filepath.Join("maps", name+".json")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		fmt.Printf("map: %v\n", err)
@@ -82,7 +94,7 @@ func loadMapDef() mapDef {
 		os.Exit(1)
 	}
 	if def.Name == "" {
-		def.Name = *mapFlag
+		def.Name = name
 	}
 	fmt.Printf("map: %s (%s)\n", def.Name, path)
 	return def

@@ -97,6 +97,58 @@ func (app *App) AddSystem(sys System) {
 
 func (app *App) Elapsed() time.Duration { return app.elapsed }
 
+// RestoreClock rewinds the canonical clock to a snapshot's tick (18.9).
+// elapsed is exact (tick x SimDt: only sim steps advance it); per-system
+// lastRun replays each tier's fire grid so both the schedule and the first
+// post-load ctx.Delta match a continuous run. The grid drifts (intervals are
+// not exact SimDt multiples), so it is replayed fire-by-fire, not floored.
+func (app *App) RestoreClock(tickIndex uint64, frameIndex uint32) {
+	app.tickIndex = tickIndex
+	app.frameIndex = frameIndex
+	app.elapsed = time.Duration(tickIndex) * SimDt
+	for i := range app.systems {
+		entry := &app.systems[i]
+		policy := entry.sys.LODPolicy()
+		for _, tier := range []LODTier{LODTierActive, LODTierRelevant, LODTierDormant} {
+			interval := policy.Interval(tier)
+			switch {
+			case interval == LODDisabled:
+			case interval == 0:
+				// Every-tick systems: lastRun tracks elapsed exactly, so the
+				// first post-load Delta is one SimDt, not elapsed-since-zero.
+				entry.lastRun[tier] = app.elapsed
+			default:
+				entry.lastRun[tier] = replayFireGrid(tickIndex, interval)
+			}
+		}
+	}
+}
+
+// PostLoadHook lets systems with private cross-tick state (prev-now floats,
+// derived ledgers) re-seed it after a snapshot load.
+type PostLoadHook interface {
+	PostLoad(simNow float64)
+}
+
+func (app *App) NotifyLoaded() {
+	for i := range app.systems {
+		if h, ok := app.systems[i].sys.(PostLoadHook); ok {
+			h.PostLoad(app.elapsed.Seconds())
+		}
+	}
+}
+
+func replayFireGrid(tickIndex uint64, interval time.Duration) time.Duration {
+	last := time.Duration(0)
+	for {
+		t := uint64((last + interval + SimDt - 1) / SimDt)
+		if t > tickIndex {
+			return last
+		}
+		last = time.Duration(t) * SimDt
+	}
+}
+
 func (app *App) FrameIndex() uint32 { return app.frameIndex }
 
 func (app *App) TickIndex() uint64 { return app.tickIndex }

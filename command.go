@@ -281,7 +281,7 @@ func buildBuildingPopupSections(
 			var arr []lvlInfo
 			for _, lvl := range levels {
 				if l := levelMap.Get(lvl); l != nil {
-					name := l.Name
+					name := l.Label()
 					if name == "" {
 						name = fmt.Sprintf("L%d", l.DisplayOrder)
 					}

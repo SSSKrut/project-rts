@@ -247,6 +247,8 @@ func (WeaponSystem) LODPolicy() core.LODPolicy {
 	}
 }
 
+func (sys *WeaponSystem) PostLoad(simNow float64) { sys.lastTick = float32(simNow) }
+
 func (sys *WeaponSystem) Update(ctx core.UpdateContext) {
 	now := float32(ctx.SimNow)
 	dt := now - sys.lastTick

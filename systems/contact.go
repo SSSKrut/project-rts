@@ -9,9 +9,19 @@ import (
 	"rts-go/core"
 )
 
-// detectionThreshold gates effective-range strength; sensor curves output a
-// 0..1 magnitude, post-multiplier ≥ 0.5 + LOS + dimension match = detected.
-const detectionThreshold float32 = 0.5
+// Detection meter (Detection 2.0): signal magnitude m (falloff × facing ×
+// concealment × motion) fills Detectability.Meter at detectFillRate×m² per
+// second under clear LOS; a sighting fires when the meter reaches 1. m=1 is
+// instant, m=0.5 ≈ 0.5 s, m=0.15 ≈ seconds of grace for a still prone.
+const (
+	detectFillRate     float32 = 8.0
+	detectDecayPerSec  float32 = 0.5
+	detectMinMagnitude float32 = 0.05
+	detectStillMul     float32 = 0.5
+	detectRunMul       float32 = 1.3
+	detectStillSpeed   float32 = 0.2
+	detectRunSpeed     float32 = 2.5
+)
 
 // contactCloseRangeM is the per-unit close-LOS radius that promotes a
 // contact's Source to CloseRangeID and exposes ground-truth Affil/Dim. One
@@ -49,6 +59,7 @@ type ContactSystem struct {
 	registryRes *ecs.Resource[components.ContactRegistry]
 	indexRes    ecs.Resource[TerrainChunkIndex]
 	hmMap       *ecs.Map[components.Heightmap]
+	dtMap       *ecs.Map[components.Detectability]
 	pool        *core.WorkerPool
 	worldRef    *ecs.World
 
@@ -63,6 +74,10 @@ type ContactSystem struct {
 	// Per-worker collectors (indexed by ParallelForIndexed chunkIdx),
 	// drained in worker order → deterministic contactsBuf ordering.
 	workerContacts [][]contactRec
+	workerMeter    [][]meterEvent
+	meterEvents    []meterEvent
+	meterFill      [][components.FactionCount]float32
+	meterSrc       [][components.FactionCount]int32
 
 	elapsed float32
 }
@@ -76,8 +91,22 @@ type contactUnit struct {
 	targetY     float32 // stance-aware silhouette Y for terrain-LOS
 	faction     uint8
 	dimMask     components.DimensionMask
-	concealment float32 // 0..1, lower = harder to spot
+	concealment float32 // stance × motion, lower = harder to spot
 	audioRadius float32
+	meter       [components.FactionCount]float32
+	det         *components.Detectability // serial apply target; nil = instant
+}
+
+// meterEvent: one group's best observation of a target this tick; serial
+// apply takes the max fill per (target, faction) and fires the sighting on
+// meter crossing.
+type meterEvent struct {
+	group    int32
+	spotter  int32
+	target   int32
+	faction  uint8
+	closeLOS bool
+	fill     float32
 }
 
 // contactSeer is the per-tick observer snapshot.
@@ -131,6 +160,7 @@ func NewContactSystem(pool *core.WorkerPool) *ContactSystem {
 		groupIdx:       make(map[ecs.Entity]int32, 16),
 		contactsBuf:    make([]contactRec, 0, 64),
 		workerContacts: make([][]contactRec, workers),
+		workerMeter:    make([][]meterEvent, workers),
 	}
 }
 
@@ -154,6 +184,7 @@ func (sys *ContactSystem) InitUI(w *ecs.World) {
 	sys.registryRes = &r
 	sys.indexRes = ecs.NewResource[TerrainChunkIndex](w)
 	sys.hmMap = ecs.NewMap[components.Heightmap](w)
+	sys.dtMap = ecs.NewMap[components.Detectability](w)
 }
 
 func (ContactSystem) Name() string { return "contact" }
@@ -169,7 +200,7 @@ func (ContactSystem) LODPolicy() core.LODPolicy {
 
 func (sys *ContactSystem) Update(ctx core.UpdateContext) {
 	sys.elapsed = float32(ctx.SimNow)
-	sys.runDetectPass()
+	sys.runDetectPass(float32(ctx.Delta.Seconds()))
 	sys.applyContactUpsert()
 	sys.applyCombatEvidence()
 }

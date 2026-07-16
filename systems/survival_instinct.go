@@ -59,6 +59,20 @@ type SurvivalInstinctSystem struct {
 	occupancyClaim map[ecs.Entity]uint8
 }
 
+// PostLoad repopulates the occupancy ledger from live TacticalOverride
+// assignments — the ledger mirrors AssignedSlot counts (inc on assign, dec
+// on release), so counting live components recreates it.
+func (sys *SurvivalInstinctSystem) PostLoad(simNow float64) {
+	clear(sys.occupancyClaim)
+	q := ecs.NewFilter1[components.TacticalOverride](sys.world).Query()
+	for q.Next() {
+		ov := q.Get()
+		if ov.AssignedSlot != (ecs.Entity{}) {
+			sys.occupancyClaim[ov.AssignedSlot]++
+		}
+	}
+}
+
 // siCoverSlot is the per-tick snapshot of one live CoverSlot entity.
 type siCoverSlot struct {
 	ent      ecs.Entity

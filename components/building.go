@@ -165,8 +165,21 @@ type LevelTransitionSpec struct {
 
 type Level struct {
 	AABB         AABB3D
-	Name         string
+	Name         [8]byte // zero-padded label; keep POD for snapshots
 	DisplayOrder uint8
+}
+
+func LevelName(s string) (out [8]byte) {
+	copy(out[:], s)
+	return out
+}
+
+func (l *Level) Label() string {
+	n := 0
+	for n < len(l.Name) && l.Name[n] != 0 {
+		n++
+	}
+	return string(l.Name[:n])
 }
 
 type LevelTransition struct {

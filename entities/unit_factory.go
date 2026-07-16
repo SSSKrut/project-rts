@@ -27,9 +27,10 @@ type UnitFactory struct {
 	MicroPathMap    *ecs.Map[components.MicroPath]
 	DangerBufMap    *ecs.Map[components.DangerBuffer]
 	BlackboardMap   *ecs.Map[components.LocalBlackboard]
-	ColliderMap     *ecs.Map[components.Collider]
-	SensorsMap      *ecs.Map[components.Sensors]
-	UnitMap         *ecs.Map[components.Unit]
+	ColliderMap      *ecs.Map[components.Collider]
+	SensorsMap       *ecs.Map[components.Sensors]
+	UnitMap          *ecs.Map[components.Unit]
+	DetectabilityMap *ecs.Map[components.Detectability]
 }
 
 // NewUnitFactory pre-builds every Map handle so per-spawn cost is just Add
@@ -47,9 +48,10 @@ func NewUnitFactory(world *ecs.World, posMap *ecs.Map[components.WorldPos]) *Uni
 		MicroPathMap:   ecs.NewMap[components.MicroPath](world),
 		DangerBufMap:   ecs.NewMap[components.DangerBuffer](world),
 		BlackboardMap:  ecs.NewMap[components.LocalBlackboard](world),
-		ColliderMap:    ecs.NewMap[components.Collider](world),
-		SensorsMap:     ecs.NewMap[components.Sensors](world),
-		UnitMap:        ecs.NewMap[components.Unit](world),
+		ColliderMap:      ecs.NewMap[components.Collider](world),
+		SensorsMap:       ecs.NewMap[components.Sensors](world),
+		UnitMap:          ecs.NewMap[components.Unit](world),
+		DetectabilityMap: ecs.NewMap[components.Detectability](world),
 	}
 }
 
@@ -87,5 +89,6 @@ func (f *UnitFactory) Spawn(pos components.WorldPos) ecs.Entity {
 	f.AwarenessMap.Add(ent, &components.Awareness{})
 	f.BlackboardMap.Add(ent, &components.LocalBlackboard{})
 	f.ActionQueueMap.Add(ent, &components.ActionQueue{})
+	f.DetectabilityMap.Add(ent, &components.Detectability{})
 	return ent
 }

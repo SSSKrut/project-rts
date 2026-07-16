@@ -5,7 +5,10 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"path/filepath"
 	"runtime"
+	"strconv"
+	"syscall"
 	"time"
 
 	rl "github.com/gen2brain/raylib-go/raylib"
@@ -29,15 +32,67 @@ var workersFlag = flag.Int("workers", 0, "worker pool size (default = NumCPU)")
 
 var replayHashFlag = flag.String("replay-hash", "", "write per-100-tick state hashes to path (headless scenes)")
 
+var saveAtFlag = flag.Uint64("save-at", 0, "write world snapshot at tick N (0 = off)")
+var savePathFlag = flag.String("save-path", "save/snapshot.rtss", "snapshot path for -save-at")
+var loadFlag = flag.String("load", "", "load world snapshot and continue")
+var runTicksFlag = flag.Uint64("run-ticks", 0, "headless: exit after tick N (overrides verdict exit)")
+
+var saveAtDone bool
+
+func maybeSaveAt(app *core.App) {
+	if *saveAtFlag == 0 || saveAtDone || app.TickIndex() < *saveAtFlag {
+		return
+	}
+	saveAtDone = true
+	meta := systems.SaveMeta{
+		MapName:    worldMap.Name,
+		SimNow:     app.Elapsed().Seconds(),
+		TickIndex:  app.TickIndex(),
+		FrameIndex: uint64(app.FrameIndex()),
+	}
+	if err := systems.SaveWorld(app.World, *savePathFlag, meta); err != nil {
+		fmt.Printf("save: %v\n", err)
+		return
+	}
+	fmt.Printf("save: wrote %s at tick %d\n", *savePathFlag, app.TickIndex())
+}
+
+func quicksavePath() string {
+	return filepath.Join(systems.SaveDir, "quick.rtss")
+}
+
+// relaunchWithLoad execs the binary with -load: in-place reload would need a
+// full system teardown/reboot; exec is the honest prototype path (Linux).
+func relaunchWithLoad(app *core.App, path string) {
+	exe, err := os.Executable()
+	if err != nil {
+		fmt.Printf("quickload: %v\n", err)
+		return
+	}
+	systems.FlushModifiedChunks(app.World, systems.SaveDir)
+	rl.CloseWindow()
+	if err := syscall.Exec(exe, []string{exe, "-load=" + path}, os.Environ()); err != nil {
+		fmt.Printf("quickload: exec: %v\n", err)
+	}
+}
+
 var (
 	replayHasher   *systems.ReplayHasher
 	replayHashFile *os.File
 	replayLastTick = ^uint64(0)
 )
 
+var replayHashEvery uint64
+
 func writeReplayHash(app *core.App) {
 	path := *replayHashFlag
-	if path == "" || app.TickIndex()%100 != 0 || app.TickIndex() == replayLastTick {
+	if replayHashEvery == 0 {
+		replayHashEvery = 100
+		if v, err := strconv.ParseUint(os.Getenv("RTS_HASH_EVERY"), 10, 64); err == nil && v > 0 {
+			replayHashEvery = v
+		}
+	}
+	if path == "" || app.TickIndex()%replayHashEvery != 0 || app.TickIndex() == replayLastTick {
 		return
 	}
 	if replayHasher == nil {
@@ -52,14 +107,27 @@ func writeReplayHash(app *core.App) {
 	}
 	replayLastTick = app.TickIndex()
 	fmt.Fprintf(replayHashFile, "%d %016x\n", app.TickIndex(), replayHasher.Hash())
+	if at, err := strconv.ParseUint(os.Getenv("RTS_DUMP_AT"), 10, 64); err == nil && at == app.TickIndex() {
+		if err := replayHasher.DumpState(os.Getenv("RTS_DUMP_FILE")); err != nil {
+			fmt.Printf("dump: %v\n", err)
+		}
+	}
 }
 
 func main() {
 	flag.Parse()
 
 	worldMap = loadMapDef()
+	if *loadFlag != "" {
+		meta, err := systems.LoadSnapshotMeta(*loadFlag)
+		if err != nil {
+			fmt.Printf("load: %v\n", err)
+			os.Exit(1)
+		}
+		worldMap = loadMapDefByName(meta.MapName)
+	}
 	systems.SetTerrainParams(worldMap.Terrain)
-	if *mapFlag != "" && !isAIScene() && !isDoorScene() {
+	if (*mapFlag != "" || *loadFlag != "") && !isAIScene() && !isDoorScene() {
 		systems.SaveDir = "./save/" + worldMap.Name
 	}
 
@@ -145,6 +213,9 @@ func main() {
 	ecs.AddResource(app.World, &contactRegistry)
 
 	symbologyPresets := components.SymbologyPresets{All: ui.BuiltinSymbologyPresets()}
+	if persisted, ok := systems.LoadSymbologySidecar(); ok {
+		symbologyPresets = persisted
+	}
 	ecs.AddResource(app.World, &symbologyPresets)
 	_ = symbologyPresets // reserved for Track 18.5.F
 
@@ -315,46 +386,56 @@ func main() {
 	lodAnchorMap := ecs.NewMap[components.LODAnchor](app.World)
 	alwaysActiveMap := ecs.NewMap[components.AlwaysActive](app.World)
 
-	anchor := app.World.NewEntity()
-	anchorPos := components.WorldPos{}
-	if isDoorScene() {
-		anchorPos = doorSceneAnchorPos()
-	} else if isAIScene() {
-		anchorPos = aiSceneAnchorPos()
+	anchor := ecs.Entity{}
+	if *loadFlag == "" {
+		anchor = app.World.NewEntity()
+		anchorPos := components.WorldPos{}
+		if isDoorScene() {
+			anchorPos = doorSceneAnchorPos()
+		} else if isAIScene() {
+			anchorPos = aiSceneAnchorPos()
+		}
+		posMap.Add(anchor, &anchorPos)
+		lodActiveMap.Add(anchor, &components.LODActive{})
+		lodAnchorMap.Add(anchor, &components.LODAnchor{})
+		alwaysActiveMap.Add(anchor, &components.AlwaysActive{})
 	}
-	posMap.Add(anchor, &anchorPos)
-	lodActiveMap.Add(anchor, &components.LODActive{})
-	lodAnchorMap.Add(anchor, &components.LODAnchor{})
-	alwaysActiveMap.Add(anchor, &components.AlwaysActive{})
 
 	camCompMap := ecs.NewMap[components.Camera](app.World)
 	orbitMap := ecs.NewMap[components.OrbitController](app.World)
 	activeCamMap := ecs.NewMap[components.ActiveCamera](app.World)
 
-	camEnt := app.World.NewEntity()
-	posMap.Add(camEnt, &components.WorldPos{Local: rl.Vector3{X: 0, Y: 15.0, Z: 20.0}})
-	camCompMap.Add(camEnt, &components.Camera{Fovy: 75.0, Perspective: true})
-	orbitMap.Add(camEnt, &components.OrbitController{
-		Target:           anchor,
-		Yaw:              0,
-		Pitch:            0.6,
-		Radius:           25.0,
-		MinRadius:        5.0,
-		MaxRadius:        100.0,
-		SensitivityYaw:   0.01,
-		SensitivityPitch: 0.01,
-		SensitivityZoom:  4.0,
-		Smooth:           0,
-	})
-	activeCamMap.Add(camEnt, &components.ActiveCamera{})
+	camEnt := ecs.Entity{}
+	if *loadFlag == "" {
+		camEnt = app.World.NewEntity()
+		posMap.Add(camEnt, &components.WorldPos{Local: rl.Vector3{X: 0, Y: 15.0, Z: 20.0}})
+		camCompMap.Add(camEnt, &components.Camera{Fovy: 75.0, Perspective: true})
+		orbitMap.Add(camEnt, &components.OrbitController{
+			Target:           anchor,
+			Yaw:              0,
+			Pitch:            0.6,
+			Radius:           25.0,
+			MinRadius:        5.0,
+			MaxRadius:        100.0,
+			SensitivityYaw:   0.01,
+			SensitivityPitch: 0.01,
+			SensitivityZoom:  4.0,
+			Smooth:           0,
+		})
+		activeCamMap.Add(camEnt, &components.ActiveCamera{})
+	}
 
 	buildingMap := ecs.NewMap[components.Building](app.World)
 	buildingMemberMap := ecs.NewMap[components.BuildingMember](app.World)
 	levelMap := ecs.NewMap[components.Level](app.World)
 	buildingViewModeMap := ecs.NewMap[components.BuildingViewMode](app.World)
 	levelVisibilityMap := ecs.NewMap[components.LevelVisibility](app.World)
-	for i := range buildingPlans.Plans {
-		p := &buildingPlans.Plans[i]
+	plansToSpawn := buildingPlans.Plans
+	if *loadFlag != "" {
+		plansToSpawn = nil // snapshot restores roots/levels; PostLoadRebuild refills the index
+	}
+	for i := range plansToSpawn {
+		p := &plansToSpawn[i]
 		root := app.World.NewEntity()
 		fp := components.AABB2D{
 			MinX: p.Pos.Local.X + float32(p.Pos.Chunk.X)*components.ChunkSize - p.Size.X*0.5,
@@ -396,7 +477,7 @@ func main() {
 			alwaysActiveMap.Add(lev, &components.AlwaysActive{})
 			levelMap.Add(lev, &components.Level{
 				AABB:         ls.AABB,
-				Name:         ls.Name,
+				Name:         components.LevelName(ls.Name),
 				DisplayOrder: ls.DisplayOrder,
 			})
 			levelVisibilityMap.Add(lev, &components.LevelVisibility{})
@@ -420,8 +501,12 @@ func main() {
 	// One TrenchRoot entity per polyline so the hit-test resolver can return
 	// an ecs.Entity in OrderTarget.Entity for OccupyTrench.
 	trenchRootMap := ecs.NewMap[components.TrenchRoot](app.World)
-	for i := range trenches.Lines {
-		pts := trenches.Lines[i].Points
+	trenchLinesToSpawn := trenches.Lines
+	if *loadFlag != "" {
+		trenchLinesToSpawn = nil
+	}
+	for i := range trenchLinesToSpawn {
+		pts := trenchLinesToSpawn[i].Points
 		if len(pts) == 0 {
 			continue
 		}
@@ -455,6 +540,7 @@ func main() {
 	staminaMap := ecs.NewMap[components.Stamina](app.World)
 	hpMap := ecs.NewMap[components.HP](app.World)
 	factionMap := ecs.NewMap[components.Faction](app.World)
+	detectabilityMap := ecs.NewMap[components.Detectability](app.World)
 	circlePatrolMap := ecs.NewMap[components.CirclePatrol](app.World)
 	individualPosMap := ecs.NewMap[components.IndividualPosition](app.World)
 
@@ -478,7 +564,9 @@ func main() {
 	playerFaction := components.Faction{ID: components.FactionPlayer}
 	var doorScene *doorSceneState
 	var aiTest *aiTestState
-	if isAIScene() {
+	if *loadFlag != "" {
+		// Snapshot restores all entities; scene / default spawns skipped.
+	} else if isAIScene() {
 		aiTest = aiSceneSpawn(app.World, squadService, roleService, unitFactory,
 			playerFaction, posMap, rosterMap, buildingMap)
 	} else if isDoorScene() {
@@ -574,6 +662,27 @@ func main() {
 		wildCenter := components.WorldPos{}.Add(rl.Vector3{X: 200, Z: 260})
 		spawnDummy(wildCenter, components.FactionWildlife,
 			&components.CirclePatrol{Center: wildCenter, RadiusM: 30, Speed: 0.8})
+	}
+
+	if *loadFlag != "" {
+		meta, err := systems.LoadWorld(app.World, *loadFlag)
+		if err != nil {
+			fmt.Printf("load: %v\n", err)
+			os.Exit(1)
+		}
+		app.RestoreClock(meta.TickIndex, uint32(meta.FrameIndex))
+		systems.PostLoadRebuild(app.World)
+		app.NotifyLoaded()
+		qa := ecs.NewFilter1[components.LODAnchor](app.World).Query()
+		for qa.Next() {
+			anchor = qa.Entity()
+		}
+		qcam := ecs.NewFilter1[components.ActiveCamera](app.World).Query()
+		for qcam.Next() {
+			camEnt = qcam.Entity()
+		}
+		fmt.Printf("load: %s map=%s tick=%d\n", *loadFlag, worldMap.Name, meta.TickIndex)
+		writeReplayHash(app)
 	}
 
 	unitRenderFilter := ecs.NewFilter3[components.WorldPos, components.Unit, components.Stance](app.World)
@@ -1773,6 +1882,28 @@ func main() {
 			}
 		}
 
+		if rl.IsKeyPressed(rl.KeyF5) {
+			path := quicksavePath()
+			meta := systems.SaveMeta{
+				MapName:    worldMap.Name,
+				SimNow:     app.Elapsed().Seconds(),
+				TickIndex:  app.TickIndex(),
+				FrameIndex: uint64(app.FrameIndex()),
+			}
+			if err := systems.SaveWorld(app.World, path, meta); err != nil {
+				fmt.Printf("quicksave: %v\n", err)
+			} else {
+				fmt.Printf("quicksave: %s tick=%d\n", path, app.TickIndex())
+			}
+		}
+		if rl.IsKeyPressed(rl.KeyF9) {
+			if _, err := os.Stat(quicksavePath()); err == nil {
+				relaunchWithLoad(app, quicksavePath())
+			} else {
+				fmt.Printf("quickload: no quicksave at %s\n", quicksavePath())
+			}
+		}
+
 		// Hover: closest unit (Panel3D) / closest squad marker (PanelMap).
 		hovered = ecs.Entity{}
 		switch focused {
@@ -1876,10 +2007,15 @@ func main() {
 			!floating.IsBusy(cursor)
 
 		app.Advance()
+		maybeSaveAt(app)
 
 		if headless {
 			writeReplayHash(app)
-			if aiTest != nil && aiTest.verdictDone {
+			if *runTicksFlag > 0 {
+				if app.TickIndex() >= *runTicksFlag {
+					break
+				}
+			} else if aiTest != nil && aiTest.verdictDone {
 				break
 			}
 			continue
@@ -2520,6 +2656,11 @@ func main() {
 			}
 			if hp := hpMap.Get(ent); hp != nil {
 				drawUnitHPBar(renderPos, *st, role, hp.Current, hp.Max, panel3DContent)
+			}
+			if fac := factionMap.Get(ent); fac == nil || fac.ID == components.FactionPlayer {
+				if det := detectabilityMap.Get(ent); det != nil {
+					drawUnitExposureBar(renderPos, *st, role, det.Meter[components.FactionEnemyRed], panel3DContent)
+				}
 			}
 		}
 		rl.EndScissorMode()

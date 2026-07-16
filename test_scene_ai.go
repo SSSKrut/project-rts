@@ -49,6 +49,9 @@ const (
 	// expected) or standing inside a trench cut (defilade, zero contacts).
 	aiSceneLosOpen     = "ai_los_open"
 	aiSceneLosDefilade = "ai_los_defilade"
+	// ai_los_creep: prone stationary hostile — detection meter grants a
+	// grace window (no contact by t=3 s, contact by t=15 s).
+	aiSceneLosCreep = "ai_los_creep"
 )
 
 // aiMainSpec selects the target wing (by expected footprint centre) and the
@@ -110,7 +113,7 @@ func aiSceneAnchorPos() components.WorldPos {
 		return components.WorldPos{}.Add(rl.Vector3{X: 0, Z: 0})
 	case aiSceneMainM0, aiSceneMainM1, aiSceneMainE, aiSceneMainN:
 		return components.WorldPos{}.Add(rl.Vector3{X: -40, Z: 10})
-	case aiSceneLosOpen, aiSceneLosDefilade:
+	case aiSceneLosOpen, aiSceneLosDefilade, aiSceneLosCreep:
 		return components.WorldPos{}.Add(rl.Vector3{X: 30, Z: 20})
 	}
 	return components.WorldPos{}
@@ -141,7 +144,7 @@ func aiSceneBuildings() []components.BuildingPlan {
 		return mainWorldBuildings()
 	}
 	switch aiSceneID() {
-	case aiSceneLosOpen, aiSceneLosDefilade:
+	case aiSceneLosOpen, aiSceneLosDefilade, aiSceneLosCreep:
 		return nil
 	case aiSceneDoorSouth:
 		return aiBuildingsSingleHouse(0)
@@ -272,7 +275,7 @@ func aiSpawnPos() components.WorldPos {
 		return components.WorldPos{}.Add(rl.Vector3{X: 0, Z: 0})
 	case aiSceneMainM0, aiSceneMainM1, aiSceneMainE, aiSceneMainN:
 		return components.WorldPos{}.Add(rl.Vector3{X: -44, Z: -4})
-	case aiSceneLosOpen, aiSceneLosDefilade:
+	case aiSceneLosOpen, aiSceneLosDefilade, aiSceneLosCreep:
 		return components.WorldPos{}.Add(rl.Vector3{X: 30, Z: 10})
 	}
 	return components.WorldPos{}
@@ -302,17 +305,30 @@ func aiSceneSpawn(
 		return nil
 	}
 
-	if id := aiSceneID(); id == aiSceneLosOpen || id == aiSceneLosDefilade {
+	if id := aiSceneID(); id == aiSceneLosOpen || id == aiSceneLosDefilade || id == aiSceneLosCreep {
 		// HoldFire keeps the enemy alive: sweepAwareness on death would wipe
 		// the very entries the verdict inspects.
 		if rules := ecs.NewMap[components.EngagementRules](world).Get(squad); rules != nil {
 			rules.Mode = components.HoldFire
 		}
-		enemyPos := components.WorldPos{}.Add(rl.Vector3{X: 30, Z: 25})
-		enemyPos.Local.Y = systems.GroundHeight(30, 25)
+		enemyZ := float32(25)
+		if id == aiSceneLosCreep {
+			enemyZ = 30
+		}
+		enemyPos := components.WorldPos{}.Add(rl.Vector3{X: 30, Z: enemyZ})
+		enemyPos.Local.Y = systems.GroundHeight(30, enemyZ)
 		enemy := unitFactory(enemyPos)
 		ecs.NewMap[components.Faction](world).Add(enemy, &components.Faction{ID: components.FactionEnemyRed})
 		ecs.NewMap[components.HP](world).Add(enemy, &components.HP{Current: 100, Max: 100})
+		if id == aiSceneLosCreep {
+			// Prone + override so StanceController's Safe band doesn't stand
+			// him back up.
+			if st := ecs.NewMap[components.Stance](world).Get(enemy); st != nil {
+				st.Code = components.StanceProne
+				st.LockUntil = 1e9 // unit_movement's profile auto-stance respects the lock
+			}
+			ecs.NewMap[components.StanceOverride](world).Add(enemy, &components.StanceOverride{Until: 1e9})
+		}
 		// Short northward march so the settled formation faces the enemy —
 		// the optical cone must not decide the verdict.
 		squadService.IssueOrder(squad, components.OrderKindMoveTo,
@@ -322,11 +338,16 @@ func aiSceneSpawn(
 		fmt.Printf("== AI LOS SCENE: %s  squad=%v enemy=%v expectVisible=%v\n",
 			id, squad, enemy, id == aiSceneLosOpen)
 		fmt.Println("============================================================")
+		earlyAt := float32(0)
+		if id == aiSceneLosCreep {
+			earlyAt = 3
+		}
 		return &aiTestState{
 			sceneID:          id,
 			squad:            squad,
 			losTarget:        enemy,
-			losExpectVisible: id == aiSceneLosOpen,
+			losExpectVisible: id != aiSceneLosDefilade,
+			losEarlyAt:       earlyAt,
 			World:            world,
 			SquadService:     squadService,
 			PosMap:           posMap,
@@ -461,8 +482,11 @@ type aiTestState struct {
 
 	// Set for ai_los_* scenes: verdict counts Contacts on this entity and
 	// tallies Direct/Shared awareness across the roster.
-	losTarget        ecs.Entity
-	losExpectVisible bool
+	losTarget         ecs.Entity
+	losExpectVisible  bool
+	losEarlyAt        float32 // >0: contacts must still be 0 at this time
+	losEarlyDone      bool
+	losEarlyContacts  int
 
 	elapsed      float32
 	orderAt      float32
@@ -647,6 +671,12 @@ func (s *aiTestState) updateLos(elapsed float32) {
 	if s.verdictDone {
 		return
 	}
+	if s.losEarlyAt > 0 && !s.losEarlyDone && elapsed >= s.losEarlyAt {
+		s.losEarlyDone = true
+		s.losEarlyContacts = s.losContactCount()
+		fmt.Printf("[ai-test %s] t=%.1fs early: contacts=%d\n",
+			s.sceneID, elapsed, s.losEarlyContacts)
+	}
 	if elapsed >= s.nextSampleAt && elapsed < s.verdictAt {
 		s.nextSampleAt += aiSampleEvery
 		fmt.Printf("[ai-test %s] t=%.1fs sample: contacts=%d\n",
@@ -661,14 +691,17 @@ func (s *aiTestState) updateLos(elapsed float32) {
 	pass := contacts == 0
 	if s.losExpectVisible {
 		pass = contacts >= 1 && direct >= 1 && direct+shared == members
+		if s.losEarlyAt > 0 && s.losEarlyContacts != 0 {
+			pass = false
+		}
 	}
 	verdict := "FAIL"
 	if pass {
 		verdict = "PASS"
 	}
 	fmt.Println("============================================================")
-	fmt.Printf("== VERDICT [%s]: %s  (contacts=%d direct=%d shared=%d members=%d expectVisible=%v)\n",
-		s.sceneID, verdict, contacts, direct, shared, members, s.losExpectVisible)
+	fmt.Printf("== VERDICT [%s]: %s  (contacts=%d direct=%d shared=%d members=%d early=%d expectVisible=%v)\n",
+		s.sceneID, verdict, contacts, direct, shared, members, s.losEarlyContacts, s.losExpectVisible)
 	fmt.Println("============================================================")
 }
 

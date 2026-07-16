@@ -1,7 +1,10 @@
 package systems
 
 import (
+	"fmt"
 	"math"
+	"os"
+	"strings"
 
 	"github.com/mlange-42/ark/ecs"
 
@@ -18,10 +21,12 @@ type ReplayHasher struct {
 	hpMap         *ecs.Map[components.HP]
 	threatMap     *ecs.Map[components.Threat]
 	progressMap   *ecs.Map[components.OrderProgress]
+	world         *ecs.World
 }
 
 func NewReplayHasher(w *ecs.World) *ReplayHasher {
 	return &ReplayHasher{
+		world:         w,
 		unitFilter:    ecs.NewFilter4[components.Unit, components.WorldPos, components.Motion, components.ActionQueue](w),
 		orderFilter:   ecs.NewFilter1[components.OrderState](w),
 		contactFilter: ecs.NewFilter1[components.Contact](w),
@@ -100,4 +105,65 @@ func (r *ReplayHasher) Hash() uint64 {
 	}
 
 	return h
+}
+
+// DumpState writes the hashed fields as per-entity text (float bits in hex) —
+// forensics for save/load hash divergence.
+func (r *ReplayHasher) DumpState(path string) error {
+	var b strings.Builder
+	fb := math.Float32bits
+	q := r.unitFilter.Query()
+	for q.Next() {
+		_, p, mot, aq := q.Get()
+		ent := q.Entity()
+		fmt.Fprintf(&b, "U %d:%d pos=%d,%d,%08x,%08x,%08x mot=%08x,%08x,%08x",
+			ent.ID(), ent.Gen(), p.Chunk.X, p.Chunk.Z,
+			fb(p.Local.X), fb(p.Local.Y), fb(p.Local.Z),
+			fb(mot.Yaw), fb(mot.VelocityYaw), fb(mot.Speed))
+		if st := r.stanceMap.Get(ent); st != nil {
+			fmt.Fprintf(&b, " st=%d,%08x", st.Code, fb(st.LockUntil))
+		}
+		if hp := r.hpMap.Get(ent); hp != nil {
+			fmt.Fprintf(&b, " hp=%08x", fb(hp.Current))
+		}
+		if th := r.threatMap.Get(ent); th != nil {
+			fmt.Fprintf(&b, " th=%08x,%08x,%d", fb(th.Total), fb(th.Suppression), th.State)
+		}
+		fmt.Fprintf(&b, " aq=%d,%d,%08x", aq.Head, aq.Count, fb(aq.StopUntil))
+		if aq.Count > 0 {
+			a := aq.Actions[aq.Head%components.ActionQueueSize]
+			fmt.Fprintf(&b, " act=%d@%d,%d,%08x,%08x,%08x", a.Kind,
+				a.Target.Chunk.X, a.Target.Chunk.Z,
+				fb(a.Target.Local.X), fb(a.Target.Local.Y), fb(a.Target.Local.Z))
+		}
+		b.WriteByte('\n')
+	}
+	qo := r.orderFilter.Query()
+	for qo.Next() {
+		st := qo.Get()
+		fmt.Fprintf(&b, "O %d:%d code=%d", qo.Entity().ID(), qo.Entity().Gen(), st.Code)
+		if pr := r.progressMap.Get(qo.Entity()); pr != nil {
+			fmt.Fprintf(&b, " prog=%08x", fb(pr.Value))
+		}
+		b.WriteByte('\n')
+	}
+	qc := r.contactFilter.Query()
+	for qc.Next() {
+		c := qc.Get()
+		fmt.Fprintf(&b, "C %d:%d pos=%d,%d,%08x,%08x,%08x t=%08x affil=%d dim=%d src=%d\n",
+			qc.Entity().ID(), qc.Entity().Gen(),
+			c.EstimatedPos.Chunk.X, c.EstimatedPos.Chunk.Z,
+			fb(c.EstimatedPos.Local.X), fb(c.EstimatedPos.Local.Y), fb(c.EstimatedPos.Local.Z),
+			fb(c.LastSeenTime), c.PerceivedAffil, c.PerceivedDim, c.Source)
+	}
+	qh := ecs.NewFilter2[components.ChunkCoord, components.Heightmap](r.world).Query()
+	for qh.Next() {
+		cc, hm := qh.Get()
+		h := fnvOffset64
+		for _, v := range hm.Heights {
+			h = (h ^ uint64(math.Float32bits(v))) * fnvPrime64
+		}
+		fmt.Fprintf(&b, "H %d,%d %016x\n", cc.X, cc.Z, h)
+	}
+	return os.WriteFile(path, []byte(b.String()), 0o644)
 }

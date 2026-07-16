@@ -53,7 +53,7 @@ func ComputeBuildingWidget(root ecs.Entity, bvm *components.BuildingViewMode, le
 		label := ""
 		if levelMap != nil {
 			if l := levelMap.Get(lev); l != nil {
-				label = l.Name
+				label = l.Label()
 			}
 		}
 		if label == "" {

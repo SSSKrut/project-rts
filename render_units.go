@@ -195,6 +195,50 @@ func drawUnitHPBar(renderPos rl.Vector3, st components.Stance, role components.U
 		1, rl.Color{R: 10, G: 12, B: 16, A: 220})
 }
 
+// drawUnitExposureBar: thin strip above the HP pill while enemies build up
+// detection on this unit; full red = spotted.
+func drawUnitExposureBar(renderPos rl.Vector3, st components.Stance, role components.UnitRoleKind,
+	exposure float32, panel3DContent rl.Rectangle) {
+	if exposure < 0.05 {
+		return
+	}
+	ratio := exposure
+	if ratio > 1 {
+		ratio = 1
+	}
+	height := unitStanceHeight(st.Code)
+	capHeight := float32(0.15)
+	if role == components.RoleLeader {
+		capHeight = 0.30
+	}
+	topPos := rl.Vector3{
+		X: renderPos.X,
+		Y: renderPos.Y + height + capHeight + 0.65,
+		Z: renderPos.Z,
+	}
+	w := int32(panel3DContent.Width)
+	h := int32(panel3DContent.Height)
+	if w < 1 || h < 1 {
+		return
+	}
+	sp := rl.GetWorldToScreenEx(topPos, systems.CurrentCamera, w, h)
+	if sp.X < 0 || sp.Y < 0 || sp.X > panel3DContent.Width || sp.Y > panel3DContent.Height {
+		return
+	}
+	const barW, barH float32 = 40, 2
+	screenX := panel3DContent.X + sp.X - barW*0.5
+	screenY := panel3DContent.Y + sp.Y - barH*0.5
+	rl.DrawRectangleRec(rl.Rectangle{X: screenX, Y: screenY, Width: barW, Height: barH},
+		rl.Color{R: 28, G: 30, B: 36, A: 200})
+	fill := rl.Color{R: 240, G: 160, B: 40, A: 255}
+	if ratio >= 1 {
+		fill = rl.Color{R: 230, G: 60, B: 60, A: 255}
+	}
+	rl.DrawRectangleRec(rl.Rectangle{
+		X: screenX, Y: screenY, Width: barW * ratio, Height: barH,
+	}, fill)
+}
+
 // drawGhostUnit draws a translucent body cube (no role cap) to preview where
 // a unit would stand after a Move order completes. Stance drives cube height.
 func drawGhostUnit(pos rl.Vector3, st components.Stance, alpha uint8) {
