@@ -520,6 +520,8 @@ func main() {
 	unitFactoryRef := entities.NewUnitFactory(app.World, posMap)
 	actionQueueMap := unitFactoryRef.ActionQueueMap
 
+	losPrev := newLOSPreview(app.World)
+
 	inspectorMaps := ui.NewInspectorMaps(app.World)
 	weaponMap := ecs.NewMap[components.Weapon](app.World)
 	_ = weaponMap
@@ -955,6 +957,11 @@ func main() {
 				ContactFilter:      contactFilter,
 				ContactMap:         contactMap,
 				ContactOverrideMap: contactOverrideMap,
+				LOSFanOrigin:       losPrev.origin,
+				LOSFanRuns:         losPrev.fanRuns(),
+				LOSFanRange:        losPrev.sensorR,
+				LOSFanFalloff:      losPrev.falloff,
+				LOSWeaponRs:        losPrev.weaponRs,
 			})
 		case ui.PanelInspect:
 			ui.DrawInspector(syn("Inspector"), ui.InspectorCtx{
@@ -1937,6 +1944,9 @@ func main() {
 				panel3DLocal, panel3DW, panel3DH)
 		}
 
+		losHeld := rl.IsKeyDown(rl.KeyV) && focused == ui.Panel3D && !floating.IsBusy(cursor)
+		losPrev.update(app.World, losHeld, ghostTargetOK, ghostTarget, selected)
+
 		// Building hover: cursor's ground target inside any Building.Footprint.
 		hoveredBuilding = ecs.Entity{}
 		hoveredLevel = ecs.Entity{}
@@ -2260,6 +2270,8 @@ func main() {
 		} else {
 			showMapDebugLy = false
 		}
+
+		drawLOSPreview(losPrev)
 		if debugOverlay.NavGrid {
 			qNav := navOverlayFilter.Query()
 			for qNav.Next() {
@@ -2507,6 +2519,11 @@ func main() {
 			ContactFilter:      contactFilter,
 			ContactMap:         contactMap,
 			ContactOverrideMap: contactOverrideMap,
+			LOSFanOrigin:       losPrev.origin,
+			LOSFanRuns:         losPrev.fanRuns(),
+			LOSFanRange:        losPrev.sensorR,
+			LOSFanFalloff:      losPrev.falloff,
+			LOSWeaponRs:        losPrev.weaponRs,
 		}
 		ui.DrawMap(panelMap, mapCtx)
 

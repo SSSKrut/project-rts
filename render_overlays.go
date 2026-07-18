@@ -403,3 +403,75 @@ func drawRoadGraphDebug(g *components.RoadGraph) {
 		rl.DrawCube(p, 0.6, 0.6, 0.6, rl.Black)
 	}
 }
+
+// drawLOSPreview renders the hold-V visibility fan: sector quads per visible
+// run (alpha = channel falloff at run midpoint), sensor-range ring, weapon
+// range rings. Both windings drawn so the fan reads from any camera side.
+func drawLOSPreview(lp *losPreviewState) {
+	if !lp.active || !lp.haveSweep {
+		return
+	}
+	base := lp.origin.ToRenderSpace(systems.CurrentOriginChunk)
+	wx := float32(lp.origin.Chunk.X)*components.ChunkSize + lp.origin.Local.X
+	wz := float32(lp.origin.Chunk.Z)*components.ChunkSize + lp.origin.Local.Z
+	yAt := func(dx, dz float32) float32 { return lp.sampler.Sample(wx+dx, wz+dz) + 0.15 }
+
+	rays := len(lp.runs)
+	if rays == 0 {
+		return
+	}
+	halfStep := math.Pi / float64(rays)
+	fill := rl.Color{R: 70, G: 210, B: 130}
+	for r, runs := range lp.runs {
+		angC := float64(r) * (2 * math.Pi / float64(rays))
+		s0 := float32(math.Sin(angC - halfStep))
+		c0 := float32(math.Cos(angC - halfStep))
+		s1 := float32(math.Sin(angC + halfStep))
+		c1 := float32(math.Cos(angC + halfStep))
+		for _, run := range runs {
+			t0 := run.T0
+			if t0 < 0.6 {
+				t0 = 0.6
+			}
+			if run.T1 <= t0 {
+				continue
+			}
+			t1 := run.T1
+			a := components.Falloff(lp.falloff, (t0+t1)*0.5, lp.sensorR)
+			col := fill
+			col.A = uint8(30 + 90*a)
+			v00 := rl.Vector3{X: base.X + s0*t0, Y: yAt(s0*t0, c0*t0), Z: base.Z + c0*t0}
+			v01 := rl.Vector3{X: base.X + s1*t0, Y: yAt(s1*t0, c1*t0), Z: base.Z + c1*t0}
+			v10 := rl.Vector3{X: base.X + s0*t1, Y: yAt(s0*t1, c0*t1), Z: base.Z + c0*t1}
+			v11 := rl.Vector3{X: base.X + s1*t1, Y: yAt(s1*t1, c1*t1), Z: base.Z + c1*t1}
+			rl.DrawTriangle3D(v00, v01, v11, col)
+			rl.DrawTriangle3D(v00, v11, v10, col)
+			rl.DrawTriangle3D(v00, v11, v01, col)
+			rl.DrawTriangle3D(v00, v10, v11, col)
+		}
+	}
+
+	drawTerrainRing(lp, wx, wz, base, lp.sensorR, rl.Color{R: 240, G: 220, B: 80, A: 200})
+	for _, wr := range lp.weaponRs {
+		drawTerrainRing(lp, wx, wz, base, wr, rl.Color{R: 240, G: 120, B: 80, A: 170})
+	}
+}
+
+func drawTerrainRing(lp *losPreviewState, wx, wz float32, base rl.Vector3, radius float32, col rl.Color) {
+	const segs = 96
+	var prev rl.Vector3
+	for i := 0; i <= segs; i++ {
+		ang := float64(i) * (2 * math.Pi / segs)
+		s := float32(math.Sin(ang))
+		c := float32(math.Cos(ang))
+		p := rl.Vector3{
+			X: base.X + s*radius,
+			Y: lp.sampler.Sample(wx+s*radius, wz+c*radius) + 0.2,
+			Z: base.Z + c*radius,
+		}
+		if i > 0 {
+			rl.DrawLine3D(prev, p, col)
+		}
+		prev = p
+	}
+}

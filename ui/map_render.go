@@ -47,6 +47,12 @@ type MapRenderCtx struct {
 	ContactFilter      *ecs.Filter1[components.Contact]
 	ContactMap         *ecs.Map[components.Contact]
 	ContactOverrideMap *ecs.Map[components.ContactSymbolOverride]
+	// LOS preview (hold V) mirrored from the 3D overlay. Empty runs → skip.
+	LOSFanOrigin  components.WorldPos
+	LOSFanRuns    [][]components.VisRun
+	LOSFanRange   float32
+	LOSFanFalloff components.FalloffKind
+	LOSWeaponRs   []float32
 }
 
 var (
@@ -72,11 +78,59 @@ func DrawMap(panel Panel, ctx MapRenderCtx) {
 	if ctx.ShowDebugLayers {
 		drawDebugLayers(content, ctx)
 	}
+	drawLOSFan(content, ctx)
 	drawOrderMarkers(content, ctx)
 	drawMapPings(content, ctx)
 	drawSquadMarkers(content, ctx)
 	drawMapContacts(content, ctx)
 	drawAnchorMarker(content, ctx)
+}
+
+// drawLOSFan mirrors the hold-V visibility fan on the map: filled sector
+// triangles per visible run + sensor / weapon range circles.
+func drawLOSFan(content rl.Rectangle, ctx MapRenderCtx) {
+	if len(ctx.LOSFanRuns) == 0 {
+		return
+	}
+	ox := float32(ctx.LOSFanOrigin.Chunk.X)*components.ChunkSize + ctx.LOSFanOrigin.Local.X
+	oz := float32(ctx.LOSFanOrigin.Chunk.Z)*components.ChunkSize + ctx.LOSFanOrigin.Local.Z
+	at := func(dx, dz float32) rl.Vector2 {
+		wp := components.WorldPos{Local: rl.Vector3{X: ox + dx, Z: oz + dz}}
+		return MapWorldToPanel(wp, ctx.Cam, content)
+	}
+	center := at(0, 0)
+	rays := len(ctx.LOSFanRuns)
+	halfStep := math.Pi / float64(rays)
+	fill := rl.Color{R: 70, G: 210, B: 130}
+	for r, runs := range ctx.LOSFanRuns {
+		angC := float64(r) * (2 * math.Pi / float64(rays))
+		s0 := float32(math.Sin(angC - halfStep))
+		c0 := float32(math.Cos(angC - halfStep))
+		s1 := float32(math.Sin(angC + halfStep))
+		c1 := float32(math.Cos(angC + halfStep))
+		for _, run := range runs {
+			if run.T1 <= run.T0 {
+				continue
+			}
+			a := components.Falloff(ctx.LOSFanFalloff, (run.T0+run.T1)*0.5, ctx.LOSFanRange)
+			col := fill
+			col.A = uint8(40 + 100*a)
+			v00 := at(s0*run.T0, c0*run.T0)
+			v01 := at(s1*run.T0, c1*run.T0)
+			v10 := at(s0*run.T1, c0*run.T1)
+			v11 := at(s1*run.T1, c1*run.T1)
+			rl.DrawTriangle(v00, v11, v01, col)
+			rl.DrawTriangle(v00, v10, v11, col)
+		}
+	}
+	edge := at(ctx.LOSFanRange, 0)
+	radPx := float32(math.Hypot(float64(edge.X-center.X), float64(edge.Y-center.Y)))
+	rl.DrawCircleLines(int32(center.X), int32(center.Y), radPx, rl.Color{R: 240, G: 220, B: 80, A: 200})
+	for _, wr := range ctx.LOSWeaponRs {
+		e := at(wr, 0)
+		rp := float32(math.Hypot(float64(e.X-center.X), float64(e.Y-center.Y)))
+		rl.DrawCircleLines(int32(center.X), int32(center.Y), rp, rl.Color{R: 240, G: 120, B: 80, A: 170})
+	}
 }
 
 func drawMapPings(content rl.Rectangle, ctx MapRenderCtx) {
