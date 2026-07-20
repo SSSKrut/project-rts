@@ -15,8 +15,9 @@ import (
 // local cursor (panel-local, NOT screen-space; raylib's GetScreenToWorldRayEx
 // derives the projection matrix from viewport size), intersect the horizontal
 // plane at the anchor's surface height, then snap to the nearest unit within
-// 1 m XZ.
+// 1 m XZ or vehicle within its ColliderR (nearest across both pools wins).
 func pickUnitFromMouse(filter *ecs.Filter3[components.WorldPos, components.Unit, components.Stance],
+	vehFilter *ecs.Filter2[components.WorldPos, components.Vehicle],
 	anchor components.WorldPos, localCursor rl.Vector2, viewW, viewH int32) (ecs.Entity, bool) {
 	target, ok := mouseTargetWorldPos(systems.CurrentCamera,
 		anchor.ToRenderSpace(systems.CurrentOriginChunk), localCursor, viewW, viewH)
@@ -24,41 +25,66 @@ func pickUnitFromMouse(filter *ecs.Filter3[components.WorldPos, components.Unit,
 		return ecs.Entity{}, false
 	}
 	var best ecs.Entity
-	bestDSq := float32(1.0 * 1.0)
-	hasHit := false
+	bestDSq := float32(math.MaxFloat32)
 	q := filter.Query()
 	for q.Next() {
 		pos, _, _ := q.Get()
 		diff := pos.Sub(target)
 		dSq := diff.X*diff.X + diff.Z*diff.Z
-		if dSq < bestDSq {
+		if dSq < 1.0 && dSq < bestDSq {
 			bestDSq = dSq
 			best = q.Entity()
-			hasHit = true
 		}
 	}
-	return best, hasHit
+	if vehFilter != nil {
+		qv := vehFilter.Query()
+		for qv.Next() {
+			pos, veh := qv.Get()
+			r := components.SpecForVehicle(veh.Kind).ColliderR
+			diff := pos.Sub(target)
+			dSq := diff.X*diff.X + diff.Z*diff.Z
+			if dSq < r*r && dSq < bestDSq {
+				bestDSq = dSq
+				best = qv.Entity()
+			}
+		}
+	}
+	return best, best != (ecs.Entity{})
 }
 
 // hoverUnitFromMouse is the silent twin of pickUnitFromMouse - no click.
 func hoverUnitFromMouse(filter *ecs.Filter3[components.WorldPos, components.Unit, components.Stance],
+	vehFilter *ecs.Filter2[components.WorldPos, components.Vehicle],
 	anchor components.WorldPos, localCursor rl.Vector2, viewW, viewH int32) (ecs.Entity, bool) {
-	return pickUnitFromMouse(filter, anchor, localCursor, viewW, viewH)
+	return pickUnitFromMouse(filter, vehFilter, anchor, localCursor, viewW, viewH)
 }
 
-// collectUnitsInRect - marquee selection. minX/Y/maxX/Y are panel-local coords.
+// collectUnitsInRect - marquee selection over units + vehicles. minX/Y/maxX/Y
+// are panel-local coords.
 func collectUnitsInRect(filter *ecs.Filter3[components.WorldPos, components.Unit, components.Stance],
+	vehFilter *ecs.Filter2[components.WorldPos, components.Vehicle],
 	minX, maxX, minY, maxY float32, viewW, viewH int32) []ecs.Entity {
 	var out []ecs.Entity
+	inRect := func(pos *components.WorldPos) bool {
+		screen := rl.GetWorldToScreenEx(pos.ToRenderSpace(systems.CurrentOriginChunk),
+			systems.CurrentCamera, viewW, viewH)
+		return screen.X >= minX && screen.X <= maxX && screen.Y >= minY && screen.Y <= maxY
+	}
 	q := filter.Query()
 	for q.Next() {
 		pos, _, _ := q.Get()
-		screen := rl.GetWorldToScreenEx(pos.ToRenderSpace(systems.CurrentOriginChunk),
-			systems.CurrentCamera, viewW, viewH)
-		if screen.X < minX || screen.X > maxX || screen.Y < minY || screen.Y > maxY {
-			continue
+		if inRect(pos) {
+			out = append(out, q.Entity())
 		}
-		out = append(out, q.Entity())
+	}
+	if vehFilter != nil {
+		qv := vehFilter.Query()
+		for qv.Next() {
+			pos, _ := qv.Get()
+			if inRect(pos) {
+				out = append(out, qv.Entity())
+			}
+		}
 	}
 	return out
 }

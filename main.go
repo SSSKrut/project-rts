@@ -794,6 +794,7 @@ func main() {
 		floorMap:         ghostFloorMap,
 		trenches:         &trenches,
 		trenchRootMap:    trenchRootMap,
+		vehicleMap:       ecs.NewMap[components.Vehicle](app.World),
 		squadColor:       squadColor,
 	}
 
@@ -1593,7 +1594,7 @@ func main() {
 			if marqueeOrigin == ui.Panel3D {
 				if dragDist < marqueeClickThreshold {
 					localEnd := rl.Vector2{X: end.X - panel3DContent.X, Y: end.Y - panel3DContent.Y}
-					if hit, ok := pickUnitFromMouse(unitRenderFilter, *anchorPos, localEnd, panel3DW, panel3DH); ok && isControllable(hit) {
+					if hit, ok := pickUnitFromMouse(unitRenderFilter, vehicleRenderFilter, *anchorPos, localEnd, panel3DW, panel3DH); ok && isControllable(hit) {
 						if shiftHeld {
 							toggleSelected(hit)
 						} else {
@@ -1621,7 +1622,7 @@ func main() {
 					if maxY < minY {
 						minY, maxY = maxY, minY
 					}
-					hits := collectUnitsInRect(unitRenderFilter, minX, maxX, minY, maxY, panel3DW, panel3DH)
+					hits := collectUnitsInRect(unitRenderFilter, vehicleRenderFilter, minX, maxX, minY, maxY, panel3DW, panel3DH)
 					own := hits[:0]
 					for _, h := range hits {
 						if isControllable(h) {
@@ -2038,7 +2039,7 @@ func main() {
 		hovered = ecs.Entity{}
 		switch focused {
 		case ui.Panel3D:
-			if hit, ok := hoverUnitFromMouse(unitRenderFilter, *anchorPos, panel3DLocal, panel3DW, panel3DH); ok {
+			if hit, ok := hoverUnitFromMouse(unitRenderFilter, vehicleRenderFilter, *anchorPos, panel3DLocal, panel3DW, panel3DH); ok {
 				hovered = hit
 			}
 		case ui.PanelMap:
@@ -2274,6 +2275,11 @@ func main() {
 				spec := components.SpecForVehicle(veh.Kind)
 				rl.DrawCircle3D(renderPos, spec.ColliderR, rl.Vector3{X: 1, Y: 0, Z: 0}, 90,
 					rl.Color{R: 0, G: 220, B: 220, A: 255})
+			}
+			if hovered == ent {
+				spec := components.SpecForVehicle(veh.Kind)
+				rl.DrawCircle3D(renderPos, spec.ColliderR+0.3, rl.Vector3{X: 1, Y: 0, Z: 0}, 90,
+					rl.Color{R: 240, G: 240, B: 120, A: 255})
 			}
 		}
 
@@ -2699,6 +2705,7 @@ func main() {
 			PanelFocused:  inspectorFocused,
 			Scroll:        inspectorScroll,
 			SquadColor:    squadColor,
+			RoadGraph:     &roadGraph,
 		})
 		// Scrollbar overlay drawn AFTER DrawInspector so EndScissorMode has released its clip.
 		if inspectorScroll != nil {

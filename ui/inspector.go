@@ -49,6 +49,8 @@ type InspectorMaps struct {
 	ContactMap               *ecs.Map[components.Contact]
 	ContactOverrideMap       *ecs.Map[components.ContactSymbolOverride]
 	UnitOverrideMap          *ecs.Map[components.UnitSymbolOverride]
+	VehicleMap               *ecs.Map[components.Vehicle]
+	RoadFollowerMap          *ecs.Map[components.RoadFollower]
 }
 
 func NewInspectorMaps(world *ecs.World) InspectorMaps {
@@ -89,6 +91,8 @@ func NewInspectorMaps(world *ecs.World) InspectorMaps {
 		ContactMap:               ecs.NewMap[components.Contact](world),
 		ContactOverrideMap:       ecs.NewMap[components.ContactSymbolOverride](world),
 		UnitOverrideMap:          ecs.NewMap[components.UnitSymbolOverride](world),
+		VehicleMap:               ecs.NewMap[components.Vehicle](world),
+		RoadFollowerMap:          ecs.NewMap[components.RoadFollower](world),
 	}
 }
 
@@ -110,6 +114,8 @@ type InspectorCtx struct {
 	Scroll *ScrollState
 	// SquadColor is injected to avoid a UI -> render-package cycle.
 	SquadColor func(ent ecs.Entity) rl.Color
+	// RoadGraph resolves RoadFollower.Edge into a kind label (Phase 19 M5).
+	RoadGraph *components.RoadGraph
 }
 
 func roleOf(ctx InspectorCtx, ent ecs.Entity) components.UnitRoleKind {
@@ -167,6 +173,8 @@ func DrawInspector(panel Panel, ctx InspectorCtx) {
 		endY = drawInspectorEmpty(ctx, x, y, usableWidth)
 	case selSingleUnit:
 		endY = drawInspectorUnit(ctx, ctx.Selected[0], x, y)
+	case selSingleVehicle:
+		endY = drawInspectorVehicle(ctx, ctx.Selected[0], x, y)
 	case selSingleSquad:
 		if sm := ctx.SquadMemberMap.Get(ctx.Selected[0]); sm != nil {
 			endY = drawInspectorSquad(ctx, sm.Squad, x, y, usableWidth)
@@ -191,6 +199,7 @@ type selectionKind uint8
 const (
 	selEmpty selectionKind = iota
 	selSingleUnit
+	selSingleVehicle
 	selSingleSquad
 	selSingleContact
 	selMulti
@@ -203,6 +212,11 @@ func describeSelection(ctx InspectorCtx) selectionKind {
 	if len(ctx.Selected) == 1 && ctx.ContactMap != nil {
 		if ctx.ContactMap.Has(ctx.Selected[0]) {
 			return selSingleContact
+		}
+	}
+	if len(ctx.Selected) == 1 && ctx.VehicleMap != nil {
+		if ctx.VehicleMap.Has(ctx.Selected[0]) {
+			return selSingleVehicle
 		}
 	}
 	commonSquad, homo := groupSelectedHelper(ctx.Selected, ctx.SquadMemberMap)

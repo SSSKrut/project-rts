@@ -30,6 +30,7 @@ type ghostContext struct {
 	floorMap      *ecs.Map[components.Floor]
 	trenches      *components.TrenchNetwork
 	trenchRootMap *ecs.Map[components.TrenchRoot]
+	vehicleMap    *ecs.Map[components.Vehicle]
 	squadColor    func(ent ecs.Entity) rl.Color
 }
 
@@ -90,6 +91,7 @@ func drawSelectionGhost(
 	if !cursorOver3D || !targetOK || g == nil {
 		return
 	}
+	drawGhostVehicles(g, selected, cursorTarget, dragFacing)
 	squad := primarySquadForGhost(selected, g.squadMemberMap)
 	if squad == (ecs.Entity{}) || !g.world.Alive(squad) {
 		return
@@ -316,6 +318,64 @@ func drawGhostAlongTrench(g *ghostContext, trenchRoot ecs.Entity, count uint8, s
 		drawGhostUnit(ghostRender, stance, ghostBodyAlpha)
 	}
 	return true
+}
+
+// drawGhostVehicles previews soloist vehicles as translucent hull boxes in
+// line abreast at the cursor. Facing = drag-derived yaw, else first-hull →
+// cursor bearing. Squadded vehicles are covered by the formation ghost.
+func drawGhostVehicles(g *ghostContext, selected []ecs.Entity,
+	target components.WorldPos, dragFacing *float32) {
+	if g.vehicleMap == nil {
+		return
+	}
+	type vehGhost struct {
+		ent  ecs.Entity
+		kind components.VehicleKind
+	}
+	var vgs []vehGhost
+	var widest float32
+	for _, e := range selected {
+		if e == (ecs.Entity{}) || !g.world.Alive(e) {
+			continue
+		}
+		v := g.vehicleMap.Get(e)
+		if v == nil {
+			continue
+		}
+		if sm := g.squadMemberMap.Get(e); sm != nil && sm.Squad != (ecs.Entity{}) {
+			continue
+		}
+		vgs = append(vgs, vehGhost{ent: e, kind: v.Kind})
+		if w := components.SpecForVehicle(v.Kind).BoxWid; w > widest {
+			widest = w
+		}
+	}
+	if len(vgs) == 0 {
+		return
+	}
+	yaw := float32(0)
+	if dragFacing != nil {
+		yaw = *dragFacing
+	} else if p := g.posMap.Get(vgs[0].ent); p != nil {
+		diff := target.Sub(*p)
+		if diff.X*diff.X+diff.Z*diff.Z > 1e-4 {
+			yaw = float32(math.Atan2(float64(diff.X), float64(diff.Z)))
+		}
+	}
+	rightX := float32(math.Cos(float64(yaw)))
+	rightZ := -float32(math.Sin(float64(yaw)))
+	spacing := widest + 2
+	half := float32(len(vgs)-1) * 0.5
+	for i, v := range vgs {
+		off := (float32(i) - half) * spacing
+		wp := target.Add(rl.Vector3{X: rightX * off, Z: rightZ * off})
+		col := rl.Color{R: 200, G: 220, B: 235, A: ghostBodyAlpha}
+		if g.squadColor != nil {
+			c := g.squadColor(v.ent)
+			col = rl.Color{R: c.R, G: c.G, B: c.B, A: ghostBodyAlpha}
+		}
+		drawVehicleBox(wp.ToRenderSpace(systems.CurrentOriginChunk), yaw, v.kind, col)
+	}
 }
 
 // facingFromSquadToTarget returns the yaw the squad would face if it walked
