@@ -14,6 +14,9 @@ const (
 	// Close enough to a waypoint to advance Head. Lower than
 	// UnitMovement.arrivalRadius (0.6) so pops happen without overshoot.
 	microPathArrivalRadius float32 = 0.6
+	// The mouth waypoint right before a gate needs a precise approach;
+	// UnitMovement mirrors this radius so steering doesn't stop early.
+	gateMouthRadius float32 = 0.3
 	// Goal drift threshold that flips Dirty for a replan.
 	microPathGoalShift float32 = 2.0
 	// Max replans per tick across all units (caps NavService.FindPath load).
@@ -97,6 +100,14 @@ func (sys *MicroPathSystem) tickUnit(pos *components.WorldPos, mp *components.Mi
 			if u.X*v.X+u.Z*v.Z <= 0.5*vlen2 && vlen2 >= 1e-6 {
 				break
 			}
+		}
+		if mp.Head+1 < mp.Count && mp.GateMask&(1<<(mp.Head+1)) != 0 &&
+			distSq >= gateMouthRadius*gateMouthRadius {
+			// The waypoint BEFORE a gate is the opening's mouth: popping it
+			// at full radius lets a walker beside the jamb switch to the
+			// through-wall target and pin against the wall face
+			// (ai_compound_main leader trap). Align with the mouth first.
+			break
 		}
 		mp.Head++
 		mp.BestDistSq = float32(math.MaxFloat32)

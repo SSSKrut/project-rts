@@ -52,6 +52,9 @@ type SquadService struct {
 	orderOutOfRangeMap         *ecs.Map[components.OrderOutOfRangeTracker]
 	factionMap                 *ecs.Map[components.Faction]
 	controllerMap              *ecs.Map[components.Controller]
+	// Two-phase building entry reads the squad anchor + target footprint.
+	posMap      *ecs.Map[components.WorldPos]
+	buildingMap *ecs.Map[components.Building]
 	// IssueOrder / CancelAllOrders clear AI-driven cover assignment so an
 	// explicit player order regains control.
 	tacticalOverrideMap *ecs.Map[components.TacticalOverride]
@@ -96,6 +99,8 @@ func NewSquadService(w *ecs.World) *SquadService {
 		orderOutOfRangeMap:       ecs.NewMap[components.OrderOutOfRangeTracker](w),
 		factionMap:               ecs.NewMap[components.Faction](w),
 		controllerMap:            ecs.NewMap[components.Controller](w),
+		posMap:                   ecs.NewMap[components.WorldPos](w),
+		buildingMap:              ecs.NewMap[components.Building](w),
 		tacticalOverrideMap:      ecs.NewMap[components.TacticalOverride](w),
 		squadStateMap:            ecs.NewMap[components.SquadState](w),
 		individualPosMap:         ecs.NewMap[components.IndividualPosition](w),

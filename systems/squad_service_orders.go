@@ -1,6 +1,9 @@
 package systems
 
 import (
+	"math"
+
+	rl "github.com/gen2brain/raylib-go/raylib"
 	"github.com/mlange-42/ark/ecs"
 
 	"rts-go/components"
@@ -27,10 +30,83 @@ type OrderParams struct {
 	EngagementOverride *components.EngagementMode
 }
 
+// buildingApproachTrigger / buildingApproachStandoff — a building order from
+// beyond the trigger distance first marches the squad (in formation) to a
+// standoff point outside the footprint; the interior phase chains after.
+const (
+	buildingApproachTrigger  float32 = 25.0
+	buildingApproachStandoff float32 = 6.0
+)
+
 // IssueOrder spawns a new Order entity owned by `squad`. append=false
 // cancels the existing chain; append=true appends at the tail. Per-kind
-// completion lives in OrderResolverSystem.
+// completion lives in OrderResolverSystem. Far building orders synthesize an
+// approach MoveTo first (owner feedback 2026-07-19: clicking a building km
+// away must not collapse the formation into door-spread from the start).
 func (s *SquadService) IssueOrder(
+	squad ecs.Entity,
+	kind components.OrderKindCode,
+	target components.WorldPos,
+	entityTarget ecs.Entity,
+	appendToQueue bool,
+	params OrderParams,
+) ecs.Entity {
+	switch kind {
+	case components.OrderKindGarrison, components.OrderKindOccupyBuilding,
+		components.OrderKindClearBuilding:
+		if approach, ok := s.buildingApproachPos(squad, entityTarget); ok {
+			approachParams := params
+			approachParams.HasFacing = false
+			s.issueOrderRaw(squad, components.OrderKindMoveTo, approach,
+				ecs.Entity{}, appendToQueue, approachParams)
+			appendToQueue = true
+		}
+	}
+	return s.issueOrderRaw(squad, kind, target, entityTarget, appendToQueue, params)
+}
+
+// buildingApproachPos returns the standoff point outside the building's
+// footprint on the squad-anchor side; ok=false when the squad is already
+// within buildingApproachTrigger of the footprint (direct entry).
+func (s *SquadService) buildingApproachPos(squad, building ecs.Entity) (components.WorldPos, bool) {
+	if building == (ecs.Entity{}) || !s.world.Alive(building) {
+		return components.WorldPos{}, false
+	}
+	b := s.buildingMap.Get(building)
+	roster := s.rosterMap.Get(squad)
+	if b == nil || roster == nil {
+		return components.WorldPos{}, false
+	}
+	anchor, ok := SquadAnchorPos(s.world, roster, s.posMap)
+	if !ok {
+		return components.WorldPos{}, false
+	}
+	ax := float32(anchor.Chunk.X)*components.ChunkSize + anchor.Local.X
+	az := float32(anchor.Chunk.Z)*components.ChunkSize + anchor.Local.Z
+	fp := b.Footprint
+	nx, nz := ax, az
+	if nx < fp.MinX {
+		nx = fp.MinX
+	} else if nx > fp.MaxX {
+		nx = fp.MaxX
+	}
+	if nz < fp.MinZ {
+		nz = fp.MinZ
+	} else if nz > fp.MaxZ {
+		nz = fp.MaxZ
+	}
+	dx, dz := ax-nx, az-nz
+	distSq := dx*dx + dz*dz
+	if distSq <= buildingApproachTrigger*buildingApproachTrigger || distSq < 1e-4 {
+		return components.WorldPos{}, false
+	}
+	inv := buildingApproachStandoff / float32(math.Sqrt(float64(distSq)))
+	wx := nx + dx*inv
+	wz := nz + dz*inv
+	return components.WorldPos{}.Add(rl.Vector3{X: wx, Y: GroundHeight(wx, wz), Z: wz}), true
+}
+
+func (s *SquadService) issueOrderRaw(
 	squad ecs.Entity,
 	kind components.OrderKindCode,
 	target components.WorldPos,

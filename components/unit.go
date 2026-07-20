@@ -99,6 +99,9 @@ type LocalBlackboard struct {
 
 	GoalSlot  WorldPos
 	GoalLevel ecs.Entity // non-zero when GoalSlot lies on a Level entity (interior pathing)
+	// CatchUp: the member lags its slot; UnitMovement raises effective Pace
+	// one tier until the slot is regained (FormationSystem hysteresis).
+	CatchUp bool
 
 	PrefVelocityX float32 // pre-ORCA preferred velocity (XZ plane)
 	PrefVelocityZ float32

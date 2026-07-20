@@ -1,6 +1,7 @@
 package systems
 
 import (
+	"fmt"
 	"math"
 	"time"
 
@@ -35,6 +36,9 @@ type FormationSystem struct {
 	// MicroPath.Dirty when the goal shifts; MicroPathSystem then replans.
 	microPathMap  *ecs.Map[components.MicroPath]
 	blackboardMap *ecs.Map[components.LocalBlackboard]
+	// Slot-Y resample (#13): a flank slot metres from the centre needs the
+	// height under ITS OWN XZ, not the centre's. Stateless — parallel-safe.
+	sampler *HeightSampler
 	// Read the squad's head order kind to skip the outside-walkable clamp
 	// when the player wants the squad INSIDE (Garrison / OccupyBuilding /
 	// ClearBuilding); otherwise the clamp pushes inside slots back outside
@@ -99,6 +103,7 @@ func (sys *FormationSystem) InitUI(w *ecs.World) {
 	sys.orderKindMap = ecs.NewMap[components.OrderKind](w)
 	sys.orderTargetMap = ecs.NewMap[components.OrderTarget](w)
 	sys.levelMap = ecs.NewMap[components.Level](w)
+	sys.sampler = NewHeightSampler(w)
 }
 
 func (FormationSystem) Name() string { return "formation" }
@@ -134,6 +139,18 @@ const formationPushTolerance float32 = 0.7
 // into circular motion.
 const formationForwardLockDist float32 = 5.0
 
+// Forward slew (#12): the march heading rotates toward the desired direction
+// at most this many rad/s, with a deadband below which it doesn't move at
+// all. Unlimited per-tick recompute from (target - live centroid) let
+// centroid noise wobble Forward, slots orbited, members chased them sideways.
+// The deadband must eat replan noise: every 1 s a fresh path from the
+// (ORCA-wiggling) leader re-quantizes on the 1 m nav grid, swinging the
+// first-segment direction by up to ~12deg. Real course changes exceed it.
+const (
+	formationTurnRate    float32 = 1.2
+	formationYawDeadband float32 = 0.26
+)
+
 // formationWork — snapshot row for the parallel per-squad pass. Pointers are
 // stable between snapshot and ParallelFor since neither branch changes
 // archetype for snapshotted entities.
@@ -167,13 +184,14 @@ func (sys *FormationSystem) Update(ctx core.UpdateContext) {
 	}
 
 	world := ctx.World
+	dt := float32(ctx.Delta.Seconds())
 	sys.pool.ParallelForIndexed(len(work), func(chunkIdx, start, end int) {
 		if chunkIdx >= len(sys.workerLeaveBufs) {
 			chunkIdx = len(sys.workerLeaveBufs) - 1
 		}
 		buf := &sys.workerLeaveBufs[chunkIdx]
 		for i := start; i < end; i++ {
-			sys.processSquad(world, work[i], buf)
+			sys.processSquad(world, work[i], dt, buf)
 		}
 	})
 
@@ -186,7 +204,7 @@ func (sys *FormationSystem) Update(ctx core.UpdateContext) {
 
 // processSquad handles one squad's formation pass. leaveBuffer writes are a
 // no-op while cohesionEjectionEnabled = false.
-func (sys *FormationSystem) processSquad(world *ecs.World, w formationWork, leaveBuffer *[]ecs.Entity) {
+func (sys *FormationSystem) processSquad(world *ecs.World, w formationWork, dt float32, leaveBuffer *[]ecs.Entity) {
 	roster := w.roster
 	mp := w.mp
 	fd := w.fd
@@ -194,31 +212,26 @@ func (sys *FormationSystem) processSquad(world *ecs.World, w formationWork, leav
 		return
 	}
 
-	center, ok := SquadCenter(world, roster, sys.posMap)
+	center, ok := SquadAnchorPos(world, roster, sys.posMap)
 	if !ok {
 		return
 	}
 
-	// Pause waypoint advance when the squad spreads beyond 2x Spacing so the
-	// commander doesn't outrun stragglers. Self-clears once everyone is back
-	// within Spacing.
-	stragglerThreshold := 2.0 * fd.Spacing
-	spread, caughtUp, totalLive := SquadSpread(world, roster, center, sys.posMap, fd.Spacing)
-	waiting := spread > stragglerThreshold
-	mp.WaitingForStragglers = waiting
+	// The leader does NOT wait for stragglers — lagging members regain their
+	// slots at raised Pace instead (bb.CatchUp). Spread stats stay for HUD.
+	_, caughtUp, totalLive := SquadSpread(world, roster, center, sys.posMap, fd.Spacing)
+	mp.WaitingForStragglers = false
 	mp.StragglerCaughtUp = caughtUp
 	mp.StragglerTotal = totalLive
 
 	// SquadMacroPathSystem runs every 1 s, FormationSystem at 100 ms is the
 	// responsive pace for head advance.
-	if !waiting {
-		for mp.Head < mp.Count {
-			d := center.Sub(mp.Waypoints[mp.Head])
-			if d.X*d.X+d.Z*d.Z < SquadWaypointReached*SquadWaypointReached {
-				mp.Head++
-			} else {
-				break
-			}
+	for mp.Head < mp.Count {
+		d := center.Sub(mp.Waypoints[mp.Head])
+		if d.X*d.X+d.Z*d.Z < SquadWaypointReached*SquadWaypointReached {
+			mp.Head++
+		} else {
+			break
 		}
 	}
 
@@ -259,14 +272,69 @@ func (sys *FormationSystem) processSquad(world *ecs.World, w formationWork, leav
 		}
 	}
 
-	// Only recompute Forward when (target - center)/mag is geometrically
-	// stable; inside formationForwardLockDist the existing Forward sticks.
+	// Desired march direction: the current macro SEGMENT when one exists
+	// (stable between replans), else (target - center) — geometrically noisy,
+	// so it stays locked inside formationForwardLockDist. Forward then SLEWS
+	// toward the desired direction instead of snapping (#12).
 	forwardZero := fd.Forward.X == 0 && fd.Forward.Z == 0
 	if haveTarget {
-		diff := centerTarget.Sub(center)
-		mag := float32(math.Sqrt(float64(diff.X*diff.X + diff.Z*diff.Z)))
-		if mag > 0.05 && (forwardZero || mag > formationForwardLockDist) {
-			fd.Forward = rl.Vector3{X: diff.X / mag, Y: 0, Z: diff.Z / mag}
+		var dirX, dirZ float32
+		haveDir := false
+		if mp.Head < mp.Count && mp.Count > 1 {
+			// Pure path geometry — never a live position (leader wiggle
+			// through the deadband re-created the churn), over a two-segment
+			// baseline: single 4 m decimated segments quantize direction in
+			// ~14deg grid steps and alternate between replans.
+			lo := int(mp.Head) - 1
+			if lo < 0 {
+				lo = 0
+			}
+			hi := lo + 2
+			if last := int(mp.Count) - 1; hi > last {
+				hi = last
+			}
+			if hi > lo {
+				d := mp.Waypoints[hi].Sub(mp.Waypoints[lo])
+				if magSq := d.X*d.X + d.Z*d.Z; magSq > 0.0025 {
+					inv := 1 / float32(math.Sqrt(float64(magSq)))
+					dirX, dirZ = d.X*inv, d.Z*inv
+					haveDir = true
+				}
+			}
+		}
+		if !haveDir {
+			diff := centerTarget.Sub(center)
+			mag := float32(math.Sqrt(float64(diff.X*diff.X + diff.Z*diff.Z)))
+			if mag > 0.05 && (forwardZero || mag > formationForwardLockDist) {
+				dirX, dirZ = diff.X/mag, diff.Z/mag
+				haveDir = true
+			}
+		}
+		switch {
+		case haveDir && forwardZero:
+			fd.Forward = rl.Vector3{X: dirX, Y: 0, Z: dirZ}
+		case haveDir:
+			cur := float32(math.Atan2(float64(fd.Forward.X), float64(fd.Forward.Z)))
+			want := float32(math.Atan2(float64(dirX), float64(dirZ)))
+			delta := wrapAngle(want - cur)
+			if debugLog && (delta > formationYawDeadband || delta < -formationYawDeadband) {
+				fmt.Printf("[fwd] head=%d/%d cur=%.0f want=%.0f\n",
+					mp.Head, mp.Count, cur*180/math.Pi, want*180/math.Pi)
+			}
+			if delta > formationYawDeadband || delta < -formationYawDeadband {
+				maxStep := formationTurnRate * dt
+				if delta > maxStep {
+					delta = maxStep
+				} else if delta < -maxStep {
+					delta = -maxStep
+				}
+				cur += delta
+				fd.Forward = rl.Vector3{
+					X: float32(math.Sin(float64(cur))),
+					Y: 0,
+					Z: float32(math.Cos(float64(cur))),
+				}
+			}
 		}
 	}
 
@@ -379,12 +447,32 @@ func (sys *FormationSystem) processSquad(world *ecs.World, w formationWork, leav
 			} else {
 				target = center
 			}
+			// Slot Y = live surface under the slot's own XZ (#13): the
+			// centre's Y is metres off for flank slots on a cross-slope.
+			wx := float32(target.Chunk.X)*components.ChunkSize + target.Local.X
+			wz := float32(target.Chunk.Z)*components.ChunkSize + target.Local.Z
+			target.Local.Y = sys.sampler.Sample(wx, wz)
 		}
 
 		// Mirror the per-unit slot target into the blackboard so
-		// UtilityEvaluator's DistToSlot signal sees the same goal.
+		// UtilityEvaluator's DistToSlot signal sees the same goal. CatchUp
+		// hysteresis: engage beyond 2xSpacing+2, relax within Spacing+1.
+		// The leader (slot 0) sets the squad's pace and never catch-ups.
 		if bb := sys.blackboardMap.Get(mem); bb != nil {
 			bb.GoalSlot = target
+			if i > 0 && ip == nil {
+				d := mPos.Sub(target)
+				lagSq := d.X*d.X + d.Z*d.Z
+				if bb.CatchUp {
+					relax := fd.Spacing + 1
+					bb.CatchUp = lagSq > relax*relax
+				} else {
+					engage := 2*fd.Spacing + 2
+					bb.CatchUp = lagSq > engage*engage
+				}
+			} else {
+				bb.CatchUp = false
+			}
 		}
 
 		// Retarget the existing MoveTo head in place instead of

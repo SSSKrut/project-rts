@@ -26,10 +26,14 @@ func (sys *UnitMovementSystem) step(
 	hash *core.SpatialHash,
 	walls map[components.ChunkCoord][]colWall,
 ) staminaMarkerOp {
-	// StaminaExhausted forces Walk; otherwise use the profile's Pace.
+	// StaminaExhausted forces Walk; otherwise use the profile's Pace, one
+	// tier up while the member lags its formation slot (bb.CatchUp).
 	effectivePace := w.profile.Pace
+	stepBB := sys.blackboardMap.Get(w.ent)
 	if w.exhausted {
 		effectivePace = components.PaceWalk
+	} else if stepBB != nil && stepBB.CatchUp && effectivePace < components.PaceSprint {
+		effectivePace++
 	}
 
 	// Stance auto-transition when no ActionStance is at the queue head; the
@@ -113,7 +117,14 @@ func (sys *UnitMovementSystem) step(
 		}
 		diff := shortTerm.Sub(*w.pos)
 		distSq := diff.X*diff.X + diff.Z*diff.Z
-		if distSq < arrivalRadius*arrivalRadius {
+		shortArrive := arrivalRadius
+		if morePath && w.microPath.Head+1 < w.microPath.Count &&
+			w.microPath.GateMask&(1<<(w.microPath.Head+1)) != 0 {
+			// Mouth waypoint before a gate: keep steering until the tight
+			// radius MicroPathSystem pops at, or the walker stalls 0.6 m out.
+			shortArrive = gateMouthRadius
+		}
+		if distSq < shortArrive*shortArrive {
 			// Reached the short-term waypoint; don't pop (final-goal arrival
 			// already handled). MicroPathSystem advances Head next tick.
 			return markerOp
@@ -218,6 +229,11 @@ func (sys *UnitMovementSystem) step(
 
 		// Y lerp lets units climb stairs / drop into bunkers without
 		// teleporting; GroundStick picks the closest-Y floor next tick.
+		// Final-target Y (a replanned path can re-root at the stair BOTTOM —
+		// a short-term-waypoint lerp would drag a mid-climb walker back
+		// down), but rate-clamped: the unclamped lerp walked a chord through
+		// terrain relief on long surface orders (ISSUES #13). 3 m/s tracks
+		// any stair ramp; the surface residual is one tick's worth (~5 cm).
 		dy := action.Target.Local.Y - w.pos.Local.Y
 		progress := float32(0)
 		if dist > 0 {
@@ -225,6 +241,16 @@ func (sys *UnitMovementSystem) step(
 			if progress > 1 {
 				progress = 1
 			}
+		}
+		yStep := dy * progress
+		// 8 m/s: enough to hook onto a 45-deg stair ramp at sprint (the
+		// GroundStick closest-Y capture needs pos.Y raised to the ramp fast),
+		// while capping the #13 surface chord-dive at ~0.13 m per tick.
+		const yLerpMaxRate float32 = 8.0
+		if maxY := yLerpMaxRate * dt; yStep > maxY {
+			yStep = maxY
+		} else if yStep < -maxY {
+			yStep = -maxY
 		}
 		// Combat-move: under Alerted/Threatened the body faces the threat
 		// (weapons on target) while legs walk along VelocityYaw. Throttle
@@ -254,7 +280,7 @@ func (sys *UnitMovementSystem) step(
 			}
 		}
 
-		move := rl.Vector3{X: vx * dt, Y: dy * progress, Z: vz * dt}
+		move := rl.Vector3{X: vx * dt, Y: yStep, Z: vz * dt}
 		*w.pos = w.pos.Add(move)
 		w.mot.Speed = speed
 		w.mot.VelocityYaw = velocityYaw

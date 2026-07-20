@@ -68,6 +68,11 @@ var worldMap mapDef
 
 func loadMapDef() mapDef {
 	if *mapFlag == "" || isAIScene() || isDoorScene() {
+		// Most ai_* scenes pin the default map for reproducibility; a scene
+		// that needs specific relief names its own manifest.
+		if name := aiSceneMapName(); name != "" {
+			return readMapFile(name)
+		}
 		return defaultMapDef()
 	}
 	return readMapFile(*mapFlag)

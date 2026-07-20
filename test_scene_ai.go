@@ -6,6 +6,7 @@ package main
 
 import (
 	"fmt"
+	"math"
 
 	rl "github.com/gen2brain/raylib-go/raylib"
 	"github.com/mlange-42/ark/ecs"
@@ -58,7 +59,22 @@ const (
 	// route via ActionQueue waypoints; PASS when both park at the final
 	// point (early verdict on arrival).
 	aiSceneVehMove = "ai_vehicle_move"
+
+	// ai_march_* (ISSUES #12/#13): one MotorRifle squad marches a straight
+	// ~100 m MoveTo and the verdict scores movement hygiene — formation-yaw
+	// churn + sideways-walking ticks (#12), member clearance vs the live
+	// heightmap (#13). _line runs on the default map, _slope on `hills`.
+	aiSceneMarchLine  = "ai_march_line"
+	aiSceneMarchSlope = "ai_march_slope"
 )
+
+// aiSceneMapName lets a scene demand a specific map manifest ("" = default).
+func aiSceneMapName() string {
+	if aiSceneID() == aiSceneMarchSlope {
+		return "hills"
+	}
+	return ""
+}
 
 // aiMainSpec selects the target wing (by expected footprint centre) and the
 // storey index for one ai_main_* scene.
@@ -123,6 +139,10 @@ func aiSceneAnchorPos() components.WorldPos {
 		return components.WorldPos{}.Add(rl.Vector3{X: 30, Z: 20})
 	case aiSceneVehMove:
 		return components.WorldPos{}.Add(rl.Vector3{X: 40, Z: 0})
+	case aiSceneMarchLine:
+		return components.WorldPos{}.Add(rl.Vector3{X: 75, Z: 10})
+	case aiSceneMarchSlope:
+		return components.WorldPos{}.Add(rl.Vector3{X: 20, Z: -10})
 	}
 	return components.WorldPos{}
 }
@@ -152,7 +172,8 @@ func aiSceneBuildings() []components.BuildingPlan {
 		return mainWorldBuildings()
 	}
 	switch aiSceneID() {
-	case aiSceneLosOpen, aiSceneLosDefilade, aiSceneLosCreep:
+	case aiSceneLosOpen, aiSceneLosDefilade, aiSceneLosCreep,
+		aiSceneMarchLine, aiSceneMarchSlope:
 		return nil
 	case aiSceneDoorSouth:
 		return aiBuildingsSingleHouse(0)
@@ -285,8 +306,72 @@ func aiSpawnPos() components.WorldPos {
 		return components.WorldPos{}.Add(rl.Vector3{X: -44, Z: -4})
 	case aiSceneLosOpen, aiSceneLosDefilade, aiSceneLosCreep:
 		return components.WorldPos{}.Add(rl.Vector3{X: 30, Z: 10})
+	case aiSceneMarchLine:
+		return components.WorldPos{}.Add(rl.Vector3{X: 30, Z: 10})
+	case aiSceneMarchSlope:
+		return components.WorldPos{}.Add(rl.Vector3{X: -20, Z: -40})
 	}
 	return components.WorldPos{}
+}
+
+// aiMarchSceneSpawn (#12/#13): one MotorRifle squad in Line, straight MoveTo.
+func aiMarchSceneSpawn(
+	world *ecs.World,
+	squadService *systems.SquadService,
+	roleService *systems.RoleService,
+	unitFactory aiUnitSpawn,
+	playerFaction components.Faction,
+	posMap *ecs.Map[components.WorldPos],
+	rosterMap *ecs.Map[components.CommandRoster],
+) *aiTestState {
+	squad := squadService.CreateFromTemplate(
+		systems.TmplMotorRifle, aiSpawnPos(),
+		components.FormationLine, playerFaction,
+		components.Controller{Owner: components.ControllerLocal},
+		roleService, unitFactory,
+	)
+	if squad == (ecs.Entity{}) {
+		fmt.Printf("[ai-test %s] FAILED TO SPAWN SQUAD — aborting\n", aiSceneID())
+		return nil
+	}
+	goal := components.WorldPos{}.Add(rl.Vector3{X: 120, Z: 10})
+	// Flat straight march must hold a near-constant heading; the hills route
+	// legitimately re-turns on path-exhaustion replans (16-wp cap = 64 m).
+	churnMax := float32(40)
+	if aiSceneID() == aiSceneMarchSlope {
+		goal = components.WorldPos{}.Add(rl.Vector3{X: 60, Z: 20})
+		churnMax = 150
+	}
+	goal.Local.Y = systems.GroundHeight(
+		goal.Local.X+float32(goal.Chunk.X)*components.ChunkSize,
+		goal.Local.Z+float32(goal.Chunk.Z)*components.ChunkSize,
+	)
+	// Two non-squad soloists exercise the pushSoloMove arm (#13's worst
+	// offender: far direct MoveTo).
+	spawn := aiSpawnPos()
+	solo1 := unitFactory(spawn.Add(rl.Vector3{X: -5, Z: -4}))
+	solo2 := unitFactory(spawn.Add(rl.Vector3{X: 5, Z: -4}))
+	return &aiTestState{
+		sceneID:       aiSceneID(),
+		squad:         squad,
+		marchActive:   true,
+		marchGoal:     goal,
+		marchChurnMax: churnMax,
+		soloEnts:      []ecs.Entity{solo1, solo2},
+		AQMap:         ecs.NewMap[components.ActionQueue](world),
+		World:         world,
+		SquadService:  squadService,
+		PosMap:        posMap,
+		RosterMap:     rosterMap,
+		MotionMap:     ecs.NewMap[components.Motion](world),
+		FdMap:         ecs.NewMap[components.FormationData](world),
+		sampler:       systems.NewHeightSampler(world),
+		marchMinClear: 1e9,
+		marchMaxClear: -1e9,
+		orderAt:       aiOrderAt,
+		verdictAt:     120,
+		nextSampleAt:  aiOrderAt + 5,
+	}
 }
 
 // aiVehicleSceneSpawn: truck + tank at (20, 8..16), three off-road legs.
@@ -339,6 +424,10 @@ func aiSceneSpawn(
 	}
 	if aiSceneID() == aiSceneVehMove {
 		return aiVehicleSceneSpawn(world, vehicleFactory, posMap)
+	}
+	if id := aiSceneID(); id == aiSceneMarchLine || id == aiSceneMarchSlope {
+		return aiMarchSceneSpawn(world, squadService, roleService, unitFactory,
+			playerFaction, posMap, rosterMap)
 	}
 	squad := squadService.CreateFromTemplate(
 		systems.TmplMotorRifle, aiSpawnPos(),
@@ -545,6 +634,22 @@ type aiTestState struct {
 	vehWaypoints []components.WorldPos
 	VehQueueMap  *ecs.Map[components.ActionQueue]
 
+	// Set for ai_march_* scenes (#12/#13): movement-hygiene metrics.
+	marchActive   bool
+	marchGoal     components.WorldPos
+	marchChurnMax float32
+	soloEnts      []ecs.Entity
+	AQMap         *ecs.Map[components.ActionQueue]
+	FdMap         *ecs.Map[components.FormationData]
+	sampler       *systems.HeightSampler
+	marchMoveN    int
+	marchSideN    int
+	marchChurnDeg float32
+	marchLastFYaw float32
+	marchHaveFYaw bool
+	marchMinClear float32
+	marchMaxClear float32
+
 	elapsed      float32
 	orderAt      float32
 	verdictAt    float32
@@ -598,6 +703,10 @@ func (s *aiTestState) Update(elapsed float32) {
 		return
 	}
 	s.elapsed = elapsed
+	if s.marchActive {
+		s.updateMarch(elapsed)
+		return
+	}
 	if len(s.vehEnts) > 0 {
 		s.updateVehicles(elapsed)
 		return
@@ -723,6 +832,146 @@ func (s *aiTestState) Update(elapsed float32) {
 		fmt.Printf("== VERDICT [%s]: %s  (%d/%d members inside)\n",
 			s.sceneID, verdict, inside, alive)
 		s.dumpPositions()
+		fmt.Println("============================================================")
+		s.verdictDone = true
+	}
+}
+
+// angDiffAbs — |a-b| folded into [0, pi].
+func angDiffAbs(a, b float32) float32 {
+	d := a - b
+	for d > math.Pi {
+		d -= 2 * math.Pi
+	}
+	for d < -math.Pi {
+		d += 2 * math.Pi
+	}
+	if d < 0 {
+		d = -d
+	}
+	return d
+}
+
+func (s *aiTestState) updateMarch(elapsed float32) {
+	if s.verdictDone {
+		return
+	}
+	if !s.orderFired {
+		if elapsed < s.orderAt {
+			return
+		}
+		fmt.Println("============================================================")
+		fmt.Printf("== AI MARCH SCENE: %s  squad=%v goal=(%.0f,%.0f)\n",
+			s.sceneID, s.squad,
+			float32(s.marchGoal.Chunk.X)*components.ChunkSize+s.marchGoal.Local.X,
+			float32(s.marchGoal.Chunk.Z)*components.ChunkSize+s.marchGoal.Local.Z)
+		fmt.Println("============================================================")
+		s.SquadService.IssueOrder(s.squad, components.OrderKindMoveTo,
+			s.marchGoal, ecs.Entity{}, false, systems.OrderParams{})
+		for _, e := range s.soloEnts {
+			pushSoloMove(s.AQMap, s.PosMap, e, s.marchGoal, false)
+		}
+		s.orderFired = true
+		return
+	}
+
+	roster := s.RosterMap.Get(s.squad)
+	if roster == nil {
+		return
+	}
+	sampleOne := func(mem ecs.Entity) {
+		if mem == (ecs.Entity{}) || !s.World.Alive(mem) {
+			return
+		}
+		pos := s.PosMap.Get(mem)
+		mot := s.MotionMap.Get(mem)
+		if pos == nil || mot == nil {
+			return
+		}
+		if mot.Speed > 1.5 {
+			s.marchMoveN++
+			if angDiffAbs(mot.VelocityYaw, mot.Yaw) > math.Pi/3 {
+				s.marchSideN++
+			}
+		}
+		wx := float32(pos.Chunk.X)*components.ChunkSize + pos.Local.X
+		wz := float32(pos.Chunk.Z)*components.ChunkSize + pos.Local.Z
+		clear := pos.Local.Y - s.sampler.Sample(wx, wz)
+		if clear < s.marchMinClear {
+			s.marchMinClear = clear
+		}
+		if clear > s.marchMaxClear {
+			s.marchMaxClear = clear
+		}
+	}
+	// Per-frame metrics over live members + soloists.
+	for i := uint8(0); i < roster.Count; i++ {
+		sampleOne(roster.Members[i])
+	}
+	for _, e := range s.soloEnts {
+		sampleOne(e)
+	}
+	// Churn accumulates after a 5 s alignment window: the initial in-place
+	// turn toward the march heading is legitimate rotation, not noise.
+	if fd := s.FdMap.Get(s.squad); fd != nil && (fd.Forward.X != 0 || fd.Forward.Z != 0) &&
+		elapsed > s.orderAt+5 {
+		yaw := float32(math.Atan2(float64(fd.Forward.X), float64(fd.Forward.Z)))
+		if s.marchHaveFYaw {
+			s.marchChurnDeg += angDiffAbs(yaw, s.marchLastFYaw) * (180 / math.Pi)
+		}
+		s.marchLastFYaw = yaw
+		s.marchHaveFYaw = true
+	}
+
+	center, okC := systems.SquadCenter(s.World, roster, s.PosMap)
+	arrived := false
+	if okC {
+		d := center.Sub(s.marchGoal)
+		arrived = d.X*d.X+d.Z*d.Z < 9
+	}
+	for _, e := range s.soloEnts {
+		if e == (ecs.Entity{}) || !s.World.Alive(e) {
+			continue
+		}
+		if p := s.PosMap.Get(e); p != nil {
+			d := p.Sub(s.marchGoal)
+			if d.X*d.X+d.Z*d.Z > 36 {
+				arrived = false
+			}
+		}
+	}
+
+	if elapsed >= s.nextSampleAt && elapsed < s.verdictAt && !arrived {
+		s.nextSampleAt = elapsed + aiSampleEvery
+		sideFrac := float32(0)
+		if s.marchMoveN > 0 {
+			sideFrac = float32(s.marchSideN) / float32(s.marchMoveN)
+		}
+		fmt.Printf("[ai-test %s] t=%.1fs side=%.3f churn=%.0fdeg clear=[%.2f..%.2f]\n",
+			s.sceneID, elapsed, sideFrac, s.marchChurnDeg, s.marchMinClear, s.marchMaxClear)
+	}
+
+	if arrived || elapsed >= s.verdictAt {
+		sideFrac := float32(1)
+		if s.marchMoveN > 0 {
+			sideFrac = float32(s.marchSideN) / float32(s.marchMoveN)
+		}
+		// Post-fix baseline: line 0deg side 0.01-0.03 clear ±0.14; slope
+		// 88deg side 0.02-0.05 clear -0.22..0.18. Pre-fix: churn 410deg,
+		// side-storms, clear -0.32 (and unbounded on far solo orders).
+		pass := arrived &&
+			sideFrac <= 0.08 &&
+			s.marchChurnDeg <= s.marchChurnMax &&
+			s.marchMinClear >= -0.3 &&
+			s.marchMaxClear <= 0.5
+		verdict := "FAIL"
+		if pass {
+			verdict = "PASS"
+		}
+		fmt.Println("============================================================")
+		fmt.Printf("== VERDICT [%s]: %s  (arrived=%v t=%.1fs side=%.3f churn=%.0fdeg clear=[%.2f..%.2f])\n",
+			s.sceneID, verdict, arrived, elapsed, sideFrac, s.marchChurnDeg,
+			s.marchMinClear, s.marchMaxClear)
 		fmt.Println("============================================================")
 		s.verdictDone = true
 	}

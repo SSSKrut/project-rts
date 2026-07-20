@@ -129,7 +129,7 @@ func (sys *SquadMacroPathSystem) processSquad(world *ecs.World, w macroPathWork,
 		return
 	}
 
-	center, ok := SquadCenter(world, roster, sys.posMap)
+	center, ok := SquadAnchorPos(world, roster, sys.posMap)
 	if !ok {
 		return
 	}
@@ -189,15 +189,28 @@ func (sys *SquadMacroPathSystem) processSquad(world *ecs.World, w macroPathWork,
 		return
 	}
 
+	// Replan only when forced (new order), the path ran dry, or the anchor
+	// drifted off it — a fresh path every second from a moving start flips
+	// between near-equal A* routes and swings the march heading (#12).
+	// Drift / exhaustion are rate-limited to the old 1 s interval.
 	needReplan := false
 	switch {
 	case mp.ReplanAt == 0:
 		needReplan = true
-	case elapsed >= mp.ReplanAt:
+	case elapsed < mp.LastPlanned+SquadReplanInterval:
+	case mp.Head >= mp.Count:
 		needReplan = true
-	case mp.Count > 0 && mp.Head < mp.Count:
-		d := center.Sub(mp.Waypoints[mp.Head])
-		if d.X*d.X+d.Z*d.Z > SquadReplanCenterDrift*SquadReplanCenterDrift {
+	default:
+		// Lateral deviation from the current leg — raw distance to the next
+		// waypoint trips en route whenever decimated spacing exceeds it.
+		var lat float32
+		if mp.Head > 0 {
+			lat = pointToSegXZ(center, mp.Waypoints[mp.Head-1], mp.Waypoints[mp.Head])
+		} else {
+			d := center.Sub(mp.Waypoints[0])
+			lat = float32(math.Sqrt(float64(d.X*d.X + d.Z*d.Z)))
+		}
+		if lat > SquadReplanCenterDrift {
 			needReplan = true
 		}
 	}
@@ -247,22 +260,40 @@ func (sys *SquadMacroPathSystem) processSquad(world *ecs.World, w macroPathWork,
 		}
 	}
 
-	// Forward = unit XZ-vector from center toward the next waypoint. Falls
-	// back to existing Forward when the squad is on top of the waypoint.
-	var target components.WorldPos
-	if mp.Count > 0 {
-		target = mp.Waypoints[0]
-	} else {
-		target = mp.Goal
-	}
-	diff := target.Sub(center)
-	mag := float32(math.Sqrt(float64(diff.X*diff.X + diff.Z*diff.Z)))
-	if mag > 0.01 {
-		fd.Forward = rl.Vector3{X: diff.X / mag, Y: 0, Z: diff.Z / mag}
+	// Seed Forward only when it's still zero (fresh squad); FormationSystem
+	// owns the live heading via its slew-limited update (#12) — a second
+	// writer at replan cadence would snap it around.
+	if fd.Forward.X == 0 && fd.Forward.Z == 0 {
+		var target components.WorldPos
+		if mp.Count > 0 {
+			target = mp.Waypoints[0]
+		} else {
+			target = mp.Goal
+		}
+		diff := target.Sub(center)
+		mag := float32(math.Sqrt(float64(diff.X*diff.X + diff.Z*diff.Z)))
+		if mag > 0.01 {
+			fd.Forward = rl.Vector3{X: diff.X / mag, Y: 0, Z: diff.Z / mag}
+		}
 	}
 
 	mp.LastPlanned = elapsed
 	mp.ReplanAt = elapsed + SquadReplanInterval
+}
+
+// SquadAnchorPos — the formation reference point: the commander (slot 0)
+// when alive, else the roster centroid. Slots and waypoint progress key on
+// the leader; stragglers regain their slots at raised Pace instead of the
+// whole squad waiting (owner feedback 2026-07-19).
+func SquadAnchorPos(world *ecs.World, roster *components.CommandRoster, posMap *ecs.Map[components.WorldPos]) (components.WorldPos, bool) {
+	if roster.Count > 0 {
+		if lead := roster.Members[0]; lead != (ecs.Entity{}) && world.Alive(lead) {
+			if p := posMap.Get(lead); p != nil {
+				return *p, true
+			}
+		}
+	}
+	return SquadCenter(world, roster, posMap)
 }
 
 // SquadCenter returns the XZ-averaged WorldPos of every live roster member.
@@ -311,6 +342,25 @@ func SquadCenter(world *ecs.World, roster *components.CommandRoster, posMap *ecs
 func centerXZDistSq(a, b components.WorldPos) float32 {
 	d := a.Sub(b)
 	return d.X*d.X + d.Z*d.Z
+}
+
+// pointToSegXZ — XZ distance from p to segment [a, b].
+func pointToSegXZ(p, a, b components.WorldPos) float32 {
+	ab := b.Sub(a)
+	ap := p.Sub(a)
+	lenSq := ab.X*ab.X + ab.Z*ab.Z
+	t := float32(0)
+	if lenSq > 1e-6 {
+		t = (ap.X*ab.X + ap.Z*ab.Z) / lenSq
+		if t < 0 {
+			t = 0
+		} else if t > 1 {
+			t = 1
+		}
+	}
+	dx := ap.X - ab.X*t
+	dz := ap.Z - ab.Z*t
+	return float32(math.Sqrt(float64(dx*dx + dz*dz)))
 }
 
 // SquadSpread returns (maxDistance, caughtUp, total): largest XZ distance

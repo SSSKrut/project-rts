@@ -49,6 +49,10 @@ func (sys *GroundStickSystem) InitUI(w *ecs.World) {
 // (collider radius ~0.3) is still carried.
 const stairEdgePad float32 = 0.4
 
+// stairBaseMagnet — the bottom this-many metres of a ramp win the closest-Y
+// tie against the plate the stair stands on.
+const stairBaseMagnet float32 = 1.0
+
 func (GroundStickSystem) Name() string { return "ground_stick" }
 
 func (GroundStickSystem) LODPolicy() core.LODPolicy {
@@ -185,6 +189,13 @@ func (sys GroundStickSystem) Update(ctx core.UpdateContext) {
 		if rampY, ok := stairRampY(wx, wz); ok {
 			if d := absDelta(pos.Local.Y, rampY); d < bestD {
 				bestD = d
+				bestY = rampY
+			} else if rampY > bestY && rampY-bestY <= stairBaseMagnet {
+				// Base magnetism: the bottom metre of a ramp claims walkers
+				// standing on its host plate. A radius-popped waypoint enters
+				// the climb from the side, and the plate snap would otherwise
+				// re-capture the walker every tick — the ai_main_m1 straggler
+				// loop (climb can only engage exactly at the base without this).
 				bestY = rampY
 			}
 		}

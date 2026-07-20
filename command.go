@@ -395,29 +395,34 @@ func issueDirectOrder(
 		squadService.IssueOrder(s, kind, target, entity, shiftHeld, params)
 	}
 	for _, e := range groups.Soloists {
-		aq := actionQueueMap.Get(e)
-		pos := posMap.Get(e)
-		if aq == nil || pos == nil {
-			continue
-		}
-		if !shiftHeld {
-			systems.ClearActions(aq)
-		}
-		path := navService.FindPath(*pos, target, systems.NavOpts{
-			Locomotion: components.LocomotionFoot,
-		})
-		if len(path) == 0 {
-			systems.PushAction(aq, components.Action{
-				Kind: components.ActionMoveTo, Target: target,
-			})
-		} else {
-			for _, wp := range path {
-				systems.PushAction(aq, components.Action{
-					Kind: components.ActionMoveTo, Target: wp,
-				})
-			}
-		}
+		pushSoloMove(actionQueueMap, posMap, e, target, shiftHeld)
 	}
+}
+
+// pushSoloMove drives one non-squad unit toward `target` — the soloist arm
+// of every RMB order path (and the ai_march_* scenes, which call it directly
+// so the gate exercises the live code). One MoveTo with the FINAL target:
+// MicroPathSystem plans the route (GoalSnap drift flips Dirty next tick).
+// The old path-dump overflowed the 4-slot ActionQueue on any long order,
+// leaving only the last 4 waypoints — a straight chord across terrain and
+// obstacles (ISSUES #13).
+func pushSoloMove(
+	actionQueueMap *ecs.Map[components.ActionQueue],
+	posMap *ecs.Map[components.WorldPos],
+	e ecs.Entity,
+	target components.WorldPos,
+	shiftHeld bool,
+) {
+	aq := actionQueueMap.Get(e)
+	if aq == nil || posMap.Get(e) == nil {
+		return
+	}
+	if !shiftHeld {
+		systems.ClearActions(aq)
+	}
+	systems.PushAction(aq, components.Action{
+		Kind: components.ActionMoveTo, Target: target,
+	})
 }
 
 // applyModifiersToParams converts press-time modifiers into OrderParams.
@@ -497,28 +502,7 @@ func resolveRMBOrderWithParams(
 		return
 	}
 	for _, e := range groups.Soloists {
-		aq := actionQueueMap.Get(e)
-		pos := posMap.Get(e)
-		if aq == nil || pos == nil {
-			continue
-		}
-		if !shiftHeld {
-			systems.ClearActions(aq)
-		}
-		path := navService.FindPath(*pos, target, systems.NavOpts{
-			Locomotion: components.LocomotionFoot,
-		})
-		if len(path) == 0 {
-			systems.PushAction(aq, components.Action{
-				Kind: components.ActionMoveTo, Target: target,
-			})
-		} else {
-			for _, wp := range path {
-				systems.PushAction(aq, components.Action{
-					Kind: components.ActionMoveTo, Target: wp,
-				})
-			}
-		}
+		pushSoloMove(actionQueueMap, posMap, e, target, shiftHeld)
 	}
 
 }
