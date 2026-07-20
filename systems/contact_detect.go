@@ -34,6 +34,20 @@ func (sys *ContactSystem) runDetectPass(dt float32) {
 	sys.seersBuf = sys.seersBuf[:0]
 	sys.contactsBuf = sys.contactsBuf[:0]
 
+	// Snapshot live smoke fields — targets standing inside are harder to spot.
+	sys.smokeBuf = sys.smokeBuf[:0]
+	qSm := sys.smokeFilter.Query()
+	for qSm.Next() {
+		sf, sp := qSm.Get()
+		if float64(sys.elapsed) >= sf.ExpiresAt {
+			continue
+		}
+		sx := float32(sp.Chunk.X)*components.ChunkSize + sp.Local.X
+		sz := float32(sp.Chunk.Z)*components.ChunkSize + sp.Local.Z
+		sys.smokeBuf = append(sys.smokeBuf, smokeVol{x: sx, z: sz, rSq: sf.Radius * sf.Radius})
+	}
+	qSm.Close()
+
 	q := sys.unitFilter.Query()
 	for q.Next() {
 		ent := q.Entity()
@@ -53,6 +67,7 @@ func (sys *ContactSystem) runDetectPass(dt float32) {
 		case mot.Speed > detectRunSpeed:
 			conceal *= detectRunMul
 		}
+		conceal *= sys.smokeMulAt(wx, wz)
 		det := sys.dtMap.Get(ent)
 		meter := [components.FactionCount]float32{1, 1, 1, 1}
 		if det != nil {
@@ -105,7 +120,7 @@ func (sys *ContactSystem) runDetectPass(dt float32) {
 			ent: ent, pos: *pos, chunk: pos.Chunk,
 			x: wx, z: wz, targetY: pos.Local.Y + vspec.BoxHgt*0.6,
 			faction: faction.ID, dimMask: components.DimVehicle,
-			concealment: vspec.DetectMul, audioRadius: audio,
+			concealment: vspec.DetectMul * sys.smokeMulAt(wx, wz), audioRadius: audio,
 			meter: meter, det: det,
 		})
 		maxR := float32(0)
@@ -636,6 +651,20 @@ func (sys *ContactSystem) audioEmissionRadius(unit ecs.Entity, motionSpeed float
 		r = visionMaxRange
 	}
 	return r
+}
+
+// smokeMulAt returns smokeConcealMul if (wx, wz) sits inside any live smoke
+// field this tick, else 1.0. Multiple overlapping fields do not stack.
+func (sys *ContactSystem) smokeMulAt(wx, wz float32) float32 {
+	for i := range sys.smokeBuf {
+		s := &sys.smokeBuf[i]
+		dx := s.x - wx
+		dz := s.z - wz
+		if dx*dx+dz*dz <= s.rSq {
+			return smokeConcealMul
+		}
+	}
+	return 1
 }
 
 func clamp32(v, lo, hi float32) float32 {

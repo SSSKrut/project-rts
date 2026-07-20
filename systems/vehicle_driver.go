@@ -24,6 +24,7 @@ type VehicleDriverSystem struct {
 	queueMap    *ecs.Map[components.ActionQueue]
 	routeMap    *ecs.Map[components.RoadRoute]
 	followerMap *ecs.Map[components.RoadFollower]
+	overrideMap *ecs.Map[components.VehicleOverride]
 	sampler     *HeightSampler
 	router      *RoadRouter
 }
@@ -42,6 +43,7 @@ func (sys *VehicleDriverSystem) InitUI(w *ecs.World) {
 	sys.queueMap = ecs.NewMap[components.ActionQueue](w)
 	sys.routeMap = ecs.NewMap[components.RoadRoute](w)
 	sys.followerMap = ecs.NewMap[components.RoadFollower](w)
+	sys.overrideMap = ecs.NewMap[components.VehicleOverride](w)
 	sys.sampler = NewHeightSampler(w)
 	sys.router = NewRoadRouter(w)
 }
@@ -72,14 +74,25 @@ func (sys *VehicleDriverSystem) Update(ctx core.UpdateContext) {
 		if aq == nil {
 			continue
 		}
-		sys.step(veh, pos, mot, aq, sys.routeMap.Get(ent), sys.followerMap.Get(ent), dt)
+		sys.step(veh, pos, mot, aq, sys.routeMap.Get(ent),
+			sys.followerMap.Get(ent), sys.overrideMap.Get(ent), dt)
 	}
 }
 
 func (sys *VehicleDriverSystem) step(veh *components.Vehicle, pos *components.WorldPos,
 	mot *components.Motion, aq *components.ActionQueue,
-	route *components.RoadRoute, follower *components.RoadFollower, dt float32) {
+	route *components.RoadRoute, follower *components.RoadFollower,
+	ov *components.VehicleOverride, dt float32) {
 	spec := components.SpecForVehicle(veh.Kind)
+
+	// Reflexes that own locomotion (FaceThreat / SmokeAndReverse) run before
+	// the order queue. Flee drives through the queue, so it falls through.
+	if ov != nil && ov.Kind != components.VehicleReflexNone &&
+		ov.Kind != components.VehicleReflexFlee {
+		clearRoute(route, follower)
+		sys.stepReflex(pos, mot, spec, ov, dt)
+		return
+	}
 
 	if aq.Count == 0 {
 		clearRoute(route, follower)

@@ -30,6 +30,9 @@ type VehicleFactory struct {
 	OnGroundMap     *ecs.Map[components.OnGround]
 	WeaponMap       *ecs.Map[components.Weapon]
 	OwnedByMap      *ecs.Map[components.OwnedBy]
+	ThreatMap       *ecs.Map[components.Threat]
+	DangerMap       *ecs.Map[components.DangerBuffer]
+	OverrideMap     *ecs.Map[components.VehicleOverride]
 }
 
 func NewVehicleFactory(world *ecs.World, posMap *ecs.Map[components.WorldPos]) *VehicleFactory {
@@ -53,6 +56,9 @@ func NewVehicleFactory(world *ecs.World, posMap *ecs.Map[components.WorldPos]) *
 		OnGroundMap:     ecs.NewMap[components.OnGround](world),
 		WeaponMap:       ecs.NewMap[components.Weapon](world),
 		OwnedByMap:      ecs.NewMap[components.OwnedBy](world),
+		ThreatMap:       ecs.NewMap[components.Threat](world),
+		DangerMap:       ecs.NewMap[components.DangerBuffer](world),
+		OverrideMap:     ecs.NewMap[components.VehicleOverride](world),
 	}
 }
 
@@ -102,6 +108,9 @@ func (f *VehicleFactory) Spawn(pos components.WorldPos, kind components.VehicleK
 	f.EquipmentMap.Add(ent, &eq)
 	f.DetectMap.Add(ent, &components.Detectability{})
 	f.OnGroundMap.Add(ent, &components.OnGround{})
+	f.ThreatMap.Add(ent, &components.Threat{})
+	f.DangerMap.Add(ent, &components.DangerBuffer{})
+	f.OverrideMap.Add(ent, &components.VehicleOverride{})
 	if spec.TurretSlewDps > 0 {
 		f.TurretMap.Add(ent, &components.Turret{})
 	}

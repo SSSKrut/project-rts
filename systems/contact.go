@@ -45,6 +45,7 @@ type ContactSystem struct {
 	wallFilter    *ecs.Filter2[components.WorldPos, components.WallSegment]
 	contactFilter *ecs.Filter1[components.Contact]
 	threatFilter  *ecs.Filter2[components.ThreatSource, components.WorldPos]
+	smokeFilter   *ecs.Filter2[components.SmokeField, components.WorldPos]
 
 	doorMap            *ecs.Map[components.Door]
 	stanceMap          *ecs.Map[components.Stance]
@@ -66,6 +67,7 @@ type ContactSystem struct {
 
 	// Per-tick scratch — reset with [:0] / clear() at top of Update.
 	unitsBuf     []contactUnit
+	smokeBuf     []smokeVol
 	seersBuf     []contactSeer
 	wallsByChunk map[components.ChunkCoord][]losWall
 	heightmaps   map[components.ChunkCoord][]float32
@@ -81,6 +83,16 @@ type ContactSystem struct {
 	meterSrc       [][components.FactionCount]int32
 
 	elapsed float32
+}
+
+// smokeConcealMul multiplies a target's concealment when it stands inside a
+// live SmokeField — dropped by the SmokeAndReverse reflex to break contact.
+const smokeConcealMul float32 = 0.35
+
+// smokeVol is a per-tick snapshot of a live smoke field (world XZ + squared
+// radius) used to attenuate concealment.
+type smokeVol struct {
+	x, z, rSq float32
 }
 
 // contactUnit is the per-tick candidate snapshot.
@@ -172,6 +184,7 @@ func (sys *ContactSystem) InitUI(w *ecs.World) {
 	sys.wallFilter = ecs.NewFilter2[components.WorldPos, components.WallSegment](w)
 	sys.contactFilter = ecs.NewFilter1[components.Contact](w)
 	sys.threatFilter = ecs.NewFilter2[components.ThreatSource, components.WorldPos](w)
+	sys.smokeFilter = ecs.NewFilter2[components.SmokeField, components.WorldPos](w)
 	sys.doorMap = ecs.NewMap[components.Door](w)
 	sys.stanceMap = ecs.NewMap[components.Stance](w)
 	sys.factionMap = ecs.NewMap[components.Faction](w)

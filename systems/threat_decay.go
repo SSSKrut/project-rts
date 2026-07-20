@@ -7,10 +7,12 @@ import (
 	"rts-go/core"
 )
 
-// ThreatDecaySystem despawns ThreatSource entities whose age exceeds their
-// TTL. Kept separate so readers get the contract "live within TTL of spawn".
+// ThreatDecaySystem despawns short-lived field entities past their lifetime:
+// ThreatSource (age > TTL) and SmokeField (now >= ExpiresAt). Kept separate so
+// readers get the contract "live within its window".
 type ThreatDecaySystem struct {
 	filter    *ecs.Filter1[components.ThreatSource]
+	smoke     *ecs.Filter1[components.SmokeField]
 	despawned []ecs.Entity
 }
 
@@ -22,6 +24,7 @@ func NewThreatDecaySystem() *ThreatDecaySystem {
 
 func (sys *ThreatDecaySystem) InitUI(w *ecs.World) {
 	sys.filter = ecs.NewFilter1[components.ThreatSource](w)
+	sys.smoke = ecs.NewFilter1[components.SmokeField](w)
 }
 
 func (ThreatDecaySystem) Name() string { return "threat_decay" }
@@ -46,6 +49,15 @@ func (sys *ThreatDecaySystem) Update(ctx core.UpdateContext) {
 			sys.despawned = append(sys.despawned, q.Entity())
 		}
 	}
+	q.Close()
+
+	qs := sys.smoke.Query()
+	for qs.Next() {
+		if float64(now) >= qs.Get().ExpiresAt {
+			sys.despawned = append(sys.despawned, qs.Entity())
+		}
+	}
+
 	// Remove after closing the query (Ark forbids mid-query archetype mutation).
 	for _, e := range sys.despawned {
 		if ctx.World.Alive(e) {

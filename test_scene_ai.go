@@ -85,6 +85,13 @@ const (
 	// tank shrugs off 30mm/ATGM frontal hits. PASS = enemy side destroyed,
 	// at least one player vehicle alive.
 	aiSceneVehCombat = "ai_vehicle_combat"
+
+	// ai_vehicle_reflex (Phase 19 M4): three vehicles take synthetic fire
+	// from one point and each runs its class reflex — the tank (spawned
+	// side-on) pivots its hull to face the threat, the BMP drops a smoke
+	// field and reverses, the truck flees. PASS = all three conditions in
+	// one run.
+	aiSceneVehReflex = "ai_vehicle_reflex"
 )
 
 // aiSceneMapName lets a scene demand a specific map manifest ("" = default).
@@ -578,6 +585,58 @@ func aiVehicleCombatSpawn(world *ecs.World, vehicleFactory *entities.VehicleFact
 	}
 }
 
+// aiVehicleReflexSpawn: a tank (side-on), a BMP and a truck, all player-side,
+// each fed synthetic bullet-impact danger from one northern point. No real
+// shooter — the reflex arbitration is what we measure.
+func aiVehicleReflexSpawn(world *ecs.World, vehicleFactory *entities.VehicleFactory,
+	posMap *ecs.Map[components.WorldPos]) *aiTestState {
+	if vehicleFactory == nil {
+		fmt.Printf("[ai-test %s] NO VEHICLE FACTORY — aborting\n", aiSceneID())
+		return nil
+	}
+	wp := func(x, z float32) components.WorldPos {
+		p := components.WorldPos{}.Add(rl.Vector3{X: x, Z: z})
+		p.Local.Y = systems.GroundHeight(x, z)
+		return p
+	}
+	tankPos := wp(0, -35)
+	bmpPos := wp(25, -35)
+	truckPos := wp(-15, -20)
+	tank := vehicleFactory.Spawn(tankPos, components.VehicleTank,
+		components.FactionPlayer, components.ControllerLocal)
+	bmp := vehicleFactory.Spawn(bmpPos, components.VehicleBMP,
+		components.FactionPlayer, components.ControllerLocal)
+	truck := vehicleFactory.Spawn(truckPos, components.VehicleTruck,
+		components.FactionPlayer, components.ControllerLocal)
+	// Tank starts broadside to the threat so FaceThreat has 90° to close.
+	motMap := ecs.NewMap[components.Motion](world)
+	if m := motMap.Get(tank); m != nil {
+		m.Yaw = math.Pi / 2
+	}
+	if m := motMap.Get(bmp); m != nil {
+		m.Yaw = -math.Pi / 2
+	}
+	return &aiTestState{
+		sceneID:          aiSceneID(),
+		reflexActive:     true,
+		reflexTank:       tank,
+		reflexBmp:        bmp,
+		reflexTruck:      truck,
+		reflexSource:     wp(0, 0),
+		reflexBmpSpawn:   bmpPos,
+		reflexVehicles:   []ecs.Entity{tank, bmp, truck},
+		DangerMap:        ecs.NewMap[components.DangerBuffer](world),
+		SmokeFilter:      ecs.NewFilter2[components.SmokeField, components.WorldPos](world),
+		World:            world,
+		PosMap:           posMap,
+		MotionMap:        motMap,
+		orderAt:          aiOrderAt,
+		verdictAt:        30,
+		nextSampleAt:     aiOrderAt + 3,
+		reflexNextInject: aiOrderAt,
+	}
+}
+
 // aiSceneSpawn instantiates the squad + captures the entities the auto-
 // verifier needs. Returns nil for non-AI scenes.
 func aiSceneSpawn(
@@ -609,6 +668,9 @@ func aiSceneSpawn(
 	}
 	if aiSceneID() == aiSceneVehCombat {
 		return aiVehicleCombatSpawn(world, vehicleFactory, posMap)
+	}
+	if aiSceneID() == aiSceneVehReflex {
+		return aiVehicleReflexSpawn(world, vehicleFactory, posMap)
 	}
 	squad := squadService.CreateFromTemplate(
 		systems.TmplMotorRifle, aiSpawnPos(),
@@ -825,6 +887,19 @@ type aiTestState struct {
 	vehFoes         []ecs.Entity
 	HPMap           *ecs.Map[components.HP]
 
+	// Set for ai_vehicle_reflex (M4): each vehicle runs its class reflex
+	// under synthetic fire from reflexSource.
+	reflexActive     bool
+	reflexTank       ecs.Entity
+	reflexBmp        ecs.Entity
+	reflexTruck      ecs.Entity
+	reflexVehicles   []ecs.Entity
+	reflexSource     components.WorldPos
+	reflexBmpSpawn   components.WorldPos
+	reflexNextInject float32
+	reflexBmpSmoked  bool
+	SmokeFilter      *ecs.Filter2[components.SmokeField, components.WorldPos]
+
 	// Set for ai_cover_side (#18): synthetic-threat cover-side metric.
 	coverActive     bool
 	coverMembers    []ecs.Entity
@@ -912,6 +987,10 @@ func (s *aiTestState) Update(elapsed float32) {
 	}
 	if s.vehCombatActive {
 		s.updateVehCombat(elapsed)
+		return
+	}
+	if s.reflexActive {
+		s.updateVehReflex(elapsed)
 		return
 	}
 	if s.marchActive {
@@ -1333,6 +1412,116 @@ func (s *aiTestState) updateVehCombat(elapsed float32) {
 		fmt.Println("============================================================")
 		s.verdictDone = true
 	}
+}
+
+func (s *aiTestState) updateVehReflex(elapsed float32) {
+	if s.verdictDone {
+		return
+	}
+	if !s.orderFired {
+		if elapsed < s.orderAt {
+			return
+		}
+		fmt.Println("============================================================")
+		fmt.Printf("== AI VEHICLE REFLEX: %s  tank=side-on bmp=smoke+reverse truck=flee\n",
+			s.sceneID)
+		fmt.Println("============================================================")
+		s.orderFired = true
+	}
+	// Pulse synthetic bullet impacts into each vehicle's DangerBuffer.
+	if elapsed <= 12 && elapsed >= s.reflexNextInject {
+		s.reflexNextInject = elapsed + 0.5
+		for _, v := range s.reflexVehicles {
+			if v == (ecs.Entity{}) || !s.World.Alive(v) {
+				continue
+			}
+			if buf := s.DangerMap.Get(v); buf != nil {
+				components.PushDanger(buf, components.DangerEvent{
+					Kind:     components.DangerBulletImpact,
+					Pos:      s.reflexSource,
+					Strength: 0.35,
+					Time:     elapsed,
+				})
+			}
+		}
+	}
+
+	// Latch the BMP smoke observation while a field is live near its spawn.
+	if !s.reflexBmpSmoked {
+		q := s.SmokeFilter.Query()
+		for q.Next() {
+			_, sp := q.Get()
+			d := sp.Sub(s.reflexBmpSpawn)
+			if d.X*d.X+d.Z*d.Z < 20*20 {
+				s.reflexBmpSmoked = true
+			}
+		}
+		q.Close()
+	}
+
+	tankFaced := false
+	if s.World.Alive(s.reflexTank) {
+		if m := s.MotionMap.Get(s.reflexTank); m != nil {
+			if tp := s.PosMap.Get(s.reflexTank); tp != nil {
+				d := s.reflexSource.Sub(*tp)
+				bearing := float32(math.Atan2(float64(d.X), float64(d.Z)))
+				if absReflexAngle(reflexNormAngle(m.Yaw-bearing)) < 30*math.Pi/180 {
+					tankFaced = true
+				}
+			}
+		}
+	}
+	bmpRetreat := reflexDist(s.PosMap, s.reflexBmp, s.reflexBmpSpawn)
+	bmpMoved := bmpRetreat >= 8
+	truckDist := reflexDist(s.PosMap, s.reflexTruck, s.reflexSource)
+	truckFled := truckDist >= 30
+
+	if elapsed >= s.nextSampleAt && elapsed < s.verdictAt {
+		s.nextSampleAt = elapsed + aiSampleEvery
+		fmt.Printf("[ai-test %s] t=%.1fs tankFaced=%v bmpBack=%.1fm smoked=%v truckDist=%.1fm\n",
+			s.sceneID, elapsed, tankFaced, bmpRetreat, s.reflexBmpSmoked, truckDist)
+	}
+
+	done := tankFaced && bmpMoved && s.reflexBmpSmoked && truckFled
+	if done || elapsed >= s.verdictAt {
+		pass := tankFaced && bmpMoved && s.reflexBmpSmoked && truckFled
+		verdict := "FAIL"
+		if pass {
+			verdict = "PASS"
+		}
+		fmt.Println("============================================================")
+		fmt.Printf("== VERDICT [%s]: %s  (t=%.1fs tankFaced=%v bmpBack=%.1fm smoked=%v truckDist=%.1fm)\n",
+			s.sceneID, verdict, elapsed, tankFaced, bmpRetreat, s.reflexBmpSmoked, truckDist)
+		fmt.Println("============================================================")
+		s.verdictDone = true
+	}
+}
+
+// reflexDist returns the horizontal distance from `ent` to `to`.
+func reflexDist(posMap *ecs.Map[components.WorldPos], ent ecs.Entity, to components.WorldPos) float32 {
+	p := posMap.Get(ent)
+	if p == nil {
+		return 0
+	}
+	d := p.Sub(to)
+	return float32(math.Sqrt(float64(d.X*d.X + d.Z*d.Z)))
+}
+
+func reflexNormAngle(a float32) float32 {
+	for a > math.Pi {
+		a -= 2 * math.Pi
+	}
+	for a < -math.Pi {
+		a += 2 * math.Pi
+	}
+	return a
+}
+
+func absReflexAngle(a float32) float32 {
+	if a < 0 {
+		return -a
+	}
+	return a
 }
 
 func (s *aiTestState) updateVehicles(elapsed float32) {

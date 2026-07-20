@@ -52,6 +52,7 @@ type InspectorMaps struct {
 	VehicleMap               *ecs.Map[components.Vehicle]
 	RoadFollowerMap          *ecs.Map[components.RoadFollower]
 	WeaponMap                *ecs.Map[components.Weapon]
+	VehicleOverrideMap       *ecs.Map[components.VehicleOverride]
 }
 
 func NewInspectorMaps(world *ecs.World) InspectorMaps {
@@ -95,6 +96,7 @@ func NewInspectorMaps(world *ecs.World) InspectorMaps {
 		VehicleMap:               ecs.NewMap[components.Vehicle](world),
 		RoadFollowerMap:          ecs.NewMap[components.RoadFollower](world),
 		WeaponMap:                ecs.NewMap[components.Weapon](world),
+		VehicleOverrideMap:       ecs.NewMap[components.VehicleOverride](world),
 	}
 }
 
@@ -143,6 +145,7 @@ var (
 	inspectorTextDim     = rl.Color{R: 140, G: 150, B: 160, A: 255}
 	inspectorRowHoverBG  = rl.Color{R: 60, G: 70, B: 95, A: 200}
 	inspectorRowSelectBG = rl.Color{R: 30, G: 80, B: 110, A: 180}
+	inspectorHighlight   = rl.Color{R: 240, G: 190, B: 90, A: 255}
 )
 
 // DrawInspector dispatches on selection:

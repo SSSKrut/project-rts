@@ -15,8 +15,9 @@ import (
 // channel, drain DangerBuffer (Strength → channel + weighted ThreatDir),
 // clamp to [0, 1], recompute Total + State, reset ring for next tick.
 type ThreatSystem struct {
-	filter   *ecs.Filter4[components.Unit, components.Threat, components.DangerBuffer, components.WorldPos]
-	lastTick float32
+	filter    *ecs.Filter4[components.Unit, components.Threat, components.DangerBuffer, components.WorldPos]
+	vehFilter *ecs.Filter4[components.Vehicle, components.Threat, components.DangerBuffer, components.WorldPos]
+	lastTick  float32
 }
 
 func NewThreatSystem() *ThreatSystem {
@@ -25,6 +26,7 @@ func NewThreatSystem() *ThreatSystem {
 
 func (sys *ThreatSystem) InitUI(w *ecs.World) {
 	sys.filter = ecs.NewFilter4[components.Unit, components.Threat, components.DangerBuffer, components.WorldPos](w)
+	sys.vehFilter = ecs.NewFilter4[components.Vehicle, components.Threat, components.DangerBuffer, components.WorldPos](w)
 }
 
 func (ThreatSystem) Name() string { return "threat" }
@@ -52,6 +54,13 @@ func (sys *ThreatSystem) Update(ctx core.UpdateContext) {
 	q := sys.filter.Query()
 	for q.Next() {
 		_, threat, buf, pos := q.Get()
+		tickThreat(threat, buf, pos, dt)
+	}
+
+	// Vehicles run the same aggregator so their reflexes read a live Threat.
+	qv := sys.vehFilter.Query()
+	for qv.Next() {
+		_, threat, buf, pos := qv.Get()
 		tickThreat(threat, buf, pos, dt)
 	}
 }

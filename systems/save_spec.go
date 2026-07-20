@@ -166,13 +166,14 @@ var saveComponents = map[string]saveEntry{
 	"components.NodeEntity":       saveReg[components.NodeEntity](SaveMemcpy),
 	"components.BuildingViewMode": saveReg[components.BuildingViewMode](SaveMemcpy),
 
-	"components.Controller":   saveReg[components.Controller](SaveMemcpy),
-	"components.OnGround":     saveReg[components.OnGround](SaveMemcpy),
-	"components.Vehicle":      saveReg[components.Vehicle](SaveMemcpy),
-	"components.Turret":       saveReg[components.Turret](SaveMemcpy),
-	"components.RoadFollower": saveReg[components.RoadFollower](SaveMemcpy),
-	"components.RoadRoute":    saveReg[components.RoadRoute](SaveMemcpy),
-	"components.SmokeField":   saveReg[components.SmokeField](SaveMemcpy),
+	"components.Controller":      saveReg[components.Controller](SaveMemcpy),
+	"components.OnGround":        saveReg[components.OnGround](SaveMemcpy),
+	"components.Vehicle":         saveReg[components.Vehicle](SaveMemcpy),
+	"components.Turret":          saveReg[components.Turret](SaveMemcpy),
+	"components.RoadFollower":    saveReg[components.RoadFollower](SaveMemcpy),
+	"components.RoadRoute":       saveReg[components.RoadRoute](SaveMemcpy),
+	"components.SmokeField":      saveReg[components.SmokeField](SaveMemcpy),
+	"components.VehicleOverride": saveReg[components.VehicleOverride](SaveMemcpy),
 }
 
 func savePolicyFor(t reflect.Type) (SavePolicy, error) {

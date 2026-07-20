@@ -305,6 +305,11 @@ func main() {
 	threatDecaySys := systems.NewThreatDecaySystem()
 	threatDecaySys.InitUI(app.World)
 
+	// After threat_decay (fresh Threat) and before order_resolver: arm vehicle
+	// reflexes so the driver picks them up next tick.
+	vehicleReflexSys := systems.NewVehicleReflexSystem()
+	vehicleReflexSys.InitUI(app.World)
+
 	mapPingDecaySys := systems.NewMapPingDecaySystem()
 	mapPingDecaySys.InitUI(app.World)
 
@@ -375,6 +380,7 @@ func main() {
 	app.AddSystem(stanceSys)
 	app.AddSystem(utilityEvalSys)
 	app.AddSystem(threatDecaySys)
+	app.AddSystem(vehicleReflexSys)
 	app.AddSystem(levelVisSys)
 	app.AddSystem(mapPingDecaySys)
 	app.AddSystem(orderResolverSys)
@@ -724,6 +730,7 @@ func main() {
 
 	unitRenderFilter := ecs.NewFilter3[components.WorldPos, components.Unit, components.Stance](app.World)
 	vehicleRenderFilter := ecs.NewFilter2[components.WorldPos, components.Vehicle](app.World)
+	smokeRenderFilter := ecs.NewFilter2[components.WorldPos, components.SmokeField](app.World)
 	turretMap := ecs.NewMap[components.Turret](app.World)
 	chunkActiveFilter := ecs.NewFilter3[components.WorldPos, components.ChunkMesh, components.LODActive](app.World)
 	chunkRelevantFilter := ecs.NewFilter3[components.WorldPos, components.ChunkMesh, components.LODRelevant](app.World)
@@ -2692,6 +2699,14 @@ func main() {
 			ghostDragFacing, ghostPopupKind, ghostPopupLevel, levelMap)
 
 		drawOrderMarkers3D(orderMarkerRenderCtx, selected)
+
+		qsmoke := smokeRenderFilter.Query()
+		for qsmoke.Next() {
+			sp, sf := qsmoke.Get()
+			c := sp.ToRenderSpace(systems.CurrentOriginChunk)
+			c.Y += sf.Radius * 0.5
+			rl.DrawSphere(c, sf.Radius, rl.Color{R: 150, G: 150, B: 155, A: 70})
+		}
 
 		drawParticles(particleRenderCtx, float32(app.Elapsed().Seconds()))
 

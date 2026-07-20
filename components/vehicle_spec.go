@@ -47,6 +47,7 @@ type VehicleSpec struct {
 	DetectMul       float32
 	NoiseRadiusM    float32
 	Class           ArmorClass
+	ReflexKind      VehicleReflexKind
 	WeaponCount     uint8
 	WeaponKinds     [2]WeaponKind
 }
@@ -61,7 +62,7 @@ var VehicleSpecs = [VehicleKindCount]VehicleSpec{
 		TurretSlewDps: 0, Locomotion: LocomotionWheeled, ColliderR: 3.2,
 		BoxLen: 7.0, BoxWid: 2.5, BoxHgt: 2.7,
 		SensorRangeM: 50, DetectMul: 1.6, NoiseRadiusM: 120,
-		Class: ArmorClassSoft,
+		Class: ArmorClassSoft, ReflexKind: VehicleReflexFlee,
 	},
 	VehicleBTR: {
 		Kind: VehicleBTR, Name: "BTR", HP: 220,
@@ -70,7 +71,8 @@ var VehicleSpecs = [VehicleKindCount]VehicleSpec{
 		TurretSlewDps: 60, Locomotion: LocomotionWheeled, ColliderR: 3.4,
 		BoxLen: 7.7, BoxWid: 2.9, BoxHgt: 2.4,
 		SensorRangeM: 60, DetectMul: 1.5, NoiseRadiusM: 110,
-		Class: ArmorClassLight, WeaponCount: 1, WeaponKinds: [2]WeaponKind{WeaponKPVT},
+		Class: ArmorClassLight, ReflexKind: VehicleReflexSmokeAndReverse,
+		WeaponCount: 1, WeaponKinds: [2]WeaponKind{WeaponKPVT},
 	},
 	VehicleBMP: {
 		Kind: VehicleBMP, Name: "BMP", HP: 260,
@@ -79,7 +81,8 @@ var VehicleSpecs = [VehicleKindCount]VehicleSpec{
 		TurretSlewDps: 55, Locomotion: LocomotionTracked, ColliderR: 3.0,
 		BoxLen: 6.7, BoxWid: 3.15, BoxHgt: 2.45,
 		SensorRangeM: 60, DetectMul: 1.5, NoiseRadiusM: 130,
-		Class: ArmorClassLight, WeaponCount: 1, WeaponKinds: [2]WeaponKind{WeaponAutocannon30},
+		Class: ArmorClassLight, ReflexKind: VehicleReflexSmokeAndReverse,
+		WeaponCount: 1, WeaponKinds: [2]WeaponKind{WeaponAutocannon30},
 	},
 	VehicleTank: {
 		Kind: VehicleTank, Name: "Tank", HP: 500,
@@ -88,7 +91,8 @@ var VehicleSpecs = [VehicleKindCount]VehicleSpec{
 		TurretSlewDps: 40, Locomotion: LocomotionTracked, ColliderR: 3.2,
 		BoxLen: 6.9, BoxWid: 3.6, BoxHgt: 2.2,
 		SensorRangeM: 55, DetectMul: 1.7, NoiseRadiusM: 150,
-		Class: ArmorClassHeavy, WeaponCount: 2, WeaponKinds: [2]WeaponKind{WeaponCannon125, WeaponPKM},
+		Class: ArmorClassHeavy, ReflexKind: VehicleReflexFaceThreat,
+		WeaponCount: 2, WeaponKinds: [2]WeaponKind{WeaponCannon125, WeaponPKM},
 	},
 	VehicleATCarrier: {
 		Kind: VehicleATCarrier, Name: "AT Carrier", HP: 180,
@@ -97,7 +101,8 @@ var VehicleSpecs = [VehicleKindCount]VehicleSpec{
 		TurretSlewDps: 30, Locomotion: LocomotionWheeled, ColliderR: 2.6,
 		BoxLen: 5.7, BoxWid: 2.35, BoxHgt: 2.3,
 		SensorRangeM: 65, DetectMul: 1.4, NoiseRadiusM: 100,
-		Class: ArmorClassLight, WeaponCount: 1, WeaponKinds: [2]WeaponKind{WeaponATGM},
+		Class: ArmorClassLight, ReflexKind: VehicleReflexSmokeAndReverse,
+		WeaponCount: 1, WeaponKinds: [2]WeaponKind{WeaponATGM},
 	},
 }
 

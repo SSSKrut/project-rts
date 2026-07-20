@@ -46,6 +46,13 @@ func drawInspectorVehicle(ctx InspectorCtx, ent ecs.Entity, x, y int32) int32 {
 	drawText(ctx.Font, "Road:      "+roadStatusLabel(ctx, ent),
 		x, y, inspectorFontSize, inspectorText)
 	y += inspectorRowH
+	if ctx.VehicleOverrideMap != nil {
+		if ov := ctx.VehicleOverrideMap.Get(ent); ov != nil && ov.Kind != components.VehicleReflexNone {
+			drawText(ctx.Font, "Reflex:    "+components.VehicleReflexLabel(ov.Kind),
+				x, y, inspectorFontSize, inspectorHighlight)
+			y += inspectorRowH
+		}
+	}
 	if eq := ctx.EquipmentMap.Get(ent); eq != nil {
 		for _, w := range [2]ecs.Entity{eq.Primary, eq.Secondary} {
 			if w == (ecs.Entity{}) || !ctx.World.Alive(w) {

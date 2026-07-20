@@ -24,6 +24,7 @@ type ReplayHasher struct {
 	progressMap   *ecs.Map[components.OrderProgress]
 	routeMap      *ecs.Map[components.RoadRoute]
 	followerMap   *ecs.Map[components.RoadFollower]
+	overrideMap   *ecs.Map[components.VehicleOverride]
 	world         *ecs.World
 }
 
@@ -40,6 +41,7 @@ func NewReplayHasher(w *ecs.World) *ReplayHasher {
 		progressMap:   ecs.NewMap[components.OrderProgress](w),
 		routeMap:      ecs.NewMap[components.RoadRoute](w),
 		followerMap:   ecs.NewMap[components.RoadFollower](w),
+		overrideMap:   ecs.NewMap[components.VehicleOverride](w),
 	}
 }
 
@@ -126,6 +128,15 @@ func (r *ReplayHasher) Hash() uint64 {
 		if f := r.followerMap.Get(ent); f != nil {
 			u32(uint32(f.Edge))
 			f32(f.T)
+		}
+		// Reflex state: a cleared override still holds LastAt (cooldown), and
+		// an active one steers the hull — both must survive save/load exact.
+		if ov := r.overrideMap.Get(ent); ov != nil {
+			u8(uint8(ov.Kind))
+			f32(ov.Until)
+			f32(ov.ThreatYaw)
+			f32(ov.LastAt)
+			pos(ov.Retreat)
 		}
 	}
 

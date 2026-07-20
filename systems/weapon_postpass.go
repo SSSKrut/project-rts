@@ -110,12 +110,8 @@ func (sys *WeaponSystem) applySplashToVehicles(ev splashEvent, hash *core.Spatia
 // ThreatDir votes must point away from the shooter — impact positions
 // scatter around the target and randomise the cover side.
 func (sys *WeaponSystem) propagateSuppression(ev suppressionEvent, now float32) {
-	hash := sys.spatialHash.Get()
-	if hash == nil {
-		return
-	}
 	dangerPos := ev.muzzle
-	hash.ForEachInRadius(ev.impact.X, ev.impact.Z, suppressionRadius, func(ent ecs.Entity, dSq float32) {
+	push := func(ent ecs.Entity, _ float32) {
 		if !sys.worldRef.Alive(ent) {
 			return
 		}
@@ -131,7 +127,6 @@ func (sys *WeaponSystem) propagateSuppression(ev suppressionEvent, now float32) 
 		uz := float32(pos.Chunk.Z)*components.ChunkSize + pos.Local.Z
 		dx := ux - ev.impact.X
 		dz := uz - ev.impact.Z
-		_ = dSq
 		d := float32(math.Sqrt(float64(dx*dx + dz*dz)))
 		falloff := float32(1) - d/suppressionRadius
 		if falloff < 0 {
@@ -144,5 +139,11 @@ func (sys *WeaponSystem) propagateSuppression(ev suppressionEvent, now float32) 
 			Strength: ev.hitMul * falloff,
 			Time:     now,
 		})
-	})
+	}
+	if hash := sys.spatialHash.Get(); hash != nil {
+		hash.ForEachInRadius(ev.impact.X, ev.impact.Z, suppressionRadius, push)
+	}
+	if vh := sys.vehHash.Get(); vh != nil {
+		vh.SpatialHash.ForEachInRadius(ev.impact.X, ev.impact.Z, suppressionRadius, push)
+	}
 }
