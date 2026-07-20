@@ -176,6 +176,13 @@ func (app *App) Tick(delta time.Duration) {
 	app.step(delta, true)
 }
 
+// StepOnce runs exactly one fixed sim tick regardless of TimeScale — the
+// debug panel's single-step control while paused.
+func (app *App) StepOnce() {
+	app.frameIndex++
+	app.step(SimDt, true)
+}
+
 func (app *App) step(delta time.Duration, sim bool) {
 	app.elapsed += delta
 	if sim {

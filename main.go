@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -950,6 +951,73 @@ func main() {
 		return ecs.Entity{}
 	})
 
+	// Dev-block state: single-step, spawn palette, recovered sim panic.
+	var (
+		devSpawnKind    int // 0 off; 1 rifleman; 2 enemy; 3..7 vehicle kinds
+		devPendingSteps int
+		simFatal        *simFatalState
+	)
+	devSpawnLabels := []string{"Rifleman", "Enemy", "Truck", "BTR", "BMP", "Tank", "ATC"}
+	devSpawnAt := func(target components.WorldPos) {
+		switch devSpawnKind {
+		case 1, 2:
+			ent := unitFactory(target)
+			if ent == (ecs.Entity{}) {
+				return
+			}
+			roleService.AssignRole(ent, components.RoleRifleman)
+			if devSpawnKind == 2 {
+				if f := factionMap.Get(ent); f != nil {
+					f.ID = components.FactionEnemyRed
+				}
+				if c := controllerMap.Get(ent); c != nil {
+					c.Owner = components.ControllerAI
+				}
+			}
+		case 3, 4, 5, 6, 7:
+			vehicleFactory.Spawn(target, components.VehicleKind(devSpawnKind-3),
+				components.FactionPlayer, components.ControllerLocal)
+		}
+	}
+	drawDebugWidget := func(panel ui.Panel, font rl.Font, cursorV rl.Vector2, lmb bool) {
+		simLabel := fmt.Sprintf("tick %d  speed x%d", app.TickIndex(), int(app.TimeScale))
+		if app.TimeScale == 0 {
+			simLabel = fmt.Sprintf("tick %d  PAUSED", app.TickIndex())
+		}
+		spawnButtons := make([]ui.DebugButton, len(devSpawnLabels))
+		for i, l := range devSpawnLabels {
+			spawnButtons[i] = ui.DebugButton{Label: l, Armed: devSpawnKind == i+1}
+		}
+		var dump []string
+		if len(selected) > 0 {
+			dump = devComponentDump(app.World, selected[0])
+		}
+		simIdx, spawnIdx := ui.DrawDebugPanel(panel, font, ui.DebugPanelCtx{
+			Cursor:   cursorV,
+			LMBPress: lmb,
+			Toggles:  debugOverlayToggles(&debugOverlay),
+			SimLabel: simLabel,
+			SimButtons: []ui.DebugButton{
+				{Label: "Step 1"}, {Label: "Step 10"}, {Label: "Step 60"},
+			},
+			SpawnLabel:   "Arm + LMB in 3D places the entity",
+			SpawnButtons: spawnButtons,
+			DumpLines:    dump,
+			Footer:       "Overlay radius: 2 chunks around camera",
+		})
+		if simIdx >= 0 {
+			app.TimeScale = 0 // stepping implies pause
+			devPendingSteps += []int{1, 10, 60}[simIdx]
+		}
+		if spawnIdx >= 0 {
+			if k := spawnIdx + 1; devSpawnKind == k {
+				devSpawnKind = 0
+			} else {
+				devSpawnKind = k
+			}
+		}
+	}
+
 	// ContentToPanel synthesises a Panel whose ContentRect recovers `content`
 	// so each widget's chrome-aware draw code lands in the right place.
 	// Panel3D is intentionally a no-op: the scene RT is sized to the
@@ -1016,9 +1084,7 @@ func main() {
 		case ui.PanelTimeline:
 			ui.DrawTimelinePanel(syn("Timeline"), font, timelineData, &timelineView)
 		case ui.PanelDebug:
-			ui.DrawDebugPanel(syn("Debug"), font,
-				debugOverlayToggles(&debugOverlay), cursor, lmbPress,
-				"Radius: 2 chunks around camera")
+			drawDebugWidget(syn("Debug"), font, cursor, lmbPress)
 		case ui.Panel3D:
 			// Not floatable; chevron menu disables Float pane for the 3D leaf.
 		}
@@ -1049,6 +1115,12 @@ func main() {
 	}
 
 	for !rl.WindowShouldClose() {
+		// A recovered sim panic freezes the world (it may be mid-mutation /
+		// query-locked): error screen instead of a crash.
+		if simFatal != nil {
+			drawFatalScreen(simFatal, hudFont)
+			continue
+		}
 		if rl.IsWindowResized() {
 			screenW = int32(rl.GetScreenWidth())
 			screenH = int32(rl.GetScreenHeight())
@@ -1455,6 +1527,14 @@ func main() {
 		if !chromeBusy() && !widgetClickConsumed && rl.IsMouseButtonPressed(rl.MouseButtonLeft) {
 			switch focused {
 			case ui.Panel3D:
+				if devSpawnKind != 0 {
+					if target, ok := mouseTargetWorldPos(systems.CurrentCamera,
+						anchorPos.ToRenderSpace(systems.CurrentOriginChunk),
+						panel3DLocal, panel3DW, panel3DH); ok {
+						devSpawnAt(target)
+					}
+					break // armed palette consumes the click — no marquee
+				}
 				marqueeStart = cursor
 				marqueeActive = true
 				marqueeOrigin = ui.Panel3D
@@ -2059,7 +2139,21 @@ func main() {
 		systems.OrbitInputEnabled = (focused == ui.Panel3D || focused == ui.PanelNone) &&
 			!floating.IsBusy(cursor)
 
-		app.Advance()
+		if devPendingSteps > 0 && app.TimeScale == 0 {
+			simFatal = guardedStepOnce(app)
+			devPendingSteps--
+		} else {
+			devPendingSteps = 0
+			simFatal = guardedAdvance(app)
+		}
+		if simFatal != nil {
+			if headless {
+				fmt.Printf("SIM PANIC: %s\n%s\n", simFatal.Msg,
+					strings.Join(simFatal.Stack, "\n"))
+				os.Exit(2)
+			}
+			continue
+		}
 		maybeSaveAt(app)
 
 		if headless {
@@ -2325,8 +2419,9 @@ func main() {
 			drawBuildingOutline(selectedBuilding, rl.Color{R: 90, G: 200, B: 240, A: 230})
 		}
 
-		// Hold-G also toggles the map's road / river / building debug layer.
-		if rl.IsKeyDown(rl.KeyG) {
+		// Hold-G (or the Debug-panel sticky toggle) also flips the map's
+		// road / river / building debug layer.
+		if rl.IsKeyDown(rl.KeyG) || debugOverlay.RoadGraph {
 			drawRoadGraphDebug(&roadGraph)
 			showMapDebugLy = true
 		} else {
@@ -2389,7 +2484,7 @@ func main() {
 
 		squadsLive := 0
 		squadMembersLive := 0
-		drawAllSquads := rl.IsKeyDown(rl.KeyK)
+		drawAllSquads := rl.IsKeyDown(rl.KeyK) || debugOverlay.SquadLines
 		selectedSquad, selectedHomo := groupSelected(selected, squadMemberMap)
 		qSq := squadFilter.Query()
 		for qSq.Next() {
@@ -2709,9 +2804,7 @@ func main() {
 			debugLMB := !chromeBusy() && !scrollDragging &&
 				panelMgr.FocusedAt(cursor) == ui.PanelDebug &&
 				rl.IsMouseButtonPressed(rl.MouseButtonLeft)
-			ui.DrawDebugPanel(panelMgr.Get(ui.PanelDebug),
-				hudFont, debugOverlayToggles(&debugOverlay), cursor, debugLMB,
-				"Radius: 2 chunks around camera")
+			drawDebugWidget(panelMgr.Get(ui.PanelDebug), hudFont, cursor, debugLMB)
 		}
 
 		scene3DRT.Composite(panel3D)

@@ -10,6 +10,32 @@ type DebugToggle struct {
 	On    *bool
 }
 
+// DebugButton — immediate-mode button; Armed draws the accent background
+// (spawn palette selection).
+type DebugButton struct {
+	Label string
+	Armed bool
+}
+
+// DebugPanelCtx bundles everything DrawDebugPanel renders. Clicked button
+// indices come back via the return values (-1 = none).
+type DebugPanelCtx struct {
+	Cursor   rl.Vector2
+	LMBPress bool
+
+	Toggles []DebugToggle
+
+	SimLabel   string
+	SimButtons []DebugButton
+
+	SpawnLabel   string
+	SpawnButtons []DebugButton
+
+	DumpLines []string
+
+	Footer string
+}
+
 var (
 	debugPanelBG    = rl.Color{R: 20, G: 24, B: 30, A: 250}
 	debugRowHover   = rl.Color{R: 40, G: 50, B: 65, A: 200}
@@ -20,6 +46,9 @@ var (
 	debugCheckEdge  = rl.Color{R: 110, G: 120, B: 135, A: 255}
 	debugSubtitle   = rl.Color{R: 130, G: 140, B: 152, A: 255}
 	debugRadiusInfo = rl.Color{R: 170, G: 180, B: 195, A: 255}
+	debugBtnBG      = rl.Color{R: 45, G: 54, B: 68, A: 255}
+	debugBtnArmed   = rl.Color{R: 70, G: 140, B: 100, A: 255}
+	debugDumpText   = rl.Color{R: 185, G: 195, B: 205, A: 255}
 )
 
 const (
@@ -29,46 +58,75 @@ const (
 	debugTitleSize  int32   = 15
 	debugRowSize    int32   = 13
 	debugFooterSize int32   = 11
+	debugBtnHeight  float32 = 22
+	debugDumpSize   int32   = 11
 )
 
-// DrawDebugPanel mutates `toggles[i].On` directly on click. The `footer`
-// string renders below as a single-line info hint.
-func DrawDebugPanel(panel Panel, font rl.Font, toggles []DebugToggle,
-	cursor rl.Vector2, lmbPress bool, footer string) {
+// DrawDebugPanel mutates toggle bools directly; returns the clicked indices
+// of SimButtons and SpawnButtons (-1 = none this frame).
+func DrawDebugPanel(panel Panel, font rl.Font, ctx DebugPanelCtx) (simClicked, spawnClicked int) {
+	simClicked, spawnClicked = -1, -1
 	content := ContentRect(panel)
-	rl.DrawRectangleRec(content, debugPanelBG)
 	if content.Width <= 0 || content.Height <= 0 {
 		return
 	}
+	rl.DrawRectangleRec(content, debugPanelBG)
+	rl.BeginScissorMode(int32(content.X), int32(content.Y),
+		int32(content.Width), int32(content.Height))
+	defer rl.EndScissorMode()
 
 	x := content.X + debugPad
 	y := content.Y + debugPad
-
-	title := "Overlays"
-	rl.DrawTextEx(font, title, rl.Vector2{X: x, Y: y},
-		float32(debugTitleSize), 1.0, debugTextOn)
-	y += float32(debugTitleSize) + debugPad
-
-	sub := "Click a row to toggle"
-	rl.DrawTextEx(font, sub, rl.Vector2{X: x, Y: y},
-		float32(debugFooterSize), 1.0, debugSubtitle)
-	y += float32(debugFooterSize) + debugPad
-
 	rowW := content.Width - 2*debugPad
-	for i := range toggles {
+
+	section := func(title string) {
+		rl.DrawTextEx(font, title, rl.Vector2{X: x, Y: y},
+			float32(debugTitleSize), 1.0, debugTextOn)
+		y += float32(debugTitleSize) + 4
+	}
+
+	// Sim controls.
+	if len(ctx.SimButtons) > 0 || ctx.SimLabel != "" {
+		section("Sim")
+		if ctx.SimLabel != "" {
+			rl.DrawTextEx(font, ctx.SimLabel, rl.Vector2{X: x, Y: y},
+				float32(debugFooterSize), 1.0, debugSubtitle)
+			y += float32(debugFooterSize) + 4
+		}
+		simClicked = drawDebugButtonRow(font, ctx.SimButtons, x, &y, rowW,
+			ctx.Cursor, ctx.LMBPress)
+		y += debugPad
+	}
+
+	// Spawn palette.
+	if len(ctx.SpawnButtons) > 0 {
+		section("Spawn")
+		if ctx.SpawnLabel != "" {
+			rl.DrawTextEx(font, ctx.SpawnLabel, rl.Vector2{X: x, Y: y},
+				float32(debugFooterSize), 1.0, debugSubtitle)
+			y += float32(debugFooterSize) + 4
+		}
+		spawnClicked = drawDebugButtonRow(font, ctx.SpawnButtons, x, &y, rowW,
+			ctx.Cursor, ctx.LMBPress)
+		y += debugPad
+	}
+
+	// Overlay toggles.
+	section("Overlays")
+	for i := range ctx.Toggles {
 		row := rl.Rectangle{X: x, Y: y, Width: rowW, Height: debugRowHeight}
-		hovered := cursor.X >= row.X && cursor.X <= row.X+row.Width &&
-			cursor.Y >= row.Y && cursor.Y <= row.Y+row.Height
+		hovered := ctx.Cursor.X >= row.X && ctx.Cursor.X <= row.X+row.Width &&
+			ctx.Cursor.Y >= row.Y && ctx.Cursor.Y <= row.Y+row.Height
 		if hovered {
 			rl.DrawRectangleRec(row, debugRowHover)
-			if lmbPress && toggles[i].On != nil {
-				*toggles[i].On = !*toggles[i].On
+			if ctx.LMBPress && ctx.Toggles[i].On != nil {
+				*ctx.Toggles[i].On = !*ctx.Toggles[i].On
 			}
 		}
 
 		boxY := row.Y + (debugRowHeight-debugCheckSize)*0.5
 		box := rl.Rectangle{X: row.X + 2, Y: boxY, Width: debugCheckSize, Height: debugCheckSize}
-		on := toggles[i].On != nil && *toggles[i].On
+		on := ctx.Toggles[i].On != nil && *ctx.Toggles[i].On
 		fill := debugCheckOff
 		if on {
 			fill = debugCheckOn
@@ -80,17 +138,66 @@ func DrawDebugPanel(panel Panel, font rl.Font, toggles []DebugToggle,
 		if on {
 			textCol = debugTextOn
 		}
-		textX := box.X + box.Width + debugPad
-		textY := row.Y + (debugRowHeight-float32(debugRowSize))*0.5
-		rl.DrawTextEx(font, toggles[i].Label, rl.Vector2{X: textX, Y: textY},
+		rl.DrawTextEx(font, ctx.Toggles[i].Label,
+			rl.Vector2{X: box.X + box.Width + debugPad, Y: row.Y + (debugRowHeight-float32(debugRowSize))*0.5},
 			float32(debugRowSize), 1.0, textCol)
 
 		y += debugRowHeight + 2
 	}
 
-	if footer != "" {
+	// Raw component dump of the selected entity.
+	if len(ctx.DumpLines) > 0 {
 		y += debugPad
-		rl.DrawTextEx(font, footer, rl.Vector2{X: x, Y: y},
+		section("Entity")
+		for _, ln := range ctx.DumpLines {
+			if y > content.Y+content.Height {
+				break
+			}
+			rl.DrawTextEx(font, ln, rl.Vector2{X: x, Y: y},
+				float32(debugDumpSize), 1.0, debugDumpText)
+			y += float32(debugDumpSize) + 3
+		}
+	}
+
+	if ctx.Footer != "" {
+		y += debugPad
+		rl.DrawTextEx(font, ctx.Footer, rl.Vector2{X: x, Y: y},
 			float32(debugFooterSize), 1.0, debugRadiusInfo)
 	}
+	return
+}
+
+// drawDebugButtonRow lays buttons horizontally with wrapping; returns the
+// clicked index (-1 = none).
+func drawDebugButtonRow(font rl.Font, buttons []DebugButton, x float32, y *float32,
+	rowW float32, cursor rl.Vector2, lmbPress bool) int {
+	clicked := -1
+	bx := x
+	for i := range buttons {
+		w := rl.MeasureTextEx(font, buttons[i].Label, float32(debugRowSize), 1.0).X + 2*debugPad
+		if bx+w > x+rowW && bx > x {
+			bx = x
+			*y += debugBtnHeight + 4
+		}
+		btn := rl.Rectangle{X: bx, Y: *y, Width: w, Height: debugBtnHeight}
+		hovered := cursor.X >= btn.X && cursor.X <= btn.X+btn.Width &&
+			cursor.Y >= btn.Y && cursor.Y <= btn.Y+btn.Height
+		bg := debugBtnBG
+		if buttons[i].Armed {
+			bg = debugBtnArmed
+		} else if hovered {
+			bg = debugRowHover
+		}
+		rl.DrawRectangleRec(btn, bg)
+		rl.DrawRectangleLinesEx(btn, 1, debugCheckEdge)
+		rl.DrawTextEx(font, buttons[i].Label,
+			rl.Vector2{X: btn.X + debugPad, Y: btn.Y + (debugBtnHeight-float32(debugRowSize))*0.5},
+			float32(debugRowSize), 1.0, debugTextOn)
+		if hovered && lmbPress {
+			clicked = i
+		}
+		bx += w + 6
+	}
+	*y += debugBtnHeight + 4
+	return clicked
 }

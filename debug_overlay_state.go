@@ -18,6 +18,9 @@ type DebugOverlayState struct {
 	Vision       bool
 	Transitions  bool
 	UnitPaths    bool
+	// Sticky twins of the hold-G / hold-K overlays.
+	RoadGraph  bool
+	SquadLines bool
 }
 
 var debugOverlay DebugOverlayState
@@ -31,6 +34,8 @@ func debugOverlayToggles(s *DebugOverlayState) []ui.DebugToggle {
 		{Label: "Vision pairs", On: &s.Vision},
 		{Label: "Transitions", On: &s.Transitions},
 		{Label: "Unit paths", On: &s.UnitPaths},
+		{Label: "Road graph (G)", On: &s.RoadGraph},
+		{Label: "Squad lines (K)", On: &s.SquadLines},
 	}
 }
 
