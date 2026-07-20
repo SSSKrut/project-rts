@@ -15,6 +15,7 @@ import (
 // the same scene must produce identical hash sequences (WS-B replay gate).
 type ReplayHasher struct {
 	unitFilter    *ecs.Filter4[components.Unit, components.WorldPos, components.Motion, components.ActionQueue]
+	vehFilter     *ecs.Filter4[components.Vehicle, components.WorldPos, components.Motion, components.ActionQueue]
 	orderFilter   *ecs.Filter1[components.OrderState]
 	contactFilter *ecs.Filter1[components.Contact]
 	stanceMap     *ecs.Map[components.Stance]
@@ -28,6 +29,7 @@ func NewReplayHasher(w *ecs.World) *ReplayHasher {
 	return &ReplayHasher{
 		world:         w,
 		unitFilter:    ecs.NewFilter4[components.Unit, components.WorldPos, components.Motion, components.ActionQueue](w),
+		vehFilter:     ecs.NewFilter4[components.Vehicle, components.WorldPos, components.Motion, components.ActionQueue](w),
 		orderFilter:   ecs.NewFilter1[components.OrderState](w),
 		contactFilter: ecs.NewFilter1[components.Contact](w),
 		stanceMap:     ecs.NewMap[components.Stance](w),
@@ -78,6 +80,24 @@ func (r *ReplayHasher) Hash() uint64 {
 		u8(aq.Head)
 		u8(aq.Count)
 		f32(aq.StopUntil)
+		if aq.Count > 0 {
+			a := aq.Actions[aq.Head%components.ActionQueueSize]
+			u8(uint8(a.Kind))
+			pos(a.Target)
+		}
+	}
+
+	qv := r.vehFilter.Query()
+	for qv.Next() {
+		_, p, mot, aq := qv.Get()
+		pos(*p)
+		f32(mot.Yaw)
+		f32(mot.Speed)
+		if hp := r.hpMap.Get(qv.Entity()); hp != nil {
+			f32(hp.Current)
+		}
+		u8(aq.Head)
+		u8(aq.Count)
 		if aq.Count > 0 {
 			a := aq.Actions[aq.Head%components.ActionQueueSize]
 			u8(uint8(a.Kind))

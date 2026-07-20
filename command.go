@@ -38,6 +38,8 @@ type HitTester struct {
 	UnitFilter      *ecs.Filter2[components.Unit, components.WorldPos]
 	FactionMap      *ecs.Map[components.Faction]
 	UnitHitRadius   float32
+	// OwnFaction: units of this faction are never attack-pick targets.
+	OwnFaction uint8
 }
 
 // HitTest classifies a WorldPos. Priority: Unit (closest in radius) ->
@@ -59,7 +61,7 @@ func (h *HitTester) HitTest(target components.WorldPos) HitTestResult {
 			_, pos := q.Get()
 			ent := q.Entity()
 			f := h.FactionMap.Get(ent)
-			if f == nil || f.ID == components.FactionPlayer {
+			if f == nil || f.ID == h.OwnFaction {
 				continue
 			}
 			ux := float32(pos.Chunk.X)*components.ChunkSize + pos.Local.X

@@ -165,6 +165,13 @@ var saveComponents = map[string]saveEntry{
 	"components.ActiveCamera":     saveReg[components.ActiveCamera](SaveMemcpy),
 	"components.NodeEntity":       saveReg[components.NodeEntity](SaveMemcpy),
 	"components.BuildingViewMode": saveReg[components.BuildingViewMode](SaveMemcpy),
+
+	"components.Controller":   saveReg[components.Controller](SaveMemcpy),
+	"components.OnGround":     saveReg[components.OnGround](SaveMemcpy),
+	"components.Vehicle":      saveReg[components.Vehicle](SaveMemcpy),
+	"components.Turret":       saveReg[components.Turret](SaveMemcpy),
+	"components.RoadFollower": saveReg[components.RoadFollower](SaveMemcpy),
+	"components.SmokeField":   saveReg[components.SmokeField](SaveMemcpy),
 }
 
 func savePolicyFor(t reflect.Type) (SavePolicy, error) {
@@ -210,6 +217,7 @@ var resourceClasses = map[string]ResourceClass{
 	"components.MapMarkerCache":     ResRebuild,
 	"components.ContactRegistry":    ResRebuild,
 	"core.SpatialHash":              ResRebuild,
+	"core.VehicleSpatialHash":       ResRebuild,
 
 	"components.StreamingMap": ResFromManifest, // empty since the smart-space demo graph was removed
 

@@ -24,16 +24,22 @@ const AnchorEyeHeight float32 = 1.5
 // and per-tick Y-lerp gains are an order of magnitude smaller, so without
 // the ramp every climb snaps back to the lower plate.
 type GroundStickSystem struct {
-	anchorFilter *ecs.Filter2[components.LODAnchor, components.WorldPos]
-	unitFilter   *ecs.Filter2[components.Unit, components.WorldPos]
-	floorFilter  *ecs.Filter2[components.WorldPos, components.Floor]
-	stairsFilter *ecs.Filter2[components.WorldPos, components.Stairs]
-	sampler      *HeightSampler
+	anchorFilter  *ecs.Filter2[components.LODAnchor, components.WorldPos]
+	unitFilter    *ecs.Filter2[components.Unit, components.WorldPos]
+	vehicleFilter *ecs.Filter2[components.Vehicle, components.WorldPos]
+	floorFilter   *ecs.Filter2[components.WorldPos, components.Floor]
+	stairsFilter  *ecs.Filter2[components.WorldPos, components.Stairs]
+	sampler       *HeightSampler
 }
 
 func (sys *GroundStickSystem) InitUI(w *ecs.World) {
 	sys.anchorFilter = ecs.NewFilter2[components.LODAnchor, components.WorldPos](w)
-	sys.unitFilter = ecs.NewFilter2[components.Unit, components.WorldPos](w)
+	// OnGround gates the clamp: aircraft (Phase 20) omit the marker and
+	// keep their own Y.
+	sys.unitFilter = ecs.NewFilter2[components.Unit, components.WorldPos](w).
+		With(ecs.C[components.OnGround]())
+	sys.vehicleFilter = ecs.NewFilter2[components.Vehicle, components.WorldPos](w).
+		With(ecs.C[components.OnGround]())
 	sys.floorFilter = ecs.NewFilter2[components.WorldPos, components.Floor](w)
 	sys.stairsFilter = ecs.NewFilter2[components.WorldPos, components.Stairs](w)
 	sys.sampler = NewHeightSampler(w)
@@ -183,5 +189,15 @@ func (sys GroundStickSystem) Update(ctx core.UpdateContext) {
 			}
 		}
 		pos.Local.Y = bestY
+	}
+
+	// Vehicles never enter buildings: surface clamp only. Bridge-deck Y is
+	// RoadFollower's job (Phase 19 M2).
+	qv := sys.vehicleFilter.Query()
+	for qv.Next() {
+		_, pos := qv.Get()
+		wx := float32(pos.Chunk.X)*components.ChunkSize + pos.Local.X
+		wz := float32(pos.Chunk.Z)*components.ChunkSize + pos.Local.Z
+		pos.Local.Y = sys.sampler.Sample(wx, wz)
 	}
 }

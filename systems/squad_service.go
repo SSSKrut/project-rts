@@ -51,6 +51,7 @@ type SquadService struct {
 	orderEngagementOverrideMap *ecs.Map[components.OrderParamEngagementOverride]
 	orderOutOfRangeMap         *ecs.Map[components.OrderOutOfRangeTracker]
 	factionMap                 *ecs.Map[components.Faction]
+	controllerMap              *ecs.Map[components.Controller]
 	// IssueOrder / CancelAllOrders clear AI-driven cover assignment so an
 	// explicit player order regains control.
 	tacticalOverrideMap *ecs.Map[components.TacticalOverride]
@@ -94,9 +95,26 @@ func NewSquadService(w *ecs.World) *SquadService {
 		orderEngagementOverrideMap: ecs.NewMap[components.OrderParamEngagementOverride](w),
 		orderOutOfRangeMap:       ecs.NewMap[components.OrderOutOfRangeTracker](w),
 		factionMap:               ecs.NewMap[components.Faction](w),
+		controllerMap:            ecs.NewMap[components.Controller](w),
 		tacticalOverrideMap:      ecs.NewMap[components.TacticalOverride](w),
 		squadStateMap:            ecs.NewMap[components.SquadState](w),
 		individualPosMap:         ecs.NewMap[components.IndividualPosition](w),
+	}
+}
+
+func (s *SquadService) upsertFaction(ent ecs.Entity, f components.Faction) {
+	if existing := s.factionMap.Get(ent); existing != nil {
+		*existing = f
+	} else {
+		s.factionMap.Add(ent, &f)
+	}
+}
+
+func (s *SquadService) upsertController(ent ecs.Entity, c components.Controller) {
+	if existing := s.controllerMap.Get(ent); existing != nil {
+		*existing = c
+	} else {
+		s.controllerMap.Add(ent, &c)
 	}
 }
 

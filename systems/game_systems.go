@@ -41,6 +41,7 @@ func (system *LODSystem) InitUI(w *ecs.World) {
 			ecs.C[components.Prop](),
 			ecs.C[components.BuildingMember](),
 			ecs.C[components.Unit](),
+			ecs.C[components.Vehicle](),
 			ecs.C[components.CoverSlot](),
 		)
 }

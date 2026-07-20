@@ -63,7 +63,13 @@ type Locomotion uint8
 
 const (
 	LocomotionFoot Locomotion = iota
+	LocomotionWheeled
+	LocomotionTracked
 )
+
+// OnGround marks entities GroundStickSystem clamps to the surface / floor
+// stack. Aircraft (Phase 20) fly by omitting the marker.
+type OnGround struct{}
 
 // NavBaked marks a chunk whose NavGrid pass has run. SpatialBakeSystem gates
 // on Without[NavBaked]; cleared on chunk eviction.

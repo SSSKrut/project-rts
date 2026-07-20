@@ -205,6 +205,9 @@ func main() {
 	// UnitMovement.separation, WeaponSystem.resolveShot/propagateSuppression.
 	unitSpatialHash := core.NewSpatialHash(32.0)
 	ecs.AddResource(app.World, unitSpatialHash)
+	// Second hash per Locomotion class (WS-E sh.1): vehicles only.
+	vehicleSpatialHash := core.NewVehicleSpatialHash(32.0)
+	ecs.AddResource(app.World, vehicleSpatialHash)
 
 	eventLog := components.NewEventLog()
 	ecs.AddResource(app.World, eventLog)
@@ -268,6 +271,9 @@ func main() {
 
 	unitMovementSys := systems.NewUnitMovementSystem(workerPool)
 	unitMovementSys.InitUI(app.World)
+
+	vehicleDriverSys := &systems.VehicleDriverSystem{}
+	vehicleDriverSys.InitUI(app.World)
 
 	contactSys := systems.NewContactSystem(workerPool)
 	contactSys.InitUI(app.World)
@@ -360,6 +366,7 @@ func main() {
 	app.AddSystem(spatialHashRebuildSys)
 	app.AddSystem(circlePatrolSys)
 	app.AddSystem(unitMovementSys)
+	app.AddSystem(vehicleDriverSys)
 	app.AddSystem(contactSys)
 	app.AddSystem(weaponSys)
 	app.AddSystem(particleSys)
@@ -399,6 +406,7 @@ func main() {
 		lodActiveMap.Add(anchor, &components.LODActive{})
 		lodAnchorMap.Add(anchor, &components.LODAnchor{})
 		alwaysActiveMap.Add(anchor, &components.AlwaysActive{})
+		ecs.NewMap[components.OnGround](app.World).Add(anchor, &components.OnGround{})
 	}
 
 	camCompMap := ecs.NewMap[components.Camera](app.World)
@@ -519,6 +527,7 @@ func main() {
 
 	unitFactoryRef := entities.NewUnitFactory(app.World, posMap)
 	actionQueueMap := unitFactoryRef.ActionQueueMap
+	vehicleFactory := entities.NewVehicleFactory(app.World, posMap)
 
 	losPrev := newLOSPreview(app.World)
 
@@ -542,9 +551,16 @@ func main() {
 	staminaMap := ecs.NewMap[components.Stamina](app.World)
 	hpMap := ecs.NewMap[components.HP](app.World)
 	factionMap := ecs.NewMap[components.Faction](app.World)
+	controllerMap := ecs.NewMap[components.Controller](app.World)
 	detectabilityMap := ecs.NewMap[components.Detectability](app.World)
 	circlePatrolMap := ecs.NewMap[components.CirclePatrol](app.World)
 	individualPosMap := ecs.NewMap[components.IndividualPosition](app.World)
+
+	// Selection / order input gates on Controller, not Faction (DP-4).
+	isControllable := func(ent ecs.Entity) bool {
+		c := controllerMap.Get(ent)
+		return c != nil && c.Owner == components.ControllerLocal
+	}
 
 	// Missing Faction (legacy spawns) falls through to FactionPlayer.
 	squadColor := func(ent ecs.Entity) rl.Color {
@@ -564,17 +580,19 @@ func main() {
 	unitFactory := unitFactoryRef.Spawn
 
 	playerFaction := components.Faction{ID: components.FactionPlayer}
+	playerController := components.Controller{Owner: components.ControllerLocal}
+	aiController := components.Controller{Owner: components.ControllerAI}
 	var doorScene *doorSceneState
 	var aiTest *aiTestState
 	if *loadFlag != "" {
 		// Snapshot restores all entities; scene / default spawns skipped.
 	} else if isAIScene() {
 		aiTest = aiSceneSpawn(app.World, squadService, roleService, unitFactory,
-			playerFaction, posMap, rosterMap, buildingMap)
+			vehicleFactory, playerFaction, posMap, rosterMap, buildingMap)
 	} else if isDoorScene() {
 		testSquad := squadService.CreateFromTemplate(
 			systems.TmplMotorRifle, doorSceneSquadSpawn(),
-			components.FormationLine, playerFaction, roleService, unitFactory)
+			components.FormationLine, playerFaction, playerController, roleService, unitFactory)
 		var firstBuilding, firstLevel ecs.Entity
 		var firstLevelAABB components.AABB3D
 		var firstFootprint components.AABB2D
@@ -610,26 +628,26 @@ func main() {
 		squadService.CreateFromTemplate(
 			systems.TmplLightInfantry,
 			components.WorldPos{}.Add(rl.Vector3{X: -25, Z: -55}),
-			components.FormationLine, playerFaction, roleService, unitFactory)
+			components.FormationLine, playerFaction, playerController, roleService, unitFactory)
 		squadService.CreateFromTemplate(
 			systems.TmplMGTeam,
 			components.WorldPos{}.Add(rl.Vector3{X: 40, Z: 15}),
-			components.FormationWedge, playerFaction, roleService, unitFactory)
+			components.FormationWedge, playerFaction, playerController, roleService, unitFactory)
 		squadService.CreateFromTemplate(
 			systems.TmplATTeam,
 			components.WorldPos{}.Add(rl.Vector3{X: -30, Z: 40}),
-			components.FormationColumn, playerFaction, roleService, unitFactory)
+			components.FormationColumn, playerFaction, playerController, roleService, unitFactory)
 		squadService.CreateFromTemplate(
 			systems.TmplMotorRifle,
 			components.WorldPos{}.Add(rl.Vector3{X: -20, Z: 0}),
-			components.FormationLoose, playerFaction, roleService, unitFactory)
+			components.FormationLoose, playerFaction, playerController, roleService, unitFactory)
 
 		// Hostile MotorRifle squad parked via DefendPosition.
 		enemySpawn := components.WorldPos{}.Add(rl.Vector3{X: 5, Z: -90})
 		enemySquad := squadService.CreateFromTemplate(
 			systems.TmplMotorRifle, enemySpawn,
 			components.FormationLine, components.Faction{ID: components.FactionEnemyRed},
-			roleService, unitFactory)
+			aiController, roleService, unitFactory)
 		if enemySquad != (ecs.Entity{}) {
 			squadService.IssueOrder(enemySquad,
 				components.OrderKindDefendPosition, enemySpawn, ecs.Entity{},
@@ -644,7 +662,13 @@ func main() {
 			if ent == (ecs.Entity{}) {
 				return
 			}
-			factionMap.Add(ent, &components.Faction{ID: faction})
+			// Factory stamps FactionPlayer/ControllerLocal defaults; overwrite.
+			if f := factionMap.Get(ent); f != nil {
+				f.ID = faction
+			}
+			if c := controllerMap.Get(ent); c != nil {
+				c.Owner = components.ControllerAI
+			}
 			if patrol != nil {
 				circlePatrolMap.Add(ent, patrol)
 			}
@@ -664,6 +688,16 @@ func main() {
 		wildCenter := components.WorldPos{}.Add(rl.Vector3{X: 200, Z: 260})
 		spawnDummy(wildCenter, components.FactionWildlife,
 			&components.CirclePatrol{Center: wildCenter, RadiusM: 30, Speed: 0.8})
+
+		// Phase 19 M0: one vehicle per class parked west of the squads.
+		for i, vk := range []components.VehicleKind{
+			components.VehicleTruck, components.VehicleBTR, components.VehicleBMP,
+			components.VehicleTank, components.VehicleATCarrier,
+		} {
+			vehicleFactory.Spawn(
+				components.WorldPos{}.Add(rl.Vector3{X: -55, Z: -12 + float32(i)*10}),
+				vk, components.FactionPlayer, components.ControllerLocal)
+		}
 	}
 
 	if *loadFlag != "" {
@@ -688,6 +722,7 @@ func main() {
 	}
 
 	unitRenderFilter := ecs.NewFilter3[components.WorldPos, components.Unit, components.Stance](app.World)
+	vehicleRenderFilter := ecs.NewFilter2[components.WorldPos, components.Vehicle](app.World)
 	chunkActiveFilter := ecs.NewFilter3[components.WorldPos, components.ChunkMesh, components.LODActive](app.World)
 	chunkRelevantFilter := ecs.NewFilter3[components.WorldPos, components.ChunkMesh, components.LODRelevant](app.World)
 	propFilter := ecs.NewFilter2[components.WorldPos, components.Prop](app.World)
@@ -737,6 +772,7 @@ func main() {
 		UnitFilter:      unitHitFilter,
 		FactionMap:      factionMap,
 		UnitHitRadius:   1.5,
+		OwnFaction:      components.FactionPlayer,
 	}
 
 	ghostWallMap := ecs.NewMap[components.WallSegment](app.World)
@@ -1353,7 +1389,7 @@ func main() {
 			}
 			if rl.IsMouseButtonPressed(rl.MouseButtonLeft) && !scrollDragging {
 				if timelineHoverOK && timelineHoverHit.Squad != (ecs.Entity{}) &&
-					app.World.Alive(timelineHoverHit.Squad) {
+					app.World.Alive(timelineHoverHit.Squad) && isControllable(timelineHoverHit.Squad) {
 					if r := rosterMap.Get(timelineHoverHit.Squad); r != nil {
 						selected = selected[:0]
 						for i := uint8(0); i < r.Count; i++ {
@@ -1449,7 +1485,7 @@ func main() {
 					}
 					lastMapClickEnt = cHit
 					lastMapClickTime = now
-				} else if hit := ui.PickSquadAt(cursor, mapCtx, panelMap, 12); hit != (ecs.Entity{}) && app.World.Alive(hit) {
+				} else if hit := ui.PickSquadAt(cursor, mapCtx, panelMap, 12); hit != (ecs.Entity{}) && app.World.Alive(hit) && isControllable(hit) {
 					if r := rosterMap.Get(hit); r != nil {
 						if shiftHeld {
 							for i := uint8(0); i < r.Count; i++ {
@@ -1477,7 +1513,7 @@ func main() {
 			if marqueeOrigin == ui.Panel3D {
 				if dragDist < marqueeClickThreshold {
 					localEnd := rl.Vector2{X: end.X - panel3DContent.X, Y: end.Y - panel3DContent.Y}
-					if hit, ok := pickUnitFromMouse(unitRenderFilter, *anchorPos, localEnd, panel3DW, panel3DH); ok {
+					if hit, ok := pickUnitFromMouse(unitRenderFilter, *anchorPos, localEnd, panel3DW, panel3DH); ok && isControllable(hit) {
 						if shiftHeld {
 							toggleSelected(hit)
 						} else {
@@ -1506,6 +1542,13 @@ func main() {
 						minY, maxY = maxY, minY
 					}
 					hits := collectUnitsInRect(unitRenderFilter, minX, maxX, minY, maxY, panel3DW, panel3DH)
+					own := hits[:0]
+					for _, h := range hits {
+						if isControllable(h) {
+							own = append(own, h)
+						}
+					}
+					hits = own
 					if shiftHeld {
 						for _, h := range hits {
 							if isSelected(h) < 0 {
@@ -2119,6 +2162,25 @@ func main() {
 					rl.Color{R: 240, G: 240, B: 120, A: 255})
 			}
 			unitsLive++
+		}
+
+		// Phase 19 M0: player vehicles as spec-sized boxes. Enemy-vehicle
+		// FoW arrives with vehicle contacts (M3).
+		qveh := vehicleRenderFilter.Query()
+		for qveh.Next() {
+			pos, veh := qveh.Get()
+			ent := qveh.Entity()
+			renderPos := pos.ToRenderSpace(systems.CurrentOriginChunk)
+			yaw := float32(0)
+			if m := unitFactoryRef.MotionMap.Get(ent); m != nil {
+				yaw = m.Yaw
+			}
+			drawVehicleBox(renderPos, yaw, veh.Kind, squadColor(ent))
+			if isSelected(ent) >= 0 {
+				spec := components.SpecForVehicle(veh.Kind)
+				rl.DrawCircle3D(renderPos, spec.ColliderR, rl.Vector3{X: 1, Y: 0, Z: 0}, 90,
+					rl.Color{R: 0, G: 220, B: 220, A: 255})
+			}
 		}
 
 		propLive := 0
@@ -2845,11 +2907,13 @@ func main() {
 	}
 }
 
-// containsVehicle is a placeholder — always false until the Vehicle
-// component ships. Swap the body for a real Vehicle-map.Has loop then.
 func containsVehicle(units []ecs.Entity, world *ecs.World) bool {
-	_ = world
-	_ = units
+	vehMap := ecs.NewMap[components.Vehicle](world)
+	for _, u := range units {
+		if u != (ecs.Entity{}) && world.Alive(u) && vehMap.Has(u) {
+			return true
+		}
+	}
 	return false
 }
 

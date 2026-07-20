@@ -31,6 +31,9 @@ type UnitFactory struct {
 	SensorsMap       *ecs.Map[components.Sensors]
 	UnitMap          *ecs.Map[components.Unit]
 	DetectabilityMap *ecs.Map[components.Detectability]
+	FactionMap       *ecs.Map[components.Faction]
+	ControllerMap    *ecs.Map[components.Controller]
+	OnGroundMap      *ecs.Map[components.OnGround]
 }
 
 // NewUnitFactory pre-builds every Map handle so per-spawn cost is just Add
@@ -52,6 +55,9 @@ func NewUnitFactory(world *ecs.World, posMap *ecs.Map[components.WorldPos]) *Uni
 		SensorsMap:       ecs.NewMap[components.Sensors](world),
 		UnitMap:          ecs.NewMap[components.Unit](world),
 		DetectabilityMap: ecs.NewMap[components.Detectability](world),
+		FactionMap:       ecs.NewMap[components.Faction](world),
+		ControllerMap:    ecs.NewMap[components.Controller](world),
+		OnGroundMap:      ecs.NewMap[components.OnGround](world),
 	}
 }
 
@@ -90,5 +96,10 @@ func (f *UnitFactory) Spawn(pos components.WorldPos) ecs.Entity {
 	f.BlackboardMap.Add(ent, &components.LocalBlackboard{})
 	f.ActionQueueMap.Add(ent, &components.ActionQueue{})
 	f.DetectabilityMap.Add(ent, &components.Detectability{})
+	// Explicit allegiance on every combatant (DP-4): spawn sites overwrite,
+	// never rely on a missing component meaning "player".
+	f.FactionMap.Add(ent, &components.Faction{ID: components.FactionPlayer})
+	f.ControllerMap.Add(ent, &components.Controller{Owner: components.ControllerLocal})
+	f.OnGroundMap.Add(ent, &components.OnGround{})
 	return ent
 }

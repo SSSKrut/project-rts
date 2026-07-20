@@ -11,6 +11,7 @@ import (
 	"github.com/mlange-42/ark/ecs"
 
 	"rts-go/components"
+	"rts-go/entities"
 	"rts-go/gen/buildings"
 	"rts-go/systems"
 )
@@ -52,6 +53,11 @@ const (
 	// ai_los_creep: prone stationary hostile — detection meter grants a
 	// grace window (no contact by t=3 s, contact by t=15 s).
 	aiSceneLosCreep = "ai_los_creep"
+
+	// ai_vehicle_move (Phase 19 M1): truck + tank drive a 3-leg off-road
+	// route via ActionQueue waypoints; PASS when both park at the final
+	// point (early verdict on arrival).
+	aiSceneVehMove = "ai_vehicle_move"
 )
 
 // aiMainSpec selects the target wing (by expected footprint centre) and the
@@ -115,6 +121,8 @@ func aiSceneAnchorPos() components.WorldPos {
 		return components.WorldPos{}.Add(rl.Vector3{X: -40, Z: 10})
 	case aiSceneLosOpen, aiSceneLosDefilade, aiSceneLosCreep:
 		return components.WorldPos{}.Add(rl.Vector3{X: 30, Z: 20})
+	case aiSceneVehMove:
+		return components.WorldPos{}.Add(rl.Vector3{X: 40, Z: 0})
 	}
 	return components.WorldPos{}
 }
@@ -281,6 +289,38 @@ func aiSpawnPos() components.WorldPos {
 	return components.WorldPos{}
 }
 
+// aiVehicleSceneSpawn: truck + tank at (20, 8..16), three off-road legs.
+func aiVehicleSceneSpawn(world *ecs.World, vehicleFactory *entities.VehicleFactory,
+	posMap *ecs.Map[components.WorldPos]) *aiTestState {
+	if vehicleFactory == nil {
+		fmt.Printf("[ai-test %s] NO VEHICLE FACTORY — aborting\n", aiSceneID())
+		return nil
+	}
+	wp := func(x, z float32) components.WorldPos {
+		p := components.WorldPos{}.Add(rl.Vector3{X: x, Z: z})
+		p.Local.Y = systems.GroundHeight(x, z)
+		return p
+	}
+	truck := vehicleFactory.Spawn(wp(20, 8), components.VehicleTruck,
+		components.FactionPlayer, components.ControllerLocal)
+	tank := vehicleFactory.Spawn(wp(20, 16), components.VehicleTank,
+		components.FactionPlayer, components.ControllerLocal)
+	return &aiTestState{
+		sceneID:      aiSceneID(),
+		vehEnts:      []ecs.Entity{truck, tank},
+		// Leg 4 sits ~160° behind the leg-3 arrival heading: the truck
+		// (4×TurnRadius = 32 m > 23 m) backs out, the tank pivots.
+		vehWaypoints: []components.WorldPos{wp(55, 28), wp(80, -5), wp(45, -30), wp(60, -12)},
+		World:        world,
+		PosMap:       posMap,
+		MotionMap:    ecs.NewMap[components.Motion](world),
+		VehQueueMap:  ecs.NewMap[components.ActionQueue](world),
+		orderAt:      aiOrderAt,
+		verdictAt:    90,
+		nextSampleAt: aiOrderAt + 3,
+	}
+}
+
 // aiSceneSpawn instantiates the squad + captures the entities the auto-
 // verifier needs. Returns nil for non-AI scenes.
 func aiSceneSpawn(
@@ -288,6 +328,7 @@ func aiSceneSpawn(
 	squadService *systems.SquadService,
 	roleService *systems.RoleService,
 	unitFactory aiUnitSpawn,
+	vehicleFactory *entities.VehicleFactory,
 	playerFaction components.Faction,
 	posMap *ecs.Map[components.WorldPos],
 	rosterMap *ecs.Map[components.CommandRoster],
@@ -296,9 +337,14 @@ func aiSceneSpawn(
 	if !isAIScene() {
 		return nil
 	}
+	if aiSceneID() == aiSceneVehMove {
+		return aiVehicleSceneSpawn(world, vehicleFactory, posMap)
+	}
 	squad := squadService.CreateFromTemplate(
 		systems.TmplMotorRifle, aiSpawnPos(),
-		components.FormationLine, playerFaction, roleService, unitFactory,
+		components.FormationLine, playerFaction,
+		components.Controller{Owner: components.ControllerLocal},
+		roleService, unitFactory,
 	)
 	if squad == (ecs.Entity{}) {
 		fmt.Printf("[ai-test %s] FAILED TO SPAWN SQUAD — aborting\n", aiSceneID())
@@ -318,7 +364,12 @@ func aiSceneSpawn(
 		enemyPos := components.WorldPos{}.Add(rl.Vector3{X: 30, Z: enemyZ})
 		enemyPos.Local.Y = systems.GroundHeight(30, enemyZ)
 		enemy := unitFactory(enemyPos)
-		ecs.NewMap[components.Faction](world).Add(enemy, &components.Faction{ID: components.FactionEnemyRed})
+		if f := ecs.NewMap[components.Faction](world).Get(enemy); f != nil {
+			f.ID = components.FactionEnemyRed
+		}
+		if c := ecs.NewMap[components.Controller](world).Get(enemy); c != nil {
+			c.Owner = components.ControllerAI
+		}
 		ecs.NewMap[components.HP](world).Add(enemy, &components.HP{Current: 100, Max: 100})
 		if id == aiSceneLosCreep {
 			// Prone + override so StanceController's Safe band doesn't stand
@@ -488,6 +539,12 @@ type aiTestState struct {
 	losEarlyDone      bool
 	losEarlyContacts  int
 
+	// Set for ai_vehicle_* scenes: waypoints go straight into each
+	// vehicle's ActionQueue; verdict = all parked at the final point.
+	vehEnts      []ecs.Entity
+	vehWaypoints []components.WorldPos
+	VehQueueMap  *ecs.Map[components.ActionQueue]
+
 	elapsed      float32
 	orderAt      float32
 	verdictAt    float32
@@ -541,6 +598,10 @@ func (s *aiTestState) Update(elapsed float32) {
 		return
 	}
 	s.elapsed = elapsed
+	if len(s.vehEnts) > 0 {
+		s.updateVehicles(elapsed)
+		return
+	}
 	s.EnsureInit()
 
 	if s.losTarget != (ecs.Entity{}) {
@@ -665,6 +726,90 @@ func (s *aiTestState) Update(elapsed float32) {
 		fmt.Println("============================================================")
 		s.verdictDone = true
 	}
+}
+
+func (s *aiTestState) updateVehicles(elapsed float32) {
+	if s.verdictDone {
+		return
+	}
+	if !s.orderFired {
+		if elapsed < s.orderAt {
+			return
+		}
+		fmt.Println("============================================================")
+		fmt.Printf("== AI VEHICLE SCENE: %s  vehicles=%d legs=%d\n",
+			s.sceneID, len(s.vehEnts), len(s.vehWaypoints))
+		fmt.Println("============================================================")
+		for _, v := range s.vehEnts {
+			if aq := s.VehQueueMap.Get(v); aq != nil {
+				for _, wpt := range s.vehWaypoints {
+					systems.PushAction(aq, components.Action{
+						Kind: components.ActionMoveTo, Target: wpt,
+					})
+				}
+			}
+		}
+		s.orderFired = true
+		fmt.Printf("[ai-test %s] t=%.1fs WAYPOINTS PUSHED\n", s.sceneID, elapsed)
+		return
+	}
+	if elapsed >= s.nextSampleAt && elapsed < s.verdictAt {
+		s.nextSampleAt = elapsed + aiSampleEvery
+		for i, v := range s.vehEnts {
+			if v == (ecs.Entity{}) || !s.World.Alive(v) {
+				continue
+			}
+			pos := s.PosMap.Get(v)
+			mot := s.MotionMap.Get(v)
+			aq := s.VehQueueMap.Get(v)
+			if pos == nil || mot == nil || aq == nil {
+				continue
+			}
+			wx := float32(pos.Chunk.X)*components.ChunkSize + pos.Local.X
+			wz := float32(pos.Chunk.Z)*components.ChunkSize + pos.Local.Z
+			fmt.Printf("[ai-test %s] t=%.1fs veh%d=(%.1f,%.1f) speed=%.2f queue=%d\n",
+				s.sceneID, elapsed, i, wx, wz, mot.Speed, aq.Count)
+		}
+	}
+	arrived := s.vehArrivedCount()
+	if arrived == len(s.vehEnts) || elapsed >= s.verdictAt {
+		verdict := "FAIL"
+		if arrived == len(s.vehEnts) && len(s.vehEnts) > 0 {
+			verdict = "PASS"
+		}
+		fmt.Println("============================================================")
+		fmt.Printf("== VERDICT [%s]: %s  (%d/%d vehicles arrived)\n",
+			s.sceneID, verdict, arrived, len(s.vehEnts))
+		fmt.Println("============================================================")
+		s.verdictDone = true
+	}
+}
+
+func (s *aiTestState) vehArrivedCount() int {
+	if len(s.vehWaypoints) == 0 {
+		return 0
+	}
+	final := s.vehWaypoints[len(s.vehWaypoints)-1]
+	fx := float32(final.Chunk.X)*components.ChunkSize + final.Local.X
+	fz := float32(final.Chunk.Z)*components.ChunkSize + final.Local.Z
+	n := 0
+	for _, v := range s.vehEnts {
+		if v == (ecs.Entity{}) || !s.World.Alive(v) {
+			continue
+		}
+		aq := s.VehQueueMap.Get(v)
+		pos := s.PosMap.Get(v)
+		if aq == nil || pos == nil || aq.Count != 0 {
+			continue
+		}
+		wx := float32(pos.Chunk.X)*components.ChunkSize + pos.Local.X
+		wz := float32(pos.Chunk.Z)*components.ChunkSize + pos.Local.Z
+		dx, dz := wx-fx, wz-fz
+		if dx*dx+dz*dz < 36 {
+			n++
+		}
+	}
+	return n
 }
 
 func (s *aiTestState) updateLos(elapsed float32) {

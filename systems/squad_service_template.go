@@ -15,6 +15,7 @@ func (s *SquadService) CreateFromTemplate(
 	pos components.WorldPos,
 	formation components.FormationKind,
 	faction components.Faction,
+	controller components.Controller,
 	roleService *RoleService,
 	unitFactory func(spawn components.WorldPos) ecs.Entity,
 ) ecs.Entity {
@@ -42,12 +43,9 @@ func (s *SquadService) CreateFromTemplate(
 			continue
 		}
 		roleService.AssignRole(u, role)
-		// Template's faction wins over any factory-set value.
-		if existing := s.factionMap.Get(u); existing != nil {
-			*existing = faction
-		} else {
-			s.factionMap.Add(u, &faction)
-		}
+		// Template's allegiance wins over factory defaults.
+		s.upsertFaction(u, faction)
+		s.upsertController(u, controller)
 		units = append(units, u)
 	}
 	if len(units) == 0 {
@@ -58,13 +56,10 @@ func (s *SquadService) CreateFromTemplate(
 		return squad
 	}
 
-	// Stamp Faction onto squad entity too so map / inspector can tint
-	// without walking to a roster member.
-	if s.factionMap.Has(squad) {
-		*s.factionMap.Get(squad) = faction
-	} else {
-		s.factionMap.Add(squad, &faction)
-	}
+	// Stamp allegiance onto the squad entity too so map / inspector / input
+	// can read it without walking to a roster member.
+	s.upsertFaction(squad, faction)
+	s.upsertController(squad, controller)
 
 	s.applyTemplateStandingRules(squad, template, roster)
 	return squad

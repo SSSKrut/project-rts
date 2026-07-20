@@ -59,6 +59,15 @@ func (h *SpatialHash) CellSize() float32 { return h.cellSize }
 
 func (h *SpatialHash) Len() int { return len(h.entries) }
 
+// VehicleSpatialHash is a distinct resource type so the vehicle-class hash
+// can be registered alongside the infantry SpatialHash (resources are
+// type-keyed). One instance per Locomotion class — see invariants above.
+type VehicleSpatialHash struct{ SpatialHash }
+
+func NewVehicleSpatialHash(cellSize float32) *VehicleSpatialHash {
+	return &VehicleSpatialHash{*NewSpatialHash(cellSize)}
+}
+
 func packKey(cx, cz int32) int64 {
 	return (int64(cx) << 32) | int64(uint32(cz))
 }

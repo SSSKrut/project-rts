@@ -76,6 +76,15 @@ func (s *SquadService) CreateFromUnits(units []ecs.Entity, kind components.Forma
 	s.orderQueueMap.Add(squad, &components.OrderQueueHead{})
 	s.alwaysActiveMap.Add(squad, &components.AlwaysActive{})
 
+	// Squad allegiance mirrors its first member so map / inspector / input
+	// never fall back to implicit defaults (DP-4).
+	if f := s.factionMap.Get(prepared[0]); f != nil {
+		s.upsertFaction(squad, *f)
+	}
+	if c := s.controllerMap.Get(prepared[0]); c != nil {
+		s.upsertController(squad, *c)
+	}
+
 	// Stage 4 — attach SquadMember on every member. Each Add mutates the
 	// unit archetype; the Squad archetype is untouched.
 	for i, u := range prepared {
