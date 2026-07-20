@@ -10,7 +10,7 @@ import (
 	"rts-go/core"
 )
 
-// VehicleDriverSystem — Phase 19 Driver layer. Kinematic arc-steering
+// VehicleDriverSystem — kinematic arc-steering
 // along the vehicle's ActionQueue: forward speed rides the hull yaw, yaw
 // rate is curvature-limited (|Speed| / TurnRadius, plus a pivot term for
 // tracked hulls). A target far behind flips into reverse (Speed < 0) until

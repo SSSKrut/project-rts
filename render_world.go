@@ -10,7 +10,7 @@ import (
 	"rts-go/systems"
 )
 
-// Prop draw distances (ISSUES #15): full detail near, trees-as-cones +
+// Prop draw distances: full detail near, trees-as-cones +
 // planes only in the far band, nothing beyond cull. Behind-camera props are
 // skipped outside the near ring (orbit swings keep the surroundings).
 const (

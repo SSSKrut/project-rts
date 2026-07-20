@@ -107,9 +107,9 @@ type builtMesh struct {
 }
 
 // meshBudgetPerTick caps the rebuild+upload burst: a streaming-ring shift
-// dirties a whole chunk row at once and a 20-mesh burst is a visible hitch
-// (ISSUES #15). Leftovers keep MeshDirty and drain over the next ticks;
-// Active (near-camera) chunks go first.
+// dirties a whole chunk row at once and a 20-mesh burst is a visible hitch.
+// Leftovers keep MeshDirty and drain over the next ticks; Active
+// (near-camera) chunks go first.
 const meshBudgetPerTick = 3
 
 func (sys TerrainMeshSystem) Update(ctx core.UpdateContext) {

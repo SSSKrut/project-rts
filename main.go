@@ -724,6 +724,7 @@ func main() {
 
 	unitRenderFilter := ecs.NewFilter3[components.WorldPos, components.Unit, components.Stance](app.World)
 	vehicleRenderFilter := ecs.NewFilter2[components.WorldPos, components.Vehicle](app.World)
+	turretMap := ecs.NewMap[components.Turret](app.World)
 	chunkActiveFilter := ecs.NewFilter3[components.WorldPos, components.ChunkMesh, components.LODActive](app.World)
 	chunkRelevantFilter := ecs.NewFilter3[components.WorldPos, components.ChunkMesh, components.LODRelevant](app.World)
 	propFilter := ecs.NewFilter2[components.WorldPos, components.Prop](app.World)
@@ -2277,8 +2278,6 @@ func main() {
 			unitsLive++
 		}
 
-		// Phase 19 M0: player vehicles as spec-sized boxes. Enemy-vehicle
-		// FoW arrives with vehicle contacts (M3).
 		qveh := vehicleRenderFilter.Query()
 		for qveh.Next() {
 			pos, veh := qveh.Get()
@@ -2288,7 +2287,11 @@ func main() {
 			if m := unitFactoryRef.MotionMap.Get(ent); m != nil {
 				yaw = m.Yaw
 			}
-			drawVehicleBox(renderPos, yaw, veh.Kind, squadColor(ent))
+			turretYaw := float32(0)
+			if t := turretMap.Get(ent); t != nil {
+				turretYaw = t.Yaw
+			}
+			drawVehicleBox(renderPos, yaw, turretYaw, veh.Kind, squadColor(ent))
 			if isSelected(ent) >= 0 {
 				spec := components.SpecForVehicle(veh.Kind)
 				rl.DrawCircle3D(renderPos, spec.ColliderR, rl.Vector3{X: 1, Y: 0, Z: 0}, 90,

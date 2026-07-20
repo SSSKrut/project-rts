@@ -1,7 +1,30 @@
 package components
 
-// VehicleSpec is the per-class data row (PHASE-19 P3). Armor* are damage
+// ArmorClass buckets targets for the weapon-vs-class table. Infantry is
+// implicitly Soft.
+type ArmorClass uint8
+
+const (
+	ArmorClassSoft ArmorClass = iota
+	ArmorClassLight
+	ArmorClassHeavy
+)
+
+// VsClassMul returns the weapon's damage multiplier against `class`.
+func VsClassMul(w *WeaponSpec, class ArmorClass) float32 {
+	switch class {
+	case ArmorClassLight:
+		return w.VsLight
+	case ArmorClassHeavy:
+		return w.VsHeavy
+	}
+	return w.VsSoft
+}
+
+// VehicleSpec is the per-class data row. Armor* are damage
 // multipliers by hit sector (1.0 = unarmoured). Speeds m/s, slew deg/s.
+// WeaponKinds[:WeaponCount] is the factory loadout — slot 0 becomes
+// Equipment.Primary (turret main), slot 1 Secondary (coax).
 type VehicleSpec struct {
 	Kind            VehicleKind
 	Name            string
@@ -23,6 +46,9 @@ type VehicleSpec struct {
 	SensorRangeM    float32
 	DetectMul       float32
 	NoiseRadiusM    float32
+	Class           ArmorClass
+	WeaponCount     uint8
+	WeaponKinds     [2]WeaponKind
 }
 
 // VehicleSpecs — canonical table indexed by VehicleKind. Numbers are rough
@@ -35,6 +61,7 @@ var VehicleSpecs = [VehicleKindCount]VehicleSpec{
 		TurretSlewDps: 0, Locomotion: LocomotionWheeled, ColliderR: 3.2,
 		BoxLen: 7.0, BoxWid: 2.5, BoxHgt: 2.7,
 		SensorRangeM: 50, DetectMul: 1.6, NoiseRadiusM: 120,
+		Class: ArmorClassSoft,
 	},
 	VehicleBTR: {
 		Kind: VehicleBTR, Name: "BTR", HP: 220,
@@ -43,6 +70,7 @@ var VehicleSpecs = [VehicleKindCount]VehicleSpec{
 		TurretSlewDps: 60, Locomotion: LocomotionWheeled, ColliderR: 3.4,
 		BoxLen: 7.7, BoxWid: 2.9, BoxHgt: 2.4,
 		SensorRangeM: 60, DetectMul: 1.5, NoiseRadiusM: 110,
+		Class: ArmorClassLight, WeaponCount: 1, WeaponKinds: [2]WeaponKind{WeaponKPVT},
 	},
 	VehicleBMP: {
 		Kind: VehicleBMP, Name: "BMP", HP: 260,
@@ -51,6 +79,7 @@ var VehicleSpecs = [VehicleKindCount]VehicleSpec{
 		TurretSlewDps: 55, Locomotion: LocomotionTracked, ColliderR: 3.0,
 		BoxLen: 6.7, BoxWid: 3.15, BoxHgt: 2.45,
 		SensorRangeM: 60, DetectMul: 1.5, NoiseRadiusM: 130,
+		Class: ArmorClassLight, WeaponCount: 1, WeaponKinds: [2]WeaponKind{WeaponAutocannon30},
 	},
 	VehicleTank: {
 		Kind: VehicleTank, Name: "Tank", HP: 500,
@@ -59,6 +88,7 @@ var VehicleSpecs = [VehicleKindCount]VehicleSpec{
 		TurretSlewDps: 40, Locomotion: LocomotionTracked, ColliderR: 3.2,
 		BoxLen: 6.9, BoxWid: 3.6, BoxHgt: 2.2,
 		SensorRangeM: 55, DetectMul: 1.7, NoiseRadiusM: 150,
+		Class: ArmorClassHeavy, WeaponCount: 2, WeaponKinds: [2]WeaponKind{WeaponCannon125, WeaponPKM},
 	},
 	VehicleATCarrier: {
 		Kind: VehicleATCarrier, Name: "AT Carrier", HP: 180,
@@ -67,6 +97,7 @@ var VehicleSpecs = [VehicleKindCount]VehicleSpec{
 		TurretSlewDps: 30, Locomotion: LocomotionWheeled, ColliderR: 2.6,
 		BoxLen: 5.7, BoxWid: 2.35, BoxHgt: 2.3,
 		SensorRangeM: 65, DetectMul: 1.4, NoiseRadiusM: 100,
+		Class: ArmorClassLight, WeaponCount: 1, WeaponKinds: [2]WeaponKind{WeaponATGM},
 	},
 }
 

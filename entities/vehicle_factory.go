@@ -8,7 +8,7 @@ import (
 
 // VehicleFactory bundles the Map handles for spawning a ground vehicle.
 // Class differences come from components.VehicleSpecs; the factory only
-// materialises the spec row into components (PHASE-19 P2/P4).
+// materialises the spec row into components.
 type VehicleFactory struct {
 	world  *ecs.World
 	posMap *ecs.Map[components.WorldPos]
@@ -28,6 +28,8 @@ type VehicleFactory struct {
 	EquipmentMap    *ecs.Map[components.Equipment]
 	DetectMap       *ecs.Map[components.Detectability]
 	OnGroundMap     *ecs.Map[components.OnGround]
+	WeaponMap       *ecs.Map[components.Weapon]
+	OwnedByMap      *ecs.Map[components.OwnedBy]
 }
 
 func NewVehicleFactory(world *ecs.World, posMap *ecs.Map[components.WorldPos]) *VehicleFactory {
@@ -49,6 +51,8 @@ func NewVehicleFactory(world *ecs.World, posMap *ecs.Map[components.WorldPos]) *
 		EquipmentMap:    ecs.NewMap[components.Equipment](world),
 		DetectMap:       ecs.NewMap[components.Detectability](world),
 		OnGroundMap:     ecs.NewMap[components.OnGround](world),
+		WeaponMap:       ecs.NewMap[components.Weapon](world),
+		OwnedByMap:      ecs.NewMap[components.OwnedBy](world),
 	}
 }
 
@@ -66,7 +70,7 @@ func vehicleSensors(spec *components.VehicleSpec) components.Sensors {
 }
 
 // Spawn creates a vehicle of `kind` at `pos` with the spec-derived component
-// set. Weapon sub-entities arrive in Phase 19 M3 (Equipment stays empty).
+// set.
 func (f *VehicleFactory) Spawn(pos components.WorldPos, kind components.VehicleKind,
 	factionID, controller uint8) ecs.Entity {
 	spec := components.SpecForVehicle(kind)
@@ -85,11 +89,39 @@ func (f *VehicleFactory) Spawn(pos components.WorldPos, kind components.VehicleK
 	sensors := vehicleSensors(spec)
 	f.SensorsMap.Add(ent, &sensors)
 	f.AwarenessMap.Add(ent, &components.Awareness{})
-	f.EquipmentMap.Add(ent, &components.Equipment{})
+	eq := components.Equipment{}
+	for i := uint8(0); i < spec.WeaponCount && i < 2; i++ {
+		wep := f.spawnWeapon(ent, wp, spec.WeaponKinds[i])
+		if i == 0 {
+			eq.Primary = wep
+			eq.Active = wep
+		} else {
+			eq.Secondary = wep
+		}
+	}
+	f.EquipmentMap.Add(ent, &eq)
 	f.DetectMap.Add(ent, &components.Detectability{})
 	f.OnGroundMap.Add(ent, &components.OnGround{})
 	if spec.TurretSlewDps > 0 {
 		f.TurretMap.Add(ent, &components.Turret{})
 	}
+	return ent
+}
+
+func (f *VehicleFactory) spawnWeapon(owner ecs.Entity, pos components.WorldPos,
+	kind components.WeaponKind) ecs.Entity {
+	spec := components.SpecForWeapon(kind)
+	ent := f.world.NewEntity()
+	f.WeaponMap.Add(ent, &components.Weapon{
+		Kind:       kind,
+		Ammo:       spec.Ammo,
+		RangeM:     spec.RangeM,
+		RoF:        spec.RoF,
+		Damage:     spec.Damage,
+		Dispersion: spec.Dispersion,
+	})
+	f.OwnedByMap.Add(ent, &components.OwnedBy{Owner: owner})
+	wp := pos
+	f.posMap.Add(ent, &wp)
 	return ent
 }

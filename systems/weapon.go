@@ -29,9 +29,11 @@ type WeaponSystem struct {
 	damage    *DamageService
 	particles *SpawnParticleHandles
 
-	seerFilter   *ecs.Filter6[components.Unit, components.WorldPos, components.Motion, components.Equipment, components.Awareness, components.Faction]
-	targetFilter *ecs.Filter4[components.Unit, components.WorldPos, components.Stance, components.Faction]
-	wallFilter   *ecs.Filter2[components.WorldPos, components.WallSegment]
+	seerFilter    *ecs.Filter6[components.Unit, components.WorldPos, components.Motion, components.Equipment, components.Awareness, components.Faction]
+	vehSeerFilter *ecs.Filter6[components.Vehicle, components.WorldPos, components.Motion, components.Equipment, components.Awareness, components.Faction]
+	targetFilter  *ecs.Filter4[components.Unit, components.WorldPos, components.Stance, components.Faction]
+	vehTargetsF   *ecs.Filter3[components.Vehicle, components.WorldPos, components.Faction]
+	wallFilter    *ecs.Filter2[components.WorldPos, components.WallSegment]
 
 	posMap      *ecs.Map[components.WorldPos]
 	stanceMap   *ecs.Map[components.Stance]
@@ -41,6 +43,8 @@ type WeaponSystem struct {
 	threatMap   *ecs.Map[components.Threat]
 	doorMap     *ecs.Map[components.Door]
 	colliderMap *ecs.Map[components.Collider]
+	vehicleMap  *ecs.Map[components.Vehicle]
+	turretMap   *ecs.Map[components.Turret]
 	// shouldFire walks SquadMember → Squad → EngagementRules / order flags.
 	squadMemberMap             *ecs.Map[components.SquadMember]
 	engagementRulesMap         *ecs.Map[components.EngagementRules]
@@ -69,6 +73,7 @@ type WeaponSystem struct {
 	worldRef        *ecs.World
 
 	spatialHash ecs.Resource[core.SpatialHash]
+	vehHash     ecs.Resource[core.VehicleSpatialHash]
 	indexRes    ecs.Resource[TerrainChunkIndex]
 	hmMap       *ecs.Map[components.Heightmap]
 	heightmaps  map[components.ChunkCoord][]float32
@@ -77,7 +82,8 @@ type WeaponSystem struct {
 }
 
 // targetSnap is a read-only candidate-target snapshot. Stance + Faction
-// inlined so the parallel pass skips component dereferences.
+// inlined so the parallel pass skips component dereferences; vehicles carry
+// class + hull yaw + sector armor for the damage math.
 type targetSnap struct {
 	ent     ecs.Entity
 	pos     components.WorldPos
@@ -85,6 +91,12 @@ type targetSnap struct {
 	radius  float32
 	stance  components.StanceCode
 	faction uint8
+	isVeh   bool
+	class   components.ArmorClass
+	hullYaw float32
+	armorF  float32
+	armorS  float32
+	armorR  float32
 }
 
 // shotWork is one queued shot for the parallel raycast pass.
@@ -104,6 +116,20 @@ type shotWork struct {
 	// AoE knobs: SplashRadius > 0 turns the shot into a splash event.
 	splashRadius  float32
 	splashFalloff float32
+	// Weapon-vs-class multipliers, copied from WeaponSpec at snapshot time.
+	vsSoft  float32
+	vsLight float32
+	vsHeavy float32
+}
+
+func vsClassOf(soft, light, heavy float32, class components.ArmorClass) float32 {
+	switch class {
+	case components.ArmorClassLight:
+		return light
+	case components.ArmorClassHeavy:
+		return heavy
+	}
+	return soft
 }
 
 // hitKind classifies what a shot struck. Drives per-kind particle spawn.
@@ -123,6 +149,9 @@ type splashEvent struct {
 	falloff  float32
 	damage   float32
 	excluded ecs.Entity // direct-hit target — skip to avoid double-count
+	vsSoft   float32
+	vsLight  float32
+	vsHeavy  float32
 }
 
 type damageEvent struct {
@@ -152,9 +181,8 @@ type threatEvent struct {
 
 // suppressionEvent: per-impact propagation. hitMul = 0.5 on direct hit, 0.2
 // on miss (distance-scaled in the post-pass). muzzle rides along because the
-// DANGER DIRECTION is the shooter, not the crater: an overshoot lands past
-// the unit and an impact-pos vote would point the threat BACKWARD (ISSUES
-// #18 — units took the enemy-facing side of cover).
+// danger DIRECTION is the shooter, not the crater: an overshoot lands past
+// the unit and an impact-pos vote would point the threat backward.
 type suppressionEvent struct {
 	impact  rl.Vector3
 	muzzle  components.WorldPos
@@ -211,7 +239,9 @@ func NewWeaponSystem(pool *core.WorkerPool, damage *DamageService, particles *Sp
 
 func (sys *WeaponSystem) InitUI(w *ecs.World) {
 	sys.seerFilter = ecs.NewFilter6[components.Unit, components.WorldPos, components.Motion, components.Equipment, components.Awareness, components.Faction](w)
+	sys.vehSeerFilter = ecs.NewFilter6[components.Vehicle, components.WorldPos, components.Motion, components.Equipment, components.Awareness, components.Faction](w)
 	sys.targetFilter = ecs.NewFilter4[components.Unit, components.WorldPos, components.Stance, components.Faction](w)
+	sys.vehTargetsF = ecs.NewFilter3[components.Vehicle, components.WorldPos, components.Faction](w)
 	sys.wallFilter = ecs.NewFilter2[components.WorldPos, components.WallSegment](w)
 
 	sys.posMap = ecs.NewMap[components.WorldPos](w)
@@ -222,6 +252,8 @@ func (sys *WeaponSystem) InitUI(w *ecs.World) {
 	sys.threatMap = ecs.NewMap[components.Threat](w)
 	sys.doorMap = ecs.NewMap[components.Door](w)
 	sys.colliderMap = ecs.NewMap[components.Collider](w)
+	sys.vehicleMap = ecs.NewMap[components.Vehicle](w)
+	sys.turretMap = ecs.NewMap[components.Turret](w)
 	sys.squadMemberMap = ecs.NewMap[components.SquadMember](w)
 	sys.engagementRulesMap = ecs.NewMap[components.EngagementRules](w)
 	sys.orderQueueMap = ecs.NewMap[components.OrderQueueHead](w)
@@ -234,6 +266,7 @@ func (sys *WeaponSystem) InitUI(w *ecs.World) {
 	sys.worldRef = w
 
 	sys.spatialHash = ecs.NewResource[core.SpatialHash](w)
+	sys.vehHash = ecs.NewResource[core.VehicleSpatialHash](w)
 	sys.indexRes = ecs.NewResource[TerrainChunkIndex](w)
 	sys.hmMap = ecs.NewMap[components.Heightmap](w)
 }
@@ -285,6 +318,7 @@ func (sys *WeaponSystem) Update(ctx core.UpdateContext) {
 	sys.snapshotTargetsAndWalls()
 	snapshotHeightmaps(sys.indexRes.Get(), sys.hmMap, sys.heightmaps)
 	sys.snapshotShots(now)
+	sys.snapshotVehicleShots(now, float32(ctx.Delta.Seconds()))
 
 	if len(sys.shotsBuf) > 0 {
 		sys.runParallelResolve(now)
@@ -310,6 +344,25 @@ func (sys *WeaponSystem) snapshotTargetsAndWalls() {
 		sys.targetsBuf = append(sys.targetsBuf, targetSnap{
 			ent: ent, pos: *pos, chunk: pos.Chunk,
 			radius: radius, stance: stance.Code, faction: fac.ID,
+		})
+		sys.targetsByChunk[pos.Chunk] = append(sys.targetsByChunk[pos.Chunk], idx)
+	}
+
+	qV := sys.vehTargetsF.Query()
+	for qV.Next() {
+		veh, pos, fac := qV.Get()
+		ent := qV.Entity()
+		spec := components.SpecForVehicle(veh.Kind)
+		yaw := float32(0)
+		if m := sys.motionMap.Get(ent); m != nil {
+			yaw = m.Yaw
+		}
+		idx := int32(len(sys.targetsBuf))
+		sys.targetsBuf = append(sys.targetsBuf, targetSnap{
+			ent: ent, pos: *pos, chunk: pos.Chunk,
+			radius: spec.ColliderR, stance: components.StanceStand, faction: fac.ID,
+			isVeh: true, class: spec.Class, hullYaw: yaw,
+			armorF: spec.ArmorFront, armorS: spec.ArmorSide, armorR: spec.ArmorRear,
 		})
 		sys.targetsByChunk[pos.Chunk] = append(sys.targetsByChunk[pos.Chunk], idx)
 	}
@@ -347,15 +400,17 @@ func (sys *WeaponSystem) snapshotShots(now float32) {
 		if weapon.LastFiredAt != 0 && now-weapon.LastFiredAt < cooldown {
 			continue
 		}
-		// Pick a hostile target from awareness (most recent + alive + range).
-		target, targetPos, ok := sys.pickTarget(shooter, fac.ID, pos, aware, weapon, now)
+		wspec := components.SpecForWeapon(weapon.Kind)
+		// Pick a hostile target from awareness (most recent + alive + range;
+		// zero-multiplier classes are skipped — no ammo wasted on a tank).
+		target, targetPos, ok := sys.pickTarget(shooter, fac.ID, pos, aware, weapon, wspec, now)
 		if !ok {
 			continue
 		}
-		// Phase 14 M14.3 - RoE + AttackMove gate. Skip silently (no ammo
-		// decrement, no cooldown bump) so a HoldFire squad can resume fire
-		// the instant the player flips the rule.
-		if !sys.shouldFire(shooter, motion.Speed, pos, targetPos) {
+		// RoE + AttackMove gate. Skip silently (no ammo decrement, no
+		// cooldown bump) so a HoldFire squad can resume fire the instant the
+		// player flips the rule.
+		if !sys.shouldFire(shooter, motion.Speed, pos, targetPos, sys.vehicleMap.Has(target)) {
 			continue
 		}
 		targetStance := components.StanceStand
@@ -385,8 +440,6 @@ func (sys *WeaponSystem) snapshotShots(now float32) {
 		weapon.LastFiredAt = now
 		weapon.Ammo--
 
-		// Phase 14.5 M14.5.5 - pull splash params from WeaponSpec.
-		wspec := components.SpecForWeapon(weapon.Kind)
 		sys.shotsBuf = append(sys.shotsBuf, shotWork{
 			shooter:       shooter,
 			muzzle:        muzzle,
@@ -402,6 +455,9 @@ func (sys *WeaponSystem) snapshotShots(now float32) {
 			rngSeed:       uint64(shooter.ID()) ^ uint64(now*1000.0),
 			splashRadius:  wspec.SplashRadius,
 			splashFalloff: wspec.SplashFalloff,
+			vsSoft:        wspec.VsSoft,
+			vsLight:       wspec.VsLight,
+			vsHeavy:       wspec.VsHeavy,
 		})
 	}
 }
@@ -474,6 +530,13 @@ func (sys *WeaponSystem) applyPostPass(now float32) {
 		for w := range sys.workerSplash {
 			for _, ev := range sys.workerSplash[w] {
 				sys.applySplashDamage(ev, hash)
+			}
+		}
+	}
+	if vh := sys.vehHash.Get(); vh != nil {
+		for w := range sys.workerSplash {
+			for _, ev := range sys.workerSplash[w] {
+				sys.applySplashToVehicles(ev, &vh.SpatialHash)
 			}
 		}
 	}

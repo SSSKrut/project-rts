@@ -51,6 +51,7 @@ type InspectorMaps struct {
 	UnitOverrideMap          *ecs.Map[components.UnitSymbolOverride]
 	VehicleMap               *ecs.Map[components.Vehicle]
 	RoadFollowerMap          *ecs.Map[components.RoadFollower]
+	WeaponMap                *ecs.Map[components.Weapon]
 }
 
 func NewInspectorMaps(world *ecs.World) InspectorMaps {
@@ -93,6 +94,7 @@ func NewInspectorMaps(world *ecs.World) InspectorMaps {
 		UnitOverrideMap:          ecs.NewMap[components.UnitSymbolOverride](world),
 		VehicleMap:               ecs.NewMap[components.Vehicle](world),
 		RoadFollowerMap:          ecs.NewMap[components.RoadFollower](world),
+		WeaponMap:                ecs.NewMap[components.Weapon](world),
 	}
 }
 
@@ -114,7 +116,7 @@ type InspectorCtx struct {
 	Scroll *ScrollState
 	// SquadColor is injected to avoid a UI -> render-package cycle.
 	SquadColor func(ent ecs.Entity) rl.Color
-	// RoadGraph resolves RoadFollower.Edge into a kind label (Phase 19 M5).
+	// RoadGraph resolves RoadFollower.Edge into a kind label.
 	RoadGraph *components.RoadGraph
 }
 

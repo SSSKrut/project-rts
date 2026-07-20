@@ -8,7 +8,7 @@ import (
 	"rts-go/systems"
 )
 
-// Vehicle route preview (ISSUES #17): committed itineraries draw for every
+// Vehicle route preview: committed itineraries draw for every
 // selected soloist vehicle in its squad colour; a translucent hypothetical
 // line from the first selected vehicle follows the cursor so the player sees
 // road-vs-straight BEFORE ordering. Lines hug terrain via 8 m subdivision.

@@ -41,6 +41,7 @@ const contactCap = 128
 // CloseRangeID (close LOS) without downgrading PlayerClassified.
 type ContactSystem struct {
 	unitFilter    *ecs.Filter6[components.Unit, components.WorldPos, components.Motion, components.Sensors, components.Awareness, components.Faction]
+	vehFilter     *ecs.Filter6[components.Vehicle, components.WorldPos, components.Motion, components.Sensors, components.Awareness, components.Faction]
 	wallFilter    *ecs.Filter2[components.WorldPos, components.WallSegment]
 	contactFilter *ecs.Filter1[components.Contact]
 	threatFilter  *ecs.Filter2[components.ThreatSource, components.WorldPos]
@@ -167,6 +168,7 @@ func NewContactSystem(pool *core.WorkerPool) *ContactSystem {
 func (sys *ContactSystem) InitUI(w *ecs.World) {
 	sys.worldRef = w
 	sys.unitFilter = ecs.NewFilter6[components.Unit, components.WorldPos, components.Motion, components.Sensors, components.Awareness, components.Faction](w)
+	sys.vehFilter = ecs.NewFilter6[components.Vehicle, components.WorldPos, components.Motion, components.Sensors, components.Awareness, components.Faction](w)
 	sys.wallFilter = ecs.NewFilter2[components.WorldPos, components.WallSegment](w)
 	sys.contactFilter = ecs.NewFilter1[components.Contact](w)
 	sys.threatFilter = ecs.NewFilter2[components.ThreatSource, components.WorldPos](w)

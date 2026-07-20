@@ -85,7 +85,7 @@ func drawFatalScreen(f *simFatalState, font rl.Font) {
 	rl.EndDrawing()
 }
 
-// Hitch logger (ISSUES #15): flags frames that are both slow in absolute
+// Hitch logger: flags frames that are both slow in absolute
 // terms and an outlier vs the rolling median, then prints the last tick's
 // top systems — spike attribution without a trace build. tick << frame ⇒
 // the spike is render-side (draw calls / uploads), not sim.

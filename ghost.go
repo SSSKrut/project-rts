@@ -374,7 +374,7 @@ func drawGhostVehicles(g *ghostContext, selected []ecs.Entity,
 			c := g.squadColor(v.ent)
 			col = rl.Color{R: c.R, G: c.G, B: c.B, A: ghostBodyAlpha}
 		}
-		drawVehicleBox(wp.ToRenderSpace(systems.CurrentOriginChunk), yaw, v.kind, col)
+		drawVehicleBox(wp.ToRenderSpace(systems.CurrentOriginChunk), yaw, 0, v.kind, col)
 	}
 }
 

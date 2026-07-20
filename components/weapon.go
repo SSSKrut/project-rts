@@ -9,6 +9,12 @@ const (
 	WeaponRPG7
 	WeaponGP25
 	WeaponMakarov
+	// Vehicle armament. Appended after infantry kinds so saved Weapon.Kind
+	// values stay stable.
+	WeaponCannon125
+	WeaponAutocannon30
+	WeaponKPVT
+	WeaponATGM
 )
 
 // Weapon - per-instance state for a weapon entity. Lives on its own entity

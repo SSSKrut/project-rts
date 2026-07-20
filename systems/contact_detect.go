@@ -21,12 +21,9 @@ func stanceConcealmentMul(code components.StanceCode) float32 {
 	return 1.0
 }
 
-// dimensionMaskFor classifies an entity into its sensor bitmask. Phase 18.5
-// has only infantry (units) so this is uniform; vehicles in Phase 19 plug in
-// via a Vehicle component check before this fallback.
-func dimensionMaskFor(_ ecs.Entity) components.DimensionMask {
-	return components.DimInfantry
-}
+// Vehicle audio signature: full NoiseRadiusM on the move, a quarter while
+// idling (engine running). Deterministic, no per-vehicle state.
+const vehIdleNoiseMul float32 = 0.25
 
 // runDetectPass collects unit/seer snapshots, buckets walls + heightmaps by
 // chunk, groups seers by squad, then runs per-group detection in parallel.
@@ -64,7 +61,7 @@ func (sys *ContactSystem) runDetectPass(dt float32) {
 		sys.unitsBuf = append(sys.unitsBuf, contactUnit{
 			ent: ent, pos: *pos, chunk: pos.Chunk,
 			x: wx, z: wz, targetY: pos.Local.Y + spec.TargetCenterY,
-			faction: faction.ID, dimMask: dimensionMaskFor(ent),
+			faction: faction.ID, dimMask: components.DimInfantry,
 			concealment: conceal, audioRadius: audio,
 			meter: meter, det: det,
 		})
@@ -84,6 +81,49 @@ func (sys *ContactSystem) runDetectPass(dt float32) {
 		})
 	}
 	q.Close()
+
+	// Vehicles: big, loud, easy to spot (DetectMul > 1 widens the effective
+	// sensor range against them) — and they see through their own Sensors
+	// like any seer.
+	qV := sys.vehFilter.Query()
+	for qV.Next() {
+		ent := qV.Entity()
+		veh, pos, mot, sensors, aware, faction := qV.Get()
+		vspec := components.SpecForVehicle(veh.Kind)
+		wx := float32(pos.Chunk.X)*components.ChunkSize + pos.Local.X
+		wz := float32(pos.Chunk.Z)*components.ChunkSize + pos.Local.Z
+		audio := vspec.NoiseRadiusM * vehIdleNoiseMul
+		if mot.Speed > detectStillSpeed || mot.Speed < -detectStillSpeed {
+			audio = vspec.NoiseRadiusM
+		}
+		det := sys.dtMap.Get(ent)
+		meter := [components.FactionCount]float32{1, 1, 1, 1}
+		if det != nil {
+			meter = det.Meter
+		}
+		sys.unitsBuf = append(sys.unitsBuf, contactUnit{
+			ent: ent, pos: *pos, chunk: pos.Chunk,
+			x: wx, z: wz, targetY: pos.Local.Y + vspec.BoxHgt*0.6,
+			faction: faction.ID, dimMask: components.DimVehicle,
+			concealment: vspec.DetectMul, audioRadius: audio,
+			meter: meter, det: det,
+		})
+		maxR := float32(0)
+		for i := uint8(0); i < sensors.Count; i++ {
+			if r := sensors.Channels[i].BaseRangeM; r > maxR {
+				maxR = r
+			}
+		}
+		sys.seersBuf = append(sys.seersBuf, contactSeer{
+			ent: ent, pos: *pos,
+			x: wx, z: wz, eyeY: pos.Local.Y + vspec.BoxHgt,
+			fwdX: float32(math.Sin(float64(mot.Yaw))),
+			fwdZ: float32(math.Cos(float64(mot.Yaw))),
+			yaw:  mot.Yaw, faction: faction.ID,
+			sensors: sensors, aware: aware, maxRange: maxR,
+		})
+	}
+	qV.Close()
 
 	clear(sys.wallsByChunk)
 	qW := sys.wallFilter.Query()

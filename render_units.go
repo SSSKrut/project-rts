@@ -312,8 +312,9 @@ func unitStanceHeight(code components.StanceCode) float32 {
 }
 
 // drawVehicleBox draws a placeholder hull (+ turret block for turreted
-// classes) sized from VehicleSpec, yawed with the hull.
-func drawVehicleBox(pos rl.Vector3, yaw float32, kind components.VehicleKind, col rl.Color) {
+// classes) sized from VehicleSpec, yawed with the hull. turretYaw is
+// hull-relative; the top block + gun rotate with it.
+func drawVehicleBox(pos rl.Vector3, yaw, turretYaw float32, kind components.VehicleKind, col rl.Color) {
 	spec := components.SpecForVehicle(kind)
 	hull := rl.Vector3{X: spec.BoxWid, Y: spec.BoxHgt * 0.62, Z: spec.BoxLen}
 	rl.PushMatrix()
@@ -323,6 +324,7 @@ func drawVehicleBox(pos rl.Vector3, yaw float32, kind components.VehicleKind, co
 	wire := rl.Color{R: 30, G: 34, B: 26, A: col.A}
 	rl.DrawCubeV(rl.Vector3{}, hull, col)
 	rl.DrawCubeWiresV(rl.Vector3{}, hull, wire)
+	rl.Rotatef(turretYaw*(180.0/math.Pi), 0, 1, 0)
 	top := rl.Vector3{X: spec.BoxWid * 0.6, Y: spec.BoxHgt * 0.38, Z: spec.BoxLen * 0.45}
 	topCol := rl.Color{R: uint8(float32(col.R) * 0.75), G: uint8(float32(col.G) * 0.75),
 		B: uint8(float32(col.B) * 0.75), A: col.A}

@@ -78,6 +78,13 @@ const (
 	// (south) side of the trunk. PASS = both assigned slots south of the
 	// tree AND both units parked on them.
 	aiSceneCoverSide = "ai_cover_side"
+
+	// ai_vehicle_combat: tank+BTR (player) vs BMP+ATCarrier (enemy AI) at
+	// ~50 m. Gunners detect, slew and fire on their own; the cannon's
+	// weapon-vs-class preference must delete both light hulls while the
+	// tank shrugs off 30mm/ATGM frontal hits. PASS = enemy side destroyed,
+	// at least one player vehicle alive.
+	aiSceneVehCombat = "ai_vehicle_combat"
 )
 
 // aiSceneMapName lets a scene demand a specific map manifest ("" = default).
@@ -161,6 +168,8 @@ func aiSceneAnchorPos() components.WorldPos {
 	case aiSceneMarchSlope:
 		return components.WorldPos{}.Add(rl.Vector3{X: 20, Z: -10})
 	case aiSceneCoverSide:
+		return components.WorldPos{}.Add(rl.Vector3{X: 40, Z: -30})
+	case aiSceneVehCombat:
 		return components.WorldPos{}.Add(rl.Vector3{X: 40, Z: -30})
 	}
 	return components.WorldPos{}
@@ -519,6 +528,56 @@ func aiCoverSceneSpawn(
 	}
 }
 
+// aiVehicleCombatSpawn: tank+BTR (player, west) vs BMP+ATCarrier (enemy AI,
+// east), ~50 m apart on open ground. No orders — the Gunner layer does the
+// rest.
+func aiVehicleCombatSpawn(world *ecs.World, vehicleFactory *entities.VehicleFactory,
+	posMap *ecs.Map[components.WorldPos]) *aiTestState {
+	if vehicleFactory == nil {
+		fmt.Printf("[ai-test %s] NO VEHICLE FACTORY — aborting\n", aiSceneID())
+		return nil
+	}
+	wp := func(x, z float32) components.WorldPos {
+		p := components.WorldPos{}.Add(rl.Vector3{X: x, Z: z})
+		p.Local.Y = systems.GroundHeight(x, z)
+		return p
+	}
+	tank := vehicleFactory.Spawn(wp(15, -35), components.VehicleTank,
+		components.FactionPlayer, components.ControllerLocal)
+	btr := vehicleFactory.Spawn(wp(25, -35), components.VehicleBTR,
+		components.FactionPlayer, components.ControllerLocal)
+	bmp := vehicleFactory.Spawn(wp(58, -32), components.VehicleBMP,
+		components.FactionEnemyRed, components.ControllerAI)
+	atc := vehicleFactory.Spawn(wp(64, -28), components.VehicleATCarrier,
+		components.FactionEnemyRed, components.ControllerAI)
+	// Sides face each other — the M4 FaceThreat reflex will own this later.
+	motMap := ecs.NewMap[components.Motion](world)
+	for _, e := range []ecs.Entity{tank, btr} {
+		if m := motMap.Get(e); m != nil {
+			m.Yaw = math.Pi / 2
+		}
+	}
+	for _, e := range []ecs.Entity{bmp, atc} {
+		if m := motMap.Get(e); m != nil {
+			m.Yaw = -math.Pi / 2
+		}
+	}
+	return &aiTestState{
+		sceneID:         aiSceneID(),
+		vehCombatActive: true,
+		vehEnts:         []ecs.Entity{tank, btr},
+		vehFoes:         []ecs.Entity{bmp, atc},
+		HPMap:           ecs.NewMap[components.HP](world),
+		World:           world,
+		PosMap:          posMap,
+		MotionMap:       ecs.NewMap[components.Motion](world),
+		VehQueueMap:     ecs.NewMap[components.ActionQueue](world),
+		orderAt:         aiOrderAt,
+		verdictAt:       90,
+		nextSampleAt:    aiOrderAt + 3,
+	}
+}
+
 // aiSceneSpawn instantiates the squad + captures the entities the auto-
 // verifier needs. Returns nil for non-AI scenes.
 func aiSceneSpawn(
@@ -547,6 +606,9 @@ func aiSceneSpawn(
 	}
 	if aiSceneID() == aiSceneCoverSide {
 		return aiCoverSceneSpawn(world, squadService, unitFactory, posMap, rosterMap)
+	}
+	if aiSceneID() == aiSceneVehCombat {
+		return aiVehicleCombatSpawn(world, vehicleFactory, posMap)
 	}
 	squad := squadService.CreateFromTemplate(
 		systems.TmplMotorRifle, aiSpawnPos(),
@@ -758,6 +820,11 @@ type aiTestState struct {
 	VehFollowerMap   *ecs.Map[components.RoadFollower]
 	vehGraphRes      ecs.Resource[components.RoadGraph]
 
+	// Set for ai_vehicle_combat: two sides duel, verdict = enemy side dead.
+	vehCombatActive bool
+	vehFoes         []ecs.Entity
+	HPMap           *ecs.Map[components.HP]
+
 	// Set for ai_cover_side (#18): synthetic-threat cover-side metric.
 	coverActive     bool
 	coverMembers    []ecs.Entity
@@ -841,6 +908,10 @@ func (s *aiTestState) Update(elapsed float32) {
 	s.elapsed = elapsed
 	if s.coverActive {
 		s.updateCoverSide(elapsed)
+		return
+	}
+	if s.vehCombatActive {
+		s.updateVehCombat(elapsed)
 		return
 	}
 	if s.marchActive {
@@ -1207,6 +1278,58 @@ func (s *aiTestState) updateCoverSide(elapsed float32) {
 				fmt.Printf("==   unit %v slotZ=%.1f dz=%.1f\n", u, z, z-s.coverTreeZ)
 			}
 		}
+		fmt.Println("============================================================")
+		s.verdictDone = true
+	}
+}
+
+func (s *aiTestState) sideStatus(side []ecs.Entity) (alive int, hpSum float32) {
+	for _, e := range side {
+		if e == (ecs.Entity{}) || !s.World.Alive(e) {
+			continue
+		}
+		alive++
+		if hp := s.HPMap.Get(e); hp != nil {
+			hpSum += hp.Current
+		}
+	}
+	return alive, hpSum
+}
+
+func (s *aiTestState) updateVehCombat(elapsed float32) {
+	if s.verdictDone {
+		return
+	}
+	if !s.orderFired {
+		if elapsed < s.orderAt {
+			return
+		}
+		fmt.Println("============================================================")
+		fmt.Printf("== AI VEHICLE COMBAT: %s  players=%d foes=%d\n",
+			s.sceneID, len(s.vehEnts), len(s.vehFoes))
+		fmt.Println("============================================================")
+		s.orderFired = true
+	}
+	playersAlive, playersHP := s.sideStatus(s.vehEnts)
+	foesAlive, foesHP := s.sideStatus(s.vehFoes)
+	if elapsed >= s.nextSampleAt && elapsed < s.verdictAt {
+		s.nextSampleAt = elapsed + aiSampleEvery
+		fmt.Printf("[ai-test %s] t=%.1fs players=%d hp=%.0f foes=%d hp=%.0f\n",
+			s.sceneID, elapsed, playersAlive, playersHP, foesAlive, foesHP)
+	}
+	if !s.orderFired {
+		return
+	}
+	if foesAlive == 0 || playersAlive == 0 || elapsed >= s.verdictAt {
+		pass := foesAlive == 0 && playersAlive > 0
+		verdict := "FAIL"
+		if pass {
+			verdict = "PASS"
+		}
+		fmt.Println("============================================================")
+		fmt.Printf("== VERDICT [%s]: %s  (t=%.1fs players=%d/%d hp=%.0f foes=%d/%d)\n",
+			s.sceneID, verdict, elapsed, playersAlive, len(s.vehEnts), playersHP,
+			foesAlive, len(s.vehFoes))
 		fmt.Println("============================================================")
 		s.verdictDone = true
 	}

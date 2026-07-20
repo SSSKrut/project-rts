@@ -62,15 +62,42 @@ func (sys *WeaponSystem) applySplashDamage(ev splashEvent, hash *core.SpatialHas
 		if t <= 0 {
 			return
 		}
-		mul := t
-		switch {
-		case ev.falloff >= 2:
-			mul = t * t
-		case ev.falloff <= 1:
-		default:
-			mul = t*t*(ev.falloff-1) + t*(2-ev.falloff)
+		amt := ev.damage * splashFalloffMul(t, ev.falloff) * ev.vsSoft
+		if amt > 0 {
+			sys.damage.Apply(ent, amt)
 		}
-		amt := ev.damage * mul
+	})
+}
+
+func splashFalloffMul(t, falloff float32) float32 {
+	switch {
+	case falloff >= 2:
+		return t * t
+	case falloff <= 1:
+		return t
+	}
+	return t*t*(falloff-1) + t*(2-falloff)
+}
+
+// Splash against vehicles: class multiplier × side armor (no sector
+// resolution for blast waves).
+func (sys *WeaponSystem) applySplashToVehicles(ev splashEvent, hash *core.SpatialHash) {
+	rSq := ev.radius * ev.radius
+	hash.ForEachInRadius(ev.pos.X, ev.pos.Z, ev.radius, func(ent ecs.Entity, dSq float32) {
+		if ent == ev.excluded || !sys.worldRef.Alive(ent) {
+			return
+		}
+		veh := sys.vehicleMap.Get(ent)
+		if veh == nil {
+			return
+		}
+		t := float32(1) - dSq/rSq
+		if t <= 0 {
+			return
+		}
+		spec := components.SpecForVehicle(veh.Kind)
+		classMul := vsClassOf(ev.vsSoft, ev.vsLight, ev.vsHeavy, spec.Class)
+		amt := ev.damage * splashFalloffMul(t, ev.falloff) * classMul * spec.ArmorSide
 		if amt > 0 {
 			sys.damage.Apply(ent, amt)
 		}
@@ -81,7 +108,7 @@ func (sys *WeaponSystem) applySplashDamage(ev splashEvent, hash *core.SpatialHas
 // Strength = hitMul * (1 - d/radius). ThreatSystem drains the buffer next
 // tick to update Threat.Suppression / ThreatDir. Event Pos = the MUZZLE:
 // ThreatDir votes must point away from the shooter — impact positions
-// scatter around the target and randomise the cover side (ISSUES #18).
+// scatter around the target and randomise the cover side.
 func (sys *WeaponSystem) propagateSuppression(ev suppressionEvent, now float32) {
 	hash := sys.spatialHash.Get()
 	if hash == nil {

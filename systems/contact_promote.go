@@ -1,6 +1,8 @@
 package systems
 
 import (
+	"github.com/mlange-42/ark/ecs"
+
 	"rts-go/components"
 )
 
@@ -41,9 +43,12 @@ func (sys *ContactSystem) applyCombatEvidence() {
 		if c.Source >= components.SourceCloseRangeID {
 			continue
 		}
-		// Locate the active weapon on the tracked entity.
+		// Locate the active weapon on the tracked entity. Alive-check before
+		// deref: unarmed vehicles carry a zero Active, and Map.Get panics on
+		// dead/zero entities.
 		var lastFired float32
-		if eq := sys.equipMap.Get(tracked); eq != nil {
+		if eq := sys.equipMap.Get(tracked); eq != nil &&
+			eq.Active != (ecs.Entity{}) && sys.worldRef.Alive(eq.Active) {
 			if w := sys.weaponMap.Get(eq.Active); w != nil {
 				lastFired = w.LastFiredAt
 			}

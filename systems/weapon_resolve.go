@@ -49,6 +49,7 @@ func resolveShot(
 	var bestHit ecs.Entity
 	var bestPos components.WorldPos
 	var bestRadius float32
+	bestIdx := int32(-1)
 	for dcZ := int32(-1); dcZ <= 1; dcZ++ {
 		for dcX := int32(-1); dcX <= 1; dcX++ {
 			cc := components.ChunkCoord{X: s.shooterChunk.X + dcX, Z: s.shooterChunk.Z + dcZ}
@@ -68,6 +69,7 @@ func resolveShot(
 					bestHit = t.ent
 					bestPos = t.pos
 					bestRadius = t.radius
+					bestIdx = idx
 				}
 			}
 		}
@@ -117,22 +119,25 @@ func resolveShot(
 	if s.splashRadius > 0 {
 		*splashBuf = append(*splashBuf, splashEvent{
 			pos: impact, radius: s.splashRadius, falloff: s.splashFalloff,
+			vsSoft: s.vsSoft, vsLight: s.vsLight, vsHeavy: s.vsHeavy,
 			damage: s.damage, excluded: bestHit,
 		})
 	}
 
-	if hitUnit {
-		mul := float32(1)
-		for _, idx := range targetsByChunk[bestPos.Chunk] {
-			if targets[idx].ent == bestHit {
-				mul = components.SpecForStance(targets[idx].stance).DamageMultiplier
-				break
-			}
+	if hitUnit && bestIdx >= 0 {
+		t := &targets[bestIdx]
+		var mul float32
+		if t.isVeh {
+			mul = vsClassOf(s.vsSoft, s.vsLight, s.vsHeavy, t.class) * armorSectorMul(t, s.muzzle.X, s.muzzle.Z)
+		} else {
+			mul = s.vsSoft * components.SpecForStance(t.stance).DamageMultiplier
 		}
-		*dmgBuf = append(*dmgBuf, damageEvent{
-			target: bestHit,
-			amount: s.damage * mul,
-		})
+		if amt := s.damage * mul; amt > 0 {
+			*dmgBuf = append(*dmgBuf, damageEvent{
+				target: bestHit,
+				amount: amt,
+			})
+		}
 	}
 
 	severity := s.damage / 100
@@ -156,6 +161,29 @@ func resolveShot(
 		hitMul:  hitMul,
 		shooter: s.shooter,
 	})
+}
+
+// armorSectorMul: incoming shot direction vs hull forward — head-on hits
+// front armor, from behind rear, else side.
+func armorSectorMul(t *targetSnap, mx, mz float32) float32 {
+	tx := float32(t.pos.Chunk.X)*components.ChunkSize + t.pos.Local.X
+	tz := float32(t.pos.Chunk.Z)*components.ChunkSize + t.pos.Local.Z
+	dx := tx - mx
+	dz := tz - mz
+	l := float32(math.Sqrt(float64(dx*dx + dz*dz)))
+	if l <= 0 {
+		return t.armorS
+	}
+	fx := float32(math.Sin(float64(t.hullYaw)))
+	fz := float32(math.Cos(float64(t.hullYaw)))
+	c := (dx*fx + dz*fz) / l
+	switch {
+	case c < -0.5:
+		return t.armorF
+	case c > 0.5:
+		return t.armorR
+	}
+	return t.armorS
 }
 
 // Fresh slice per call so the parallel pass stays race-safe.

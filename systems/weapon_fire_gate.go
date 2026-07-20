@@ -17,7 +17,7 @@ const weaponMovingSpeedThreshold float32 = 1.0
 // the HoldFire silence (AttackTarget / SuppressFire carry this flag;
 // AttackMove does not).
 func (sys *WeaponSystem) shouldFire(shooter ecs.Entity, motionSpeed float32,
-	shooterPos *components.WorldPos, targetPos components.WorldPos) bool {
+	shooterPos *components.WorldPos, targetPos components.WorldPos, targetIsVeh bool) bool {
 	// Reloading / Suppressed silence the unit unconditionally — animation /
 	// shock state forbids firing even with FreeFire or AttackTarget override.
 	if b := sys.blackboardMap.Get(shooter); b != nil {
@@ -62,7 +62,11 @@ func (sys *WeaponSystem) shouldFire(shooter ecs.Entity, motionSpeed float32,
 	case components.ReturnFire, components.FreeFire:
 	}
 
-	if !rules.FireOnInf && !overridesHoldFire {
+	fireOn := rules.FireOnInf
+	if targetIsVeh {
+		fireOn = rules.FireOnArm
+	}
+	if !fireOn && !overridesHoldFire {
 		return false
 	}
 
@@ -90,15 +94,19 @@ func (sys *WeaponSystem) shouldFire(shooter ecs.Entity, motionSpeed float32,
 	return true
 }
 
-// pickTarget walks the seer's Awareness FIFO and returns the most recent
-// hostile sighting still alive, in range, and within the awareness max-age.
+// pickTarget walks the seer's Awareness FIFO and returns the best hostile
+// sighting: highest weapon-vs-class multiplier first (a cannon prefers
+// armour, a coax prefers infantry), most recent among equals. Classes the
+// weapon can't hurt are skipped entirely.
 func (sys *WeaponSystem) pickTarget(
 	self ecs.Entity, ownFaction uint8, selfPos *components.WorldPos,
-	aware *components.Awareness, weapon *components.Weapon, now float32,
+	aware *components.Awareness, weapon *components.Weapon,
+	wspec *components.WeaponSpec, now float32,
 ) (ecs.Entity, components.WorldPos, bool) {
 	var bestEnt ecs.Entity
 	var bestPos components.WorldPos
 	bestTime := float32(0)
+	bestMul := float32(0)
 	rngSq := weapon.RangeM * weapon.RangeM
 	for i := range aware.LastSeen {
 		e := aware.LastSeen[i]
@@ -118,6 +126,14 @@ func (sys *WeaponSystem) pickTarget(
 		if f == nil || f.ID == ownFaction {
 			continue
 		}
+		class := components.ArmorClassSoft
+		if tv := sys.vehicleMap.Get(e.Target); tv != nil {
+			class = components.SpecForVehicle(tv.Kind).Class
+		}
+		mul := components.VsClassMul(wspec, class)
+		if mul < 0.05 {
+			continue
+		}
 		// Awareness.Pos is stale by up to one Vision tick; prefer live.
 		pos := e.Pos
 		if live := sys.posMap.Get(e.Target); live != nil {
@@ -134,7 +150,8 @@ func (sys *WeaponSystem) pickTarget(
 		if e.Flags&components.AwareDirect == 0 && sys.sharedLosBlocked(selfPos, e.Target, pos) {
 			continue
 		}
-		if e.Time > bestTime {
+		if mul > bestMul || (mul == bestMul && e.Time > bestTime) {
+			bestMul = mul
 			bestTime = e.Time
 			bestEnt = e.Target
 			bestPos = pos

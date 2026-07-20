@@ -9,8 +9,8 @@ import (
 	"rts-go/components"
 )
 
-// drawInspectorVehicle — Phase 19 M5 rows: class / HP / motion+gear /
-// road-follower status / faction / squad.
+// drawInspectorVehicle: class / HP / motion+gear / road status / faction /
+// squad rows.
 func drawInspectorVehicle(ctx InspectorCtx, ent ecs.Entity, x, y int32) int32 {
 	if !ctx.World.Alive(ent) {
 		drawText(ctx.Font, "(vehicle no longer alive)", x, y, inspectorFontSize, inspectorTextDim)
@@ -46,6 +46,19 @@ func drawInspectorVehicle(ctx InspectorCtx, ent ecs.Entity, x, y int32) int32 {
 	drawText(ctx.Font, "Road:      "+roadStatusLabel(ctx, ent),
 		x, y, inspectorFontSize, inspectorText)
 	y += inspectorRowH
+	if eq := ctx.EquipmentMap.Get(ent); eq != nil {
+		for _, w := range [2]ecs.Entity{eq.Primary, eq.Secondary} {
+			if w == (ecs.Entity{}) || !ctx.World.Alive(w) {
+				continue
+			}
+			if wc := ctx.WeaponMap.Get(w); wc != nil {
+				drawText(ctx.Font, fmt.Sprintf("Weapon:    %-8s ammo %d",
+					components.SpecForWeapon(wc.Kind).Name, wc.Ammo),
+					x, y, inspectorFontSize, inspectorText)
+				y += inspectorRowH
+			}
+		}
+	}
 	if ctx.FactionMap != nil {
 		if f := ctx.FactionMap.Get(ent); f != nil {
 			drawText(ctx.Font, "Faction:   "+factionLabel(f.ID),

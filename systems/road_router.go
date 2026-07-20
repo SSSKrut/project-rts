@@ -8,11 +8,10 @@ import (
 	"rts-go/components"
 )
 
-// RoadRouter plans road itineraries over the RoadGraph (Phase 19 M2 +
-// edge-ramps ISSUES #16). Edge cost is travel time; off-road legs are costed
-// at a locomotion-dependent PLANNING speed below the spec value (terrain
-// roughness — and the P5 hard road preference for wheels), so class data
-// still decides: a truck detours far for asphalt, a tank cuts corners.
+// RoadRouter plans road itineraries over the RoadGraph. Edge cost is
+// travel time; off-road legs are costed at a locomotion-dependent PLANNING
+// speed below the spec value (terrain roughness bites wheels hardest), so
+// class data decides: a truck detours far for asphalt, a tank cuts corners.
 // On/off-ramps are the PROJECTIONS of start/goal onto edges (virtual entry /
 // exit points), not just graph nodes — driving parallel to a road 5 m away
 // enters it immediately. Bridges are enterable only via their end nodes.
@@ -59,9 +58,9 @@ func NewRoadRouter(w *ecs.World) *RoadRouter {
 
 const roadDirtSpeedMul float32 = 0.8
 
-// Planning-only off-road speed multipliers (P5 hard preference): wheels
-// crawl off-road in practice (obstacles, ruts), tracks cut corners readily.
-// Actual drive speed stays at the spec value.
+// Planning-only off-road speed multipliers: wheels crawl off-road in
+// practice (obstacles, ruts), tracks cut corners readily. Actual drive
+// speed stays at the spec value.
 const (
 	planOffroadMulWheeled float32 = 0.6
 	planOffroadMulTracked float32 = 0.9
