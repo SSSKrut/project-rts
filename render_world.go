@@ -10,6 +10,24 @@ import (
 	"rts-go/systems"
 )
 
+// Prop draw distances (ISSUES #15): full detail near, trees-as-cones +
+// planes only in the far band, nothing beyond cull. Behind-camera props are
+// skipped outside the near ring (orbit swings keep the surroundings).
+const (
+	propFullDetailDistSq float32 = 120 * 120
+	propCullDistSq       float32 = 260 * 260
+	propNearKeepDistSq   float32 = 40 * 40
+)
+
+// drawPropFar — reduced far-band LOD: a tree collapses to one 4-segment
+// canopy cone. Caller culls small props (bushes/rocks) in the far band.
+func drawPropFar(meta components.PropMeta, pos rl.Vector3, scale float32) {
+	trunkH := meta.Size.Y * scale
+	canopyR := meta.Size.Z * scale
+	tip := rl.Vector3{X: pos.X, Y: pos.Y + trunkH*2.5, Z: pos.Z}
+	rl.DrawCylinderEx(pos, tip, canopyR, 0, 4, meta.Color)
+}
+
 func drawProp(meta components.PropMeta, pos rl.Vector3, yaw, scale float32) {
 	switch meta.Primitive {
 	case components.PrimitiveCube:

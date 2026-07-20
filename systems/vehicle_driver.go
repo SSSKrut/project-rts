@@ -103,7 +103,7 @@ func (sys *VehicleDriverSystem) step(veh *components.Vehicle, pos *components.Wo
 	if route != nil && (route.Planned == 0 || route.Goal != action.Target) {
 		sys.planRoute(pos, action.Target, spec, route)
 	}
-	if route != nil && route.Head < route.Count {
+	if route != nil && route.Planned == 1 && route.Phase < 3 {
 		sys.stepRoute(pos, mot, spec, route, follower, dt)
 		return
 	}

@@ -33,16 +33,24 @@ type RoadFollower struct {
 	T    float32
 }
 
-// RoadRoute is the planned node sequence for the head MoveTo action
-// (Phase 19 M2). Planned != 0 means the routing decision was made for Goal
-// (Count == 0 → drive straight off-road); a head action whose target differs
-// from Goal triggers a replan.
+// RoadRoute is the planned road itinerary for the head MoveTo action
+// (Phase 19 M2, edge-ramps ISSUES #16). Planned != 0 means the routing
+// decision was made for Goal; a head action whose target differs triggers a
+// replan. Entry/Exit are mid-edge ramp points (projection param T), -1 when
+// the route starts/ends at a node. Phase: 0 = off-road to entry point,
+// 1 = node chain, 2 = along ExitEdge to exit point, 3 = exhausted (drive
+// straight to Goal). Planned with Phase 3 and no legs = off-road decision.
 type RoadRoute struct {
-	Nodes   [32]uint16
-	Count   uint8
-	Head    uint8
-	Planned uint8
-	Goal    WorldPos
+	Nodes     [32]uint16
+	Count     uint8
+	Head      uint8
+	Planned   uint8
+	Phase     uint8
+	EntryEdge int32
+	EntryT    float32
+	ExitEdge  int32
+	ExitT     float32
+	Goal      WorldPos
 }
 
 // SmokeField is a short-lived concealment volume spawned by the

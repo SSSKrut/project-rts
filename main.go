@@ -797,6 +797,15 @@ func main() {
 		vehicleMap:       ecs.NewMap[components.Vehicle](app.World),
 		squadColor:       squadColor,
 	}
+	routePrevCtx := &routePreviewCtx{
+		world:      app.World,
+		router:     systems.NewRoadRouter(app.World),
+		vehicleMap: ghostCtx.vehicleMap,
+		routeMap:   ecs.NewMap[components.RoadRoute](app.World),
+		posMap:     posMap,
+		memberMap:  squadMemberMap,
+		squadColor: squadColor,
+	}
 
 	orderMarkerRenderCtx := orderMarkerCtx{
 		world:          app.World,
@@ -1947,6 +1956,9 @@ func main() {
 				default:
 					selected = append(selected[:0], b.Units...)
 				}
+				// Recall snapshots go stale — this runs BEFORE the frame's
+				// post-Advance scrub, and RMB handlers deref this frame.
+				selected = compactAlive(app.World, selected)
 			}
 		}
 
@@ -2169,6 +2181,12 @@ func main() {
 			continue
 		}
 
+		hitchCheck(app, rl.GetFrameTime()*1000, rl.GetTime())
+
+		// Units die inside Advance; scrub the selection before the render
+		// half derefs components (Ark Map.Get panics on dead entities).
+		selected = compactAlive(app.World, selected)
+
 		anchorPos = posMap.Get(anchor)
 		anchorRender := anchorPos.ToRenderSpace(systems.CurrentOriginChunk)
 
@@ -2285,11 +2303,38 @@ func main() {
 
 		propLive := 0
 		bridgeLive := 0
+		camPos := systems.CurrentCamera.Position
+		camFwdX := systems.CurrentCamera.Target.X - camPos.X
+		camFwdZ := systems.CurrentCamera.Target.Z - camPos.Z
 		qp := propFilter.Query()
 		for qp.Next() {
 			pos, prop := qp.Get()
 			renderPos := pos.ToRenderSpace(systems.CurrentOriginChunk)
-			drawProp(propRegistry.Metas[prop.Type], renderPos, prop.Yaw, prop.Scale)
+			pdx := renderPos.X - camPos.X
+			pdz := renderPos.Z - camPos.Z
+			pDistSq := pdx*pdx + pdz*pdz
+			if pDistSq > propCullDistSq {
+				continue
+			}
+			if pDistSq > propNearKeepDistSq && pdx*camFwdX+pdz*camFwdZ < 0 {
+				continue
+			}
+			meta := propRegistry.Metas[prop.Type]
+			if pDistSq > propFullDetailDistSq {
+				switch meta.Primitive {
+				case components.PrimitiveTree:
+					drawPropFar(meta, renderPos, prop.Scale)
+					propLive++
+				case components.PrimitivePlane:
+					drawProp(meta, renderPos, prop.Yaw, prop.Scale)
+					propLive++
+					if prop.Type == components.PropBridge {
+						bridgeLive++
+					}
+				}
+				continue
+			}
+			drawProp(meta, renderPos, prop.Yaw, prop.Scale)
 			propLive++
 			if prop.Type == components.PropBridge {
 				bridgeLive++
@@ -2638,6 +2683,8 @@ func main() {
 			ghostTarget = rmbState.PressTarget
 			ghostTargetOK = true
 		}
+		drawVehicleRoutes(routePrevCtx, selected,
+			focused == ui.Panel3D && ghostTargetOK, ghostTarget)
 		drawSelectionGhost(ghostCtx, selected, focused == ui.Panel3D, ghostTarget, ghostTargetOK,
 			ghostDragFacing, ghostPopupKind, ghostPopupLevel, levelMap)
 

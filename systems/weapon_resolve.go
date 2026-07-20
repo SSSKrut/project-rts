@@ -152,6 +152,7 @@ func resolveShot(
 	}
 	*suppBuf = append(*suppBuf, suppressionEvent{
 		impact:  impact,
+		muzzle:  s.muzzlePos,
 		hitMul:  hitMul,
 		shooter: s.shooter,
 	})

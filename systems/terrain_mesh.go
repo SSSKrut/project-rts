@@ -106,6 +106,12 @@ type builtMesh struct {
 	tris    int32
 }
 
+// meshBudgetPerTick caps the rebuild+upload burst: a streaming-ring shift
+// dirties a whole chunk row at once and a 20-mesh burst is a visible hitch
+// (ISSUES #15). Leftovers keep MeshDirty and drain over the next ticks;
+// Active (near-camera) chunks go first.
+const meshBudgetPerTick = 3
+
 func (sys TerrainMeshSystem) Update(ctx core.UpdateContext) {
 	if ctx.Tier != core.LODTierActive {
 		return
@@ -120,11 +126,15 @@ func (sys TerrainMeshSystem) Update(ctx core.UpdateContext) {
 			b := buildChunkMesh(hm.Heights, components.ChunkResolution)
 			b.id = q.Entity()
 			built = append(built, b)
+			if len(built) >= meshBudgetPerTick {
+				q.Close()
+				break
+			}
 		}
 	}
 
 	// Relevant: every-other-vertex decimation. (65+1)/2 = 33.
-	{
+	if len(built) < meshBudgetPerTick {
 		q := sys.relevantFilter.Query()
 		for q.Next() {
 			hm, _, _ := q.Get()
@@ -132,6 +142,10 @@ func (sys TerrainMeshSystem) Update(ctx core.UpdateContext) {
 			b := buildDecimatedMesh(hm.Heights, components.ChunkResolution, res)
 			b.id = q.Entity()
 			built = append(built, b)
+			if len(built) >= meshBudgetPerTick {
+				q.Close()
+				break
+			}
 		}
 	}
 

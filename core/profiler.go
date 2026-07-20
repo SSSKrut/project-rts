@@ -152,6 +152,40 @@ type SystemMedian struct {
 	Median time.Duration
 }
 
+// LastFrameSystems returns the top-n systems of the most recent completed
+// tick by raw duration (not median) — hitch forensics (ISSUES #15).
+func (p *Profiler) LastFrameSystems(n int) []SystemMedian {
+	idx := p.head - 1
+	if idx < 0 {
+		if !p.full {
+			return nil
+		}
+		idx = ProfileWindow - 1
+	}
+	f := &p.samples[idx]
+	out := make([]SystemMedian, p.systemCount)
+	for i := 0; i < p.systemCount; i++ {
+		out[i] = SystemMedian{Name: p.systemNames[i], Median: time.Duration(f.perSystemNs[i])}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Median > out[j].Median })
+	if len(out) > n {
+		out = out[:n]
+	}
+	return out
+}
+
+// LastFrameTick returns the most recent completed tick's total duration.
+func (p *Profiler) LastFrameTick() time.Duration {
+	idx := p.head - 1
+	if idx < 0 {
+		if !p.full {
+			return 0
+		}
+		idx = ProfileWindow - 1
+	}
+	return time.Duration(p.samples[idx].tickTotalNs)
+}
+
 // SystemMediansSorted returns every registered system's median, sorted
 // descending by Median.
 func (p *Profiler) SystemMediansSorted() []SystemMedian {

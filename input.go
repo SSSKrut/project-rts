@@ -112,6 +112,20 @@ func mouseTargetWorldPos(cam rl.Camera3D, anchorRender rl.Vector3,
 	return (components.WorldPos{Chunk: systems.CurrentOriginChunk}).Add(hit), true
 }
 
+// compactAlive filters dead entities out of a selection-like list in place.
+// Units die inside App.Advance while selected (and bind snapshots go stale);
+// Ark's Map.Get PANICS on a dead entity, so every list that survives a tick
+// must be scrubbed before component derefs.
+func compactAlive(world *ecs.World, list []ecs.Entity) []ecs.Entity {
+	out := list[:0]
+	for _, e := range list {
+		if e != (ecs.Entity{}) && world.Alive(e) {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
 // bindEntry stores one slot of the Ctrl+1..5 / 1..5 selection-recall ring.
 // If Squad is non-zero, recall expands to whoever is currently in the roster
 // (binding a squad and then losing members still works). Squad == zero ⇒

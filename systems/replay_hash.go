@@ -114,6 +114,11 @@ func (r *ReplayHasher) Hash() uint64 {
 			u8(rt.Count)
 			u8(rt.Head)
 			u8(rt.Planned)
+			u8(rt.Phase)
+			u32(uint32(rt.EntryEdge))
+			f32(rt.EntryT)
+			u32(uint32(rt.ExitEdge))
+			f32(rt.ExitT)
 			if rt.Head < rt.Count {
 				u32(uint32(rt.Nodes[rt.Head]))
 			}

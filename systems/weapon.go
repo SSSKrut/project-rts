@@ -151,9 +151,13 @@ type threatEvent struct {
 }
 
 // suppressionEvent: per-impact propagation. hitMul = 0.5 on direct hit, 0.2
-// on miss (distance-scaled in the post-pass).
+// on miss (distance-scaled in the post-pass). muzzle rides along because the
+// DANGER DIRECTION is the shooter, not the crater: an overshoot lands past
+// the unit and an impact-pos vote would point the threat BACKWARD (ISSUES
+// #18 — units took the enemy-facing side of cover).
 type suppressionEvent struct {
 	impact  rl.Vector3
+	muzzle  components.WorldPos
 	hitMul  float32
 	shooter ecs.Entity
 }

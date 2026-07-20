@@ -128,8 +128,17 @@ func (sys PropSpawnSystem) Update(ctx core.UpdateContext) {
 	var pending []pendingProp
 	var clearedChunks []ecs.Entity
 
+	// A streaming-ring shift dirties a whole chunk row; 64 cells × 3 biome
+	// noises each is a visible burst (ISSUES #15). Leftover chunks keep
+	// PropsDirty and drain over the next ticks.
+	const propSpawnChunkBudget = 2
+
 	q := sys.chunkFilter.Query()
 	for q.Next() {
+		if len(clearedChunks) >= propSpawnChunkBudget {
+			q.Close()
+			break
+		}
 		cc, _, _ := q.Get()
 		ccVal := *cc
 		clearedChunks = append(clearedChunks, q.Entity())

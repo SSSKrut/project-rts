@@ -71,6 +71,13 @@ const (
 	// heightmap (#13). _line runs on the default map, _slope on `hills`.
 	aiSceneMarchLine  = "ai_march_line"
 	aiSceneMarchSlope = "ai_march_slope"
+
+	// ai_cover_side (ISSUES #18): a 2-man squad stands BETWEEN a lone oak
+	// and a synthetic threat pulsing from the north (DangerBuffer injection,
+	// no bullets). The scramble must relocate both men to slots on the far
+	// (south) side of the trunk. PASS = both assigned slots south of the
+	// tree AND both units parked on them.
+	aiSceneCoverSide = "ai_cover_side"
 )
 
 // aiSceneMapName lets a scene demand a specific map manifest ("" = default).
@@ -153,6 +160,8 @@ func aiSceneAnchorPos() components.WorldPos {
 		return components.WorldPos{}.Add(rl.Vector3{X: 75, Z: 10})
 	case aiSceneMarchSlope:
 		return components.WorldPos{}.Add(rl.Vector3{X: 20, Z: -10})
+	case aiSceneCoverSide:
+		return components.WorldPos{}.Add(rl.Vector3{X: 40, Z: -30})
 	}
 	return components.WorldPos{}
 }
@@ -452,6 +461,64 @@ func aiVehicleRoadSceneSpawn(world *ecs.World, vehicleFactory *entities.VehicleF
 	}
 }
 
+// aiCoverSceneSpawn (#18): lone oak at (40,-38), 2-man squad north of it at
+// z=-30, synthetic shooter position further north at (40,-10).
+func aiCoverSceneSpawn(
+	world *ecs.World,
+	squadService *systems.SquadService,
+	unitFactory aiUnitSpawn,
+	posMap *ecs.Map[components.WorldPos],
+	rosterMap *ecs.Map[components.CommandRoster],
+) *aiTestState {
+	wp := func(x, z float32) components.WorldPos {
+		p := components.WorldPos{}.Add(rl.Vector3{X: x, Z: z})
+		p.Local.Y = systems.GroundHeight(x, z)
+		return p
+	}
+	treePos := wp(40, -38)
+	tree := world.NewEntity()
+	posMap.Add(tree, &treePos)
+	ecs.NewMap[components.Prop](world).Add(tree,
+		&components.Prop{Type: components.PropOak, Yaw: 0, Scale: 1})
+	ecs.NewMap[components.LODRelevant](world).Add(tree, &components.LODRelevant{})
+	// Registering in PropChunkIndex is what makes the bake emit cover slots
+	// (and eviction tear them down with the chunk).
+	propIdxRes := ecs.NewResource[systems.PropChunkIndex](world)
+	if idx := propIdxRes.Get(); idx != nil {
+		idx.Loaded[treePos.Chunk] = append(idx.Loaded[treePos.Chunk], tree)
+	}
+
+	u1 := unitFactory(wp(36, -30))
+	u2 := unitFactory(wp(44, -30))
+	squad := squadService.CreateFromUnits([]ecs.Entity{u1, u2}, components.FormationLine)
+	if squad == (ecs.Entity{}) {
+		fmt.Printf("[ai-test %s] FAILED TO FORM SQUAD — aborting\n", aiSceneID())
+		return nil
+	}
+	return &aiTestState{
+		sceneID:         aiSceneID(),
+		squad:           squad,
+		coverActive:     true,
+		coverMembers:    []ecs.Entity{u1, u2},
+		coverTreeX:      40,
+		coverTreeZ:      -38,
+		coverShooter:    wp(40, -10),
+		coverSlotZ:      map[ecs.Entity]float32{},
+		coverSlotOf:     map[ecs.Entity]ecs.Entity{},
+		DangerMap:       ecs.NewMap[components.DangerBuffer](world),
+		OverrideMap:     ecs.NewMap[components.TacticalOverride](world),
+		World:           world,
+		SquadService:    squadService,
+		PosMap:          posMap,
+		RosterMap:       rosterMap,
+		MotionMap:       ecs.NewMap[components.Motion](world),
+		orderAt:         aiOrderAt,
+		verdictAt:       30,
+		nextSampleAt:    aiOrderAt + 3,
+		coverNextInject: aiOrderAt,
+	}
+}
+
 // aiSceneSpawn instantiates the squad + captures the entities the auto-
 // verifier needs. Returns nil for non-AI scenes.
 func aiSceneSpawn(
@@ -477,6 +544,9 @@ func aiSceneSpawn(
 	if id := aiSceneID(); id == aiSceneMarchLine || id == aiSceneMarchSlope {
 		return aiMarchSceneSpawn(world, squadService, roleService, unitFactory,
 			playerFaction, posMap, rosterMap)
+	}
+	if aiSceneID() == aiSceneCoverSide {
+		return aiCoverSceneSpawn(world, squadService, unitFactory, posMap, rosterMap)
 	}
 	squad := squadService.CreateFromTemplate(
 		systems.TmplMotorRifle, aiSpawnPos(),
@@ -688,6 +758,18 @@ type aiTestState struct {
 	VehFollowerMap   *ecs.Map[components.RoadFollower]
 	vehGraphRes      ecs.Resource[components.RoadGraph]
 
+	// Set for ai_cover_side (#18): synthetic-threat cover-side metric.
+	coverActive     bool
+	coverMembers    []ecs.Entity
+	coverTreeX      float32
+	coverTreeZ      float32
+	coverShooter    components.WorldPos
+	coverNextInject float32
+	coverSlotZ      map[ecs.Entity]float32
+	coverSlotOf     map[ecs.Entity]ecs.Entity
+	DangerMap       *ecs.Map[components.DangerBuffer]
+	OverrideMap     *ecs.Map[components.TacticalOverride]
+
 	// Set for ai_march_* scenes (#12/#13): movement-hygiene metrics.
 	marchActive   bool
 	marchGoal     components.WorldPos
@@ -757,6 +839,10 @@ func (s *aiTestState) Update(elapsed float32) {
 		return
 	}
 	s.elapsed = elapsed
+	if s.coverActive {
+		s.updateCoverSide(elapsed)
+		return
+	}
 	if s.marchActive {
 		s.updateMarch(elapsed)
 		return
@@ -1026,6 +1112,101 @@ func (s *aiTestState) updateMarch(elapsed float32) {
 		fmt.Printf("== VERDICT [%s]: %s  (arrived=%v t=%.1fs side=%.3f churn=%.0fdeg clear=[%.2f..%.2f])\n",
 			s.sceneID, verdict, arrived, elapsed, sideFrac, s.marchChurnDeg,
 			s.marchMinClear, s.marchMaxClear)
+		fmt.Println("============================================================")
+		s.verdictDone = true
+	}
+}
+
+// updateCoverSide (#18): pulse suppression events from the north shooter
+// position into both members' DangerBuffers (t=2..12, every 0.5 s), track
+// TacticalOverride.AssignedSlot, and pass when both men park on slots south
+// of the trunk. Early verdict once both are within 1.5 m of their slots —
+// after the threat decays the override clears and formation pulls them back.
+func (s *aiTestState) updateCoverSide(elapsed float32) {
+	if s.verdictDone {
+		return
+	}
+	if !s.orderFired {
+		if elapsed < s.orderAt {
+			return
+		}
+		fmt.Println("============================================================")
+		fmt.Printf("== AI COVER SCENE: %s  tree=(%.0f,%.0f) shooter north\n",
+			s.sceneID, s.coverTreeX, s.coverTreeZ)
+		fmt.Println("============================================================")
+		s.orderFired = true
+	}
+	if elapsed <= 12 && elapsed >= s.coverNextInject {
+		s.coverNextInject = elapsed + 0.5
+		for _, u := range s.coverMembers {
+			if u == (ecs.Entity{}) || !s.World.Alive(u) {
+				continue
+			}
+			if buf := s.DangerMap.Get(u); buf != nil {
+				components.PushDanger(buf, components.DangerEvent{
+					Kind:     components.DangerBulletImpact,
+					Pos:      s.coverShooter,
+					Strength: 0.35,
+					Time:     elapsed,
+				})
+			}
+		}
+	}
+
+	assigned := 0
+	parked := 0
+	southSlots := 0
+	for _, u := range s.coverMembers {
+		if u == (ecs.Entity{}) || !s.World.Alive(u) {
+			continue
+		}
+		if ov := s.OverrideMap.Get(u); ov != nil && ov.AssignedSlot != (ecs.Entity{}) {
+			if sp := s.PosMap.Get(ov.AssignedSlot); sp != nil {
+				s.coverSlotOf[u] = ov.AssignedSlot
+				s.coverSlotZ[u] = float32(sp.Chunk.Z)*components.ChunkSize + sp.Local.Z
+			}
+		}
+		slot, ok := s.coverSlotOf[u]
+		if !ok {
+			continue
+		}
+		assigned++
+		if s.coverSlotZ[u] < s.coverTreeZ-0.5 {
+			southSlots++
+		}
+		if sp := s.PosMap.Get(slot); sp != nil && s.World.Alive(slot) {
+			up := s.PosMap.Get(u)
+			if up != nil {
+				d := up.Sub(*sp)
+				if d.X*d.X+d.Z*d.Z < 1.5*1.5 {
+					parked++
+				}
+			}
+		}
+	}
+
+	if elapsed >= s.nextSampleAt && elapsed < s.verdictAt {
+		s.nextSampleAt = elapsed + aiSampleEvery
+		fmt.Printf("[ai-test %s] t=%.1fs assigned=%d south=%d parked=%d\n",
+			s.sceneID, elapsed, assigned, southSlots, parked)
+	}
+
+	n := len(s.coverMembers)
+	done := assigned == n && parked == n
+	if done || elapsed >= s.verdictAt {
+		pass := assigned == n && southSlots == n && parked == n
+		verdict := "FAIL"
+		if pass {
+			verdict = "PASS"
+		}
+		fmt.Println("============================================================")
+		fmt.Printf("== VERDICT [%s]: %s  (assigned=%d/%d southSlots=%d parked=%d treeZ=%.1f)\n",
+			s.sceneID, verdict, assigned, n, southSlots, parked, s.coverTreeZ)
+		for _, u := range s.coverMembers {
+			if z, ok := s.coverSlotZ[u]; ok {
+				fmt.Printf("==   unit %v slotZ=%.1f dz=%.1f\n", u, z, z-s.coverTreeZ)
+			}
+		}
 		fmt.Println("============================================================")
 		s.verdictDone = true
 	}

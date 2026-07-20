@@ -79,15 +79,15 @@ func (sys *WeaponSystem) applySplashDamage(ev splashEvent, hash *core.SpatialHas
 
 // Pushes DangerBulletImpact into each nearby unit's DangerBuffer with
 // Strength = hitMul * (1 - d/radius). ThreatSystem drains the buffer next
-// tick to update Threat.Suppression / ThreatDir.
+// tick to update Threat.Suppression / ThreatDir. Event Pos = the MUZZLE:
+// ThreatDir votes must point away from the shooter — impact positions
+// scatter around the target and randomise the cover side (ISSUES #18).
 func (sys *WeaponSystem) propagateSuppression(ev suppressionEvent, now float32) {
 	hash := sys.spatialHash.Get()
 	if hash == nil {
 		return
 	}
-	impactPos := components.Normalize(components.WorldPos{
-		Local: rl.Vector3{X: ev.impact.X, Y: ev.impact.Y, Z: ev.impact.Z},
-	})
+	dangerPos := ev.muzzle
 	hash.ForEachInRadius(ev.impact.X, ev.impact.Z, suppressionRadius, func(ent ecs.Entity, dSq float32) {
 		if !sys.worldRef.Alive(ent) {
 			return
@@ -113,7 +113,7 @@ func (sys *WeaponSystem) propagateSuppression(ev suppressionEvent, now float32) 
 		components.PushDanger(buf, components.DangerEvent{
 			Kind:     components.DangerBulletImpact,
 			Source:   ev.shooter,
-			Pos:      impactPos,
+			Pos:      dangerPos,
 			Strength: ev.hitMul * falloff,
 			Time:     now,
 		})

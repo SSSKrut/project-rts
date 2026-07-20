@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime/debug"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -82,6 +83,55 @@ func drawFatalScreen(f *simFatalState, font rl.Font) {
 		line(ln, 12, rl.Color{R: 170, G: 175, B: 185, A: 255})
 	}
 	rl.EndDrawing()
+}
+
+// Hitch logger (ISSUES #15): flags frames that are both slow in absolute
+// terms and an outlier vs the rolling median, then prints the last tick's
+// top systems — spike attribution without a trace build. tick << frame ⇒
+// the spike is render-side (draw calls / uploads), not sim.
+const (
+	hitchAbsMs   float32 = 30
+	hitchFactor  float32 = 2.5
+	hitchLogysec float64 = 1
+)
+
+var (
+	hitchWindow  [60]float32
+	hitchScratch [60]float32
+	hitchHead    int
+	hitchFilled  bool
+	hitchLastLog float64
+)
+
+func hitchCheck(app *core.App, frameMs float32, nowSec float64) {
+	hitchWindow[hitchHead] = frameMs
+	hitchHead++
+	if hitchHead >= len(hitchWindow) {
+		hitchHead = 0
+		hitchFilled = true
+	}
+	n := hitchHead
+	if hitchFilled {
+		n = len(hitchWindow)
+	}
+	if n < 30 || frameMs < hitchAbsMs {
+		return
+	}
+	copy(hitchScratch[:n], hitchWindow[:n])
+	s := hitchScratch[:n]
+	sort.Slice(s, func(i, j int) bool { return s[i] < s[j] })
+	median := s[n/2]
+	if frameMs < hitchFactor*median || nowSec-hitchLastLog < hitchLogysec {
+		return
+	}
+	hitchLastLog = nowSec
+	tickMs := float64(app.Prof.LastFrameTick().Nanoseconds()) / 1e6
+	var b strings.Builder
+	fmt.Fprintf(&b, "[hitch] frame %.1fms (median %.1f) tick %.1fms |", frameMs, median, tickMs)
+	for _, sm := range app.Prof.LastFrameSystems(3) {
+		fmt.Fprintf(&b, " %s %.1f", sm.Name, float64(sm.Median.Nanoseconds())/1e6)
+	}
+	fmt.Println(b.String())
 }
 
 // devComponentDump — raw reflect view of every component on `ent`, one line

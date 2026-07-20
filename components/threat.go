@@ -90,7 +90,9 @@ const (
 )
 
 // DangerEvent is one typed signal pushed into a unit's DangerBuffer.
-// ThreatSystem drains the buffer each tick.
+// ThreatSystem drains the buffer each tick. Pos is where the danger
+// EMANATES FROM (bullet impacts carry the shooter's muzzle, not the crater —
+// ThreatDir votes derive from Pos and cover must face the shooter).
 type DangerEvent struct {
 	Kind     DangerKind
 	Source   ecs.Entity

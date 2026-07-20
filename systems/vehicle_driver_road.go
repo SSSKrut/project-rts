@@ -1,12 +1,12 @@
 package systems
 
 import (
+	"fmt"
+
 	"rts-go/components"
 )
 
 const (
-	// Node pop radii: the on-ramp entry needs a tight approach, edge nodes
-	// pop early (base + half road width) so the arc rounds the corner.
 	vehRampArrivalRadius float32 = 2.5
 	vehNodePopBase       float32 = 3.0
 	// Sticky-to-edge: lateral drift beyond halfWidth+this aims the hull back
@@ -15,11 +15,25 @@ const (
 	vehRejoinAhead float32 = 6.0
 )
 
+// rampPopRadius scales the waypoint pop with the hull's turning circle: a
+// truck (R=8) physically cannot hit a 2.5 m point off-arc and orbits it
+// forever. Popping intermediate ramp/node points early is free — the next
+// leg re-aims.
+func rampPopRadius(base float32, spec *components.VehicleSpec) float32 {
+	if r := 0.75 * spec.TurnRadiusM; r > base {
+		return r
+	}
+	return base
+}
+
 func clearRoute(route *components.RoadRoute, follower *components.RoadFollower) {
 	if route != nil {
 		route.Count = 0
 		route.Head = 0
 		route.Planned = 0
+		route.Phase = 0
+		route.EntryEdge = -1
+		route.ExitEdge = -1
 	}
 	if follower != nil {
 		follower.Edge = -1
@@ -32,85 +46,155 @@ func (sys *VehicleDriverSystem) planRoute(pos *components.WorldPos,
 	route.Goal = target
 	route.Count = 0
 	route.Head = 0
+	route.Phase = 3
+	route.EntryEdge = -1
+	route.ExitEdge = -1
 	sx, sz := worldXZ(*pos)
 	gx, gz := worldXZ(target)
-	nodes := sys.router.PlanRoute(sx, sz, gx, gz, spec)
-	if len(nodes) < 2 || len(nodes) > len(route.Nodes) {
+	plan, ok := sys.router.PlanRoute(sx, sz, gx, gz, spec)
+	if !ok || len(plan.Nodes) > len(route.Nodes) {
 		return
 	}
-	for i, nid := range nodes {
+	for i, nid := range plan.Nodes {
 		route.Nodes[i] = nid
 	}
-	route.Count = uint8(len(nodes))
+	route.Count = uint8(len(plan.Nodes))
+	route.EntryEdge = plan.EntryEdge
+	route.EntryT = plan.EntryT
+	route.ExitEdge = plan.ExitEdge
+	route.ExitT = plan.ExitT
+	route.Phase = 0
+	if debugLog {
+		fmt.Printf("[route] start=(%.1f,%.1f) goal=(%.1f,%.1f) nodes=%v entry=(%d,%.2f) exit=(%d,%.2f)\n",
+			sx, sz, gx, gz, plan.Nodes, plan.EntryEdge, plan.EntryT, plan.ExitEdge, plan.ExitT)
+	}
 }
 
-// stepRoute drives the current route leg: off-road to the entry node
-// (Head == 0, reverse allowed), then edge to edge at road speed. Writes
-// RoadFollower{Edge, T} while on an edge — GroundStick reads it for
-// bridge-deck Y.
+// stepRoute advances the itinerary phases: off-road to the entry ramp →
+// node chain edge by edge → along ExitEdge to the exit ramp. Writes
+// RoadFollower{Edge, T} whenever the hull rides a known edge — GroundStick
+// reads it for bridge-deck Y. Phase 3 hands control back to the direct leg.
 func (sys *VehicleDriverSystem) stepRoute(pos *components.WorldPos, mot *components.Motion,
 	spec *components.VehicleSpec, route *components.RoadRoute,
 	follower *components.RoadFollower, dt float32) {
 	g := sys.router.Graph()
-	node := int(route.Nodes[route.Head])
-	if g == nil || node >= len(g.Nodes) {
-		clearRoute(route, follower)
-		return
-	}
-	px, pz := worldXZ(*pos)
-	tx, tz := worldXZ(g.Nodes[node].Pos)
-	aimX, aimZ := tx, tz
-
-	cruise := spec.MaxSpeedOffroad
-	popR := vehRampArrivalRadius
-	onEdge := false
-	if route.Head > 0 {
-		prev := int(route.Nodes[route.Head-1])
-		if prev < len(g.Nodes) {
-			if ei := sys.router.EdgeBetween(uint16(prev), uint16(node)); ei >= 0 {
-				e := &g.Edges[ei]
-				cruise = roadSpeedForEdge(e.Kind, spec)
-				popR = vehNodePopBase + e.Width*0.5
-				onEdge = true
-				ax, az := worldXZ(g.Nodes[prev].Pos)
-				segLen := dist2D(ax, az, tx, tz)
-				if segLen > 0 {
-					t := ((px-ax)*(tx-ax) + (pz-az)*(tz-az)) / (segLen * segLen)
-					if t < 0 {
-						t = 0
-					} else if t > 1 {
-						t = 1
-					}
-					if follower != nil {
-						follower.Edge = ei
-						follower.T = t
-					}
-					cx := ax + t*(tx-ax)
-					cz := az + t*(tz-az)
-					if dist2D(px, pz, cx, cz) > e.Width*0.5+vehRejoinSlack {
-						at := t + vehRejoinAhead/segLen
-						if at > 1 {
-							at = 1
-						}
-						aimX = ax + at*(tx-ax)
-						aimZ = az + at*(tz-az)
-					}
-				}
-			}
-		}
-	}
-	if !onEdge && follower != nil {
-		follower.Edge = -1
-	}
-
-	dist := dist2D(px, pz, tx, tz)
-	if dist < popR {
-		route.Head++
-		if route.Head >= route.Count && follower != nil {
+	if g == nil {
+		route.Phase = 3
+		if follower != nil {
 			follower.Edge = -1
 		}
 		return
 	}
-	cruise *= sys.slopeMul(pos, mot.Yaw)
-	sys.drive(pos, mot, spec, aimX-px, aimZ-pz, dist, cruise, route.Head == 0, false, dt)
+	px, pz := worldXZ(*pos)
+
+	if route.Phase == 0 {
+		if route.EntryEdge < 0 || int(route.EntryEdge) >= len(g.Edges) {
+			route.Phase = 1
+		} else {
+			ex, ez := sys.router.EdgePoint(route.EntryEdge, route.EntryT)
+			d := dist2D(px, pz, ex, ez)
+			if d < rampPopRadius(vehRampArrivalRadius, spec) {
+				route.Phase = 1
+			} else {
+				if follower != nil {
+					follower.Edge = -1
+				}
+				cruise := spec.MaxSpeedOffroad * sys.slopeMul(pos, mot.Yaw)
+				sys.drive(pos, mot, spec, ex-px, ez-pz, d, cruise, true, false, dt)
+				return
+			}
+		}
+	}
+
+	for route.Phase == 1 {
+		if route.Head >= route.Count {
+			route.Phase = 2
+			break
+		}
+		node := int(route.Nodes[route.Head])
+		if node >= len(g.Nodes) {
+			route.Phase = 3
+			if follower != nil {
+				follower.Edge = -1
+			}
+			return
+		}
+		tx, tz := worldXZ(g.Nodes[node].Pos)
+		ei := int32(-1)
+		if route.Head > 0 {
+			prev := int(route.Nodes[route.Head-1])
+			if prev < len(g.Nodes) {
+				ei = sys.router.EdgeBetween(uint16(prev), uint16(node))
+			}
+		} else if route.EntryEdge >= 0 {
+			ei = route.EntryEdge
+		}
+		aimX, aimZ := tx, tz
+		popR := rampPopRadius(vehRampArrivalRadius, spec)
+		cruise := spec.MaxSpeedOffroad
+		if ei >= 0 && int(ei) < len(g.Edges) {
+			e := &g.Edges[ei]
+			cruise = roadSpeedForEdge(e.Kind, spec)
+			popR = rampPopRadius(vehNodePopBase+e.Width*0.5, spec)
+			t, lat := sys.router.projOnEdge(int(ei), px, pz)
+			if follower != nil {
+				follower.Edge = ei
+				follower.T = t
+			}
+			if elen := sys.router.EdgeLen(ei); lat > e.Width*0.5+vehRejoinSlack && elen > 0 {
+				// Rejoin aims ahead ALONG THE TRAVEL DIRECTION: toward From
+				// means decreasing T. A +T-blind rejoin point runs away up
+				// the edge and drags the hull to the wrong end.
+				dir := float32(1)
+				if int(e.From) == node {
+					dir = -1
+				}
+				at := t + dir*vehRejoinAhead/elen
+				if at > 1 {
+					at = 1
+				} else if at < 0 {
+					at = 0
+				}
+				aimX, aimZ = sys.router.EdgePoint(ei, at)
+			}
+		} else if follower != nil {
+			follower.Edge = -1
+		}
+		d := dist2D(px, pz, tx, tz)
+		if d < popR {
+			route.Head++
+			continue
+		}
+		cruise *= sys.slopeMul(pos, mot.Yaw)
+		allowRev := route.Head == 0 && route.EntryEdge < 0
+		sys.drive(pos, mot, spec, aimX-px, aimZ-pz, d, cruise, allowRev, false, dt)
+		return
+	}
+
+	if route.Phase == 2 {
+		if route.ExitEdge < 0 || int(route.ExitEdge) >= len(g.Edges) {
+			route.Phase = 3
+			if follower != nil {
+				follower.Edge = -1
+			}
+			return
+		}
+		e := &g.Edges[route.ExitEdge]
+		ex, ez := sys.router.EdgePoint(route.ExitEdge, route.ExitT)
+		d := dist2D(px, pz, ex, ez)
+		if d < rampPopRadius(vehRampArrivalRadius, spec) {
+			route.Phase = 3
+			if follower != nil {
+				follower.Edge = -1
+			}
+			return
+		}
+		t, _ := sys.router.projOnEdge(int(route.ExitEdge), px, pz)
+		if follower != nil {
+			follower.Edge = route.ExitEdge
+			follower.T = t
+		}
+		cruise := roadSpeedForEdge(e.Kind, spec) * sys.slopeMul(pos, mot.Yaw)
+		sys.drive(pos, mot, spec, ex-px, ez-pz, d, cruise, false, false, dt)
+	}
 }
