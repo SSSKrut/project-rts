@@ -171,6 +171,7 @@ var saveComponents = map[string]saveEntry{
 	"components.Vehicle":      saveReg[components.Vehicle](SaveMemcpy),
 	"components.Turret":       saveReg[components.Turret](SaveMemcpy),
 	"components.RoadFollower": saveReg[components.RoadFollower](SaveMemcpy),
+	"components.RoadRoute":    saveReg[components.RoadRoute](SaveMemcpy),
 	"components.SmokeField":   saveReg[components.SmokeField](SaveMemcpy),
 }
 

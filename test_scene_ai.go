@@ -59,6 +59,11 @@ const (
 	// route via ActionQueue waypoints; PASS when both park at the final
 	// point (early verdict on arrival).
 	aiSceneVehMove = "ai_vehicle_move"
+	// ai_vehicle_road (Phase 19 M2): two trucks patrol west↔east on `valley`
+	// across the auto-tagged bridge; PASS = both parked at the final point
+	// AND at least one tick spent on a RoadBridge edge (validates RoadGraph
+	// A* + RoadFollower + deck Y end to end).
+	aiSceneVehRoad = "ai_vehicle_road"
 
 	// ai_march_* (ISSUES #12/#13): one MotorRifle squad marches a straight
 	// ~100 m MoveTo and the verdict scores movement hygiene — formation-yaw
@@ -70,8 +75,11 @@ const (
 
 // aiSceneMapName lets a scene demand a specific map manifest ("" = default).
 func aiSceneMapName() string {
-	if aiSceneID() == aiSceneMarchSlope {
+	switch aiSceneID() {
+	case aiSceneMarchSlope:
 		return "hills"
+	case aiSceneVehRoad:
+		return "valley"
 	}
 	return ""
 }
@@ -139,6 +147,8 @@ func aiSceneAnchorPos() components.WorldPos {
 		return components.WorldPos{}.Add(rl.Vector3{X: 30, Z: 20})
 	case aiSceneVehMove:
 		return components.WorldPos{}.Add(rl.Vector3{X: 40, Z: 0})
+	case aiSceneVehRoad:
+		return components.WorldPos{}.Add(rl.Vector3{X: 20, Z: -8})
 	case aiSceneMarchLine:
 		return components.WorldPos{}.Add(rl.Vector3{X: 75, Z: 10})
 	case aiSceneMarchSlope:
@@ -406,6 +416,42 @@ func aiVehicleSceneSpawn(world *ecs.World, vehicleFactory *entities.VehicleFacto
 	}
 }
 
+// aiVehicleRoadSceneSpawn: two trucks on `valley`, west↔east patrol. The
+// time-optimal plan for a truck (road 16 / offroad 6 m/s) enters the highway
+// and crosses the bridge both ways; off-road would be a straight swim through
+// the river cut, so the bridge-tick check proves routing actually engaged.
+func aiVehicleRoadSceneSpawn(world *ecs.World, vehicleFactory *entities.VehicleFactory,
+	posMap *ecs.Map[components.WorldPos]) *aiTestState {
+	if vehicleFactory == nil {
+		fmt.Printf("[ai-test %s] NO VEHICLE FACTORY — aborting\n", aiSceneID())
+		return nil
+	}
+	wp := func(x, z float32) components.WorldPos {
+		p := components.WorldPos{}.Add(rl.Vector3{X: x, Z: z})
+		p.Local.Y = systems.GroundHeight(x, z)
+		return p
+	}
+	t1 := vehicleFactory.Spawn(wp(-40, -30), components.VehicleTruck,
+		components.FactionPlayer, components.ControllerLocal)
+	t2 := vehicleFactory.Spawn(wp(-40, -24), components.VehicleTruck,
+		components.FactionPlayer, components.ControllerLocal)
+	return &aiTestState{
+		sceneID:          aiSceneID(),
+		vehEnts:          []ecs.Entity{t1, t2},
+		vehWaypoints:     []components.WorldPos{wp(70, 8), wp(-45, -25)},
+		vehRequireBridge: true,
+		VehFollowerMap:   ecs.NewMap[components.RoadFollower](world),
+		vehGraphRes:      ecs.NewResource[components.RoadGraph](world),
+		World:            world,
+		PosMap:           posMap,
+		MotionMap:        ecs.NewMap[components.Motion](world),
+		VehQueueMap:      ecs.NewMap[components.ActionQueue](world),
+		orderAt:          aiOrderAt,
+		verdictAt:        120,
+		nextSampleAt:     aiOrderAt + 3,
+	}
+}
+
 // aiSceneSpawn instantiates the squad + captures the entities the auto-
 // verifier needs. Returns nil for non-AI scenes.
 func aiSceneSpawn(
@@ -424,6 +470,9 @@ func aiSceneSpawn(
 	}
 	if aiSceneID() == aiSceneVehMove {
 		return aiVehicleSceneSpawn(world, vehicleFactory, posMap)
+	}
+	if aiSceneID() == aiSceneVehRoad {
+		return aiVehicleRoadSceneSpawn(world, vehicleFactory, posMap)
 	}
 	if id := aiSceneID(); id == aiSceneMarchLine || id == aiSceneMarchSlope {
 		return aiMarchSceneSpawn(world, squadService, roleService, unitFactory,
@@ -630,9 +679,14 @@ type aiTestState struct {
 
 	// Set for ai_vehicle_* scenes: waypoints go straight into each
 	// vehicle's ActionQueue; verdict = all parked at the final point.
-	vehEnts      []ecs.Entity
-	vehWaypoints []components.WorldPos
-	VehQueueMap  *ecs.Map[components.ActionQueue]
+	// vehRequireBridge additionally demands ≥1 tick on a RoadBridge edge.
+	vehEnts          []ecs.Entity
+	vehWaypoints     []components.WorldPos
+	VehQueueMap      *ecs.Map[components.ActionQueue]
+	vehRequireBridge bool
+	vehBridgeTicks   int
+	VehFollowerMap   *ecs.Map[components.RoadFollower]
+	vehGraphRes      ecs.Resource[components.RoadGraph]
 
 	// Set for ai_march_* scenes (#12/#13): movement-hygiene metrics.
 	marchActive   bool
@@ -1002,6 +1056,9 @@ func (s *aiTestState) updateVehicles(elapsed float32) {
 		fmt.Printf("[ai-test %s] t=%.1fs WAYPOINTS PUSHED\n", s.sceneID, elapsed)
 		return
 	}
+	if s.vehRequireBridge && s.vehOnBridge() {
+		s.vehBridgeTicks++
+	}
 	if elapsed >= s.nextSampleAt && elapsed < s.verdictAt {
 		s.nextSampleAt = elapsed + aiSampleEvery
 		for i, v := range s.vehEnts {
@@ -1022,16 +1079,45 @@ func (s *aiTestState) updateVehicles(elapsed float32) {
 	}
 	arrived := s.vehArrivedCount()
 	if arrived == len(s.vehEnts) || elapsed >= s.verdictAt {
+		pass := arrived == len(s.vehEnts) && len(s.vehEnts) > 0 &&
+			(!s.vehRequireBridge || s.vehBridgeTicks > 0)
 		verdict := "FAIL"
-		if arrived == len(s.vehEnts) && len(s.vehEnts) > 0 {
+		if pass {
 			verdict = "PASS"
 		}
 		fmt.Println("============================================================")
-		fmt.Printf("== VERDICT [%s]: %s  (%d/%d vehicles arrived)\n",
-			s.sceneID, verdict, arrived, len(s.vehEnts))
+		if s.vehRequireBridge {
+			fmt.Printf("== VERDICT [%s]: %s  (%d/%d vehicles arrived, bridge_ticks=%d)\n",
+				s.sceneID, verdict, arrived, len(s.vehEnts), s.vehBridgeTicks)
+		} else {
+			fmt.Printf("== VERDICT [%s]: %s  (%d/%d vehicles arrived)\n",
+				s.sceneID, verdict, arrived, len(s.vehEnts))
+		}
 		fmt.Println("============================================================")
 		s.verdictDone = true
 	}
+}
+
+// vehOnBridge: true when any scene vehicle's RoadFollower sits on a
+// RoadBridge edge this tick.
+func (s *aiTestState) vehOnBridge() bool {
+	g := s.vehGraphRes.Get()
+	if g == nil {
+		return false
+	}
+	for _, v := range s.vehEnts {
+		if v == (ecs.Entity{}) || !s.World.Alive(v) {
+			continue
+		}
+		f := s.VehFollowerMap.Get(v)
+		if f == nil || f.Edge < 0 || int(f.Edge) >= len(g.Edges) {
+			continue
+		}
+		if g.Edges[f.Edge].Kind == components.RoadBridge {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *aiTestState) vehArrivedCount() int {

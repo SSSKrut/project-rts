@@ -40,7 +40,13 @@ func makeStartingTrenches() []components.Trench {
 }
 
 func makeStartingRivers() []components.RiverPolyline {
-	if isDoorScene() || isAIScene() {
+	if isDoorScene() {
+		return nil
+	}
+	// An ai scene that pins its own map manifest gets that map's rivers
+	// (ai_vehicle_road needs the valley bridge); default-map ai scenes stay
+	// river-free.
+	if isAIScene() && aiSceneMapName() == "" {
 		return nil
 	}
 	return worldMap.riverLines()

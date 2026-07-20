@@ -10,18 +10,22 @@ import (
 	"rts-go/core"
 )
 
-// VehicleDriverSystem — Phase 19 M1 Driver layer. Kinematic arc-steering
+// VehicleDriverSystem — Phase 19 Driver layer. Kinematic arc-steering
 // along the vehicle's ActionQueue: forward speed rides the hull yaw, yaw
 // rate is curvature-limited (|Speed| / TurnRadius, plus a pivot term for
 // tracked hulls). A target far behind flips into reverse (Speed < 0) until
 // the nose can come around — simplified three-point turn. Gear lives in the
 // sign of Motion.Speed, so there is no private cross-tick state to restore
-// on load. Off-road only; road preference and bridge decks are M2
-// (RoadFollower).
+// on load. M2: the head MoveTo is routed over the RoadGraph when the road
+// wins on time (RoadRoute); on edges the hull cruises at road speed and
+// writes RoadFollower for bridge-deck Y (vehicle_driver_road.go).
 type VehicleDriverSystem struct {
-	filter   *ecs.Filter3[components.Vehicle, components.WorldPos, components.Motion]
-	queueMap *ecs.Map[components.ActionQueue]
-	sampler  *HeightSampler
+	filter      *ecs.Filter3[components.Vehicle, components.WorldPos, components.Motion]
+	queueMap    *ecs.Map[components.ActionQueue]
+	routeMap    *ecs.Map[components.RoadRoute]
+	followerMap *ecs.Map[components.RoadFollower]
+	sampler     *HeightSampler
+	router      *RoadRouter
 }
 
 const (
@@ -36,7 +40,10 @@ const (
 func (sys *VehicleDriverSystem) InitUI(w *ecs.World) {
 	sys.filter = ecs.NewFilter3[components.Vehicle, components.WorldPos, components.Motion](w)
 	sys.queueMap = ecs.NewMap[components.ActionQueue](w)
+	sys.routeMap = ecs.NewMap[components.RoadRoute](w)
+	sys.followerMap = ecs.NewMap[components.RoadFollower](w)
 	sys.sampler = NewHeightSampler(w)
+	sys.router = NewRoadRouter(w)
 }
 
 func (VehicleDriverSystem) Name() string { return "vehicle_driver" }
@@ -60,19 +67,22 @@ func (sys *VehicleDriverSystem) Update(ctx core.UpdateContext) {
 	q := sys.filter.Query()
 	for q.Next() {
 		veh, pos, mot := q.Get()
-		aq := sys.queueMap.Get(q.Entity())
+		ent := q.Entity()
+		aq := sys.queueMap.Get(ent)
 		if aq == nil {
 			continue
 		}
-		sys.step(veh, pos, mot, aq, dt)
+		sys.step(veh, pos, mot, aq, sys.routeMap.Get(ent), sys.followerMap.Get(ent), dt)
 	}
 }
 
 func (sys *VehicleDriverSystem) step(veh *components.Vehicle, pos *components.WorldPos,
-	mot *components.Motion, aq *components.ActionQueue, dt float32) {
+	mot *components.Motion, aq *components.ActionQueue,
+	route *components.RoadRoute, follower *components.RoadFollower, dt float32) {
 	spec := components.SpecForVehicle(veh.Kind)
 
 	if aq.Count == 0 {
+		clearRoute(route, follower)
 		sys.brake(mot, dt)
 		sys.advance(pos, mot, dt)
 		return
@@ -82,6 +92,7 @@ func (sys *VehicleDriverSystem) step(veh *components.Vehicle, pos *components.Wo
 	case components.ActionMoveTo:
 	case components.ActionStop:
 		mot.Speed = 0
+		clearRoute(route, follower)
 		popAction(aq)
 		return
 	default:
@@ -89,41 +100,66 @@ func (sys *VehicleDriverSystem) step(veh *components.Vehicle, pos *components.Wo
 		return
 	}
 
+	if route != nil && (route.Planned == 0 || route.Goal != action.Target) {
+		sys.planRoute(pos, action.Target, spec, route)
+	}
+	if route != nil && route.Head < route.Count {
+		sys.stepRoute(pos, mot, spec, route, follower, dt)
+		return
+	}
+	if follower != nil {
+		follower.Edge = -1
+	}
+
 	diff := action.Target.Sub(*pos)
 	distSq := diff.X*diff.X + diff.Z*diff.Z
 	if distSq < vehArrivalRadius*vehArrivalRadius {
+		clearRoute(route, follower)
 		popAction(aq)
 		return
 	}
 	dist := float32(math.Sqrt(float64(distSq)))
-	desiredYaw := float32(math.Atan2(float64(diff.X), float64(diff.Z)))
+	cruise := spec.MaxSpeedOffroad * sys.slopeMul(pos, mot.Yaw)
+	sys.drive(pos, mot, spec, diff.X, diff.Z, dist, cruise, true, true, dt)
+}
+
+// drive steers toward the point at (dx, dz) relative to the hull and
+// advances. envelope enables the brake-to-stop arrival envelope; allowReverse
+// enables the reverse-gear hysteresis (enter when the target sits far behind
+// and close — no room for a forward arc; exit once the nose is near enough or
+// the target has drifted away).
+func (sys *VehicleDriverSystem) drive(pos *components.WorldPos, mot *components.Motion,
+	spec *components.VehicleSpec, dx, dz, dist, cruise float32,
+	allowReverse, envelope bool, dt float32) {
+	desiredYaw := float32(math.Atan2(float64(dx), float64(dz)))
 	yawErr := wrapAngle(desiredYaw - mot.Yaw)
 	absErr := yawErr
 	if absErr < 0 {
 		absErr = -absErr
 	}
 
-	// Gear: hysteresis rides the sign of Speed. Enter reverse when the
-	// target sits far behind and close (no room for a forward arc); exit
-	// once the nose is near enough or the target has drifted away.
-	reversing := mot.Speed < -0.01
-	if !reversing && absErr > 2.1 && dist < 4*spec.TurnRadiusM {
-		reversing = true
-	} else if reversing && (absErr < 1.2 || dist > 6*spec.TurnRadiusM) {
-		reversing = false
+	reversing := false
+	if allowReverse {
+		reversing = mot.Speed < -0.01
+		if !reversing && absErr > 2.1 && dist < 4*spec.TurnRadiusM {
+			reversing = true
+		} else if reversing && (absErr < 1.2 || dist > 6*spec.TurnRadiusM) {
+			reversing = false
+		}
 	}
 
 	var target float32
 	if reversing {
 		target = -spec.MaxSpeedReverse
 	} else {
-		target = spec.MaxSpeedOffroad * sys.slopeMul(pos, mot.Yaw)
+		target = cruise
 		if absErr > 0.9 && target > vehTurnSlowSpeed {
 			target = vehTurnSlowSpeed
 		}
-		// Arrival envelope: never faster than a full-brake stop allows.
-		if vMax := float32(math.Sqrt(float64(2 * vehDecel * dist))); target > vMax {
-			target = vMax
+		if envelope {
+			if vMax := float32(math.Sqrt(float64(2 * vehDecel * dist))); target > vMax {
+				target = vMax
+			}
 		}
 	}
 	if mot.Speed < target {

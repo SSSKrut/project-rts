@@ -29,6 +29,8 @@ type GroundStickSystem struct {
 	vehicleFilter *ecs.Filter2[components.Vehicle, components.WorldPos]
 	floorFilter   *ecs.Filter2[components.WorldPos, components.Floor]
 	stairsFilter  *ecs.Filter2[components.WorldPos, components.Stairs]
+	followerMap   *ecs.Map[components.RoadFollower]
+	graphRes      ecs.Resource[components.RoadGraph]
 	sampler       *HeightSampler
 }
 
@@ -42,6 +44,8 @@ func (sys *GroundStickSystem) InitUI(w *ecs.World) {
 		With(ecs.C[components.OnGround]())
 	sys.floorFilter = ecs.NewFilter2[components.WorldPos, components.Floor](w)
 	sys.stairsFilter = ecs.NewFilter2[components.WorldPos, components.Stairs](w)
+	sys.followerMap = ecs.NewMap[components.RoadFollower](w)
+	sys.graphRes = ecs.NewResource[components.RoadGraph](w)
 	sys.sampler = NewHeightSampler(w)
 }
 
@@ -202,13 +206,56 @@ func (sys GroundStickSystem) Update(ctx core.UpdateContext) {
 		pos.Local.Y = bestY
 	}
 
-	// Vehicles never enter buildings: surface clamp only. Bridge-deck Y is
-	// RoadFollower's job (Phase 19 M2).
+	// Vehicles never enter buildings: surface clamp, except on a bridge edge
+	// where Y comes off the deck (node-height lerp + bridgeYOffset, ramped
+	// over the first/last metres so bank→deck has no step). max() keeps the
+	// hull from sinking where deck and bank meet.
 	qv := sys.vehicleFilter.Query()
 	for qv.Next() {
 		_, pos := qv.Get()
 		wx := float32(pos.Chunk.X)*components.ChunkSize + pos.Local.X
 		wz := float32(pos.Chunk.Z)*components.ChunkSize + pos.Local.Z
-		pos.Local.Y = sys.sampler.Sample(wx, wz)
+		y := sys.sampler.Sample(wx, wz)
+		if deck, ok := sys.bridgeDeckY(qv.Entity()); ok && deck > y {
+			y = deck
+		}
+		pos.Local.Y = y
 	}
+}
+
+// bridgeEndRamp — metres of deck at each end over which the bridgeYOffset
+// lift fades to bank level.
+const bridgeEndRamp float32 = 4.0
+
+func (sys *GroundStickSystem) bridgeDeckY(ent ecs.Entity) (float32, bool) {
+	f := sys.followerMap.Get(ent)
+	if f == nil || f.Edge < 0 {
+		return 0, false
+	}
+	g := sys.graphRes.Get()
+	if g == nil || int(f.Edge) >= len(g.Edges) {
+		return 0, false
+	}
+	e := &g.Edges[f.Edge]
+	if e.Kind != components.RoadBridge {
+		return 0, false
+	}
+	ax, az := worldXZ(g.Nodes[e.From].Pos)
+	bx, bz := worldXZ(g.Nodes[e.To].Pos)
+	t := f.T
+	if t < 0 {
+		t = 0
+	} else if t > 1 {
+		t = 1
+	}
+	base := GroundHeight(ax, az) + t*(GroundHeight(bx, bz)-GroundHeight(ax, az))
+	end := t
+	if 1-t < end {
+		end = 1 - t
+	}
+	ramp := end * dist2D(ax, az, bx, bz) / bridgeEndRamp
+	if ramp > 1 {
+		ramp = 1
+	}
+	return base + bridgeYOffset*ramp, true
 }

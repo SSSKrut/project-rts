@@ -13,38 +13,42 @@ type VehicleFactory struct {
 	world  *ecs.World
 	posMap *ecs.Map[components.WorldPos]
 
-	VehicleMap     *ecs.Map[components.Vehicle]
-	TurretMap      *ecs.Map[components.Turret]
-	ActionQueueMap *ecs.Map[components.ActionQueue]
-	MotionMap      *ecs.Map[components.Motion]
-	ColliderMap    *ecs.Map[components.Collider]
-	HPMap          *ecs.Map[components.HP]
-	FactionMap     *ecs.Map[components.Faction]
-	ControllerMap  *ecs.Map[components.Controller]
-	SensorsMap     *ecs.Map[components.Sensors]
-	AwarenessMap   *ecs.Map[components.Awareness]
-	EquipmentMap   *ecs.Map[components.Equipment]
-	DetectMap      *ecs.Map[components.Detectability]
-	OnGroundMap    *ecs.Map[components.OnGround]
+	VehicleMap      *ecs.Map[components.Vehicle]
+	TurretMap       *ecs.Map[components.Turret]
+	ActionQueueMap  *ecs.Map[components.ActionQueue]
+	RoadFollowerMap *ecs.Map[components.RoadFollower]
+	RoadRouteMap    *ecs.Map[components.RoadRoute]
+	MotionMap       *ecs.Map[components.Motion]
+	ColliderMap     *ecs.Map[components.Collider]
+	HPMap           *ecs.Map[components.HP]
+	FactionMap      *ecs.Map[components.Faction]
+	ControllerMap   *ecs.Map[components.Controller]
+	SensorsMap      *ecs.Map[components.Sensors]
+	AwarenessMap    *ecs.Map[components.Awareness]
+	EquipmentMap    *ecs.Map[components.Equipment]
+	DetectMap       *ecs.Map[components.Detectability]
+	OnGroundMap     *ecs.Map[components.OnGround]
 }
 
 func NewVehicleFactory(world *ecs.World, posMap *ecs.Map[components.WorldPos]) *VehicleFactory {
 	return &VehicleFactory{
-		world:          world,
-		posMap:         posMap,
-		VehicleMap:     ecs.NewMap[components.Vehicle](world),
-		TurretMap:      ecs.NewMap[components.Turret](world),
-		ActionQueueMap: ecs.NewMap[components.ActionQueue](world),
-		MotionMap:      ecs.NewMap[components.Motion](world),
-		ColliderMap:    ecs.NewMap[components.Collider](world),
-		HPMap:          ecs.NewMap[components.HP](world),
-		FactionMap:     ecs.NewMap[components.Faction](world),
-		ControllerMap:  ecs.NewMap[components.Controller](world),
-		SensorsMap:     ecs.NewMap[components.Sensors](world),
-		AwarenessMap:   ecs.NewMap[components.Awareness](world),
-		EquipmentMap:   ecs.NewMap[components.Equipment](world),
-		DetectMap:      ecs.NewMap[components.Detectability](world),
-		OnGroundMap:    ecs.NewMap[components.OnGround](world),
+		world:           world,
+		posMap:          posMap,
+		VehicleMap:      ecs.NewMap[components.Vehicle](world),
+		TurretMap:       ecs.NewMap[components.Turret](world),
+		ActionQueueMap:  ecs.NewMap[components.ActionQueue](world),
+		RoadFollowerMap: ecs.NewMap[components.RoadFollower](world),
+		RoadRouteMap:    ecs.NewMap[components.RoadRoute](world),
+		MotionMap:       ecs.NewMap[components.Motion](world),
+		ColliderMap:     ecs.NewMap[components.Collider](world),
+		HPMap:           ecs.NewMap[components.HP](world),
+		FactionMap:      ecs.NewMap[components.Faction](world),
+		ControllerMap:   ecs.NewMap[components.Controller](world),
+		SensorsMap:      ecs.NewMap[components.Sensors](world),
+		AwarenessMap:    ecs.NewMap[components.Awareness](world),
+		EquipmentMap:    ecs.NewMap[components.Equipment](world),
+		DetectMap:       ecs.NewMap[components.Detectability](world),
+		OnGroundMap:     ecs.NewMap[components.OnGround](world),
 	}
 }
 
@@ -71,6 +75,8 @@ func (f *VehicleFactory) Spawn(pos components.WorldPos, kind components.VehicleK
 	f.posMap.Add(ent, &wp)
 	f.VehicleMap.Add(ent, &components.Vehicle{Kind: kind})
 	f.ActionQueueMap.Add(ent, &components.ActionQueue{})
+	f.RoadFollowerMap.Add(ent, &components.RoadFollower{Edge: -1})
+	f.RoadRouteMap.Add(ent, &components.RoadRoute{})
 	f.MotionMap.Add(ent, &components.Motion{})
 	f.ColliderMap.Add(ent, &components.Collider{Radius: spec.ColliderR})
 	f.HPMap.Add(ent, &components.HP{Current: spec.HP, Max: spec.HP})

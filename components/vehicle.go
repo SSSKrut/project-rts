@@ -25,11 +25,24 @@ type Turret struct {
 }
 
 // RoadFollower is the road-graph locomotion state (Phase 19 M2). Edge is an
-// index into RoadGraph.Edges, -1 while off-road; T is the param along the
-// edge. Added when a road path is assigned, removed on arrival.
+// index into RoadGraph.Edges, -1 while off-road; T is the hull projection
+// param along the edge. Always present on vehicles (factory-stamped);
+// GroundStick reads it for bridge-deck Y.
 type RoadFollower struct {
 	Edge int32
 	T    float32
+}
+
+// RoadRoute is the planned node sequence for the head MoveTo action
+// (Phase 19 M2). Planned != 0 means the routing decision was made for Goal
+// (Count == 0 → drive straight off-road); a head action whose target differs
+// from Goal triggers a replan.
+type RoadRoute struct {
+	Nodes   [32]uint16
+	Count   uint8
+	Head    uint8
+	Planned uint8
+	Goal    WorldPos
 }
 
 // SmokeField is a short-lived concealment volume spawned by the

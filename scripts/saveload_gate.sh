@@ -5,7 +5,7 @@
 set -u
 cd "$(dirname "$0")/.."
 
-SCENES=${@:-"ai_los_open ai_los_creep ai_compound_main ai_main_m1 ai_vehicle_move ai_march_slope"}
+SCENES=${@:-"ai_los_open ai_los_creep ai_compound_main ai_main_m1 ai_vehicle_move ai_vehicle_road ai_march_slope"}
 TICKS=2000
 SAVE_AT=1000
 D=/tmp/rts-saveload

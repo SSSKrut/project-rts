@@ -22,6 +22,8 @@ type ReplayHasher struct {
 	hpMap         *ecs.Map[components.HP]
 	threatMap     *ecs.Map[components.Threat]
 	progressMap   *ecs.Map[components.OrderProgress]
+	routeMap      *ecs.Map[components.RoadRoute]
+	followerMap   *ecs.Map[components.RoadFollower]
 	world         *ecs.World
 }
 
@@ -36,6 +38,8 @@ func NewReplayHasher(w *ecs.World) *ReplayHasher {
 		hpMap:         ecs.NewMap[components.HP](w),
 		threatMap:     ecs.NewMap[components.Threat](w),
 		progressMap:   ecs.NewMap[components.OrderProgress](w),
+		routeMap:      ecs.NewMap[components.RoadRoute](w),
+		followerMap:   ecs.NewMap[components.RoadFollower](w),
 	}
 }
 
@@ -90,10 +94,11 @@ func (r *ReplayHasher) Hash() uint64 {
 	qv := r.vehFilter.Query()
 	for qv.Next() {
 		_, p, mot, aq := qv.Get()
+		ent := qv.Entity()
 		pos(*p)
 		f32(mot.Yaw)
 		f32(mot.Speed)
-		if hp := r.hpMap.Get(qv.Entity()); hp != nil {
+		if hp := r.hpMap.Get(ent); hp != nil {
 			f32(hp.Current)
 		}
 		u8(aq.Head)
@@ -102,6 +107,20 @@ func (r *ReplayHasher) Hash() uint64 {
 			a := aq.Actions[aq.Head%components.ActionQueueSize]
 			u8(uint8(a.Kind))
 			pos(a.Target)
+		}
+		// Route state must survive save/load byte-exact: a zeroed RoadRoute
+		// would replan to near-identical steering and hide from pos alone.
+		if rt := r.routeMap.Get(ent); rt != nil {
+			u8(rt.Count)
+			u8(rt.Head)
+			u8(rt.Planned)
+			if rt.Head < rt.Count {
+				u32(uint32(rt.Nodes[rt.Head]))
+			}
+		}
+		if f := r.followerMap.Get(ent); f != nil {
+			u32(uint32(f.Edge))
+			f32(f.T)
 		}
 	}
 
