@@ -252,22 +252,12 @@ func DockSideFor(target *LayoutNode, cursor rl.Vector2) DockSide {
 	return DockBottom
 }
 
-// DockWrapBounds returns the rect of the subtree DockNear will wrap. Used
-// by the drag preview to highlight what area will be reorganised.
-func DockWrapBounds(target *LayoutNode) rl.Rectangle {
+// DockHighlightRect returns the half of `target` where source will land.
+func DockHighlightRect(target *LayoutNode, side DockSide) rl.Rectangle {
 	if target == nil {
 		return rl.Rectangle{}
 	}
-	if target.Parent != nil {
-		return target.Parent.Bounds
-	}
-	return target.Bounds
-}
-
-// DockHighlightRect returns the rect inside DockWrapBounds where source
-// will land.
-func DockHighlightRect(target *LayoutNode, side DockSide) rl.Rectangle {
-	b := DockWrapBounds(target)
+	b := target.Bounds
 	if b.Width <= 0 || b.Height <= 0 {
 		return rl.Rectangle{}
 	}
@@ -284,34 +274,32 @@ func DockHighlightRect(target *LayoutNode, side DockSide) rl.Rectangle {
 	return rl.Rectangle{}
 }
 
-// DockNear wraps target.Parent (or target if root) in a new Split with
-// `source` on `side`. Caller must detach source from the tree first.
+// DockNear splits `target` in half and puts `source` on `side`; everything
+// else keeps its place. Caller must detach source from the tree first, and
+// update the workspace root when target was it.
 func DockNear(source, target *LayoutNode, side DockSide) *LayoutNode {
 	if source == nil || target == nil || side == DockNone {
 		return nil
 	}
-	wrap := target.Parent
-	if wrap == nil {
-		wrap = target
-	}
-	oldParent := wrap.Parent
+	// Snapshot before NewSplit reparents target.
+	oldParent := target.Parent
 
 	var newSplit *LayoutNode
 	switch side {
 	case DockLeft:
-		newSplit = NewSplit(SplitVertical, 0.5, source, wrap)
+		newSplit = NewSplit(SplitVertical, 0.5, source, target)
 	case DockRight:
-		newSplit = NewSplit(SplitVertical, 0.5, wrap, source)
+		newSplit = NewSplit(SplitVertical, 0.5, target, source)
 	case DockTop:
-		newSplit = NewSplit(SplitHorizontal, 0.5, source, wrap)
+		newSplit = NewSplit(SplitHorizontal, 0.5, source, target)
 	case DockBottom:
-		newSplit = NewSplit(SplitHorizontal, 0.5, wrap, source)
+		newSplit = NewSplit(SplitHorizontal, 0.5, target, source)
 	default:
 		return nil
 	}
 	newSplit.Parent = oldParent
 	if oldParent != nil {
-		if oldParent.Children[0] == wrap {
+		if oldParent.Children[0] == target {
 			oldParent.Children[0] = newSplit
 		} else {
 			oldParent.Children[1] = newSplit

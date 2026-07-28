@@ -20,11 +20,7 @@ func DrawChrome(p Panel, font rl.Font, fontSize int32) rl.Rectangle {
 	b := p.Bounds
 	rl.DrawRectangleLinesEx(b, 1, panelBorderColor)
 
-	titleRect := rl.Rectangle{
-		X: b.X + 1, Y: b.Y + 1,
-		Width:  b.Width - 2,
-		Height: float32(titleBarHeight),
-	}
+	titleRect := PanelTitleRect(b)
 	rl.DrawRectangleRec(titleRect, titleBarColor)
 	rl.DrawTextEx(font, p.Title,
 		rl.Vector2{X: titleRect.X + 8, Y: titleRect.Y + 4},
@@ -36,6 +32,16 @@ func DrawChrome(p Panel, font rl.Font, fontSize int32) rl.Rectangle {
 		X: b.X + 1, Y: b.Y + 1 + float32(titleBarHeight),
 		Width:  b.Width - 2,
 		Height: b.Height - 2 - float32(titleBarHeight),
+	}
+}
+
+// PanelTitleRect is the title-bar strip inside the panel border — drawn by
+// DrawChrome, hit-tested by the title-bar drag.
+func PanelTitleRect(b rl.Rectangle) rl.Rectangle {
+	return rl.Rectangle{
+		X: b.X + 1, Y: b.Y + 1,
+		Width:  b.Width - 2,
+		Height: float32(titleBarHeight),
 	}
 }
 

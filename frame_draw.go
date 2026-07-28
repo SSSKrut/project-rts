@@ -250,6 +250,7 @@ func (g *Game) drawUI() {
 	if g.UI.PanelMgr.IsCornerDragging() {
 		ui.DrawCornerDragPreview(g.UI.PanelMgr, g.Frame.Cursor)
 	}
+	ui.DrawTitleDragPreview(g.UI.PanelMgr, g.Frame.Cursor)
 
 	g.UI.ChevronMenu.Draw(g.hudFont, g.Frame.Cursor)
 

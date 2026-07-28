@@ -65,9 +65,22 @@ type PanelManager struct {
 	dragStartRatio float32
 	dragDirty      bool
 
-	cornerLeaf  *LayoutNode
-	cornerStart rl.Vector2
-	cornerDirty bool
+	cornerLeaf       *LayoutNode
+	cornerPos        CornerPos
+	cornerStart      rl.Vector2
+	cornerOff        rl.Vector2
+	cornerMode       CornerDragKind
+	cornerDirty      bool
+	cornerSplitX     *LayoutNode
+	cornerSplitY     *LayoutNode
+	cornerRatioX     float32
+	cornerRatioY     float32
+	cornerMergeSplit *LayoutNode
+	cornerMergeDir   edgeDir
+
+	titleLeaf   *LayoutNode
+	titleStart  rl.Vector2
+	titleActive bool
 }
 
 func NewPanelManager() *PanelManager {

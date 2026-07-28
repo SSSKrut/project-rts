@@ -9,11 +9,12 @@ import (
 // handleChrome runs the splitter / corner / chevron / floating-panel layer.
 // It owns the cursor shape and claims LMB before any world handler sees it.
 func (g *Game) handleChrome() {
-	// Splitter / corner / chevron hover + drag. Priority chain: open menu
-	// wins LMB; splitter; chevron (open menu); corner-grab (start split).
+	// Priority chain for LMB: open menu; splitter (resize one divider);
+	// chevron (open menu); corner grip (resize / split); title bar (move).
 	splitterHover := g.UI.PanelMgr.SplitterAt(g.Frame.Cursor)
-	cornerHover := g.UI.PanelMgr.CornerAt(g.Frame.Cursor)
+	cornerHover, cornerPos := g.UI.PanelMgr.CornerAt(g.Frame.Cursor)
 	chevronHover := chevronLeafAt(g.UI.PanelMgr, g.Frame.Cursor)
+	titleHover := g.UI.PanelMgr.TitleBarAt(g.Frame.Cursor)
 	switch {
 	case g.UI.PanelMgr.IsDragging():
 		if sp := g.UI.PanelMgr.DraggingSplitter(); sp != nil {
@@ -24,6 +25,8 @@ func (g *Game) handleChrome() {
 			}
 		}
 	case g.UI.PanelMgr.IsCornerDragging():
+		rl.SetMouseCursor(ui.CornerCursor(g.UI.PanelMgr.CornerDragPos()))
+	case g.UI.PanelMgr.TitleDragActive():
 		rl.SetMouseCursor(rl.MouseCursorResizeAll)
 	case g.UI.Floating.IsResizing() || g.UI.Floating.ResizeHover(g.Frame.Cursor):
 		if c, ok := g.UI.Floating.ResizeCursorAt(g.Frame.Cursor); ok {
@@ -38,7 +41,7 @@ func (g *Game) handleChrome() {
 			rl.SetMouseCursor(rl.MouseCursorResizeNS)
 		}
 	case cornerHover != nil:
-		rl.SetMouseCursor(rl.MouseCursorResizeNWSE)
+		rl.SetMouseCursor(ui.CornerCursor(cornerPos))
 	case chevronHover != nil:
 		rl.SetMouseCursor(rl.MouseCursorPointingHand)
 	default:
@@ -56,7 +59,8 @@ func (g *Game) handleChrome() {
 	// form. Menu-open and floating-panel presses bypass workspace handlers.
 	overFloating := g.UI.Floating.HitTest(g.Frame.Cursor) != nil
 	g.Frame.LMBDown = rl.IsMouseButtonPressed(rl.MouseButtonLeft) && !floatingConsumed && !overFloating
-	g.Frame.LMBPress = g.Frame.LMBDown && !g.UI.PanelMgr.IsDragging() && !g.UI.PanelMgr.IsCornerDragging()
+	g.Frame.LMBPress = g.Frame.LMBDown && !g.UI.PanelMgr.IsDragging() &&
+		!g.UI.PanelMgr.IsCornerDragging() && !g.UI.PanelMgr.IsTitleDragging()
 	if g.UI.ChevronMenu.Open && g.Frame.LMBDown {
 		if idx := g.UI.ChevronMenu.HitItem(g.hudFont, g.Frame.Cursor); idx >= 0 {
 			it := g.UI.ChevronMenu.Items[idx]
@@ -68,9 +72,7 @@ func (g *Game) handleChrome() {
 		} else {
 			g.UI.ChevronMenu.Close()
 		}
-		g.Frame.Panel3D = g.UI.PanelMgr.Get(ui.Panel3D)
-		g.Frame.PanelMap = g.UI.PanelMgr.Get(ui.PanelMap)
-		g.UI.Scene3DRT.EnsureSize(g.Frame.Panel3D)
+		g.syncPanelRects()
 	} else if g.Frame.LMBPress && splitterHover != nil {
 		g.UI.PanelMgr.BeginDrag(splitterHover)
 	} else if g.Frame.LMBPress && chevronHover != nil {
@@ -78,36 +80,53 @@ func (g *Game) handleChrome() {
 		ch := ui.ChevronRect(ui.Panel{Bounds: chevronHover.Bounds})
 		g.UI.ChevronMenu.OpenAt(chevronHover, ch, isRoot)
 	} else if g.Frame.LMBPress && cornerHover != nil {
-		g.UI.PanelMgr.BeginCornerDrag(cornerHover, g.Frame.Cursor)
+		g.UI.PanelMgr.BeginCornerDrag(cornerHover, cornerPos, g.Frame.Cursor)
+	} else if g.Frame.LMBPress && titleHover != nil {
+		g.UI.PanelMgr.BeginTitleDrag(titleHover, g.Frame.Cursor)
 	}
 
 	if g.UI.PanelMgr.IsDragging() {
 		if rl.IsMouseButtonDown(rl.MouseButtonLeft) {
 			g.UI.PanelMgr.UpdateDrag(g.Frame.Cursor)
-			g.Frame.Panel3D = g.UI.PanelMgr.Get(ui.Panel3D)
-			g.Frame.PanelMap = g.UI.PanelMgr.Get(ui.PanelMap)
-			g.UI.Scene3DRT.EnsureSize(g.Frame.Panel3D)
-		} else {
-			if g.UI.PanelMgr.EndDrag() {
-				saveLayout(g.UI.PanelMgr)
-			}
-			g.Frame.Panel3D = g.UI.PanelMgr.Get(ui.Panel3D)
-			g.Frame.PanelMap = g.UI.PanelMgr.Get(ui.PanelMap)
-			g.UI.Scene3DRT.EnsureSize(g.Frame.Panel3D)
+		} else if g.UI.PanelMgr.EndDrag() {
+			saveLayout(g.UI.PanelMgr)
 		}
+		g.syncPanelRects()
 	}
 	if g.UI.PanelMgr.IsCornerDragging() {
-		if !rl.IsMouseButtonDown(rl.MouseButtonLeft) {
+		switch {
+		case rl.IsKeyPressed(rl.KeyEscape):
+			g.UI.PanelMgr.CancelCornerDrag()
+		case rl.IsMouseButtonDown(rl.MouseButtonLeft):
+			g.UI.PanelMgr.UpdateCornerDrag(g.Frame.Cursor)
+		default:
 			if g.UI.PanelMgr.CommitCornerDrag(g.Frame.Cursor) {
 				saveLayout(g.UI.PanelMgr)
 			}
-			g.Frame.Panel3D = g.UI.PanelMgr.Get(ui.Panel3D)
-			g.Frame.PanelMap = g.UI.PanelMgr.Get(ui.PanelMap)
-			g.UI.Scene3DRT.EnsureSize(g.Frame.Panel3D)
-		} else if rl.IsKeyPressed(rl.KeyEscape) {
-			g.UI.PanelMgr.CancelCornerDrag()
+		}
+		g.syncPanelRects()
+	}
+	if g.UI.PanelMgr.IsTitleDragging() {
+		switch {
+		case rl.IsKeyPressed(rl.KeyEscape):
+			g.UI.PanelMgr.CancelTitleDrag()
+		case rl.IsMouseButtonDown(rl.MouseButtonLeft):
+			g.UI.PanelMgr.UpdateTitleDrag(g.Frame.Cursor)
+		default:
+			if g.UI.PanelMgr.CommitTitleDrag(g.Frame.Cursor) {
+				saveLayout(g.UI.PanelMgr)
+			}
+			g.syncPanelRects()
 		}
 	}
+}
+
+// syncPanelRects re-reads the two panels whose rects the render half caches
+// and resizes the scene render target to match.
+func (g *Game) syncPanelRects() {
+	g.Frame.Panel3D = g.UI.PanelMgr.Get(ui.Panel3D)
+	g.Frame.PanelMap = g.UI.PanelMgr.Get(ui.PanelMap)
+	g.UI.Scene3DRT.EnsureSize(g.Frame.Panel3D)
 }
 
 // chevronLeafAt returns the workspace leaf whose chevron button is under the cursor.

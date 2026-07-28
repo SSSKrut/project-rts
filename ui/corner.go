@@ -6,13 +6,18 @@ import (
 	rl "github.com/gen2brain/raylib-go/raylib"
 )
 
-// Blender-style corner drag. Each workspace leaf carries grab handles in
-// all four corners; from any corner the drag does the same thing. Two modes:
+// Corner grips. Each workspace leaf carries a grab handle in all four
+// corners; what the drag does is picked by direction:
 //
-//   - INSIDE source at release: split (larger of |dx|/|dy| picks axis; sign
-//     picks which side keeps the original content).
-//   - OUTSIDE source at release with a sibling: merge (source absorbed,
-//     sibling expands).
+//   - OUTWARD (away from the pane) → resize: the two dividers bounding the
+//     pane at that corner follow the cursor, so the pane grows and the
+//     neighbours shrink. Nothing moves in the tree.
+//   - OUTWARD past a neighbour's far edge → that neighbour is eaten and the
+//     pane takes its place (only when the neighbour is a single leaf).
+//   - INWARD (into the pane) → split at the cursor; the swept side becomes
+//     the new pane.
+//
+// Moving a pane elsewhere is the title-bar drag (title_drag.go), not this.
 //
 // Top-edge corners are shifted below the title bar so they don't collide
 // with the chevron or title text.
@@ -28,6 +33,7 @@ var (
 	cornerPreviewColor   = rl.Color{R: 90, G: 200, B: 255, A: 200}
 	cornerMergeOverlay   = rl.Color{R: 70, G: 78, B: 88, A: 170}
 	cornerMergeBorder    = rl.Color{R: 220, G: 90, B: 90, A: 220}
+	cornerResizeBorder   = rl.Color{R: 90, G: 200, B: 255, A: 160}
 	cornerDockHighlight  = rl.Color{R: 90, G: 200, B: 255, A: 110}
 	cornerDockBorder     = rl.Color{R: 90, G: 200, B: 255, A: 230}
 )
@@ -47,11 +53,68 @@ type CornerDragKind uint8
 
 const (
 	CornerDragNone   CornerDragKind = iota
-	CornerSplitVert                 // horizontal motion → vertical divider
-	CornerSplitHoriz                // vertical motion → horizontal divider
-	CornerMerge                     // cursor on source's direct sibling → close source
-	CornerDock                      // cursor on a non-sibling leaf → restructure
+	CornerSplitVert                 // inward horizontal motion → vertical divider
+	CornerSplitHoriz                // inward vertical motion → horizontal divider
+	CornerResize                    // outward → bounding dividers follow the cursor
+	CornerMerge                     // outward past a neighbour → neighbour is eaten
 )
+
+// edgeDir names one side of a pane.
+type edgeDir uint8
+
+const (
+	edgeRight edgeDir = iota
+	edgeLeft
+	edgeBottom
+	edgeTop
+)
+
+func cornerDirX(p CornerPos) edgeDir {
+	if p == CornerBR || p == CornerTR {
+		return edgeRight
+	}
+	return edgeLeft
+}
+
+func cornerDirY(p CornerPos) edgeDir {
+	if p == CornerBR || p == CornerBL {
+		return edgeBottom
+	}
+	return edgeTop
+}
+
+// edgeSign is +1 when the edge's outward direction is +X / +Y.
+func edgeSign(d edgeDir) float32 {
+	if d == edgeRight || d == edgeBottom {
+		return 1
+	}
+	return -1
+}
+
+// neighbourChild is the index of the child living past dir's divider.
+func neighbourChild(d edgeDir) int {
+	if d == edgeRight || d == edgeBottom {
+		return 1
+	}
+	return 0
+}
+
+// boundingSplit returns the ancestor split whose divider forms `leaf`'s edge
+// on `dir` — the divider a resize on that side must move. nil when the leaf
+// reaches the workspace border there.
+func boundingSplit(leaf *LayoutNode, dir edgeDir) *LayoutNode {
+	for n := leaf; n != nil && n.Parent != nil; n = n.Parent {
+		p := n.Parent
+		want := SplitVertical
+		if dir == edgeBottom || dir == edgeTop {
+			want = SplitHorizontal
+		}
+		if p.Orient == want && p.Children[neighbourChild(dir)] != n {
+			return p
+		}
+	}
+	return nil
+}
 
 func CornerHandleRect(leaf *LayoutNode, pos CornerPos) rl.Rectangle {
 	if leaf == nil {
@@ -72,250 +135,334 @@ func CornerHandleRect(leaf *LayoutNode, pos CornerPos) rl.Rectangle {
 	return rl.Rectangle{}
 }
 
-func (m *PanelManager) CornerAt(cursor rl.Vector2) *LayoutNode {
-	if m.Workspace == nil {
-		return nil
+// CornerCursor: BR/TL sit on the NWSE diagonal, BL/TR on NESW.
+func CornerCursor(pos CornerPos) rl.MouseCursor {
+	if pos == CornerBR || pos == CornerTL {
+		return rl.MouseCursorResizeNWSE
 	}
-	if pointInRect(cursor, m.TopBar.Bounds) {
-		return nil
+	return rl.MouseCursorResizeNESW
+}
+
+func (m *PanelManager) CornerAt(cursor rl.Vector2) (*LayoutNode, CornerPos) {
+	if m.Workspace == nil || pointInRect(cursor, m.TopBar.Bounds) {
+		return nil, CornerBR
 	}
 	var hit *LayoutNode
+	hitPos := CornerBR
 	m.Workspace.WalkLeaves(func(l *LayoutNode) {
 		if hit != nil {
 			return
 		}
 		for _, p := range AllCornerPos {
 			if pointInRect(cursor, CornerHandleRect(l, p)) {
-				hit = l
+				hit, hitPos = l, p
 				return
 			}
 		}
 	})
-	return hit
+	return hit, hitPos
 }
 
-func (m *PanelManager) BeginCornerDrag(leaf *LayoutNode, cursor rl.Vector2) {
+// BeginCornerDrag snapshots the two bounding dividers plus the offset from
+// the grab point to the pane edge, so the edge doesn't jump to the cursor on
+// the first frame.
+func (m *PanelManager) BeginCornerDrag(leaf *LayoutNode, pos CornerPos, cursor rl.Vector2) {
+	if leaf == nil || !leaf.IsLeaf() {
+		return
+	}
 	m.cornerLeaf = leaf
+	m.cornerPos = pos
 	m.cornerStart = cursor
+	m.cornerMode = CornerDragNone
 	m.cornerDirty = false
+	m.cornerMergeSplit = nil
+
+	b := leaf.Bounds
+	m.cornerSplitX = boundingSplit(leaf, cornerDirX(pos))
+	m.cornerSplitY = boundingSplit(leaf, cornerDirY(pos))
+	if cornerDirX(pos) == edgeRight {
+		m.cornerOff.X = b.X + b.Width - cursor.X
+	} else {
+		m.cornerOff.X = b.X - cursor.X
+	}
+	if cornerDirY(pos) == edgeBottom {
+		m.cornerOff.Y = b.Y + b.Height - cursor.Y
+	} else {
+		m.cornerOff.Y = b.Y - cursor.Y
+	}
+	if m.cornerSplitX != nil {
+		m.cornerRatioX = m.cornerSplitX.Ratio
+	}
+	if m.cornerSplitY != nil {
+		m.cornerRatioY = m.cornerSplitY.Ratio
+	}
 }
 
 func (m *PanelManager) IsCornerDragging() bool       { return m.cornerLeaf != nil }
 func (m *PanelManager) CornerDragLeaf() *LayoutNode  { return m.cornerLeaf }
+func (m *PanelManager) CornerDragPos() CornerPos     { return m.cornerPos }
 func (m *PanelManager) CornerDragOrigin() rl.Vector2 { return m.cornerStart }
+func (m *PanelManager) CornerDragKindNow() CornerDragKind {
+	return m.cornerMode
+}
 
-// CornerDragMode classifies the in-progress drag:
-//   - Cursor inside source.Bounds → split (axis from larger |dx|/|dy|).
-//   - Cursor on source.Sibling()  → merge (close source).
-//   - Cursor on another leaf      → dock (full-level strip on nearest edge).
-//   - Else → none.
-func (m *PanelManager) CornerDragMode(cursor rl.Vector2) CornerDragKind {
+// UpdateCornerDrag classifies the gesture once (sticky for the rest of the
+// drag) and, in resize mode, applies the new ratios live. Returning to the
+// grab point releases the classification and restores the original ratios.
+func (m *PanelManager) UpdateCornerDrag(cursor rl.Vector2) {
 	if m.cornerLeaf == nil {
-		return CornerDragNone
+		return
 	}
 	dx := cursor.X - m.cornerStart.X
 	dy := cursor.Y - m.cornerStart.Y
-	adx, ady := abs32(dx), abs32(dy)
-	if adx < cornerCommitPx && ady < cornerCommitPx {
-		return CornerDragNone
-	}
-	if pointInRect(cursor, m.cornerLeaf.Bounds) {
-		if adx > ady {
-			return CornerSplitVert
+	if abs32(dx) < cornerCommitPx && abs32(dy) < cornerCommitPx {
+		if m.cornerMode == CornerResize || m.cornerMode == CornerMerge {
+			m.restoreCornerRatios()
+			m.Recompute(m.screenW, m.screenH)
 		}
-		return CornerSplitHoriz
+		m.cornerMode = CornerDragNone
+		m.cornerMergeSplit = nil
+		return
 	}
-	target := m.cornerTargetAt(cursor)
-	if target == nil {
-		return CornerDragNone
+	if m.cornerMode == CornerDragNone {
+		outX := dx * edgeSign(cornerDirX(m.cornerPos))
+		outY := dy * edgeSign(cornerDirY(m.cornerPos))
+		if outX > 0 || outY > 0 {
+			m.cornerMode = CornerResize
+		} else {
+			m.cornerMode = splitAxis(dx, dy)
+		}
 	}
-	if target == m.cornerLeaf.Sibling() {
-		return CornerMerge
+	switch m.cornerMode {
+	case CornerResize, CornerMerge:
+		m.applyCornerResize(cursor)
+	case CornerSplitVert, CornerSplitHoriz:
+		m.cornerMode = splitAxis(dx, dy)
 	}
-	return CornerDock
 }
 
-// cornerTargetAt returns the leaf under cursor that is NOT the source.
-func (m *PanelManager) cornerTargetAt(cursor rl.Vector2) *LayoutNode {
-	if m.Workspace == nil {
-		return nil
+func splitAxis(dx, dy float32) CornerDragKind {
+	if abs32(dx) > abs32(dy) {
+		return CornerSplitVert
 	}
-	if pointInRect(cursor, m.TopBar.Bounds) {
-		return nil
-	}
-	hit := m.Workspace.LeafAt(cursor)
-	if hit == m.cornerLeaf {
-		return nil
-	}
-	return hit
+	return CornerSplitHoriz
 }
 
-func (m *PanelManager) CornerDragTarget(cursor rl.Vector2) *LayoutNode {
-	return m.cornerTargetAt(cursor)
+// cornerEdgeCursor maps the cursor into divider space (see cornerOff).
+func (m *PanelManager) cornerEdgeCursor(cursor rl.Vector2) rl.Vector2 {
+	return rl.Vector2{X: cursor.X + m.cornerOff.X, Y: cursor.Y + m.cornerOff.Y}
 }
 
-// CornerDragSide is only meaningful for CornerDock mode.
-func (m *PanelManager) CornerDragSide(cursor rl.Vector2) DockSide {
-	target := m.cornerTargetAt(cursor)
-	if target == nil {
-		return DockNone
+func (m *PanelManager) applyCornerResize(cursor rl.Vector2) {
+	edge := m.cornerEdgeCursor(cursor)
+	m.cornerMergeSplit = nil
+	best := float32(0)
+
+	if sp := m.cornerSplitX; sp != nil {
+		m.setSplitRatio(sp, computeRatioFromCursor(sp, edge))
+		if over, ok := mergeOvershoot(sp, cornerDirX(m.cornerPos), edge); ok && over > best {
+			best, m.cornerMergeSplit, m.cornerMergeDir = over, sp, cornerDirX(m.cornerPos)
+		}
 	}
-	return DockSideFor(target, cursor)
+	if sp := m.cornerSplitY; sp != nil {
+		m.setSplitRatio(sp, computeRatioFromCursor(sp, edge))
+		if over, ok := mergeOvershoot(sp, cornerDirY(m.cornerPos), edge); ok && over > best {
+			best, m.cornerMergeSplit, m.cornerMergeDir = over, sp, cornerDirY(m.cornerPos)
+		}
+	}
+	if m.cornerMergeSplit != nil {
+		m.cornerMode = CornerMerge
+	} else {
+		m.cornerMode = CornerResize
+	}
+	m.Recompute(m.screenW, m.screenH)
 }
 
-func (m *PanelManager) CancelCornerDrag() {
-	m.cornerLeaf = nil
+// mergeOvershoot reports how far past the neighbour's far edge the cursor is.
+// Only a leaf neighbour can be eaten — collapsing a whole subtree by accident
+// is not worth the convenience.
+func mergeOvershoot(sp *LayoutNode, dir edgeDir, cursor rl.Vector2) (float32, bool) {
+	victim := sp.Children[neighbourChild(dir)]
+	if victim == nil || !victim.IsLeaf() {
+		return 0, false
+	}
+	b := sp.Bounds
+	var over float32
+	switch dir {
+	case edgeRight:
+		over = cursor.X - (b.X + b.Width)
+	case edgeLeft:
+		over = b.X - cursor.X
+	case edgeBottom:
+		over = cursor.Y - (b.Y + b.Height)
+	case edgeTop:
+		over = b.Y - cursor.Y
+	}
+	return over, over > 0
+}
+
+func (m *PanelManager) setSplitRatio(sp *LayoutNode, r float32) {
+	if r != sp.Ratio {
+		sp.Ratio = r
+		m.cornerDirty = true
+	}
+}
+
+func (m *PanelManager) restoreCornerRatios() {
+	if m.cornerSplitX != nil {
+		m.cornerSplitX.Ratio = m.cornerRatioX
+	}
+	if m.cornerSplitY != nil {
+		m.cornerSplitY.Ratio = m.cornerRatioY
+	}
 	m.cornerDirty = false
 }
 
+func (m *PanelManager) clearCornerDrag() {
+	m.cornerLeaf = nil
+	m.cornerMode = CornerDragNone
+	m.cornerSplitX = nil
+	m.cornerSplitY = nil
+	m.cornerMergeSplit = nil
+	m.cornerDirty = false
+}
+
+func (m *PanelManager) CancelCornerDrag() {
+	if m.cornerLeaf == nil {
+		return
+	}
+	m.restoreCornerRatios()
+	m.clearCornerDrag()
+	m.Recompute(m.screenW, m.screenH)
+}
+
+// CommitCornerDrag returns true when the layout changed (caller persists).
 func (m *PanelManager) CommitCornerDrag(cursor rl.Vector2) bool {
-	leaf := m.cornerLeaf
+	leaf, pos, mode := m.cornerLeaf, m.cornerPos, m.cornerMode
+	sp, dir, dirty := m.cornerMergeSplit, m.cornerMergeDir, m.cornerDirty
+	m.clearCornerDrag()
 	if leaf == nil {
-		m.CancelCornerDrag()
 		return false
 	}
-	mode := m.CornerDragMode(cursor)
-	target := m.cornerTargetAt(cursor)
-	side := DockNone
-	if target != nil {
-		side = DockSideFor(target, cursor)
-	}
-	m.cornerLeaf = nil
-
 	switch mode {
 	case CornerSplitVert, CornerSplitHoriz:
-		return m.commitSplit(leaf, mode, cursor)
+		return m.commitSplit(leaf, pos, mode, cursor)
 	case CornerMerge:
-		return m.commitMerge(leaf)
-	case CornerDock:
-		return m.commitDock(leaf, target, side)
+		if m.eatNeighbour(sp, dir) {
+			return true
+		}
+		return dirty
+	case CornerResize:
+		return dirty
 	}
 	return false
 }
 
-func (m *PanelManager) commitSplit(leaf *LayoutNode, mode CornerDragKind, cursor rl.Vector2) bool {
-	b := leaf.Bounds
-	dx := cursor.X - m.cornerStart.X
-	dy := cursor.Y - m.cornerStart.Y
+// eatNeighbour drops the leaf past dir's divider; the split collapses into
+// the side the dragged pane lives on.
+func (m *PanelManager) eatNeighbour(sp *LayoutNode, dir edgeDir) bool {
+	if sp == nil || !sp.IsSplit() {
+		return false
+	}
+	victim := sp.Children[neighbourChild(dir)]
+	if victim == nil {
+		return false
+	}
+	wasRoot := sp == m.Workspace
+	sib := MergeIntoSibling(victim)
+	if sib == nil {
+		return false
+	}
+	if wasRoot {
+		m.Workspace = sib
+	}
+	m.Recompute(m.screenW, m.screenH)
+	return true
+}
 
+// commitSplit puts the divider under the cursor and gives the swept side to
+// the new pane, which takes the first widget kind not already on screen.
+func (m *PanelManager) commitSplit(leaf *LayoutNode, pos CornerPos, mode CornerDragKind, cursor rl.Vector2) bool {
+	b := leaf.Bounds
 	var orient SplitOrient
 	var ratio float32
-	var originalSide int
+	originalSide := 0
 	switch mode {
 	case CornerSplitVert:
+		if b.Width <= 0 {
+			return false
+		}
 		orient = SplitVertical
-		if dx < 0 {
-			split := -dx
-			if split > b.Width-panelMinW {
-				split = b.Width - panelMinW
-			}
-			if split < panelMinW {
-				split = panelMinW
-			}
-			ratio = split / b.Width
+		ratio = splitRatioAt(cursor.X-b.X, b.Width, panelMinW)
+		if cornerDirX(pos) == edgeLeft {
 			originalSide = 1
-		} else {
-			split := dx
-			if split > b.Width-panelMinW {
-				split = b.Width - panelMinW
-			}
-			if split < panelMinW {
-				split = panelMinW
-			}
-			ratio = (b.Width - split) / b.Width
-			originalSide = 0
 		}
 	case CornerSplitHoriz:
-		orient = SplitHorizontal
-		if dy < 0 {
-			split := -dy
-			if split > b.Height-panelMinH {
-				split = b.Height - panelMinH
-			}
-			if split < panelMinH {
-				split = panelMinH
-			}
-			ratio = split / b.Height
-			originalSide = 1
-		} else {
-			split := dy
-			if split > b.Height-panelMinH {
-				split = b.Height - panelMinH
-			}
-			if split < panelMinH {
-				split = panelMinH
-			}
-			ratio = (b.Height - split) / b.Height
-			originalSide = 0
+		if b.Height <= 0 {
+			return false
 		}
+		orient = SplitHorizontal
+		ratio = splitRatioAt(cursor.Y-b.Y, b.Height, panelMinH)
+		if cornerDirY(pos) == edgeTop {
+			originalSide = 1
+		}
+	default:
+		return false
 	}
 
-	newSplit := SplitLeaf(leaf, orient, clamp01(ratio), originalSide)
-	if newSplit == nil {
+	split := SplitLeaf(leaf, orient, clamp01(ratio), originalSide)
+	if split == nil {
 		return false
 	}
 	if leaf == m.Workspace {
-		m.Workspace = newSplit
+		m.Workspace = split
+	}
+	if fresh := split.Children[1-originalSide]; fresh != nil {
+		if id, ok := m.firstUnusedKind(); ok {
+			fresh.Panel, fresh.Title = id, WidgetTitle(id)
+		}
 	}
 	m.Recompute(m.screenW, m.screenH)
 	return true
 }
 
-func (m *PanelManager) commitMerge(leaf *LayoutNode) bool {
-	if leaf == nil || leaf.Parent == nil {
-		return false
+// splitRatioAt clamps a divider offset so neither side drops below min.
+func splitRatioAt(v, total, min float32) float32 {
+	if total <= 0 {
+		return 0.5
 	}
-	wasRootChild := leaf.Parent == m.Workspace
-	sib := MergeIntoSibling(leaf)
-	if sib == nil {
-		return false
+	lo, hi := min, total-min
+	if lo > hi {
+		lo, hi = total*0.5, total*0.5
 	}
-	if wasRootChild {
-		m.Workspace = sib
+	if v < lo {
+		v = lo
 	}
-	m.Recompute(m.screenW, m.screenH)
-	return true
+	if v > hi {
+		v = hi
+	}
+	return v / total
 }
 
-// commitDock detaches `source` from its old slot and re-attaches as a strip
-// on `side` of the subtree containing `target`. MergeIntoSibling can shift
-// `target`'s ancestor pointers, so DockNear re-reads them.
-func (m *PanelManager) commitDock(source, target *LayoutNode, side DockSide) bool {
-	if source == nil || target == nil || source == target || side == DockNone {
-		return false
+// firstUnusedKind keeps a fresh pane from duplicating a widget already in the
+// tree — Get(PanelID) resolves to the first matching leaf, so a duplicate
+// would render empty.
+func (m *PanelManager) firstUnusedKind() (PanelID, bool) {
+	used := map[PanelID]bool{}
+	m.Workspace.WalkLeaves(func(l *LayoutNode) { used[l.Panel] = true })
+	for _, id := range WorkspacePanelKinds {
+		if !used[id] {
+			return id, true
+		}
 	}
-	if source.Parent == nil {
-		return false
-	}
-	sourceWasRootChild := source.Parent == m.Workspace
-	sib := MergeIntoSibling(source)
-	if sib == nil {
-		return false
-	}
-	if sourceWasRootChild {
-		m.Workspace = sib
-	}
-	wrap := target.Parent
-	if wrap == nil {
-		wrap = target
-	}
-	wrapWasRoot := wrap == m.Workspace
-	newSplit := DockNear(source, target, side)
-	if newSplit == nil {
-		return false
-	}
-	if wrapWasRoot {
-		m.Workspace = newSplit
-	}
-	m.Recompute(m.screenW, m.screenH)
-	return true
+	return PanelNone, false
 }
 
 func DrawCornerHandles(m *PanelManager, cursor rl.Vector2) {
 	if m == nil || m.Workspace == nil {
 		return
 	}
-	hot := m.CornerAt(cursor)
+	hot, _ := m.CornerAt(cursor)
 	m.Workspace.WalkLeaves(func(l *LayoutNode) {
 		for _, p := range AllCornerPos {
 			r := CornerHandleRect(l, p)
@@ -354,59 +501,41 @@ func drawCornerGlyph(r rl.Rectangle, pos CornerPos, c rl.Color) {
 	}
 }
 
+// DrawCornerDragPreview: resize needs no preview (the panes move live), so
+// only the split line and the merge warning are drawn.
 func DrawCornerDragPreview(m *PanelManager, cursor rl.Vector2) {
 	if m == nil || m.cornerLeaf == nil {
 		return
 	}
-	mode := m.CornerDragMode(cursor)
-	switch mode {
+	b := m.cornerLeaf.Bounds
+	switch m.cornerMode {
 	case CornerSplitVert:
-		b := m.cornerLeaf.Bounds
-		x := cursor.X
-		if x < b.X+panelMinW {
-			x = b.X + panelMinW
-		}
-		if x > b.X+b.Width-panelMinW {
-			x = b.X + b.Width - panelMinW
-		}
+		x := b.X + b.Width*splitRatioAt(cursor.X-b.X, b.Width, panelMinW)
 		rl.DrawLineEx(
 			rl.Vector2{X: x, Y: b.Y + 4},
 			rl.Vector2{X: x, Y: b.Y + b.Height - 4},
 			2, cornerPreviewColor)
 	case CornerSplitHoriz:
-		b := m.cornerLeaf.Bounds
-		y := cursor.Y
-		if y < b.Y+panelMinH {
-			y = b.Y + panelMinH
-		}
-		if y > b.Y+b.Height-panelMinH {
-			y = b.Y + b.Height - panelMinH
-		}
+		y := b.Y + b.Height*splitRatioAt(cursor.Y-b.Y, b.Height, panelMinH)
 		rl.DrawLineEx(
 			rl.Vector2{X: b.X + 4, Y: y},
 			rl.Vector2{X: b.X + b.Width - 4, Y: y},
 			2, cornerPreviewColor)
+	case CornerResize:
+		rl.DrawRectangleLinesEx(b, 2, cornerResizeBorder)
 	case CornerMerge:
-		sib := m.cornerLeaf.Sibling()
-		if sib == nil {
+		sp := m.cornerMergeSplit
+		if sp == nil {
 			return
 		}
-		rl.DrawRectangleRec(sib.Bounds, cornerMergeOverlay)
-		rl.DrawRectangleLinesEx(m.cornerLeaf.Bounds, 2, cornerMergeBorder)
-		drawMergeArrow(m.cornerLeaf.Bounds, sib.Bounds)
-	case CornerDock:
-		target := m.cornerTargetAt(cursor)
-		if target == nil {
+		victim := sp.Children[neighbourChild(m.cornerMergeDir)]
+		if victim == nil {
 			return
 		}
-		side := DockSideFor(target, cursor)
-		wrap := DockWrapBounds(target)
-		highlight := DockHighlightRect(target, side)
-		rl.DrawRectangleRec(wrap, cornerMergeOverlay)
-		rl.DrawRectangleRec(highlight, cornerDockHighlight)
-		rl.DrawRectangleLinesEx(highlight, 2, cornerDockBorder)
-		rl.DrawRectangleLinesEx(m.cornerLeaf.Bounds, 2, cornerDockBorder)
-		drawMergeArrow(m.cornerLeaf.Bounds, highlight)
+		rl.DrawRectangleRec(victim.Bounds, cornerMergeOverlay)
+		rl.DrawRectangleLinesEx(victim.Bounds, 2, cornerMergeBorder)
+		rl.DrawRectangleLinesEx(b, 2, cornerDockBorder)
+		drawMergeArrow(b, victim.Bounds)
 	}
 }
 

@@ -80,6 +80,7 @@ func (g *Game) shutdownUI() {
 // skip LMB handlers when true so chrome doesn't double-fire into the world.
 func (g *Game) chromeBusy() bool {
 	return g.UI.PanelMgr.IsDragging() || g.UI.PanelMgr.IsCornerDragging() ||
+		g.UI.PanelMgr.IsTitleDragging() ||
 		g.UI.ChevronMenu.Open || g.UI.Floating.IsBusy(rl.GetMousePosition()) ||
 		g.UI.Floating.SwitchMenuOpen()
 }
