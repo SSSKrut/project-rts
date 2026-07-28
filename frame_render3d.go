@@ -1,0 +1,534 @@
+package main
+
+import (
+	"math"
+
+	rl "github.com/gen2brain/raylib-go/raylib"
+	"github.com/mlange-42/ark/ecs"
+
+	"rts-go/components"
+	"rts-go/systems"
+	"rts-go/ui"
+)
+
+// drawScene3D renders the world into the scene render texture: terrain, units,
+// vehicles, props, buildings, debug overlays, ghosts and particles.
+func (g *Game) drawScene3D() {
+	g.Frame.AnchorPos = g.Maps.Pos.Get(g.anchor)
+	anchorRender := g.Frame.AnchorPos.ToRenderSpace(systems.CurrentOriginChunk)
+
+	rl.BeginTextureMode(g.UI.Scene3DRT.RT)
+	rl.ClearBackground(rl.RayWhite)
+	rl.BeginMode3D(systems.CurrentCamera)
+
+	g.Frame.ChunksActive = 0
+	g.Frame.ChunksRel = 0
+	qcA := g.Filt.ChunkActive.Query()
+	for qcA.Next() {
+		pos, mesh, _ := qcA.Get()
+		g.Frame.ChunksActive++
+		if !mesh.Uploaded {
+			continue
+		}
+		renderPos := pos.ToRenderSpace(systems.CurrentOriginChunk)
+		xform := rl.MatrixTranslate(renderPos.X, renderPos.Y, renderPos.Z)
+		rl.DrawMesh(mesh.Mesh, g.terrainMaterial, xform)
+	}
+	qcR := g.Filt.ChunkRelevant.Query()
+	for qcR.Next() {
+		pos, mesh, _ := qcR.Get()
+		g.Frame.ChunksRel++
+		if !mesh.Uploaded {
+			continue
+		}
+		renderPos := pos.ToRenderSpace(systems.CurrentOriginChunk)
+		xform := rl.MatrixTranslate(renderPos.X, renderPos.Y, renderPos.Z)
+		rl.DrawMesh(mesh.Mesh, g.terrainMaterial, xform)
+	}
+
+	rl.DrawCircle3D(anchorRender, 1, rl.Vector3{X: 1, Y: 0, Z: 0}, 90, rl.Blue)
+
+	g.Frame.UnitsLive = 0
+	fowNow := g.Svc.Squad.Clock()
+	qu := g.Filt.UnitRender.Query()
+	for qu.Next() {
+		pos, _, st := qu.Get()
+		renderPos := pos.ToRenderSpace(systems.CurrentOriginChunk)
+		ent := qu.Entity()
+		// Default Rifleman keeps render resilient if a spawn path forgot AssignRole.
+		role := components.RoleRifleman
+		if r := g.Maps.Role.Get(ent); r != nil {
+			role = r.Kind
+		}
+		// Phase 18.5.G FoW: non-PlayerFaction units render only when a
+		// recent sensor refresh covers them. 2 sec tail with linear
+		// alpha fade after LOS loss.
+		alpha := float32(1.0)
+		if f := g.Maps.Faction.Get(ent); f != nil && f.ID != components.FactionPlayer {
+			contactEnt, ok := g.Res.ContactRegistry.Tracked[ent]
+			if !ok || !g.App.World.Alive(contactEnt) {
+				continue
+			}
+			c := g.Maps.Contact.Get(contactEnt)
+			if c == nil {
+				continue
+			}
+			age := fowNow - c.LastSeenTime
+			const tailSec float32 = 2.0
+			if age >= tailSec {
+				continue
+			}
+			if age > 0 {
+				alpha = 1.0 - age/tailSec
+			}
+		}
+		if alpha >= 0.999 {
+			drawUnitCube(renderPos, *st, role)
+		} else {
+			drawUnitCubeAlpha(renderPos, *st, role, alpha)
+		}
+		if g.isSelected(ent) >= 0 {
+			height := unitStanceHeight(st.Code)
+			rl.DrawCircle3D(renderPos, 1.0, rl.Vector3{X: 1, Y: 0, Z: 0}, 90,
+				rl.Color{R: 0, G: 220, B: 220, A: 255})
+			c := rl.Vector3{X: renderPos.X, Y: renderPos.Y + height*0.5, Z: renderPos.Z}
+			rl.DrawCubeWiresV(c, rl.Vector3{X: 0.7, Y: height + 0.1, Z: 0.7},
+				rl.Color{R: 0, G: 220, B: 220, A: 255})
+		}
+		if g.Sel.Hovered == ent {
+			height := unitStanceHeight(st.Code)
+			c := rl.Vector3{X: renderPos.X, Y: renderPos.Y + height*0.5, Z: renderPos.Z}
+			rl.DrawCubeWiresV(c, rl.Vector3{X: 0.8, Y: height + 0.2, Z: 0.8},
+				rl.Color{R: 240, G: 240, B: 120, A: 255})
+		}
+		g.Frame.UnitsLive++
+	}
+
+	qveh := g.Filt.VehicleRender.Query()
+	for qveh.Next() {
+		pos, veh := qveh.Get()
+		ent := qveh.Entity()
+		renderPos := pos.ToRenderSpace(systems.CurrentOriginChunk)
+		yaw := float32(0)
+		if m := g.Svc.UnitFactory.MotionMap.Get(ent); m != nil {
+			yaw = m.Yaw
+		}
+		turretYaw := float32(0)
+		if t := g.Maps.Turret.Get(ent); t != nil {
+			turretYaw = t.Yaw
+		}
+		drawVehicleBox(renderPos, yaw, turretYaw, veh.Kind, g.squadColor(ent))
+		if g.isSelected(ent) >= 0 {
+			spec := components.SpecForVehicle(veh.Kind)
+			rl.DrawCircle3D(renderPos, spec.ColliderR, rl.Vector3{X: 1, Y: 0, Z: 0}, 90,
+				rl.Color{R: 0, G: 220, B: 220, A: 255})
+		}
+		if g.Sel.Hovered == ent {
+			spec := components.SpecForVehicle(veh.Kind)
+			rl.DrawCircle3D(renderPos, spec.ColliderR+0.3, rl.Vector3{X: 1, Y: 0, Z: 0}, 90,
+				rl.Color{R: 240, G: 240, B: 120, A: 255})
+		}
+	}
+
+	g.Frame.PropsLive = 0
+	g.Frame.BridgesLive = 0
+	camPos := systems.CurrentCamera.Position
+	camFwdX := systems.CurrentCamera.Target.X - camPos.X
+	camFwdZ := systems.CurrentCamera.Target.Z - camPos.Z
+	qp := g.Filt.Prop.Query()
+	for qp.Next() {
+		pos, prop := qp.Get()
+		renderPos := pos.ToRenderSpace(systems.CurrentOriginChunk)
+		pdx := renderPos.X - camPos.X
+		pdz := renderPos.Z - camPos.Z
+		pDistSq := pdx*pdx + pdz*pdz
+		if pDistSq > propCullDistSq {
+			continue
+		}
+		if pDistSq > propNearKeepDistSq && pdx*camFwdX+pdz*camFwdZ < 0 {
+			continue
+		}
+		meta := g.Res.PropRegistry.Metas[prop.Type]
+		if pDistSq > propFullDetailDistSq {
+			switch meta.Primitive {
+			case components.PrimitiveTree:
+				drawPropFar(meta, renderPos, prop.Scale)
+				g.Frame.PropsLive++
+			case components.PrimitivePlane:
+				drawProp(meta, renderPos, prop.Yaw, prop.Scale)
+				g.Frame.PropsLive++
+				if prop.Type == components.PropBridge {
+					g.Frame.BridgesLive++
+				}
+			}
+			continue
+		}
+		drawProp(meta, renderPos, prop.Yaw, prop.Scale)
+		g.Frame.PropsLive++
+		if prop.Type == components.PropBridge {
+			g.Frame.BridgesLive++
+		}
+	}
+
+	// A Level is hidden when its building has InteriorOpen AND its avgY
+	// sits above CurrentLevel's avgY + epsilon.
+	hiddenLevels := map[ecs.Entity]bool{}
+	qLev := g.Filt.LevelCutaway.Query()
+	for qLev.Next() {
+		lvl, member := qLev.Get()
+		bvm := g.Maps.BuildingViewMode.Get(member.Building)
+		if bvm == nil || !bvm.InteriorOpen {
+			continue
+		}
+		if bvm.CurrentLevel == (ecs.Entity{}) {
+			continue
+		}
+		curLev := g.Maps.Level.Get(bvm.CurrentLevel)
+		if curLev == nil {
+			continue
+		}
+		if lvl.AABB.CenterY() > curLev.AABB.CenterY()+0.1 {
+			hiddenLevels[qLev.Entity()] = true
+		}
+	}
+
+	// A level is fogged when never discovered OR last seen >FogVisibleDuration ago.
+	now := float32(g.App.Elapsed().Seconds())
+	levelFogged := func(level ecs.Entity) bool {
+		if level == (ecs.Entity{}) {
+			return false
+		}
+		vis := g.Maps.LevelVisRead.Get(level)
+		if vis == nil {
+			return false
+		}
+		if !vis.Discovered {
+			return true
+		}
+		return now-vis.LastSeenAt > components.FogVisibleDuration
+	}
+
+	g.Frame.FloorsLive = 0
+	qf := g.Filt.FloorRender.Query()
+	for qf.Next() {
+		pos, fl := qf.Get()
+		fogged := false
+		if lm := g.Maps.LevelMember.Get(qf.Entity()); lm != nil {
+			if hiddenLevels[lm.Level] {
+				continue
+			}
+			fogged = levelFogged(lm.Level)
+		}
+		renderPos := pos.ToRenderSpace(systems.CurrentOriginChunk)
+		drawBuildingFloor(renderPos, *fl, fogged)
+		g.Frame.FloorsLive++
+	}
+	g.Frame.WallsLive = 0
+	qw := g.Filt.WallRender.Query()
+	for qw.Next() {
+		pos, ws := qw.Get()
+		e := qw.Entity()
+		mode := components.WallRenderAll
+		var outward rl.Vector3
+		fogged := false
+		if lm := g.Maps.LevelMember.Get(e); lm != nil {
+			if hiddenLevels[lm.Level] {
+				continue
+			}
+			fogged = levelFogged(lm.Level)
+			// WallMode only applies to the currently-viewed level inside an open cutaway.
+			if member := g.Maps.BuildingMember.Get(e); member != nil {
+				if bvm := g.Maps.BuildingViewMode.Get(member.Building); bvm != nil &&
+					bvm.InteriorOpen && lm.Level == bvm.CurrentLevel {
+					mode = bvm.WallMode
+				}
+			}
+			if mode == components.WallRenderCameraFacing {
+				if cd := g.Maps.CoverDirRead.Get(e); cd != nil {
+					outward = cd.Dir
+				}
+			}
+		}
+		renderPos := pos.ToRenderSpace(systems.CurrentOriginChunk)
+		drawBuildingWall(renderPos, *ws, mode, outward, fogged)
+		g.Frame.WallsLive++
+	}
+	qst := g.Filt.StairsRender.Query()
+	for qst.Next() {
+		pos, st := qst.Get()
+		renderPos := pos.ToRenderSpace(systems.CurrentOriginChunk)
+		drawBuildingStairs(renderPos, *st)
+	}
+
+	// Outline boxes around hovered + selected buildings. 0.15 m pad keeps
+	// the wireframe legible against wall surfaces.
+	drawBuildingOutline := func(root ecs.Entity, color rl.Color) {
+		if root == (ecs.Entity{}) || !g.App.World.Alive(root) {
+			return
+		}
+		bldg := g.Maps.Building.Get(root)
+		rootPos := g.Maps.Pos.Get(root)
+		if bldg == nil || rootPos == nil {
+			return
+		}
+		const pad float32 = 0.15
+		height := float32(bldg.Stories) * components.FloorHeight
+		if height < 1 {
+			height = components.FloorHeight
+		}
+		sizeX := bldg.Footprint.SizeX() + 2*pad
+		sizeZ := bldg.Footprint.SizeZ() + 2*pad
+		center := *rootPos
+		center.Local.Y += height * 0.5
+		rp := center.ToRenderSpace(systems.CurrentOriginChunk)
+		rl.DrawCubeWires(rp, sizeX, height, sizeZ, color)
+	}
+	if g.Sel.HoveredBuilding != (ecs.Entity{}) && g.Sel.HoveredBuilding != g.Sel.Building {
+		yellow := rl.Color{R: 255, G: 220, B: 60, A: 200}
+		if g.Sel.HoveredLevel != (ecs.Entity{}) {
+			if lvl := g.Maps.Level.Get(g.Sel.HoveredLevel); lvl != nil {
+				drawLevelOutline(lvl, yellow)
+			} else {
+				drawBuildingOutline(g.Sel.HoveredBuilding, yellow)
+			}
+		} else {
+			drawBuildingOutline(g.Sel.HoveredBuilding, yellow)
+		}
+	}
+	if g.Sel.Building != (ecs.Entity{}) {
+		drawBuildingOutline(g.Sel.Building, rl.Color{R: 90, G: 200, B: 240, A: 230})
+	}
+
+	// Hold-G (or the Debug-panel sticky toggle) also flips the map's
+	// road / river / building debug layer.
+	if rl.IsKeyDown(rl.KeyG) || debugOverlay.RoadGraph {
+		drawRoadGraphDebug(&g.Res.RoadGraph)
+		g.UI.ShowMapDebugLy = true
+	} else {
+		g.UI.ShowMapDebugLy = false
+	}
+
+	drawLOSPreview(g.Ctx.LOS)
+	if debugOverlay.NavGrid {
+		qNav := g.Filt.NavOverlay.Query()
+		for qNav.Next() {
+			pos, cc, grid, hm := qNav.Get()
+			if !debugChunkInRadius(*cc, systems.CurrentOriginChunk) {
+				continue
+			}
+			drawNavGridOverlay(*pos, *cc, grid, hm)
+		}
+	}
+	if debugOverlay.CoverMap {
+		qCov := g.Filt.CoverOverlay.Query()
+		for qCov.Next() {
+			pos, cc, cov, hm := qCov.Get()
+			if !debugChunkInRadius(*cc, systems.CurrentOriginChunk) {
+				continue
+			}
+			drawCoverMapOverlay(*pos, *cc, cov, hm)
+		}
+	}
+
+	g.Frame.VisionPairs = 0
+	if debugOverlay.Vision {
+		qV := g.Filt.VisionAware.Query()
+		for qV.Next() {
+			pos, aware := qV.Get()
+			if !debugChunkInRadius(pos.Chunk, systems.CurrentOriginChunk) {
+				continue
+			}
+			from := pos.ToRenderSpace(systems.CurrentOriginChunk)
+			from.Y += 1.0
+			for i := range aware.LastSeen {
+				if aware.LastSeen[i].Time == 0 {
+					continue
+				}
+				to := aware.LastSeen[i].Pos.ToRenderSpace(systems.CurrentOriginChunk)
+				to.Y += 1.0
+				rl.DrawLine3D(from, to, rl.Green)
+				g.Frame.VisionPairs++
+			}
+		}
+	} else {
+		qV := g.Filt.VisionAware.Query()
+		for qV.Next() {
+			_, aware := qV.Get()
+			for i := range aware.LastSeen {
+				if aware.LastSeen[i].Time != 0 {
+					g.Frame.VisionPairs++
+				}
+			}
+		}
+	}
+
+	g.Frame.SquadsLive = 0
+	g.Frame.SquadMembers = 0
+	drawAllSquads := rl.IsKeyDown(rl.KeyK) || debugOverlay.SquadLines
+	selectedSquad, selectedHomo := groupSelected(g.Sel.Units, g.Maps.SquadMember)
+	qSq := g.Filt.Squad.Query()
+	for qSq.Next() {
+		_, roster := qSq.Get()
+		g.Frame.SquadsLive++
+		g.Frame.SquadMembers += int(roster.Count)
+		squadEnt := qSq.Entity()
+		isSelectedSquad := selectedHomo && selectedSquad != (ecs.Entity{}) && selectedSquad == squadEnt
+		if !drawAllSquads && !isSelectedSquad {
+			continue
+		}
+		centerWP, ok := systems.SquadCenter(g.App.World, roster, g.Maps.Pos)
+		if !ok {
+			continue
+		}
+		centerRender := centerWP.ToRenderSpace(systems.CurrentOriginChunk)
+		centerRender.Y += 0.2
+		memberPos := make([]rl.Vector3, 0, roster.Count)
+		for i := uint8(0); i < roster.Count; i++ {
+			mem := roster.Members[i]
+			if mem == (ecs.Entity{}) || !g.App.World.Alive(mem) {
+				continue
+			}
+			if p := g.Maps.Pos.Get(mem); p != nil {
+				r := p.ToRenderSpace(systems.CurrentOriginChunk)
+				r.Y += 0.2
+				memberPos = append(memberPos, r)
+			}
+		}
+		drawSquadConnections(centerRender, memberPos, g.squadColor(squadEnt))
+	}
+
+	if debugOverlay.LevelNavGrid {
+		qFloor := g.Filt.FloorNav.Query()
+		for qFloor.Next() {
+			pos, _, grid := qFloor.Get()
+			if !debugChunkInRadius(pos.Chunk, systems.CurrentOriginChunk) {
+				continue
+			}
+			drawFloorNavOverlay(*pos, grid)
+		}
+	}
+
+	// Surface<->Level edges = green, Level<->Level = yellow. Missing
+	// lines through a door/stair ⇒ bake failed to resolve LevelMember.
+	if debugOverlay.Transitions {
+		levelGridReadMap := ecs.NewMap[components.LevelNavGrid](g.App.World)
+		nodeWorld := func(n components.NavNode) (rl.Vector3, bool) {
+			switch n.Kind {
+			case components.NodeSurface:
+				wx := float32(n.Chunk.X)*components.ChunkSize + float32(n.I) + 0.5
+				wz := float32(n.Chunk.Z)*components.ChunkSize + float32(n.J) + 0.5
+				wp := components.WorldPos{}.Add(rl.Vector3{
+					X: wx, Y: systems.GroundHeight(wx, wz) + 0.5, Z: wz,
+				})
+				return wp.ToRenderSpace(systems.CurrentOriginChunk), true
+			case components.NodeLevel:
+				rootPos := g.Maps.Pos.Get(n.Level)
+				ng := levelGridReadMap.Get(n.Level)
+				if rootPos == nil || ng == nil {
+					return rl.Vector3{}, false
+				}
+				rChunkBaseX := float32(rootPos.Chunk.X) * components.ChunkSize
+				rChunkBaseZ := float32(rootPos.Chunk.Z) * components.ChunkSize
+				cx := rChunkBaseX + ng.Origin.X + float32(n.I) + 0.5
+				cz := rChunkBaseZ + ng.Origin.Z + float32(n.J) + 0.5
+				wp := components.WorldPos{}.Add(rl.Vector3{X: cx, Y: ng.Origin.Y + 0.5, Z: cz})
+				return wp.ToRenderSpace(systems.CurrentOriginChunk), true
+			}
+			return rl.Vector3{}, false
+		}
+		for _, edges := range g.Res.Transitions.Out {
+			for _, e := range edges {
+				a, ok1 := nodeWorld(e.From)
+				b, ok2 := nodeWorld(e.To)
+				if !ok1 || !ok2 {
+					continue
+				}
+				col := rl.Color{R: 50, G: 220, B: 80, A: 255}
+				if e.From.Kind == components.NodeLevel && e.To.Kind == components.NodeLevel {
+					col = rl.Color{R: 240, G: 220, B: 60, A: 255}
+				}
+				rl.DrawLine3D(a, b, col)
+			}
+		}
+	}
+
+	g.Frame.CoverSlots = 0
+	if debugOverlay.CoverSlots {
+		qSlot := g.Filt.CoverSlot.Query()
+		for qSlot.Next() {
+			pos, slot := qSlot.Get()
+			if !debugChunkInRadius(pos.Chunk, systems.CurrentOriginChunk) {
+				continue
+			}
+			render := pos.ToRenderSpace(systems.CurrentOriginChunk)
+			rl.DrawCubeV(render, rl.Vector3{X: 0.25, Y: 0.25, Z: 0.25}, rl.Yellow)
+			tip := rl.Vector3{
+				X: render.X + slot.OriginDir.X*1.0,
+				Y: render.Y,
+				Z: render.Z + slot.OriginDir.Z*1.0,
+			}
+			rl.DrawLine3D(render, tip, rl.Magenta)
+			g.Frame.CoverSlots++
+		}
+	} else {
+		qSlot := g.Filt.CoverSlot.Query()
+		for qSlot.Next() {
+			qSlot.Get()
+			g.Frame.CoverSlots++
+		}
+	}
+
+	drawNavPath(g.Sel.NavPath, *g.Frame.AnchorPos)
+
+	if debugOverlay.UnitPaths {
+		drawUnitPaths(unitPathRenderCtx{
+			filter:         g.Filt.UnitPathSquad,
+			soloFilter:     g.Filt.UnitPathSolo,
+			squadMemberMap: g.Maps.SquadMember,
+			selectedSquad:  unitPathsSelectedSquad(g.Sel.Units, g.Maps.SquadMember),
+		})
+	}
+
+	// Ghost preview rotates live during facing-drag so the orientation
+	// matches what release will commit to.
+	var ghostDragFacing *float32
+	if g.UI.RMB.Active && g.UI.RMB.FacingActive {
+		dx := g.Frame.Cursor.X - g.UI.RMB.PressOrigin.X
+		dy := g.Frame.Cursor.Y - g.UI.RMB.PressOrigin.Y
+		yaw := float32(math.Atan2(float64(dx), float64(-dy)))
+		ghostDragFacing = &yaw
+		g.Frame.GhostTarget = g.UI.RMB.PressTarget
+		g.Frame.GhostTargetOK = true
+	}
+	// Popup-hover swaps ghost placement per kind; anchored at press-time target.
+	var ghostPopupKind *components.OrderKindCode
+	var ghostPopupLevel ecs.Entity
+	if g.UI.CtxMenu.IsActive() {
+		if item, ok := g.UI.CtxMenu.HoveredItemDetails(); ok {
+			k := item.Kind
+			ghostPopupKind = &k
+			ghostPopupLevel = item.LevelEntity
+		}
+		g.Frame.GhostTarget = g.UI.RMB.PressTarget
+		g.Frame.GhostTargetOK = true
+	}
+	drawVehicleRoutes(g.Ctx.Route, g.Sel.Units,
+		g.Frame.Focused == ui.Panel3D && g.Frame.GhostTargetOK, g.Frame.GhostTarget)
+	drawSelectionGhost(g.Ctx.Ghost, g.Sel.Units, g.Frame.Focused == ui.Panel3D, g.Frame.GhostTarget, g.Frame.GhostTargetOK,
+		ghostDragFacing, ghostPopupKind, ghostPopupLevel, g.Maps.Level)
+
+	drawOrderMarkers3D(g.Ctx.OrderMarker, g.Sel.Units)
+
+	qsmoke := g.Filt.SmokeRender.Query()
+	for qsmoke.Next() {
+		sp, sf := qsmoke.Get()
+		c := sp.ToRenderSpace(systems.CurrentOriginChunk)
+		c.Y += sf.Radius * 0.5
+		rl.DrawSphere(c, sf.Radius, rl.Color{R: 150, G: 150, B: 155, A: 70})
+	}
+
+	drawParticles(g.Ctx.Particle, float32(g.App.Elapsed().Seconds()))
+
+	rl.EndMode3D()
+	rl.EndTextureMode()
+}
