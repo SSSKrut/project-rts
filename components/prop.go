@@ -10,12 +10,6 @@ const (
 	PropBirch
 	PropBush
 	PropRock
-	PropWater
-	PropBridge
-	PropRoadHighway
-	PropRoadLocal
-	PropRoadDirt
-	PropJunction
 	PropTypeMax
 )
 
@@ -31,8 +25,8 @@ type Prop struct {
 // PropsDirty marks a chunk that hasn't had its procedural props spawned yet.
 type PropsDirty struct{}
 
-// RiverProcessed marks a chunk whose river-cut + water props have been
-// applied. Local to the chunk, not serialized: after eviction the chunk
+// RiverProcessed marks a chunk whose river-cut has been applied. Local to
+// the chunk, not serialized: after eviction the chunk
 // reincarnates pristine and RiverSystem reapplies the cut deterministically.
 // RiverSystem's filter excludes Modified so player edits aren't re-stamped.
 type RiverProcessed struct{}

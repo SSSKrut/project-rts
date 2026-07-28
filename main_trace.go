@@ -50,7 +50,7 @@ func recordTraceFrame(app *core.App, frameMs float32, fps int32, cen census) {
 	traceEntityMap["units"] = cen.units
 	traceEntityMap["weapons"] = cen.weapons
 	traceEntityMap["transitions"] = cen.transitions
-	traceEntityMap["bridges_live"] = cen.bridgesLive
+	traceEntityMap["ribbons_drawn"] = cen.ribbonsDrawn
 	traceEntityMap["vision_pairs"] = cen.visionPairs
 
 	app.Trace.WriteFrame(core.FrameMetrics{

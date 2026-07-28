@@ -88,6 +88,11 @@ func (g *Game) initResources() {
 	}
 	fmt.Printf("road graph: nodes=%d edges=%d bridges=%d\n",
 		len(r.RoadGraph.Nodes), len(r.RoadGraph.Edges), r.BridgeEdges)
+	// Ribbon geometry is derived from the graph + procgen ground, so it is
+	// built once here and never touched by streaming. RoadSurface must be
+	// registered before any system's InitUI grabs the handle.
+	g.buildRibbons()
+	ecs.AddResource(g.World, &r.RoadSurface)
 
 	r.BuildingPlans = components.BuildingPlanList{Plans: makeStartingBuildings()}
 	ecs.AddResource(g.World, &r.BuildingPlans)

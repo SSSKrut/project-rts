@@ -38,7 +38,9 @@ const (
 // the riverbed would stand on a plinth above the water.
 const minPropRiverDistance float32 = 3.0
 
-const roadClearanceMargin float32 = 1.0
+// Wide enough to also clear the ribbon's shoulder on an ordinary fill; a
+// tall embankment can still poke past it (PHASE-17.5-ROADS deferred).
+const roadClearanceMargin float32 = 2.0
 const minPropBuildingClearance float32 = 1.5
 const minPropTrenchClearance float32 = 1.0
 

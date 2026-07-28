@@ -29,8 +29,7 @@ type GroundStickSystem struct {
 	vehicleFilter *ecs.Filter2[components.Vehicle, components.WorldPos]
 	floorFilter   *ecs.Filter2[components.WorldPos, components.Floor]
 	stairsFilter  *ecs.Filter2[components.WorldPos, components.Stairs]
-	followerMap   *ecs.Map[components.RoadFollower]
-	graphRes      ecs.Resource[components.RoadGraph]
+	surfaceRes    ecs.Resource[components.RoadSurface]
 	sampler       *HeightSampler
 }
 
@@ -44,8 +43,7 @@ func (sys *GroundStickSystem) InitUI(w *ecs.World) {
 		With(ecs.C[components.OnGround]())
 	sys.floorFilter = ecs.NewFilter2[components.WorldPos, components.Floor](w)
 	sys.stairsFilter = ecs.NewFilter2[components.WorldPos, components.Stairs](w)
-	sys.followerMap = ecs.NewMap[components.RoadFollower](w)
-	sys.graphRes = ecs.NewResource[components.RoadGraph](w)
+	sys.surfaceRes = ecs.NewResource[components.RoadSurface](w)
 	sys.sampler = NewHeightSampler(w)
 }
 
@@ -141,6 +139,17 @@ func (sys GroundStickSystem) Update(ctx core.UpdateContext) {
 		return 0, false
 	}
 
+	// A carriageway rides above the terrain on its own embankment, so the
+	// roadway wins wherever it is the higher surface — bridges included.
+	surface := sys.surfaceRes.Get()
+	groundOrDeck := func(wx, wz float32) float32 {
+		y := sys.sampler.Sample(wx, wz)
+		if surface == nil {
+			return y
+		}
+		return surface.SurfaceY(y, wx, wz)
+	}
+
 	// Closest-Y rule lets a path walker drive Y up stairs and have GS keep
 	// the anchor on the new floor next tick.
 	qa := sys.anchorFilter.Query()
@@ -148,7 +157,7 @@ func (sys GroundStickSystem) Update(ctx core.UpdateContext) {
 		_, pos := qa.Get()
 		wx := float32(pos.Chunk.X)*components.ChunkSize + pos.Local.X
 		wz := float32(pos.Chunk.Z)*components.ChunkSize + pos.Local.Z
-		surfaceY := sys.sampler.Sample(wx, wz) + AnchorEyeHeight
+		surfaceY := groundOrDeck(wx, wz) + AnchorEyeHeight
 		bestY := surfaceY
 		bestD := absDelta(pos.Local.Y, surfaceY)
 		for _, fr := range floors {
@@ -177,7 +186,7 @@ func (sys GroundStickSystem) Update(ctx core.UpdateContext) {
 		_, pos := qu.Get()
 		wx := float32(pos.Chunk.X)*components.ChunkSize + pos.Local.X
 		wz := float32(pos.Chunk.Z)*components.ChunkSize + pos.Local.Z
-		surfaceY := sys.sampler.Sample(wx, wz)
+		surfaceY := groundOrDeck(wx, wz)
 		bestY := surfaceY
 		bestD := absDelta(pos.Local.Y, surfaceY)
 		for _, fr := range floors {
@@ -206,56 +215,13 @@ func (sys GroundStickSystem) Update(ctx core.UpdateContext) {
 		pos.Local.Y = bestY
 	}
 
-	// Vehicles never enter buildings: surface clamp, except on a bridge edge
-	// where Y comes off the deck (node-height lerp + bridgeYOffset, ramped
-	// over the first/last metres so bank→deck has no step). max() keeps the
-	// hull from sinking where deck and bank meet.
+	// Vehicles never enter buildings: plain surface clamp, with the roadway
+	// taking over wherever it is higher (embankments and bridge decks).
 	qv := sys.vehicleFilter.Query()
 	for qv.Next() {
 		_, pos := qv.Get()
 		wx := float32(pos.Chunk.X)*components.ChunkSize + pos.Local.X
 		wz := float32(pos.Chunk.Z)*components.ChunkSize + pos.Local.Z
-		y := sys.sampler.Sample(wx, wz)
-		if deck, ok := sys.bridgeDeckY(qv.Entity()); ok && deck > y {
-			y = deck
-		}
-		pos.Local.Y = y
+		pos.Local.Y = groundOrDeck(wx, wz)
 	}
-}
-
-// bridgeEndRamp — metres of deck at each end over which the bridgeYOffset
-// lift fades to bank level.
-const bridgeEndRamp float32 = 4.0
-
-func (sys *GroundStickSystem) bridgeDeckY(ent ecs.Entity) (float32, bool) {
-	f := sys.followerMap.Get(ent)
-	if f == nil || f.Edge < 0 {
-		return 0, false
-	}
-	g := sys.graphRes.Get()
-	if g == nil || int(f.Edge) >= len(g.Edges) {
-		return 0, false
-	}
-	e := &g.Edges[f.Edge]
-	if e.Kind != components.RoadBridge {
-		return 0, false
-	}
-	ax, az := worldXZ(g.Nodes[e.From].Pos)
-	bx, bz := worldXZ(g.Nodes[e.To].Pos)
-	t := f.T
-	if t < 0 {
-		t = 0
-	} else if t > 1 {
-		t = 1
-	}
-	base := GroundHeight(ax, az) + t*(GroundHeight(bx, bz)-GroundHeight(ax, az))
-	end := t
-	if 1-t < end {
-		end = 1 - t
-	}
-	ramp := end * dist2D(ax, az, bx, bz) / bridgeEndRamp
-	if ramp > 1 {
-		ramp = 1
-	}
-	return base + bridgeYOffset*ramp, true
 }

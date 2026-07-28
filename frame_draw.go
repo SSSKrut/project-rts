@@ -341,7 +341,7 @@ func (g *Game) drawUI() {
 		chunksTotal:  countFilter1(g.Filt.ChunkAll),
 		navChunks:    countFilter1(g.Filt.NavGridChunk),
 		props:        g.Frame.PropsLive,
-		bridgesLive:  g.Frame.BridgesLive,
+		ribbonsDrawn: g.Frame.RibbonsDrawn,
 		walls:        g.Frame.WallsLive,
 		floors:       g.Frame.FloorsLive,
 		stairs:       countFilter1(g.Filt.StairsCount),
@@ -368,6 +368,7 @@ func (g *Game) drawUI() {
 		drawExpandedProfHUD(&g.App.Prof, g.UI.ScreenW, cen, g.hudFont)
 	}
 
+	g.maybeScreenshot()
 	rl.EndDrawing()
 
 	recordTraceFrame(g.App, rl.GetFrameTime()*1000, rl.GetFPS(), cen)

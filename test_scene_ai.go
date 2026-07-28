@@ -401,6 +401,7 @@ func aiMarchSceneSpawn(
 		MotionMap:     ecs.NewMap[components.Motion](world),
 		FdMap:         ecs.NewMap[components.FormationData](world),
 		sampler:       systems.NewHeightSampler(world),
+		roadSurface:   ecs.NewResource[components.RoadSurface](world),
 		marchMinClear: 1e9,
 		marchMaxClear: -1e9,
 		orderAt:       aiOrderAt,
@@ -920,6 +921,7 @@ type aiTestState struct {
 	AQMap         *ecs.Map[components.ActionQueue]
 	FdMap         *ecs.Map[components.FormationData]
 	sampler       *systems.HeightSampler
+	roadSurface   ecs.Resource[components.RoadSurface]
 	marchMoveN    int
 	marchSideN    int
 	marchChurnDeg float32
@@ -1186,7 +1188,13 @@ func (s *aiTestState) updateMarch(elapsed float32) {
 		}
 		wx := float32(pos.Chunk.X)*components.ChunkSize + pos.Local.X
 		wz := float32(pos.Chunk.Z)*components.ChunkSize + pos.Local.Z
-		clear := pos.Local.Y - s.sampler.Sample(wx, wz)
+		// Clearance is measured against the surface a walker actually stands
+		// on — heightmap, or the road deck where an embankment carries it.
+		surf := s.sampler.Sample(wx, wz)
+		if rs := s.roadSurface.Get(); rs != nil {
+			surf = rs.SurfaceY(surf, wx, wz)
+		}
+		clear := pos.Local.Y - surf
 		if clear < s.marchMinClear {
 			s.marchMinClear = clear
 		}

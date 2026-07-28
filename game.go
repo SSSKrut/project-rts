@@ -39,6 +39,7 @@ type Game struct {
 	hudFont         rl.Font
 	hudFontIsCustom bool
 	headless        bool
+	shotDone        bool
 	workerPool      *core.WorkerPool
 	saveDir         string
 }
@@ -52,6 +53,7 @@ type worldRes struct {
 	PropIndex        systems.PropChunkIndex
 	Rivers           components.Rivers
 	RoadGraph        components.RoadGraph
+	RoadSurface      components.RoadSurface
 	BridgeEdges      int
 	BuildingPlans    components.BuildingPlanList
 	BuildingIndex    systems.BuildingChildIndex
@@ -168,6 +170,7 @@ type renderCtx struct {
 	Route       *routePreviewCtx
 	OrderMarker orderMarkerCtx
 	Particle    ParticleRenderCtx
+	Ribbons     ribbonSet
 }
 
 // sceneHarness holds the scripted test scenes (-scene=...); nil in normal play.
@@ -322,7 +325,7 @@ type frameState struct {
 	ChunksRel    int
 	UnitsLive    int
 	PropsLive    int
-	BridgesLive  int
+	RibbonsDrawn int
 	FloorsLive   int
 	WallsLive    int
 	VisionPairs  int

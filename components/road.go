@@ -35,12 +35,7 @@ type RoadGraph struct {
 	Edges []RoadEdge
 }
 
-// RoadProcessed marks a chunk whose RoadFlatten pass has run. Filter excludes
-// Modified - player edits aren't re-flattened. Local marker, not serialised:
-// pristine respawn re-runs the flatten deterministically.
+// RoadProcessed marks a chunk whose RoadCarve pass has run. Filter excludes
+// Modified - player edits aren't re-cut. Local marker, not serialised:
+// pristine respawn re-runs the carve deterministically.
 type RoadProcessed struct{}
-
-// RoadPropsSpawned marks a chunk whose road-surface / bridge / junction props
-// have been spawned. Independent of Modified - surface props survive on
-// player-edited chunks even when the heightmap flatten is frozen.
-type RoadPropsSpawned struct{}

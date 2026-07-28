@@ -108,7 +108,7 @@ func (g *Game) RunFrame() bool {
 
 	g.drawScene3D()
 	g.drawUI()
-	return true
+	return !g.shotDone
 }
 
 // updateTestScenes ticks the scripted -scene harnesses; no-op in normal play.

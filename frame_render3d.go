@@ -46,6 +46,8 @@ func (g *Game) drawScene3D() {
 		rl.DrawMesh(mesh.Mesh, g.terrainMaterial, xform)
 	}
 
+	g.Frame.RibbonsDrawn = g.Ctx.Ribbons.Roads.draw(g.terrainMaterial)
+
 	rl.DrawCircle3D(anchorRender, 1, rl.Vector3{X: 1, Y: 0, Z: 0}, 90, rl.Blue)
 
 	g.Frame.UnitsLive = 0
@@ -131,7 +133,6 @@ func (g *Game) drawScene3D() {
 	}
 
 	g.Frame.PropsLive = 0
-	g.Frame.BridgesLive = 0
 	camPos := systems.CurrentCamera.Position
 	camFwdX := systems.CurrentCamera.Target.X - camPos.X
 	camFwdZ := systems.CurrentCamera.Target.Z - camPos.Z
@@ -157,17 +158,11 @@ func (g *Game) drawScene3D() {
 			case components.PrimitivePlane:
 				drawProp(meta, renderPos, prop.Yaw, prop.Scale)
 				g.Frame.PropsLive++
-				if prop.Type == components.PropBridge {
-					g.Frame.BridgesLive++
-				}
 			}
 			continue
 		}
 		drawProp(meta, renderPos, prop.Yaw, prop.Scale)
 		g.Frame.PropsLive++
-		if prop.Type == components.PropBridge {
-			g.Frame.BridgesLive++
-		}
 	}
 
 	// A Level is hidden when its building has InteriorOpen AND its avgY
@@ -518,6 +513,10 @@ func (g *Game) drawScene3D() {
 		ghostDragFacing, ghostPopupKind, ghostPopupLevel, g.Maps.Level)
 
 	drawOrderMarkers3D(g.Ctx.OrderMarker, g.Sel.Units)
+
+	// Translucent: after every opaque draw, or the depth write would
+	// reject whatever stands beyond the surface.
+	g.Frame.RibbonsDrawn += g.Ctx.Ribbons.Water.draw(g.terrainMaterial)
 
 	qsmoke := g.Filt.SmokeRender.Query()
 	for qsmoke.Next() {

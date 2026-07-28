@@ -50,9 +50,9 @@ func (g *Game) spawnAnchorAndCamera() {
 		g.Maps.Camera.Add(g.camEnt, &components.Camera{Fovy: 75.0, Perspective: true})
 		g.Maps.Orbit.Add(g.camEnt, &components.OrbitController{
 			Target:           g.anchor,
-			Yaw:              0,
-			Pitch:            0.6,
-			Radius:           25.0,
+			Yaw:              shotCamYaw(0),
+			Pitch:            shotCamPitch(0.6),
+			Radius:           shotCamRadius(25.0),
 			MinRadius:        5.0,
 			MaxRadius:        100.0,
 			SensitivityYaw:   0.01,

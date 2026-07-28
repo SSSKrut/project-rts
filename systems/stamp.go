@@ -261,18 +261,15 @@ func (s *Stamper) RectCut(cc components.ChunkCoord, footprint components.AABB2D,
 	s.LevelTo(cc, footprint, referenceY-depth, falloffWidth)
 }
 
-// RoadFlatten blends the heightmap toward a linear road profile between two
-// endpoints over a strip of given width:
-//
-//	w(d) = 0.5 * (1 + cos(π * d / (width/2)))
-//	h    = lerp(h, target, w)
-//
-// where target is interpolated linearly along the road. Unlike RiverCut
-// (additive), this is a blend toward target — flattens a strip and fades
-// back at the edges. Does NOT set Modified.
-func (s *Stamper) RoadFlatten(cc components.ChunkCoord,
-	fromWX, fromWZ, fromY, toWX, toWZ, toY, width float32) {
-	if width <= 0 {
+// RoadCarve lowers the heightmap wherever it would poke through a finished
+// carriageway: inside a deck sample's half-width the target is the deck minus
+// subgrade, fading out over falloff. Fill is deliberately absent — an
+// embankment is ribbon geometry, not terrain (PHASE-17.5-ROADS P2), and
+// bridge decks sit far above their banks so they carve nothing at all.
+// Does NOT set Modified.
+func (s *Stamper) RoadCarve(cc components.ChunkCoord,
+	samples []components.RoadDeckSample, subgrade, falloff float32) {
+	if len(samples) == 0 || falloff <= 0 {
 		return
 	}
 	idx := s.indexRes.Get()
@@ -288,47 +285,56 @@ func (s *Stamper) RoadFlatten(cc components.ChunkCoord,
 		return
 	}
 
-	dx := toWX - fromWX
-	dz := toWZ - fromWZ
-	lenSq := dx*dx + dz*dz
-	if lenSq <= 0 {
-		return
-	}
-
 	step := components.ChunkSize / float32(components.ChunkResolution-1)
 	baseX := float32(cc.X) * components.ChunkSize
 	baseZ := float32(cc.Z) * components.ChunkSize
-	halfW := width * 0.5
-	invHalfW := 1.0 / halfW
-
 	touched := false
-	for j := 0; j < components.ChunkResolution; j++ {
-		wz := baseZ + float32(j)*step
-		row := j * components.ChunkResolution
-		for i := 0; i < components.ChunkResolution; i++ {
-			wx := baseX + float32(i)*step
-			t := ((wx-fromWX)*dx + (wz-fromWZ)*dz) / lenSq
-			if t < 0 {
-				t = 0
-			} else if t > 1 {
-				t = 1
+
+	for k := range samples {
+		sm := &samples[k]
+		reach := sm.HalfW + falloff
+		i0, i1 := vertexRange(sm.X-reach-baseX, sm.X+reach-baseX, step)
+		j0, j1 := vertexRange(sm.Z-reach-baseZ, sm.Z+reach-baseZ, step)
+		if i0 > i1 || j0 > j1 {
+			continue
+		}
+		target := sm.Y - subgrade
+		for j := j0; j <= j1; j++ {
+			wz := baseZ + float32(j)*step
+			row := j * components.ChunkResolution
+			for i := i0; i <= i1; i++ {
+				if hm.Heights[row+i] <= target {
+					continue
+				}
+				wx := baseX + float32(i)*step
+				d := float32(math.Sqrt(float64((wx-sm.X)*(wx-sm.X) + (wz-sm.Z)*(wz-sm.Z))))
+				if d >= reach {
+					continue
+				}
+				w := float32(1)
+				if d > sm.HalfW {
+					w = 0.5 * (1 + float32(math.Cos(math.Pi*float64((d-sm.HalfW)/falloff))))
+				}
+				hm.Heights[row+i] = hm.Heights[row+i]*(1-w) + target*w
+				touched = true
 			}
-			cx := fromWX + t*dx
-			cz := fromWZ + t*dz
-			ddx := wx - cx
-			ddz := wz - cz
-			d := float32(math.Sqrt(float64(ddx*ddx + ddz*ddz)))
-			if d >= halfW {
-				continue
-			}
-			targetY := fromY + t*(toY-fromY)
-			w := 0.5 * (1 + float32(math.Cos(math.Pi*float64(d*invHalfW))))
-			hm.Heights[row+i] = hm.Heights[row+i]*(1-w) + targetY*w
-			touched = true
 		}
 	}
 
 	if touched && !s.meshDirtyMap.Has(ent) {
 		s.meshDirtyMap.Add(ent, &components.MeshDirty{})
 	}
+}
+
+// vertexRange clips a local-space span to the chunk's vertex indices.
+func vertexRange(lo, hi, step float32) (int, int) {
+	a := int(math.Floor(float64(lo / step)))
+	b := int(math.Ceil(float64(hi / step)))
+	if a < 0 {
+		a = 0
+	}
+	if b > components.ChunkResolution-1 {
+		b = components.ChunkResolution - 1
+	}
+	return a, b
 }

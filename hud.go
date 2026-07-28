@@ -19,7 +19,7 @@ type census struct {
 	chunksTotal  int
 	navChunks    int
 	props        int
-	bridgesLive  int
+	ribbonsDrawn int
 	walls        int
 	floors       int
 	stairs       int
@@ -162,7 +162,7 @@ func drawExpandedProfHUD(p *core.Profiler, screenW int32, cen census, font rl.Fo
 		fmt.Sprintf("  chunks: active=%d rel=%d total=%d", cen.chunksActive, cen.chunksRel, cen.chunksTotal),
 		fmt.Sprintf("  nav chunks=%d transitions=%d", cen.navChunks, cen.transitions),
 		fmt.Sprintf("  walls=%d floors=%d stairs=%d", cen.walls, cen.floors, cen.stairs),
-		fmt.Sprintf("  cover-slots=%d props=%d bridges-live=%d", cen.coverSlots, cen.props, cen.bridgesLive),
+		fmt.Sprintf("  cover-slots=%d props=%d ribbons=%d", cen.coverSlots, cen.props, cen.ribbonsDrawn),
 		fmt.Sprintf("  units=%d weapons=%d selected=%d", cen.units, cen.weapons, cen.selection),
 		fmt.Sprintf("  squads=%d squad-members=%d soloists=%d", cen.squads, cen.squadMembers, cen.soloists),
 		fmt.Sprintf("  vision-pairs=%d path-wpts=%d", cen.visionPairs, cen.pathWaypts),
