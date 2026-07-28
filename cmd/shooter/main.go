@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"rts-go/core"
 	"time"
 
@@ -17,6 +18,7 @@ const (
 	camHeightMin = 5.0
 	camHeightMax = 60.0
 	camZoomStep  = 2.5
+	camFollow    = 6.0
 
 	groundSize = 200.0
 
@@ -39,6 +41,10 @@ const (
 	npcSpread       = 0.09
 	npcRange        = 55.0
 	playerFireDelay = 0.18
+
+	playerSpeed = 6.5
+	npcSpeed    = 3.4
+	npcStandoff = 16.0 // close to this, then hold and shoot
 )
 
 const (
@@ -85,6 +91,8 @@ type Character struct {
 	Cooldown  float32
 	FireDelay float32
 	Spread    float32
+	Speed     float32
+	Flank     float32 // which way this one peels off when its sight is blocked
 	IsPlayer  bool
 }
 
@@ -101,6 +109,7 @@ type World struct {
 	TeamColors [teamCount]rl.Color
 	Characters []Character
 	Bullets    []Bullet
+	Phys       Physics
 
 	seed   uint64
 	nextID int
@@ -112,7 +121,7 @@ func main() {
 	rl.SetTargetFPS(144)
 
 	app := core.NewApp()
-	world := &World{seed: uint64(time.Now().UnixNano())}
+	world := &World{seed: uint64(time.Now().UnixNano()), Phys: buildArena()}
 
 	camera := rl.Camera3D{
 		Position:   rl.Vector3{X: 0, Y: camHeight, Z: 0},
@@ -140,12 +149,12 @@ func main() {
 
 		switch gameState {
 		case Playing:
-			moveCamera(&camera, dt)
+			world.update(dt)
+			moveCamera(&camera, dt, world.playerPos())
 			aim, aiming = mouseGroundPoint(camera)
 			if aiming && rl.IsMouseButtonDown(rl.MouseButtonLeft) {
 				world.playerFire(aim)
 			}
-			world.update(dt)
 			if world.over() {
 				gameState = GameOver
 			}
@@ -162,6 +171,7 @@ func main() {
 
 		rl.BeginMode3D(camera)
 		drawGround()
+		drawCovers(&world.Phys)
 		world.drawUnits()
 		if aiming {
 			drawCrosshair(aim)
@@ -202,28 +212,90 @@ func (w *World) spawn(team int, pos rl.Vector3, isPlayer bool) {
 		Cooldown:  pseudoRand(&w.seed) * npcFireDelay, // stagger the opening volley
 		FireDelay: npcFireDelay,
 		Spread:    npcSpread,
+		Speed:     npcSpeed,
+		Flank:     float32(1 - 2*(w.nextID%2)),
 		IsPlayer:  isPlayer,
 	}
 	if isPlayer {
-		c.FireDelay, c.Spread = playerFireDelay, 0
+		c.FireDelay, c.Spread, c.Speed = playerFireDelay, 0, playerSpeed
 	}
 	w.Characters = append(w.Characters, c)
 }
 
 func (w *World) update(dt float32) {
 	for i := range w.Characters {
-		c := &w.Characters[i]
-		c.Cooldown -= dt
-		if c.IsPlayer || c.Cooldown > 0 {
-			continue
-		}
-		if target, ok := w.nearestEnemy(c); ok {
-			w.fire(c, target)
+		w.Characters[i].Cooldown -= dt
+	}
+
+	w.stepPlayer(dt)
+	for i := range w.Characters {
+		if c := &w.Characters[i]; !c.IsPlayer {
+			w.stepNPC(c, dt)
 		}
 	}
+	w.settle()
 
 	w.stepBullets(dt)
 	w.removeDead()
+}
+
+// settle untangles the crowd, then hands the last word to the walls: a body
+// shoved out of a neighbour must never end up inside cover.
+func (w *World) settle() {
+	for i := range w.Characters {
+		for j := i + 1; j < len(w.Characters); j++ {
+			SeparateXZ(&w.Characters[i].Position, &w.Characters[j].Position, charRadius*2)
+		}
+	}
+	for i := range w.Characters {
+		c := &w.Characters[i]
+		c.Position = w.Phys.MoveCircle(c.Position, rl.Vector3{}, charRadius)
+	}
+}
+
+func (w *World) stepPlayer(dt float32) {
+	p := w.player()
+	if p == nil {
+		return
+	}
+
+	var dir rl.Vector3
+	for _, b := range camBindings {
+		if rl.IsKeyDown(b.key) {
+			dir = rl.Vector3Add(dir, b.axis)
+		}
+	}
+	if dir == (rl.Vector3{}) {
+		return
+	}
+	step := rl.Vector3Scale(rl.Vector3Normalize(dir), p.Speed*dt)
+	p.Position = w.Phys.MoveCircle(p.Position, step, charRadius)
+}
+
+// stepNPC walks a fighter toward a spot where it can actually see its enemy: it
+// closes while the target is far or hidden, and holds once the shot is clean.
+// Blocked sight adds a sideways bias, so a team fans around a wall instead of
+// queueing up behind the same corner.
+func (w *World) stepNPC(c *Character, dt float32) {
+	target, ok := w.nearestEnemy(c)
+	if !ok {
+		return
+	}
+
+	sighted := !w.Phys.Blocked(muzzleOf(c.Position), muzzleOf(target))
+	dist := rl.Vector3Distance(c.Position, target)
+
+	if !sighted || dist > npcStandoff {
+		dir := flatNormalize(rl.Vector3Subtract(target, c.Position))
+		if !sighted {
+			dir = flatNormalize(rl.Vector3Add(dir, rl.Vector3{X: -dir.Z * c.Flank, Z: dir.X * c.Flank}))
+		}
+		c.Position = w.Phys.MoveCircle(c.Position, rl.Vector3Scale(dir, c.Speed*dt), charRadius)
+	}
+
+	if sighted && dist <= npcRange && c.Cooldown <= 0 {
+		w.fire(c, target)
+	}
 }
 
 func (w *World) player() *Character {
@@ -235,6 +307,15 @@ func (w *World) player() *Character {
 	return nil
 }
 
+// playerPos is nil once the player is down — the camera reads that as "free
+// look" and hands WASD back to panning.
+func (w *World) playerPos() *rl.Vector3 {
+	if p := w.player(); p != nil {
+		return &p.Position
+	}
+	return nil
+}
+
 func (w *World) playerFire(at rl.Vector3) {
 	if p := w.player(); p != nil && p.Cooldown <= 0 {
 		w.fire(p, at)
@@ -242,7 +323,7 @@ func (w *World) playerFire(at rl.Vector3) {
 }
 
 func (w *World) nearestEnemy(c *Character) (rl.Vector3, bool) {
-	best := float32(npcRange * npcRange)
+	best := float32(math.MaxFloat32)
 	var pos rl.Vector3
 	found := false
 
@@ -263,8 +344,8 @@ func (w *World) nearestEnemy(c *Character) (rl.Vector3, bool) {
 func (w *World) fire(c *Character, at rl.Vector3) {
 	c.Cooldown = c.FireDelay
 
-	muzzle := rl.Vector3{X: c.Position.X, Y: c.Position.Y + muzzleY, Z: c.Position.Z}
-	dir := rl.Vector3Normalize(rl.Vector3Subtract(rl.Vector3{X: at.X, Y: at.Y + muzzleY, Z: at.Z}, muzzle))
+	muzzle := muzzleOf(c.Position)
+	dir := rl.Vector3Normalize(rl.Vector3Subtract(muzzleOf(at), muzzle))
 	if c.Spread > 0 {
 		dir = rl.Vector3Normalize(rl.Vector3Add(dir, rl.Vector3{
 			X: (pseudoRand(&w.seed) - 0.5) * c.Spread,
@@ -282,17 +363,23 @@ func (w *World) fire(c *Character, at rl.Vector3) {
 	})
 }
 
+// stepBullets sweeps every round over the ground it covers this frame instead
+// of teleporting it — at 45 m/s a per-frame point test would punch straight
+// through a body or a wall on any slow frame.
 func (w *World) stepBullets(dt float32) {
 	for i := len(w.Bullets) - 1; i >= 0; i-- {
 		b := &w.Bullets[i]
-		b.Position = rl.Vector3Add(b.Position, rl.Vector3Scale(b.Velocity, dt))
 		b.Life -= dt
 
-		hit := w.hitCharacter(b)
-		if hit != nil {
-			hit.Health -= b.Damage
+		travel := bulletSpeed * dt
+		dir := rl.Vector3Scale(b.Velocity, 1/bulletSpeed)
+		t, victim, stopped := w.traceBullet(b, dir, travel)
+		b.Position = rl.Vector3Add(b.Position, rl.Vector3Scale(dir, t))
+
+		if victim != nil {
+			victim.Health -= b.Damage
 		}
-		if hit == nil && b.Life > 0 && inField(b.Position) {
+		if !stopped && b.Life > 0 && inField(b.Position) {
 			continue
 		}
 
@@ -301,24 +388,24 @@ func (w *World) stepBullets(dt float32) {
 	}
 }
 
-// hitCharacter tests the bullet against everyone but its own shooter — a stray
-// round hurts friend and foe alike.
-func (w *World) hitCharacter(b *Bullet) *Character {
-	const halfH = charHeight / 2
-	hitR := float32(charRadius + bulletRadius)
-
+// traceBullet finds whatever the round meets first over its next `maxT` metres:
+// a body (everyone but its own shooter — a stray hurts friend and foe alike) or
+// a piece of cover, whichever stands closer.
+func (w *World) traceBullet(b *Bullet, dir rl.Vector3, maxT float32) (t float32, victim *Character, stopped bool) {
+	t = maxT
 	for i := range w.Characters {
 		c := &w.Characters[i]
 		if c.ID == b.Owner {
 			continue
 		}
-		dx, dz := b.Position.X-c.Position.X, b.Position.Z-c.Position.Z
-		dy := b.Position.Y - (c.Position.Y + halfH)
-		if dx*dx+dz*dz <= hitR*hitR && dy*dy <= (halfH+bulletRadius)*(halfH+bulletRadius) {
-			return c
+		if hitT, ok := RayCylinderT(b.Position, dir, t, c.Position, charRadius+bulletRadius, charHeight); ok {
+			t, victim, stopped = hitT, c, true
 		}
 	}
-	return nil
+	if wallT, ok := w.Phys.Trace(b.Position, dir, t); ok {
+		t, victim, stopped = wallT, nil, true
+	}
+	return t, victim, stopped
 }
 
 func (w *World) removeDead() {
@@ -376,12 +463,13 @@ func (w *World) drawHUD(gameState int) {
 		rl.DrawText(fmt.Sprintf("TEAM %c   alive %d", 'A'+team, w.alive(team)), 46, y, 18, colorText)
 	}
 
-	status := "DEAD"
+	status, hint := "DEAD", "WASD pan   wheel zoom"
 	if p := w.player(); p != nil {
 		status = fmt.Sprintf("%d HP", int(p.Health))
+		hint = "WASD move   LMB fire   wheel zoom"
 	}
 	rl.DrawText("PLAYER   "+status, 22, 78, 18, colorText)
-	rl.DrawText("LMB fire   WASD pan   wheel zoom", 12, screenH-26, 16, colorText)
+	rl.DrawText(hint, 12, screenH-26, 16, colorText)
 }
 
 func pickTeamColors(seed *uint64) [teamCount]rl.Color {
@@ -402,24 +490,40 @@ func inField(p rl.Vector3) bool {
 	return p.X >= -half && p.X <= half && p.Z >= -half && p.Z <= half
 }
 
-// moveCamera pans the top-down camera over the XZ plane and re-sticks it to the
-// ground: the focus point always sits on the surface, the eye exactly above it.
-func moveCamera(cam *rl.Camera3D, dt float32) {
+func muzzleOf(p rl.Vector3) rl.Vector3 {
+	return rl.Vector3{X: p.X, Y: p.Y + muzzleY, Z: p.Z}
+}
+
+// flatNormalize drops the vertical component — everyone here walks the plane.
+func flatNormalize(v rl.Vector3) rl.Vector3 {
+	return rl.Vector3Normalize(rl.Vector3{X: v.X, Z: v.Z})
+}
+
+// moveCamera keeps the top-down camera over `follow`, or pans it with WASD when
+// there is nobody left to follow. The focus point always sits on the surface,
+// the eye exactly above it.
+func moveCamera(cam *rl.Camera3D, dt float32, follow *rl.Vector3) {
 	height := rl.Clamp(
 		cam.Position.Y-cam.Target.Y-rl.GetMouseWheelMove()*camZoomStep,
 		camHeightMin, camHeightMax,
 	)
 
 	focus := cam.Target
-	var dir rl.Vector3
-	for _, b := range camBindings {
-		if rl.IsKeyDown(b.key) {
-			dir = rl.Vector3Add(dir, b.axis)
+	if follow != nil {
+		k := rl.Clamp(camFollow*dt, 0, 1)
+		focus.X = rl.Lerp(focus.X, follow.X, k)
+		focus.Z = rl.Lerp(focus.Z, follow.Z, k)
+	} else {
+		var dir rl.Vector3
+		for _, b := range camBindings {
+			if rl.IsKeyDown(b.key) {
+				dir = rl.Vector3Add(dir, b.axis)
+			}
 		}
-	}
-	if dir != (rl.Vector3{}) {
-		speed := camSpeed * height / camHeight
-		focus = rl.Vector3Add(focus, rl.Vector3Scale(rl.Vector3Normalize(dir), speed*dt))
+		if dir != (rl.Vector3{}) {
+			speed := camSpeed * height / camHeight
+			focus = rl.Vector3Add(focus, rl.Vector3Scale(rl.Vector3Normalize(dir), speed*dt))
+		}
 	}
 
 	focus.Y = groundHeight(focus.X, focus.Z)
