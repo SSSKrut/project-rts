@@ -1,8 +1,10 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"math"
+	"os"
 	"rts-go/core"
 	"time"
 
@@ -58,6 +60,7 @@ var (
 	colorGround    = rl.Color{R: 50, G: 50, B: 50, A: 255}
 	colorCrosshair = rl.Color{R: 0, G: 255, B: 140, A: 255}
 	colorOutline   = rl.Color{R: 10, G: 10, B: 10, A: 190}
+	colorNet       = rl.Color{R: 0, G: 220, B: 255, A: 220}
 	colorText      = rl.Color{R: 235, G: 235, B: 235, A: 255}
 
 	rainbow = []rl.Color{
@@ -94,7 +97,21 @@ type Character struct {
 	Speed     float32
 	Flank     float32 // which way this one peels off when its sight is blocked
 	IsPlayer  bool
+	Brain     *Brain // nil = the hand-written NPC script
+	Last      Intent // net bots think at brainEvery, and coast on this between
 }
+
+// Intent is what any controller — keyboard, script or network — hands to the
+// sim. Nothing downstream cares which one produced it.
+type Intent struct {
+	Move rl.Vector3 // direction, length ≤ 1 (the length is the throttle)
+	Aim  rl.Vector3 // world point to shoot at
+	Fire bool
+}
+
+// Stat survives its owner's death, so the trainer can still read what a fallen
+// bot contributed.
+type Stat struct{ Dealt, Taken float32 }
 
 type Bullet struct {
 	Position rl.Vector3
@@ -110,18 +127,92 @@ type World struct {
 	Characters []Character
 	Bullets    []Bullet
 	Phys       Physics
+	Stats      []Stat // indexed by ID-1, outlives the dead
+	Tick       int
+	Brains     [teamCount]*Brain // nil = that team fights on the script
+
+	obs, hid, act []float32       // per-world scratch: brains hold weights only
+	slotEnemy     [neighbours]int // enemy slots the last observation reported
 
 	seed   uint64
 	nextID int
 }
 
+func newWorld(seed uint64) *World {
+	return &World{
+		seed: seed,
+		Phys: buildArena(),
+		obs:  make([]float32, obsN),
+		hid:  make([]float32, hiddenN),
+		act:  make([]float32, outN),
+	}
+}
+
 func main() {
+	cfg := defaultTrainCfg()
+	train := flag.Bool("train", false, "evolve bot brains headless instead of opening the game")
+	eval := flag.Bool("eval", false, "score the -brain genome against the scripted AI and exit")
+	brainPath := flag.String("brain", "", "genome file to drive NPCs with")
+	brainTeam := flag.Int("brain-team", 1, "team the loaded brain fights for (-1 = both)")
+	seedFlag := flag.Uint64("seed", 0, "RNG seed (0 = clock)")
+	flag.IntVar(&cfg.Pop, "pop", cfg.Pop, "genomes in the population")
+	flag.IntVar(&cfg.Gens, "gens", cfg.Gens, "generations to run")
+	flag.IntVar(&cfg.Rounds, "rounds", cfg.Rounds, "self-play rounds per generation")
+	flag.IntVar(&cfg.ScriptRounds, "script-rounds", cfg.ScriptRounds, "rounds against the scripted AI per generation")
+	flag.IntVar(&cfg.Workers, "workers", cfg.Workers, "matches to run in parallel")
+	flag.StringVar(&cfg.Out, "out", cfg.Out, "where to write the best genome")
+	mutRate := flag.Float64("mut-rate", float64(cfg.MutRate), "per-gene mutation chance")
+	mutSigma := flag.Float64("mut-sigma", float64(cfg.MutSigma), "mutation step size")
+	shape := flag.Float64("shape", float64(cfg.Shape), "weight of damage traded as a tie-breaker (0 = wins only)")
+	speed := flag.Float64("speed-bonus", float64(cfg.SpeedBonus), "extra points for winning with time to spare")
+	matchSec := flag.Float64("match-sec", float64(cfg.MatchSec), "seconds before a match is called a draw")
+	flag.Parse()
+	cfg.MutRate, cfg.MutSigma = float32(*mutRate), float32(*mutSigma)
+	cfg.Shape, cfg.MatchSec = float32(*shape), float32(*matchSec)
+	cfg.SpeedBonus = float32(*speed)
+
+	seed := *seedFlag
+	if seed == 0 {
+		seed = uint64(time.Now().UnixNano())
+	}
+
+	switch {
+	case *train:
+		if err := RunTraining(cfg, seed); err != nil {
+			fmt.Fprintln(os.Stderr, "train:", err)
+			os.Exit(1)
+		}
+	case *eval:
+		if err := EvalGenome(*brainPath, cfg, seed); err != nil {
+			fmt.Fprintln(os.Stderr, "eval:", err)
+			os.Exit(1)
+		}
+	default:
+		runGame(seed, *brainPath, *brainTeam)
+	}
+}
+
+func runGame(seed uint64, brainPath string, brainTeam int) {
+	world := newWorld(seed)
+	if brainPath != "" {
+		genes, err := loadGenome(brainPath)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "brain:", err)
+			os.Exit(1)
+		}
+		brain := NewBrain(genes)
+		for t := range teamCount {
+			if brainTeam < 0 || brainTeam == t {
+				world.Brains[t] = brain
+			}
+		}
+	}
+
 	rl.InitWindow(screenW, screenH, "RTS - Shooter Sandbox")
 	defer rl.CloseWindow()
 	rl.SetTargetFPS(144)
 
 	app := core.NewApp()
-	world := &World{seed: uint64(time.Now().UnixNano()), Phys: buildArena()}
 
 	camera := rl.Camera3D{
 		Position:   rl.Vector3{X: 0, Y: camHeight, Z: 0},
@@ -183,10 +274,16 @@ func main() {
 	}
 }
 
-func (w *World) gameStart() {
+func (w *World) gameStart() { w.reset(true) }
+
+// reset lays out a fresh match. Without a player every slot is AI — that is the
+// shape the trainer runs headless.
+func (w *World) reset(withPlayer bool) {
 	w.TeamColors = pickTeamColors(&w.seed)
 	w.Characters = w.Characters[:0]
 	w.Bullets = w.Bullets[:0]
+	w.Stats = w.Stats[:0]
+	w.Tick, w.nextID = 0, 0
 
 	for team := range teamCount {
 		lineX := float32(spawnLineX)
@@ -197,7 +294,13 @@ func (w *World) gameStart() {
 			w.spawn(team, rl.Vector3{
 				X: lineX + (pseudoRand(&w.seed)-0.5)*spawnSpread*0.4,
 				Z: (pseudoRand(&w.seed) - 0.5) * spawnSpread * 2,
-			}, team == 0 && i == 0)
+			}, withPlayer && team == 0 && i == 0)
+		}
+	}
+
+	for i := range w.Characters {
+		if c := &w.Characters[i]; !c.IsPlayer {
+			c.Brain = w.Brains[c.Team]
 		}
 	}
 }
@@ -220,23 +323,51 @@ func (w *World) spawn(team int, pos rl.Vector3, isPlayer bool) {
 		c.FireDelay, c.Spread, c.Speed = playerFireDelay, 0, playerSpeed
 	}
 	w.Characters = append(w.Characters, c)
+	w.Stats = append(w.Stats, Stat{})
 }
 
 func (w *World) update(dt float32) {
+	w.Tick++
 	for i := range w.Characters {
 		w.Characters[i].Cooldown -= dt
 	}
 
 	w.stepPlayer(dt)
 	for i := range w.Characters {
-		if c := &w.Characters[i]; !c.IsPlayer {
-			w.stepNPC(c, dt)
+		c := &w.Characters[i]
+		if c.IsPlayer {
+			continue
 		}
+		w.applyIntent(c, w.think(c), dt)
 	}
 	w.settle()
 
 	w.stepBullets(dt)
 	w.removeDead()
+}
+
+// think picks the controller. Net bots re-decide every brainEvery ticks, spread
+// across the roster by ID so the cost never lands on one frame; between those
+// they hold their last intent, which is also a fair reaction-time model.
+func (w *World) think(c *Character) Intent {
+	if c.Brain == nil {
+		return w.scriptIntent(c)
+	}
+	if (w.Tick+c.ID)%brainEvery == 0 {
+		c.Last = w.brainIntent(c)
+	}
+	return c.Last
+}
+
+func (w *World) applyIntent(c *Character, in Intent, dt float32) {
+	if throttle := rl.Vector3Length(rl.Vector3{X: in.Move.X, Z: in.Move.Z}); throttle > 1e-3 {
+		dir := flatNormalize(in.Move)
+		step := rl.Vector3Scale(dir, c.Speed*min(throttle, 1)*dt)
+		c.Position = w.Phys.MoveCircle(c.Position, step, charRadius)
+	}
+	if in.Fire && c.Cooldown <= 0 {
+		w.fire(c, in.Aim)
+	}
 }
 
 // settle untangles the crowd, then hands the last word to the walls: a body
@@ -272,30 +403,32 @@ func (w *World) stepPlayer(dt float32) {
 	p.Position = w.Phys.MoveCircle(p.Position, step, charRadius)
 }
 
-// stepNPC walks a fighter toward a spot where it can actually see its enemy: it
-// closes while the target is far or hidden, and holds once the shot is clean.
-// Blocked sight adds a sideways bias, so a team fans around a wall instead of
-// queueing up behind the same corner.
-func (w *World) stepNPC(c *Character, dt float32) {
+// scriptIntent is the hand-written fighter: it walks toward a spot where it can
+// actually see its enemy — closing while the target is far or hidden, holding
+// once the shot is clean. Blocked sight adds a sideways bias, so a team fans
+// around a wall instead of queueing up behind the same corner. This is also the
+// yardstick the trained brains are measured against.
+func (w *World) scriptIntent(c *Character) Intent {
 	target, ok := w.nearestEnemy(c)
 	if !ok {
-		return
+		return Intent{}
 	}
 
 	sighted := !w.Phys.Blocked(muzzleOf(c.Position), muzzleOf(target))
 	dist := rl.Vector3Distance(c.Position, target)
 
+	var in Intent
 	if !sighted || dist > npcStandoff {
 		dir := flatNormalize(rl.Vector3Subtract(target, c.Position))
 		if !sighted {
 			dir = flatNormalize(rl.Vector3Add(dir, rl.Vector3{X: -dir.Z * c.Flank, Z: dir.X * c.Flank}))
 		}
-		c.Position = w.Phys.MoveCircle(c.Position, rl.Vector3Scale(dir, c.Speed*dt), charRadius)
+		in.Move = dir
 	}
-
-	if sighted && dist <= npcRange && c.Cooldown <= 0 {
-		w.fire(c, target)
+	if sighted && dist <= npcRange {
+		in.Aim, in.Fire = target, true
 	}
+	return in
 }
 
 func (w *World) player() *Character {
@@ -378,6 +511,7 @@ func (w *World) stepBullets(dt float32) {
 
 		if victim != nil {
 			victim.Health -= b.Damage
+			w.credit(b.Owner, victim.ID, b.Damage)
 		}
 		if !stopped && b.Life > 0 && inField(b.Position) {
 			continue
@@ -406,6 +540,17 @@ func (w *World) traceBullet(b *Bullet, dir rl.Vector3, maxT float32) (t float32,
 		t, victim, stopped = wallT, nil, true
 	}
 	return t, victim, stopped
+}
+
+// credit books a hit against both parties. Stats are indexed by ID-1 so they
+// keep counting after the character itself is gone.
+func (w *World) credit(shooterID, victimID int, dmg float32) {
+	if i := shooterID - 1; i >= 0 && i < len(w.Stats) {
+		w.Stats[i].Dealt += dmg
+	}
+	if i := victimID - 1; i >= 0 && i < len(w.Stats) {
+		w.Stats[i].Taken += dmg
+	}
 }
 
 func (w *World) removeDead() {
@@ -459,8 +604,12 @@ func (w *World) drawHUD(gameState int) {
 	rl.DrawRectangle(12, 12, 260, 100, rl.Color{R: 0, G: 0, B: 0, A: 150})
 	for team := range teamCount {
 		y := int32(22 + team*26)
+		tag := ""
+		if w.Brains[team] != nil {
+			tag = "   NET"
+		}
 		rl.DrawRectangle(22, y, 16, 16, w.TeamColors[team])
-		rl.DrawText(fmt.Sprintf("TEAM %c   alive %d", 'A'+team, w.alive(team)), 46, y, 18, colorText)
+		rl.DrawText(fmt.Sprintf("TEAM %c   alive %d%s", 'A'+team, w.alive(team), tag), 46, y, 18, colorText)
 	}
 
 	status, hint := "DEAD", "WASD pan   wheel zoom"
@@ -558,9 +707,12 @@ func drawCharacter(c *Character, teamColor rl.Color) {
 	rl.DrawCube(body, charRadius*2, charHeight, charRadius*2, teamColor)
 	rl.DrawCubeWires(body, charRadius*2, charHeight, charRadius*2, colorOutline)
 
-	if c.IsPlayer {
-		ring := rl.Vector3{X: c.Position.X, Y: c.Position.Y + 0.03, Z: c.Position.Z}
+	ring := rl.Vector3{X: c.Position.X, Y: c.Position.Y + 0.03, Z: c.Position.Z}
+	switch {
+	case c.IsPlayer:
 		rl.DrawCircle3D(ring, charRadius*1.9, rl.Vector3{X: 1}, 90, colorText)
+	case c.Brain != nil:
+		rl.DrawCircle3D(ring, charRadius*1.5, rl.Vector3{X: 1}, 90, colorNet)
 	}
 	drawHealthBar(c)
 }
