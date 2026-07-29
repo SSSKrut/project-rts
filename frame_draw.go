@@ -68,7 +68,7 @@ func (g *Game) drawUI() {
 		Font:          g.hudFont,
 		EventLog:      g.Res.EventLog,
 		Cursor:        g.Frame.Cursor,
-		LMBPressed:    !g.chromeBusy() && !g.UI.ScrollDragging && rl.IsMouseButtonPressed(rl.MouseButtonLeft),
+		LMBPressed:    !g.chromeBusy() && !g.scrollDragging() && rl.IsMouseButtonPressed(rl.MouseButtonLeft),
 		PanelFocused:  inspectorFocused,
 		Scroll:        inspectorScroll,
 		SquadColor:    g.squadColor,
@@ -100,6 +100,11 @@ func (g *Game) drawUI() {
 		}
 		ui.DeleteContactRequest.Active = false
 		ui.DeleteContactRequest.Entity = ecs.Entity{}
+	}
+	if ui.SelectSquadRequest.Active {
+		g.selectSquad(ui.SelectSquadRequest.Squad)
+		ui.SelectSquadRequest.Active = false
+		ui.SelectSquadRequest.Squad = ecs.Entity{}
 	}
 	if ui.SymbolApplyRequest.Active {
 		if len(g.Sel.Units) == 1 {
@@ -159,7 +164,7 @@ func (g *Game) drawUI() {
 	}
 
 	if leaf := g.UI.PanelMgr.LeafFor(ui.PanelFormation); leaf != nil {
-		formationLMB := !g.chromeBusy() && !g.UI.ScrollDragging &&
+		formationLMB := !g.chromeBusy() && !g.scrollDragging() &&
 			g.UI.PanelMgr.FocusedAt(g.Frame.Cursor) == ui.PanelFormation &&
 			rl.IsMouseButtonPressed(rl.MouseButtonLeft)
 		g.UI.FormationEditor.DrawPanel(g.UI.PanelMgr.Get(ui.PanelFormation),
@@ -167,15 +172,20 @@ func (g *Game) drawUI() {
 	}
 
 	if g.UI.PanelMgr.LeafFor(ui.PanelSymbology) != nil {
+		symPanel := g.UI.PanelMgr.Get(ui.PanelSymbology)
+		symScroll := g.UI.PanelMgr.ScrollByID(ui.PanelSymbology)
 		symFocused := g.UI.PanelMgr.FocusedAt(g.Frame.Cursor) == ui.PanelSymbology
-		symLMB := symFocused && !g.chromeBusy() && !g.UI.ScrollDragging &&
+		symLMB := symFocused && !g.chromeBusy() && !g.scrollDragging() &&
 			rl.IsMouseButtonPressed(rl.MouseButtonLeft)
-		g.UI.SymbolEditor.DrawPanel(g.UI.PanelMgr.Get(ui.PanelSymbology),
-			g.hudFont, g.Frame.Cursor, symLMB, symFocused)
+		g.UI.SymbolEditor.DrawPanel(symPanel, g.hudFont, g.Frame.Cursor,
+			symLMB, symFocused, symScroll)
+		// After DrawPanel so its scissor has been released.
+		ui.ClampScrollOffset(symPanel, symScroll)
+		ui.DrawScrollbar(symPanel, symScroll)
 	}
 
 	if leaf := g.UI.PanelMgr.LeafFor(ui.PanelDebug); leaf != nil {
-		debugLMB := !g.chromeBusy() && !g.UI.ScrollDragging &&
+		debugLMB := !g.chromeBusy() && !g.scrollDragging() &&
 			g.UI.PanelMgr.FocusedAt(g.Frame.Cursor) == ui.PanelDebug &&
 			rl.IsMouseButtonPressed(rl.MouseButtonLeft)
 		g.drawDebugWidget(g.UI.PanelMgr.Get(ui.PanelDebug), g.hudFont, g.Frame.Cursor, debugLMB)

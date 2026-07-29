@@ -139,6 +139,39 @@ func SplitX(r rl.Rectangle, i, n int, gap float32) rl.Rectangle {
 	}
 }
 
+// Flow lays widgets left to right inside a Column, wrapping when the next one
+// would overrun the width. End() hands the consumed height back to the column,
+// so a wrapping run of buttons still stacks correctly with what follows.
+type Flow struct {
+	col      *Column
+	x        float32
+	h, gap   float32
+	lines    int
+	anyOnRow bool
+}
+
+func NewFlow(col *Column, h, gap float32) Flow {
+	return Flow{col: col, x: col.X, h: h, gap: gap, lines: 1}
+}
+
+func (f *Flow) Next(w float32) rl.Rectangle {
+	if f.anyOnRow && f.x+w > f.col.X+f.col.W {
+		f.x = f.col.X
+		f.lines++
+	}
+	r := rl.Rectangle{
+		X: f.x, Y: f.col.Y + float32(f.lines-1)*(f.h+f.gap),
+		Width: w, Height: f.h,
+	}
+	f.x += w + f.gap
+	f.anyOnRow = true
+	return r
+}
+
+func (f *Flow) End() {
+	f.col.Y += float32(f.lines)*(f.h+f.gap) - f.gap
+}
+
 // Text draws at the rect's top-left — panels align rows on their top edge,
 // not their centre line.
 func Text(st *Style, r rl.Rectangle, s string, c rl.Color) {

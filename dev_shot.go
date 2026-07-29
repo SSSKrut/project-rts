@@ -7,8 +7,6 @@ import (
 	"strings"
 
 	rl "github.com/gen2brain/raylib-go/raylib"
-
-	"rts-go/ui"
 )
 
 // Frame capture for eyeballing render changes without a live session. The
@@ -18,17 +16,19 @@ var (
 	shotAtFlag     = flag.Int("shot-at", 120, "dev: frame index for -shot")
 	shotCamFlag    = flag.String("shot-cam", "", "dev: starting orbit as radius,pitchDeg,yawDeg")
 	shotSelectFlag = flag.Int("shot-select", 0, "dev: preselect N units so panels render populated")
-	shotScrollFlag = flag.Float64("shot-scroll", 0, "dev: inspector scroll offset for -shot")
+	shotScrollFlag = flag.Float64("shot-scroll", 0, "dev: scroll offset applied to every scrollable panel for -shot")
 )
 
 // applyShotSelection preselects units for a capture — inspector panels are
 // mostly empty without a selection, which is the half worth looking at.
 func (g *Game) applyShotSelection() {
+	if *shotScrollFlag != 0 {
+		for _, id := range scrollablePanels {
+			g.UI.PanelMgr.ScrollByID(id).OffsetY = float32(*shotScrollFlag)
+		}
+	}
 	if *shotSelectFlag <= 0 {
 		return
-	}
-	if *shotScrollFlag != 0 {
-		g.UI.PanelMgr.ScrollByID(ui.PanelInspect).OffsetY = float32(*shotScrollFlag)
 	}
 	q := g.Filt.UnitHit.Query()
 	for q.Next() {

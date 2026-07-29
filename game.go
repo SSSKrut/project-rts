@@ -222,7 +222,8 @@ type uiState struct {
 	RMB            rmbSession
 	LastRMBPressAt float32
 
-	ScrollDragging   bool
+	// Which panel's scrollbar thumb is being dragged; PanelNone = none.
+	ScrollDragID     ui.PanelID
 	ScrollDragStartY float32
 	ScrollDragStartO float32
 

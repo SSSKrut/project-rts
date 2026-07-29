@@ -258,58 +258,63 @@ func groupSelectedHelper(selected []ecs.Entity,
 	return common, true
 }
 
-func drawInspectorEmpty(ctx InspectorCtx, x, y, width int32) int32 {
-	drawText(ctx.Font, "No selection", x, y, inspectorFontSize, inspectorText)
-	y += inspectorRowH * 2
+// SelectSquadRequest is raised when a row in the "Squads on field" list is
+// clicked. main.go resolves it into a unit selection — the ui package has no
+// business knowing what "selected" means.
+var SelectSquadRequest struct {
+	Active bool
+	Squad  ecs.Entity
+}
 
-	drawText(ctx.Font, "Squads on field:", x, y, inspectorFontSize, inspectorTextDim)
-	y += inspectorRowH
+func drawInspectorEmpty(ctx InspectorCtx, x, y, width int32) int32 {
+	col := Column{X: float32(x), Y: float32(y), W: float32(width)}
+	TextRow(&col, &ctx.st, "No selection", ctx.st.Text)
+	col.Skip(ctx.st.RowH)
+	TextRow(&col, &ctx.st, "Squads on field:", ctx.st.TextDim)
 
 	q := ctx.SquadFilter.Query()
 	for q.Next() {
 		_, roster := q.Get()
 		ent := q.Entity()
 
-		bg := rl.Color{}
-		rowText := inspectorText
-		if ctx.Hovered == ent {
-			bg = inspectorRowHoverBG
+		row := col.Band(ctx.st.RowH)
+		// The band is inset so a highlighted row reads as a list item rather
+		// than as text with a box around it.
+		band := rl.Rectangle{X: row.X - 2, Y: row.Y - 2, Width: row.Width, Height: row.Height}
+		if ctx.in.Hover(band) || ctx.Hovered == ent {
+			rl.DrawRectangleRec(band, inspectorRowHoverBG)
 		}
-		if bg.A != 0 {
-			rl.DrawRectangle(x-2, y-2, width, inspectorRowH, bg)
+		if ctx.in.Clicked(band) {
+			SelectSquadRequest.Active = true
+			SelectSquadRequest.Squad = ent
 		}
 
 		colorChip := rl.Color{R: 80, G: 80, B: 80, A: 255}
 		if ctx.SquadColor != nil {
 			colorChip = ctx.SquadColor(ent)
 		}
-		rl.DrawRectangle(x, y+2, 10, 10, colorChip)
-		drawText(ctx.Font, fmt.Sprintf("Squad #%X -%d members",
-			ent.ID()&0xFFF, roster.Count),
-			x+16, y, inspectorFontSize, rowText)
-		y += inspectorRowH
+		rl.DrawRectangle(int32(row.X), int32(row.Y)+2, 10, 10, colorChip)
+		Text(&ctx.st, rl.Rectangle{X: row.X + 16, Y: row.Y},
+			fmt.Sprintf("Squad #%X -%d members", ent.ID()&0xFFF, roster.Count),
+			ctx.st.Text)
 	}
 
 	if ctx.EventLog != nil && ctx.EventLog.Count > 0 {
-		y += inspectorRowH
-		drawText(ctx.Font, "Recent events:", x, y, inspectorFontSize, inspectorTextDim)
-		y += inspectorRowH
+		col.Skip(ctx.st.RowH)
+		TextRow(&col, &ctx.st, "Recent events:", ctx.st.TextDim)
 		for _, ev := range ctx.EventLog.Latest(8) {
-			color := inspectorText
+			color := ctx.st.Text
 			switch ev.Kind {
 			case components.EventKIA, components.EventOrderFailed:
 				color = rl.Color{R: 230, G: 110, B: 80, A: 255}
 			case components.EventSuppressionStart:
 				color = rl.Color{R: 230, G: 170, B: 90, A: 255}
 			}
-			drawText(ctx.Font,
-				fmt.Sprintf("[%5.1fs] %-10s %s", ev.At,
-					components.EventKindLabel(ev.Kind), ev.Text),
-				x, y, inspectorFontSize, color)
-			y += inspectorRowH
+			TextRow(&col, &ctx.st, fmt.Sprintf("[%5.1fs] %-10s %s", ev.At,
+				components.EventKindLabel(ev.Kind), ev.Text), color)
 		}
 	}
-	return y
+	return int32(col.Y)
 }
 
 func drawInspectorMulti(ctx InspectorCtx, x, y int32) int32 {

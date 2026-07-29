@@ -56,23 +56,25 @@ const (
 	seBtnGap    float32 = 4
 	seSectionH  float32 = 18
 	seLabelFont float32 = 13
+	sePad       float32 = 10
 )
 
 // DrawPanel renders the editor inside the workspace leaf for PanelSymbology.
-func (e *SymbolEditor) DrawPanel(panel Panel, font rl.Font, cursor rl.Vector2, lmbPress, focused bool) {
+// scroll may be nil (floating instances), in which case the body is simply
+// clipped as before.
+func (e *SymbolEditor) DrawPanel(panel Panel, font rl.Font, cursor rl.Vector2,
+	lmbPress, focused bool, scroll *ScrollState) {
 	content := ContentRect(panel)
 	rl.DrawRectangleRec(content, seBG)
-	rl.BeginScissorMode(int32(content.X), int32(content.Y), int32(content.Width), int32(content.Height))
-	defer rl.EndScissorMode()
 
-	pad := float32(10)
-	x := content.X + pad
-	y := content.Y + pad
-	rightX := content.X + content.Width - pad
+	st := SymbologyStyle(font)
+	in := WidgetInput{Cursor: cursor, Press: lmbPress, Enabled: focused}
+	sc := BeginScroll(content, scroll, sePad, sePad)
+	defer sc.End()
+	col := &sc.Col
 
-	// Affiliation row.
-	y = e.drawSectionLabel(font, x, y, "Affiliation")
-	affilOpts := []struct {
+	e.section(col, &st, "Affiliation")
+	affils := [4]struct {
 		v     components.Affiliation
 		label string
 	}{
@@ -81,19 +83,17 @@ func (e *SymbolEditor) DrawPanel(panel Panel, font rl.Font, cursor rl.Vector2, l
 		{components.AffilNeutral, "Neutral"},
 		{components.AffilUnknown, "Unknown"},
 	}
-	bx := x
-	for _, o := range affilOpts {
-		sel := e.InProgress.Affiliation == o.v
-		if e.drawButton(font, bx, y, seBtnW, seRowH, o.label, sel, true, cursor, lmbPress && focused) {
+	flow := NewFlow(col, seRowH, seBtnGap)
+	for _, o := range affils {
+		if Chip(in, &st, flow.Next(seBtnW), o.label, e.InProgress.Affiliation == o.v) {
 			e.InProgress.Affiliation = o.v
 		}
-		bx += seBtnW + seBtnGap
 	}
-	y += seRowH + seRowGap*2
+	flow.End()
+	col.Skip(seRowGap * 2)
 
-	// Dimension row.
-	y = e.drawSectionLabel(font, x, y, "Dimension")
-	dimOpts := []struct {
+	e.section(col, &st, "Dimension")
+	dims := [5]struct {
 		v     components.Dimension
 		label string
 	}{
@@ -103,25 +103,19 @@ func (e *SymbolEditor) DrawPanel(panel Panel, font rl.Font, cursor rl.Vector2, l
 		{components.DimNavalClass, "Naval"},
 		{components.DimUnknownClass, "Unknown"},
 	}
-	bx = x
-	for _, o := range dimOpts {
-		sel := e.InProgress.Dimension == o.v
-		if e.drawButton(font, bx, y, seBtnW, seRowH, o.label, sel, true, cursor, lmbPress && focused) {
+	flow = NewFlow(col, seRowH, seBtnGap)
+	for _, o := range dims {
+		if Chip(in, &st, flow.Next(seBtnW), o.label, e.InProgress.Dimension == o.v) {
 			e.InProgress.Dimension = o.v
 			// Auto-snap Icon to dimension's canonical glyph for convenience.
 			e.InProgress.Icon = canonicalIconFor(o.v)
 		}
-		bx += seBtnW + seBtnGap
-		if bx+seBtnW > rightX {
-			bx = x
-			y += seRowH + seRowGap
-		}
 	}
-	y += seRowH + seRowGap*2
+	flow.End()
+	col.Skip(seRowGap * 2)
 
-	// Icon row.
-	y = e.drawSectionLabel(font, x, y, "Icon")
-	iconOpts := []struct {
+	e.section(col, &st, "Icon")
+	icons := [10]struct {
 		v     components.IconKind
 		label string
 	}{
@@ -136,50 +130,34 @@ func (e *SymbolEditor) DrawPanel(panel Panel, font rl.Font, cursor rl.Vector2, l
 		{components.IconAircraft, "Aircraft"},
 		{components.IconNone, "None"},
 	}
-	bx = x
-	for _, o := range iconOpts {
-		sel := e.InProgress.Icon == o.v
-		if e.drawButton(font, bx, y, seBtnW, seRowH, o.label, sel, true, cursor, lmbPress && focused) {
+	flow = NewFlow(col, seRowH, seBtnGap)
+	for _, o := range icons {
+		if Chip(in, &st, flow.Next(seBtnW), o.label, e.InProgress.Icon == o.v) {
 			e.InProgress.Icon = o.v
 		}
-		bx += seBtnW + seBtnGap
-		if bx+seBtnW > rightX {
-			bx = x
-			y += seRowH + seRowGap
-		}
 	}
-	y += seRowH + seRowGap*3
+	flow.End()
+	col.Skip(seRowGap * 3)
 
-	// Preview pane.
-	y = e.drawSectionLabel(font, x, y, "Preview")
-	previewCenter := rl.Vector2{X: x + 40, Y: y + 40}
-	DrawSymbol(e.InProgress, previewCenter, 32, 1.0)
-	y += 92
+	e.section(col, &st, "Preview")
+	preview := col.Band(80)
+	DrawSymbol(e.InProgress, rl.Vector2{X: preview.X + 40, Y: preview.Y + 40}, 32, 1.0)
+	col.Skip(12)
 
-	// Apply button — disabled when no entity selected.
+	// Apply is disabled when nothing is selected to write onto.
 	hasSel := e.SelectionFn != nil && e.SelectionFn() != (ecs.Entity{})
-	if e.drawButton(font, x, y, seBtnW*2.5, seRowH+4, "Apply to selection", false, hasSel, cursor, lmbPress && focused) && hasSel {
+	apply := col.Band(seRowH + 4)
+	apply.Width = seBtnW * 2.5
+	if !hasSel {
+		ChipDisabled(&st, apply, "Apply to selection")
+	} else if Chip(in, &st, apply, "Apply to selection", false) {
 		SymbolApplyRequest.Active = true
 		SymbolApplyRequest.Spec = e.InProgress
 	}
 }
 
-func (e *SymbolEditor) drawSectionLabel(font rl.Font, x, y float32, label string) float32 {
-	rl.DrawTextEx(font, label, rl.Vector2{X: x, Y: y}, seLabelFont, 1, seRowDim)
-	return y + seSectionH
-}
-
-// drawButton returns true on click. selected -> highlighted; enabled=false ->
-// dimmed and click-ignored.
-func (e *SymbolEditor) drawButton(font rl.Font, x, y, w, h float32, label string,
-	selected, enabled bool, cursor rl.Vector2, lmbPress bool) bool {
-	st := SymbologyStyle(font)
-	r := rl.Rectangle{X: x, Y: y, Width: w, Height: h}
-	if !enabled {
-		ChipDisabled(&st, r, label)
-		return false
-	}
-	return Chip(WidgetInput{Cursor: cursor, Press: lmbPress, Enabled: true}, &st, r, label, selected)
+func (e *SymbolEditor) section(col *Column, st *Style, label string) {
+	Text(st, col.Band(seSectionH), label, st.TextDim)
 }
 
 func canonicalIconFor(d components.Dimension) components.IconKind {

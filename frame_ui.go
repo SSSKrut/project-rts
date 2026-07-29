@@ -98,6 +98,75 @@ func (g *Game) isSelected(e ecs.Entity) int {
 	return -1
 }
 
+// scrollablePanels get wheel + thumb-drag handling. A widget only reports how
+// tall its content came out; everything else is here.
+var scrollablePanels = [...]ui.PanelID{ui.PanelInspect, ui.PanelSymbology}
+
+func (g *Game) scrollDragging() bool { return g.UI.ScrollDragID != ui.PanelNone }
+
+func (g *Game) handlePanelScroll() {
+	for _, id := range scrollablePanels {
+		panel := g.UI.PanelMgr.Get(id)
+		scroll := g.UI.PanelMgr.ScrollByID(id)
+		if scroll == nil {
+			continue
+		}
+		if g.Frame.Focused == id && !g.chromeBusy() {
+			if wheel := rl.GetMouseWheelMove(); wheel != 0 {
+				scroll.OffsetY -= wheel * wheelScrollSpeed
+				ui.ClampScrollOffset(panel, scroll)
+			}
+		}
+
+		thumb := ui.ScrollbarThumbRect(panel, scroll)
+		if !g.chromeBusy() && !g.scrollDragging() &&
+			thumb.Width > 0 && thumb.Height > 0 &&
+			rl.IsMouseButtonPressed(rl.MouseButtonLeft) &&
+			rl.CheckCollisionPointRec(g.Frame.Cursor, thumb) {
+			g.UI.ScrollDragID = id
+			g.UI.ScrollDragStartY = g.Frame.Cursor.Y
+			g.UI.ScrollDragStartO = scroll.OffsetY
+		}
+		if g.UI.ScrollDragID != id {
+			continue
+		}
+		if !rl.IsMouseButtonDown(rl.MouseButtonLeft) {
+			g.UI.ScrollDragID = ui.PanelNone
+			continue
+		}
+		track := ui.ScrollbarRect(panel)
+		maxOffset := scroll.ContentHeight - track.Height
+		scrollableTrack := track.Height - thumb.Height
+		if scrollableTrack > 0 && maxOffset > 0 {
+			dy := g.Frame.Cursor.Y - g.UI.ScrollDragStartY
+			scroll.OffsetY = g.UI.ScrollDragStartO + dy*(maxOffset/scrollableTrack)
+			ui.ClampScrollOffset(panel, scroll)
+		}
+	}
+}
+
+// selectSquad replaces the selection with a squad's living members — what
+// clicking a row in the inspector's squad list means.
+func (g *Game) selectSquad(squad ecs.Entity) {
+	if squad == (ecs.Entity{}) || !g.App.World.Alive(squad) {
+		return
+	}
+	roster := g.Maps.Roster.Get(squad)
+	if roster == nil {
+		return
+	}
+	g.Sel.Units = g.Sel.Units[:0]
+	for i := uint8(0); i < roster.Count; i++ {
+		mem := roster.Members[i]
+		if mem == (ecs.Entity{}) || !g.App.World.Alive(mem) {
+			continue
+		}
+		if g.isControllable(mem) {
+			g.Sel.Units = append(g.Sel.Units, mem)
+		}
+	}
+}
+
 func (g *Game) toggleSelected(e ecs.Entity) {
 	if i := g.isSelected(e); i >= 0 {
 		g.Sel.Units = append(g.Sel.Units[:i], g.Sel.Units[i+1:]...)
@@ -182,7 +251,7 @@ func (g *Game) renderFloatingWidget(id ui.PanelID, content rl.Rectangle,
 	case ui.PanelFormation:
 		g.UI.FormationEditor.DrawPanel(syn("Formation"), font, cursor, lmbPress)
 	case ui.PanelSymbology:
-		g.UI.SymbolEditor.DrawPanel(syn("Symbology"), font, cursor, lmbPress, true)
+		g.UI.SymbolEditor.DrawPanel(syn("Symbology"), font, cursor, lmbPress, true, nil)
 	case ui.PanelMap:
 		ui.DrawMap(syn("Map"), ui.MapRenderCtx{
 			World:              g.App.World,

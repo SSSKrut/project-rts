@@ -99,44 +99,9 @@ func (g *Game) handleInput() {
 		g.UI.MapPanning = false
 	}
 
-	if g.Frame.Focused == ui.PanelInspect && !g.chromeBusy() {
-		if wheel := rl.GetMouseWheelMove(); wheel != 0 {
-			if scroll := g.UI.PanelMgr.ScrollByID(ui.PanelInspect); scroll != nil {
-				scroll.OffsetY -= wheel * wheelScrollSpeed
-				ui.ClampScrollOffset(g.UI.PanelMgr.Get(ui.PanelInspect), scroll)
-			}
-		}
-	}
-	inspScrollPanel := g.UI.PanelMgr.Get(ui.PanelInspect)
-	inspScroll := g.UI.PanelMgr.ScrollByID(ui.PanelInspect)
-	if !g.chromeBusy() && inspScroll != nil {
-		thumb := ui.ScrollbarThumbRect(inspScrollPanel, inspScroll)
-		if !g.UI.ScrollDragging && thumb.Width > 0 && thumb.Height > 0 &&
-			rl.IsMouseButtonPressed(rl.MouseButtonLeft) &&
-			g.Frame.Cursor.X >= thumb.X && g.Frame.Cursor.X < thumb.X+thumb.Width &&
-			g.Frame.Cursor.Y >= thumb.Y && g.Frame.Cursor.Y < thumb.Y+thumb.Height {
-			g.UI.ScrollDragging = true
-			g.UI.ScrollDragStartY = g.Frame.Cursor.Y
-			g.UI.ScrollDragStartO = inspScroll.OffsetY
-		}
-	}
-	if g.UI.ScrollDragging {
-		if rl.IsMouseButtonDown(rl.MouseButtonLeft) && inspScroll != nil {
-			track := ui.ScrollbarRect(inspScrollPanel)
-			maxOffset := inspScroll.ContentHeight - track.Height
-			thumbH := ui.ScrollbarThumbRect(inspScrollPanel, inspScroll).Height
-			scrollableTrack := track.Height - thumbH
-			if scrollableTrack > 0 && maxOffset > 0 {
-				dy := g.Frame.Cursor.Y - g.UI.ScrollDragStartY
-				inspScroll.OffsetY = g.UI.ScrollDragStartO + dy*(maxOffset/scrollableTrack)
-				ui.ClampScrollOffset(inspScrollPanel, inspScroll)
-			}
-		} else {
-			g.UI.ScrollDragging = false
-		}
-	}
+	g.handlePanelScroll()
 
-	if g.Frame.Focused == ui.PanelTopBar && !g.chromeBusy() && !g.UI.ScrollDragging &&
+	if g.Frame.Focused == ui.PanelTopBar && !g.chromeBusy() && !g.scrollDragging() &&
 		rl.IsMouseButtonPressed(rl.MouseButtonLeft) {
 		switch ui.TopBarHitTest(g.Frame.Cursor, g.UI.TopBarHits) {
 		case ui.TopBarHitPlayPause:
@@ -203,7 +168,7 @@ func (g *Game) handleInput() {
 				g.UI.TimelineView.Follow = false
 			}
 		}
-		if rl.IsMouseButtonPressed(rl.MouseButtonLeft) && !g.UI.ScrollDragging {
+		if rl.IsMouseButtonPressed(rl.MouseButtonLeft) && !g.scrollDragging() {
 			if g.UI.TimelineHoverOK && g.UI.TimelineHoverHit.Squad != (ecs.Entity{}) &&
 				g.App.World.Alive(g.UI.TimelineHoverHit.Squad) && g.isControllable(g.UI.TimelineHoverHit.Squad) {
 				if r := g.Maps.Roster.Get(g.UI.TimelineHoverHit.Squad); r != nil {

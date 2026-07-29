@@ -275,3 +275,92 @@ func TestSplitterDragResizesInPlace(t *testing.T) {
 		t.Errorf("pane order changed: %v -> %v", before, after)
 	}
 }
+
+// The widget primitives own the geometry every panel's hit-testing depends
+// on, so their arithmetic is worth pinning even though drawing needs a window.
+
+func TestColumnStacksBandsFlushAndRowsWithGap(t *testing.T) {
+	col := Column{X: 10, Y: 100, W: 200, Gap: 4}
+
+	a := col.Band(20)
+	b := col.Band(20)
+	if a.Y != 100 || b.Y != 120 {
+		t.Errorf("bands should stack flush: %.0f then %.0f", a.Y, b.Y)
+	}
+	c := col.Row(20)
+	d := col.Row(20)
+	if c.Y != 140 || d.Y != 164 {
+		t.Errorf("rows should carry the gap: %.0f then %.0f", c.Y, d.Y)
+	}
+	if a.X != 10 || a.Width != 200 {
+		t.Errorf("band = (%.0f, w %.0f), want the column's strip", a.X, a.Width)
+	}
+	col.Skip(6)
+	if col.Y != 194 {
+		t.Errorf("Y = %.0f after Skip(6), want 194", col.Y)
+	}
+}
+
+// SplitX must consume the row exactly — the leftover that integer division
+// used to leave was visible as a ragged right edge on chip rows.
+func TestSplitXFillsTheRowExactly(t *testing.T) {
+	row := rl.Rectangle{X: 0, Y: 0, Width: 103, Height: 18}
+	const n = 4
+	const gap = 4
+	first := SplitX(row, 0, n, gap)
+	last := SplitX(row, n-1, n, gap)
+	if first.X != 0 {
+		t.Errorf("first cell starts at %.2f, want 0", first.X)
+	}
+	if got := last.X + last.Width; got < 102.99 || got > 103.01 {
+		t.Errorf("last cell ends at %.2f, want the row's right edge 103", got)
+	}
+	for i := 1; i < n; i++ {
+		prev := SplitX(row, i-1, n, gap)
+		cur := SplitX(row, i, n, gap)
+		if got := cur.X - (prev.X + prev.Width); got < 3.99 || got > 4.01 {
+			t.Errorf("gap between cell %d and %d = %.2f, want 4", i-1, i, got)
+		}
+	}
+}
+
+func TestFlowWrapsAndReturnsTheHeightItUsed(t *testing.T) {
+	col := Column{X: 0, Y: 0, W: 100}
+	f := NewFlow(&col, 20, 4)
+	var got []rl.Rectangle
+	for i := 0; i < 4; i++ {
+		got = append(got, f.Next(30))
+	}
+	f.End()
+
+	if got[2].Y != 0 {
+		t.Errorf("third button wrapped early (y=%.0f)", got[2].Y)
+	}
+	if got[3].Y != 24 || got[3].X != 0 {
+		t.Errorf("fourth button = (%.0f, %.0f), want the start of a second line",
+			got[3].X, got[3].Y)
+	}
+	// Two lines of 20 with one 4 gap between them.
+	if col.Y != 44 {
+		t.Errorf("column advanced to %.0f, want 44", col.Y)
+	}
+}
+
+func TestWidgetInputIgnoresEverythingWhenDisabled(t *testing.T) {
+	r := rl.Rectangle{X: 0, Y: 0, Width: 10, Height: 10}
+	inside := rl.Vector2{X: 5, Y: 5}
+
+	live := WidgetInput{Cursor: inside, Press: true, Enabled: true}
+	if !live.Hover(r) || !live.Clicked(r) {
+		t.Error("an enabled widget under the cursor should hover and fire")
+	}
+	dead := WidgetInput{Cursor: inside, Press: true}
+	if dead.Hover(r) || dead.Clicked(r) {
+		t.Error("a disabled widget must neither highlight nor fire")
+	}
+	// Half-open rect: the far edge belongs to the next widget.
+	edge := WidgetInput{Cursor: rl.Vector2{X: 10, Y: 5}, Press: true, Enabled: true}
+	if edge.Hover(r) {
+		t.Error("the right edge should belong to the neighbouring widget")
+	}
+}
