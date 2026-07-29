@@ -116,12 +116,12 @@ var saveComponents = map[string]saveEntry{
 	"components.ShootingArc":    saveReg[components.ShootingArc](SaveMemcpy),
 	"components.Occupancy":      saveReg[components.Occupancy](SaveMemcpy),
 
-	"components.Prop":             saveReg[components.Prop](SaveMemcpy),
-	"components.PropsDirty":       saveReg[components.PropsDirty](SaveMemcpy),
-	"components.RiverProcessed":   saveReg[components.RiverProcessed](SaveMemcpy),
-	"components.RoadProcessed":    saveReg[components.RoadProcessed](SaveMemcpy),
-	"components.TrenchProcessed":  saveReg[components.TrenchProcessed](SaveMemcpy),
-	"components.TrenchRoot":       saveReg[components.TrenchRoot](SaveMemcpy),
+	"components.Prop":            saveReg[components.Prop](SaveMemcpy),
+	"components.PropsDirty":      saveReg[components.PropsDirty](SaveMemcpy),
+	"components.RiverProcessed":  saveReg[components.RiverProcessed](SaveMemcpy),
+	"components.RoadProcessed":   saveReg[components.RoadProcessed](SaveMemcpy),
+	"components.TrenchProcessed": saveReg[components.TrenchProcessed](SaveMemcpy),
+	"components.TrenchRoot":      saveReg[components.TrenchRoot](SaveMemcpy),
 
 	"components.Building":                 saveReg[components.Building](SaveMemcpy),
 	"components.BuildingMember":           saveReg[components.BuildingMember](SaveMemcpy),
@@ -206,7 +206,6 @@ var resourceClasses = map[string]ResourceClass{
 	"components.Rivers":           ResFromManifest,
 	"components.RoadGraph":        ResFromManifest,
 	"components.RoadSurface":      ResFromManifest, // derived from RoadGraph + procgen at boot
-
 	"components.TrenchNetwork":    ResFromManifest,
 	"components.BuildingPlanList": ResFromManifest,
 	"systems.PropTypeRegistry":    ResFromManifest,

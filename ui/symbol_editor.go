@@ -169,33 +169,17 @@ func (e *SymbolEditor) drawSectionLabel(font rl.Font, x, y float32, label string
 	return y + seSectionH
 }
 
-// drawButton returns true on click. selected → highlighted; enabled=false →
+// drawButton returns true on click. selected -> highlighted; enabled=false ->
 // dimmed and click-ignored.
 func (e *SymbolEditor) drawButton(font rl.Font, x, y, w, h float32, label string,
 	selected, enabled bool, cursor rl.Vector2, lmbPress bool) bool {
+	st := SymbologyStyle(font)
 	r := rl.Rectangle{X: x, Y: y, Width: w, Height: h}
-	hover := enabled && rl.CheckCollisionPointRec(cursor, r)
-	bg := seBtnIdle
-	switch {
-	case !enabled:
-		bg = seBtnDis
-	case selected:
-		bg = seBtnSel
-	case hover:
-		bg = seBtnHover
-	}
-	rl.DrawRectangleRec(r, bg)
-	rl.DrawRectangleLinesEx(r, 1, rl.Color{R: 10, G: 14, B: 24, A: 230})
-	col := seRowText
 	if !enabled {
-		col = seRowDim
+		ChipDisabled(&st, r, label)
+		return false
 	}
-	sz := rl.MeasureTextEx(font, label, seLabelFont, 1)
-	rl.DrawTextEx(font, label, rl.Vector2{
-		X: x + (w-sz.X)*0.5,
-		Y: y + (h-sz.Y)*0.5,
-	}, seLabelFont, 1, col)
-	return hover && lmbPress
+	return Chip(WidgetInput{Cursor: cursor, Press: lmbPress, Enabled: true}, &st, r, label, selected)
 }
 
 func canonicalIconFor(d components.Dimension) components.IconKind {

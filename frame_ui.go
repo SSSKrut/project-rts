@@ -66,6 +66,8 @@ func (g *Game) initUI() {
 		}
 		return ecs.Entity{}
 	})
+
+	g.applyShotSelection()
 }
 
 // shutdownUI reverses initUI. Deferred after g.Shutdown so it fires first,

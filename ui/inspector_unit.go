@@ -90,11 +90,11 @@ func drawInspectorUnit(ctx InspectorCtx, ent ecs.Entity, x, y int32) int32 {
 	// (IndividualPosition present). Click removes the marker;
 	// FormationSystem snaps the unit back on the next tick.
 	if ctx.IndividualPositionMap != nil && ctx.IndividualPositionMap.Has(ent) {
-		const chipW = 160
-		if drawChip(ctx, x, y, chipW, srChipH, "Return to formation", false) {
+		chip := rl.Rectangle{X: float32(x), Y: float32(y), Width: 160, Height: srChipH}
+		if Chip(ctx.in, &ctx.st, chip, "Return to formation", false) {
 			ctx.IndividualPositionMap.Remove(ent)
 		}
-		y += srChipH + 2
+		y += int32(srChipH) + 2
 	}
 	if eq := ctx.EquipmentMap.Get(ent); eq != nil {
 		drawText(ctx.Font, equipmentSummary(eq),

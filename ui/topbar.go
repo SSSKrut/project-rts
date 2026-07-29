@@ -178,25 +178,12 @@ func drawTopBarButton(r rl.Rectangle, glyph string, font rl.Font) {
 // no hover highlight. Active = small underline strip at bottom.
 func drawTopBarToolButton(r rl.Rectangle, glyph string, font rl.Font,
 	enabled, active bool, _ string, cursor rl.Vector2) {
-	hover := enabled && rl.CheckCollisionPointRec(cursor, r)
-	bg := topBarBtnIdle
-	if hover {
-		bg = topBarBtnHot
+	st := TopBarStyle(font)
+	if enabled {
+		Chip(WidgetInput{Cursor: cursor, Enabled: true}, &st, r, glyph, false)
+	} else {
+		ChipDisabled(&st, r, glyph)
 	}
-	if !enabled {
-		bg = rl.Color{R: 24, G: 28, B: 34, A: 255}
-	}
-	rl.DrawRectangleRec(r, bg)
-	rl.DrawRectangleLinesEx(r, 1, topBarBorder)
-	col := topBarText
-	if !enabled {
-		col = topBarTextDim
-	}
-	const sz int32 = 13
-	m := rl.MeasureTextEx(font, glyph, float32(sz), 1.0)
-	rl.DrawTextEx(font, glyph,
-		rl.Vector2{X: r.X + (r.Width-m.X)*0.5, Y: r.Y + (r.Height-m.Y)*0.5},
-		float32(sz), 1.0, col)
 	if active {
 		rl.DrawRectangle(int32(r.X+3), int32(r.Y+r.Height-3),
 			int32(r.Width-6), 2, topBarAccent)

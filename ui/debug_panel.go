@@ -75,6 +75,9 @@ func DrawDebugPanel(panel Panel, font rl.Font, ctx DebugPanelCtx) (simClicked, s
 		int32(content.Width), int32(content.Height))
 	defer rl.EndScissorMode()
 
+	st := DebugStyle(font)
+	in := WidgetInput{Cursor: ctx.Cursor, Press: ctx.LMBPress, Enabled: true}
+
 	x := content.X + debugPad
 	y := content.Y + debugPad
 	rowW := content.Width - 2*debugPad
@@ -93,8 +96,7 @@ func DrawDebugPanel(panel Panel, font rl.Font, ctx DebugPanelCtx) (simClicked, s
 				float32(debugFooterSize), 1.0, debugSubtitle)
 			y += float32(debugFooterSize) + 4
 		}
-		simClicked = drawDebugButtonRow(font, ctx.SimButtons, x, &y, rowW,
-			ctx.Cursor, ctx.LMBPress)
+		simClicked = drawDebugButtonRow(&st, in, ctx.SimButtons, x, &y, rowW)
 		y += debugPad
 	}
 
@@ -106,8 +108,7 @@ func DrawDebugPanel(panel Panel, font rl.Font, ctx DebugPanelCtx) (simClicked, s
 				float32(debugFooterSize), 1.0, debugSubtitle)
 			y += float32(debugFooterSize) + 4
 		}
-		spawnClicked = drawDebugButtonRow(font, ctx.SpawnButtons, x, &y, rowW,
-			ctx.Cursor, ctx.LMBPress)
+		spawnClicked = drawDebugButtonRow(&st, in, ctx.SpawnButtons, x, &y, rowW)
 		y += debugPad
 	}
 
@@ -167,33 +168,20 @@ func DrawDebugPanel(panel Panel, font rl.Font, ctx DebugPanelCtx) (simClicked, s
 	return
 }
 
-// drawDebugButtonRow lays buttons horizontally with wrapping; returns the
-// clicked index (-1 = none).
-func drawDebugButtonRow(font rl.Font, buttons []DebugButton, x float32, y *float32,
-	rowW float32, cursor rl.Vector2, lmbPress bool) int {
+// drawDebugButtonRow lays buttons horizontally, wrapping at rowW; returns
+// the clicked index (-1 = none).
+func drawDebugButtonRow(st *Style, in WidgetInput, buttons []DebugButton,
+	x float32, y *float32, rowW float32) int {
 	clicked := -1
 	bx := x
 	for i := range buttons {
-		w := rl.MeasureTextEx(font, buttons[i].Label, float32(debugRowSize), 1.0).X + 2*debugPad
+		w := rl.MeasureTextEx(st.Font, buttons[i].Label, st.FontSize, 1.0).X + 2*debugPad
 		if bx+w > x+rowW && bx > x {
 			bx = x
 			*y += debugBtnHeight + 4
 		}
 		btn := rl.Rectangle{X: bx, Y: *y, Width: w, Height: debugBtnHeight}
-		hovered := cursor.X >= btn.X && cursor.X <= btn.X+btn.Width &&
-			cursor.Y >= btn.Y && cursor.Y <= btn.Y+btn.Height
-		bg := debugBtnBG
-		if buttons[i].Armed {
-			bg = debugBtnArmed
-		} else if hovered {
-			bg = debugRowHover
-		}
-		rl.DrawRectangleRec(btn, bg)
-		rl.DrawRectangleLinesEx(btn, 1, debugCheckEdge)
-		rl.DrawTextEx(font, buttons[i].Label,
-			rl.Vector2{X: btn.X + debugPad, Y: btn.Y + (debugBtnHeight-float32(debugRowSize))*0.5},
-			float32(debugRowSize), 1.0, debugTextOn)
-		if hovered && lmbPress {
+		if Chip(in, st, btn, buttons[i].Label, buttons[i].Armed) {
 			clicked = i
 		}
 		bx += w + 6

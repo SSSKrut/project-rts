@@ -120,6 +120,11 @@ type InspectorCtx struct {
 	SquadColor func(ent ecs.Entity) rl.Color
 	// RoadGraph resolves RoadFollower.Edge into a kind label.
 	RoadGraph *components.RoadGraph
+
+	// Widget palette and pointer state, filled by DrawInspector and carried
+	// down by value so section functions don't rebuild them per call.
+	st Style
+	in WidgetInput
 }
 
 func roleOf(ctx InspectorCtx, ent ecs.Entity) components.UnitRoleKind {
@@ -156,21 +161,16 @@ var (
 // the total used height is written back into Scroll.ContentHeight at the
 // end of draw so the scrollbar can size and clamp on the next frame.
 func DrawInspector(panel Panel, ctx InspectorCtx) {
+	ctx.st = InspectorStyle(ctx.Font)
+	ctx.in = WidgetInput{Cursor: ctx.Cursor, Press: ctx.LMBPressed, Enabled: ctx.PanelFocused}
 	content := ContentRect(panel)
 	rl.DrawRectangleRec(content, inspectorBG)
-	rl.BeginScissorMode(int32(content.X), int32(content.Y), int32(content.Width), int32(content.Height))
-	defer rl.EndScissorMode()
+	sc := BeginScroll(content, ctx.Scroll, float32(inspectorPadX), float32(inspectorPadY))
+	defer sc.End()
 
-	x := int32(content.X) + inspectorPadX
-	y0 := int32(content.Y) + inspectorPadY
-	scrollOffset := int32(0)
-	if ctx.Scroll != nil {
-		scrollOffset = int32(ctx.Scroll.OffsetY)
-	}
-	// Reserve room for the scrollbar on the right so chips/text don't
-	// draw under it.
-	usableWidth := int32(content.Width) - 2*inspectorPadX - int32(scrollbarTrackWidth)
-	y := y0 - scrollOffset
+	x := int32(sc.Col.X)
+	y := int32(sc.Col.Y)
+	usableWidth := int32(sc.Col.W)
 
 	var endY int32
 	switch describeSelection(ctx) {
@@ -194,9 +194,7 @@ func DrawInspector(panel Panel, ctx InspectorCtx) {
 		endY = y
 	}
 
-	if ctx.Scroll != nil {
-		ctx.Scroll.ContentHeight = float32(endY+scrollOffset-y0) + float32(inspectorPadY)
-	}
+	sc.Col.Y = float32(endY)
 }
 
 type selectionKind uint8
@@ -339,8 +337,9 @@ func drawInspectorMulti(ctx InspectorCtx, x, y int32) int32 {
 	return y + inspectorRowH
 }
 
+// drawText is the int32 shorthand the inspector rows are written in; it
+// funnels into the same Text primitive every other surface uses.
 func drawText(font rl.Font, s string, x, y, size int32, c rl.Color) {
-	rl.DrawTextEx(font, s,
-		rl.Vector2{X: float32(x), Y: float32(y)},
-		float32(size), 1.0, c)
+	st := Style{Font: font, FontSize: float32(size)}
+	Text(&st, rl.Rectangle{X: float32(x), Y: float32(y)}, s, c)
 }

@@ -12,7 +12,7 @@ import (
 
 // Immediate-mode quick-bars for Squad standing rules
 // (MovementProfile / EngagementRules / BehaviorRules) + Stamina avg.
-// PanelFocused gates clicks so a drag from elsewhere doesn't toggle a chip.
+// Drawing is ui/widget.go primitives; this file is layout and semantics.
 
 var (
 	srSectionHdr  = rl.Color{R: 90, G: 100, B: 120, A: 255}
@@ -27,10 +27,10 @@ var (
 )
 
 const (
-	srChipH      int32 = 18
-	srChipGap    int32 = 4
-	srRowGap     int32 = 4
-	srSectionGap int32 = 6
+	srChipH      float32 = 18
+	srChipGap    float32 = 4
+	srRowGap     float32 = 4
+	srSectionGap float32 = 6
 )
 
 // drawStandingRulesSections returns the next free Y. Defensive nil checks
@@ -44,43 +44,39 @@ func drawStandingRulesSections(ctx InspectorCtx, squad ecs.Entity, x, y, width i
 	er := ctx.EngagementRulesMap.Get(squad)
 	br := ctx.BehaviorRulesMap.Get(squad)
 
+	col := Column{X: float32(x), Y: float32(y), W: float32(width)}
+
 	// Doctrine must run before the section chips so the highlights reflect
 	// the freshly-applied fields.
 	if mp != nil && er != nil && br != nil && ctx.ActiveDoctrineMap != nil {
-		y = drawDoctrineSection(ctx, squad, mp, er, br, x, y, width)
-		y += srSectionGap
+		drawDoctrineSection(ctx, &col, squad, mp, er, br)
+		col.Skip(srSectionGap)
 	}
-
 	if mp != nil {
-		y = drawMovementSection(ctx, squad, mp, x, y, width)
-		y += srSectionGap
+		drawMovementSection(ctx, &col, squad, mp)
+		col.Skip(srSectionGap)
 	}
 	if er != nil {
-		y = drawEngagementSection(ctx, er, x, y, width)
-		y += srSectionGap
+		drawEngagementSection(ctx, &col, er)
+		col.Skip(srSectionGap)
 	}
 	if br != nil {
 		// AutonomySpec writes through into BehaviorRules skipping dirty bits.
 		if ctx.ActiveAutonomyMap != nil {
-			y = drawAutonomySection(ctx, squad, br, x, y, width)
-			y += srSectionGap
+			drawAutonomySection(ctx, &col, squad, br)
+			col.Skip(srSectionGap)
 		}
-		y = drawBehaviorSection(ctx, squad, br, x, y, width)
-		y += srSectionGap
+		drawBehaviorSection(ctx, &col, squad, br)
+		col.Skip(srSectionGap)
 	}
-	return y
+	return int32(col.Y)
 }
 
 // drawAutonomySection: click applies AutonomySpec to br (skipping dirty
 // fields) and stamps ActiveAutonomy.Code for highlight.
-func drawAutonomySection(
-	ctx InspectorCtx,
-	squad ecs.Entity,
-	br *components.BehaviorRules,
-	x, y, width int32,
-) int32 {
-	drawText(ctx.Font, "Autonomy", x, y, inspectorFontSize, srSectionHdr)
-	y += inspectorRowH
+func drawAutonomySection(ctx InspectorCtx, col *Column, squad ecs.Entity,
+	br *components.BehaviorRules) {
+	Header(col, &ctx.st, "Autonomy")
 
 	dirty := components.BehaviorRulesField(0)
 	if ctx.BehaviorRulesEditMap != nil {
@@ -93,11 +89,11 @@ func drawAutonomySection(
 		components.AutonomyStrict, components.AutonomyCautious,
 		components.AutonomyAdaptive, components.AutonomySurvival,
 	}
-	chipW := (width - 3*srChipGap) / 4
+	row := col.Band(srChipH)
 	for i, a := range autonomies {
-		cx := x + int32(i)*(chipW+srChipGap)
 		active := components.AutonomyMatches(a, *br, dirty)
-		if drawChip(ctx, cx, y, chipW, srChipH, components.AutonomyName(a), active) {
+		if Chip(ctx.in, &ctx.st, SplitX(row, i, 4, srChipGap),
+			components.AutonomyName(a), active) {
 			components.ApplyAutonomy(a, br, dirty)
 			if ctx.ActiveAutonomyMap.Has(squad) {
 				*ctx.ActiveAutonomyMap.Get(squad) = components.ActiveAutonomy{Code: a}
@@ -106,32 +102,24 @@ func drawAutonomySection(
 			}
 		}
 	}
-	y += srChipH
-	return y
 }
 
 // drawDoctrineSection: click writes DoctrineSpec into the squad's three
 // components and stamps ActiveDoctrine.Code.
-func drawDoctrineSection(
-	ctx InspectorCtx,
-	squad ecs.Entity,
-	mp *components.MovementProfile,
-	er *components.EngagementRules,
-	br *components.BehaviorRules,
-	x, y, width int32,
-) int32 {
-	drawText(ctx.Font, "Doctrine", x, y, inspectorFontSize, srSectionHdr)
-	y += inspectorRowH
+func drawDoctrineSection(ctx InspectorCtx, col *Column, squad ecs.Entity,
+	mp *components.MovementProfile, er *components.EngagementRules,
+	br *components.BehaviorRules) {
+	Header(col, &ctx.st, "Doctrine")
 
 	doctrines := [4]components.DoctrineCode{
 		components.DoctrinePatrol, components.DoctrineAssault,
 		components.DoctrineStealth, components.DoctrineDefense,
 	}
-	chipW := (width - 3*srChipGap) / 4
+	row := col.Band(srChipH)
 	for i, d := range doctrines {
-		cx := x + int32(i)*(chipW+srChipGap)
 		active := components.DoctrineMatches(d, *mp, *er, *br)
-		if drawChip(ctx, cx, y, chipW, srChipH, components.DoctrineName(d), active) {
+		if Chip(ctx.in, &ctx.st, SplitX(row, i, 4, srChipGap),
+			components.DoctrineName(d), active) {
 			spec := components.DoctrineSpecs[d]
 			*mp = spec.Movement
 			*er = spec.Engage
@@ -143,110 +131,102 @@ func drawDoctrineSection(
 			}
 		}
 	}
-	y += srChipH
-	return y
 }
 
-func drawMovementSection(ctx InspectorCtx, squad ecs.Entity, mp *components.MovementProfile, x, y, width int32) int32 {
-	drawText(ctx.Font, "Movement", x, y, inspectorFontSize, srSectionHdr)
-	y += inspectorRowH
+func drawMovementSection(ctx InspectorCtx, col *Column, squad ecs.Entity,
+	mp *components.MovementProfile) {
+	Header(col, &ctx.st, "Movement")
 
-	chipW := (width - 2*srChipGap) / 3
 	presets := [6]components.MovementPreset{
 		components.PresetDefault, components.PresetCautious, components.PresetRush,
 		components.PresetSprint, components.PresetStealth, components.PresetProneCrawl,
 	}
+	rows := [2]rl.Rectangle{}
+	for i := range rows {
+		rows[i] = col.Band(srChipH)
+		col.Skip(srChipGap)
+	}
 	for i, p := range presets {
-		col := i % 3
-		row := i / 3
-		cx := x + int32(col)*(chipW+srChipGap)
-		cy := y + int32(row)*(srChipH+srChipGap)
-		active := profileMatchesPreset(*mp, p)
-		if drawChip(ctx, cx, cy, chipW, srChipH, components.PresetName(p), active) {
+		cell := SplitX(rows[i/3], i%3, 3, srChipGap)
+		if Chip(ctx.in, &ctx.st, cell, components.PresetName(p), profileMatchesPreset(*mp, p)) {
 			*mp = components.ApplyPreset(p)
 		}
 	}
-	y += 2*(srChipH+srChipGap) - srChipGap + srRowGap
 
-	colW := (width - srChipGap) / 2
-	if drawCyclicField(ctx, x, y, colW, srChipH, "Pace: "+components.PaceName(mp.Pace)) {
+	pace := col.Band(srChipH)
+	col.Skip(srRowGap)
+	if cycle(ctx, SplitX(pace, 0, 2, srChipGap), "Pace: "+components.PaceName(mp.Pace)) {
 		mp.Pace = (mp.Pace + 1) % 3
 	}
-	if drawCyclicField(ctx, x+colW+srChipGap, y, colW, srChipH, "Stance: "+components.StanceName(mp.Stance)) {
+	if cycle(ctx, SplitX(pace, 1, 2, srChipGap), "Stance: "+components.StanceName(mp.Stance)) {
 		mp.Stance = (mp.Stance + 1) % 3
 	}
-	y += srChipH + srRowGap
 
-	if drawCyclicField(ctx, x, y, colW, srChipH, "Posture: "+components.PostureName(mp.Posture)) {
+	posture := col.Band(srChipH)
+	col.Skip(srRowGap)
+	if cycle(ctx, SplitX(posture, 0, 2, srChipGap), "Posture: "+components.PostureName(mp.Posture)) {
 		if mp.Posture == components.PostureStandard {
 			mp.Posture = components.PostureQuiet
 		} else {
 			mp.Posture = components.PostureStandard
 		}
 	}
-	if drawCyclicField(ctx, x+colW+srChipGap, y, colW, srChipH, "Path: "+components.PathStyleName(mp.PathStyle)) {
+	if cycle(ctx, SplitX(posture, 1, 2, srChipGap), "Path: "+components.PathStyleName(mp.PathStyle)) {
 		mp.PathStyle = (mp.PathStyle + 1) % 4
 	}
-	y += srChipH + srRowGap
 
-	avg := squadStaminaAverage(ctx, squad)
-	drawStaminaBar(ctx, x, y, width, srChipH, avg)
-	y += srChipH
-	return y
+	drawStaminaBar(ctx, col.Band(srChipH), squadStaminaAverage(ctx, squad))
 }
 
-func drawEngagementSection(ctx InspectorCtx, er *components.EngagementRules, x, y, width int32) int32 {
-	drawText(ctx.Font, "Engagement", x, y, inspectorFontSize, srSectionHdr)
-	y += inspectorRowH
+func drawEngagementSection(ctx InspectorCtx, col *Column, er *components.EngagementRules) {
+	Header(col, &ctx.st, "Engagement")
 
-	modes := [3]components.EngagementMode{components.HoldFire, components.ReturnFire, components.FreeFire}
-	chipW := (width - 2*srChipGap) / 3
+	modes := [3]components.EngagementMode{
+		components.HoldFire, components.ReturnFire, components.FreeFire,
+	}
+	row := col.Band(srChipH)
+	col.Skip(srRowGap)
 	for i, m := range modes {
-		cx := x + int32(i)*(chipW+srChipGap)
-		if drawChip(ctx, cx, y, chipW, srChipH, components.EngagementModeName(m), er.Mode == m) {
+		if Chip(ctx.in, &ctx.st, SplitX(row, i, 3, srChipGap),
+			components.EngagementModeName(m), er.Mode == m) {
 			er.Mode = m
 		}
 	}
-	y += srChipH + srRowGap
 
-	targetW := (width - 3*srChipGap) / 4
-	type targetSpec struct {
+	targets := [4]struct {
 		label string
 		field *bool
-	}
-	targets := [4]targetSpec{
+	}{
 		{"Inf", &er.FireOnInf}, {"Arm", &er.FireOnArm},
 		{"Air", &er.FireOnAir}, {"Struct", &er.FireOnStruct},
 	}
+	row = col.Band(srChipH)
+	col.Skip(srRowGap)
 	for i, t := range targets {
-		cx := x + int32(i)*(targetW+srChipGap)
-		if drawChip(ctx, cx, y, targetW, srChipH, t.label, *t.field) {
+		if Chip(ctx.in, &ctx.st, SplitX(row, i, 4, srChipGap), t.label, *t.field) {
 			*t.field = !*t.field
 		}
 	}
-	y += srChipH + srRowGap
 
 	// Standoff cycles Any -> Close -> Medium -> Long -> Any. SectorHalfDot
 	// is read-only here; the edit UI ships with DefendPosition.
-	standoffLabel := "Standoff: " + components.StandoffName(er.Standoff)
-	if drawCyclicField(ctx, x, y, width, srChipH, standoffLabel) {
+	if cycle(ctx, col.Band(srChipH), "Standoff: "+components.StandoffName(er.Standoff)) {
 		er.Standoff = (er.Standoff + 1) % 4
 	}
-	y += srChipH + srRowGap
+	col.Skip(srRowGap)
+
 	sectorLabel := "Sector: free"
 	if er.SectorHalfDot > 0 {
 		halfDeg := math.Acos(float64(er.SectorHalfDot)) * 180.0 / math.Pi
 		yawDeg := float64(er.SectorYaw) * 180.0 / math.Pi
 		sectorLabel = fmt.Sprintf("Sector: yaw %.0f deg, half %.0f deg", yawDeg, halfDeg)
 	}
-	drawText(ctx.Font, sectorLabel, x, y, inspectorFontSize, inspectorTextDim)
-	y += inspectorRowH
-	return y
+	TextRow(col, &ctx.st, sectorLabel, ctx.st.TextDim)
 }
 
-func drawBehaviorSection(ctx InspectorCtx, squad ecs.Entity, br *components.BehaviorRules, x, y, width int32) int32 {
-	drawText(ctx.Font, "Behavior", x, y, inspectorFontSize, srSectionHdr)
-	y += inspectorRowH
+func drawBehaviorSection(ctx InspectorCtx, col *Column, squad ecs.Entity,
+	br *components.BehaviorRules) {
+	Header(col, &ctx.st, "Behavior")
 
 	// Individual field edits flip the DirtyMask bit so the next Autonomy
 	// chip click skips them.
@@ -261,119 +241,66 @@ func drawBehaviorSection(ctx InspectorCtx, squad ecs.Entity, br *components.Beha
 		ctx.BehaviorRulesEditMap.Add(squad, &components.BehaviorRulesEdit{DirtyMask: bit})
 	}
 
-	type toggleSpec struct {
+	toggles := [4]struct {
 		label string
 		field *bool
 		bit   components.BehaviorRulesField
-	}
-	toggles := [4]toggleSpec{
+	}{
 		{"Auto-reposition", &br.AllowAutoReposition, components.DirtyAutoReposition},
 		{"Auto-stance", &br.AllowAutoStance, components.DirtyAutoStance},
 		{"Hold until ordered", &br.HoldUntilOrdered, components.DirtyHoldUntilOrdered},
 		{"Allow return fire", &br.AllowReturnFire, components.DirtyAllowReturnFire},
 	}
 	for _, t := range toggles {
-		if drawToggleRow(ctx, x, y, width, srChipH, t.label, *t.field) {
+		if Toggle(ctx.in, &ctx.st, col.Band(srChipH), t.label, *t.field) {
 			*t.field = !*t.field
 			markDirty(t.bit)
 		}
-		y += srChipH + 2
+		col.Skip(2)
 	}
 
-	const step = 0.05
-	const valueW int32 = 50
-	buttonW := (width - valueW - 2*srChipGap) / 2
-	if drawChip(ctx, x, y, buttonW, srChipH, "-", false) {
-		br.SuppressionThreshold -= step
-		if br.SuppressionThreshold < 0 {
-			br.SuppressionThreshold = 0
-		}
+	const step float32 = 0.05
+	const valueW float32 = 50
+	row := col.Band(srChipH)
+	buttonW := (row.Width - valueW - 2*srChipGap) / 2
+	minus := rl.Rectangle{X: row.X, Y: row.Y, Width: buttonW, Height: row.Height}
+	plus := rl.Rectangle{X: row.X + buttonW + srChipGap + valueW + srChipGap, Y: row.Y,
+		Width: buttonW, Height: row.Height}
+	if Chip(ctx.in, &ctx.st, minus, "-", false) {
+		br.SuppressionThreshold = clamp01(br.SuppressionThreshold - step)
 		markDirty(components.DirtySuppressionThreshold)
 	}
-	label := fmt.Sprintf("%.2f", br.SuppressionThreshold)
-	drawText(ctx.Font, "Supp: "+label,
-		x+buttonW+srChipGap, y+2, inspectorFontSize, inspectorText)
-	if drawChip(ctx, x+buttonW+srChipGap+valueW+srChipGap, y, buttonW, srChipH, "+", false) {
-		br.SuppressionThreshold += step
-		if br.SuppressionThreshold > 1 {
-			br.SuppressionThreshold = 1
-		}
+	Text(&ctx.st, rl.Rectangle{X: minus.X + buttonW + srChipGap, Y: row.Y + 2},
+		fmt.Sprintf("Supp: %.2f", br.SuppressionThreshold), ctx.st.Text)
+	if Chip(ctx.in, &ctx.st, plus, "+", false) {
+		br.SuppressionThreshold = clamp01(br.SuppressionThreshold + step)
 		markDirty(components.DirtySuppressionThreshold)
 	}
-	y += srChipH
-	return y
 }
 
-func drawChip(ctx InspectorCtx, x, y, w, h int32, label string, active bool) bool {
-	r := rl.Rectangle{X: float32(x), Y: float32(y), Width: float32(w), Height: float32(h)}
-	hover := rectContains(r, ctx.Cursor) && ctx.PanelFocused
-	bg := srChipBG
-	if active {
-		bg = srChipActive
-	} else if hover {
-		bg = srChipHover
-	}
-	rl.DrawRectangleRec(r, bg)
-	rl.DrawRectangleLinesEx(r, 1, srChipBorder)
-	textColor := inspectorText
-	if active {
-		textColor = contrastTextColor(bg)
-	}
-	size := rl.MeasureTextEx(ctx.Font, label, float32(inspectorFontSize), 1)
-	rl.DrawTextEx(ctx.Font, label, rl.Vector2{
-		X: float32(x) + (float32(w)-size.X)*0.5,
-		Y: float32(y) + (float32(h)-size.Y)*0.5,
-	}, float32(inspectorFontSize), 1, textColor)
-	return hover && ctx.LMBPressed
+// cycle is a Chip that never latches — the caller advances the value.
+func cycle(ctx InspectorCtx, r rl.Rectangle, label string) bool {
+	return Chip(ctx.in, &ctx.st, r, label, false)
 }
 
-// drawCyclicField is drawChip with active=false; caller cycles the value.
-func drawCyclicField(ctx InspectorCtx, x, y, w, h int32, label string) bool {
-	return drawChip(ctx, x, y, w, h, label, false)
-}
-
-func drawToggleRow(ctx InspectorCtx, x, y, w, h int32, label string, on bool) bool {
-	r := rl.Rectangle{X: float32(x), Y: float32(y), Width: float32(w), Height: float32(h)}
-	hover := rectContains(r, ctx.Cursor) && ctx.PanelFocused
-	bg := srChipBG
-	if hover {
-		bg = srChipHover
-	}
-	rl.DrawRectangleRec(r, bg)
-	rl.DrawRectangleLinesEx(r, 1, srChipBorder)
-	mark := "[ ]"
-	markColor := inspectorTextDim
-	if on {
-		mark = "[X]"
-		markColor = srChipActive
-	}
-	drawText(ctx.Font, mark+" "+label, x+4, y+1, inspectorFontSize, markColor)
-	if !on {
-		// Override the dim mark so the label stays readable.
-		drawText(ctx.Font, mark+" "+label, x+4, y+1, inspectorFontSize, inspectorText)
-	}
-	return hover && ctx.LMBPressed
-}
-
-// drawStaminaBar: ratio < 0 means "no readings", drawn as a flat dim
-// track with "-" label.
-func drawStaminaBar(ctx InspectorCtx, x, y, w, h int32, ratio float32) {
-	track := rl.Rectangle{X: float32(x), Y: float32(y), Width: float32(w), Height: float32(h)}
-	rl.DrawRectangleRec(track, srBarTrack)
-	rl.DrawRectangleLinesEx(track, 1, srChipBorder)
+// drawStaminaBar: ratio < 0 means "no readings", drawn as a flat dim track
+// with "-" label.
+func drawStaminaBar(ctx InspectorCtx, r rl.Rectangle, ratio float32) {
 	label := "Stamina: -"
 	if ratio >= 0 {
-		fillW := float32(w-2) * ratio
 		colour := srStaminaHigh
 		if ratio < 0.2 {
 			colour = srStaminaLow
 		} else if ratio < 0.5 {
 			colour = srStaminaMid
 		}
-		rl.DrawRectangle(x+1, y+1, int32(fillW), h-2, colour)
+		Bar(r, ratio, srBarTrack, colour, 1)
 		label = fmt.Sprintf("Stamina: %.0f%%", ratio*100)
+	} else {
+		Bar(r, 0, srBarTrack, rl.Color{}, 1)
 	}
-	drawText(ctx.Font, label, x+4, y+1, inspectorFontSize, inspectorText)
+	rl.DrawRectangleLinesEx(r, 1, srChipBorder)
+	Text(&ctx.st, rl.Rectangle{X: r.X + 4, Y: r.Y + 1}, label, ctx.st.Text)
 }
 
 // squadStaminaAverage returns -1 when no readable Stamina components found.
@@ -408,10 +335,5 @@ func squadStaminaAverage(ctx InspectorCtx, squad ecs.Entity) float32 {
 // profileMatchesPreset uses strict equality so hand-edited fields don't
 // light the chip as "partially active".
 func profileMatchesPreset(p components.MovementProfile, preset components.MovementPreset) bool {
-	want := components.ApplyPreset(preset)
-	return p == want
-}
-
-func rectContains(r rl.Rectangle, c rl.Vector2) bool {
-	return c.X >= r.X && c.X < r.X+r.Width && c.Y >= r.Y && c.Y < r.Y+r.Height
+	return p == components.ApplyPreset(preset)
 }

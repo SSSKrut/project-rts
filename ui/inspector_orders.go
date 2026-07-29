@@ -98,9 +98,9 @@ func drawOrderRow(ctx InspectorCtx, ord ecs.Entity, active bool, x, y, width int
 	return y + inspectorRowH
 }
 
-func drawOrderProgressBar(rowX, rowY, width int32, active bool, stateCode components.OrderStateCode, progress float32) {
-	const padY int32 = 1
-	track := rl.Color{R: 30, G: 35, B: 44, A: 255}
+func drawOrderProgressBar(rowX, rowY, width int32, active bool,
+	stateCode components.OrderStateCode, progress float32) {
+	const padY float32 = 1
 	fill := rl.Color{R: 80, G: 130, B: 200, A: 200}
 	if !active {
 		fill = rl.Color{R: 60, G: 80, B: 120, A: 180}
@@ -108,21 +108,14 @@ func drawOrderProgressBar(rowX, rowY, width int32, active bool, stateCode compon
 	if stateCode == components.OrderStateBlocked || stateCode == components.OrderStateFailed {
 		fill = rl.Color{R: 230, G: 110, B: 80, A: 200}
 	}
-	rowH := inspectorRowH - 2*padY
-	rl.DrawRectangle(rowX, rowY+padY, width, rowH, track)
-	if progress < 0 {
-		progress = 0
+	r := rl.Rectangle{
+		X: float32(rowX), Y: float32(rowY) + padY,
+		Width: float32(width), Height: float32(inspectorRowH) - 2*padY,
 	}
-	if progress > 1 {
-		progress = 1
-	}
-	fillW := int32(float32(width) * progress)
-	if fillW > 0 {
-		rl.DrawRectangle(rowX, rowY+padY, fillW, rowH, fill)
-	}
+	Bar(r, progress, rl.Color{R: 30, G: 35, B: 44, A: 255}, fill, 0)
 	if active {
 		// Bright outline for the head order so the eye locks on it.
-		rl.DrawRectangleLines(rowX, rowY+padY, width, rowH, rl.Color{R: 110, G: 160, B: 220, A: 220})
+		rl.DrawRectangleLinesEx(r, 1, rl.Color{R: 110, G: 160, B: 220, A: 220})
 	}
 }
 
