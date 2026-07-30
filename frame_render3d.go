@@ -7,6 +7,7 @@ import (
 	"github.com/mlange-42/ark/ecs"
 
 	"rts-go/components"
+	"rts-go/render"
 	"rts-go/systems"
 	"rts-go/ui"
 )
@@ -215,7 +216,7 @@ func (g *Game) drawScene3D() {
 			fogged = levelFogged(lm.Level)
 		}
 		renderPos := pos.ToRenderSpace(systems.CurrentOriginChunk)
-		drawBuildingFloor(renderPos, *fl, fogged)
+		render.DrawFloor(renderPos, *fl, fogged)
 		g.Frame.FloorsLive++
 	}
 	g.Frame.WallsLive = 0
@@ -245,14 +246,14 @@ func (g *Game) drawScene3D() {
 			}
 		}
 		renderPos := pos.ToRenderSpace(systems.CurrentOriginChunk)
-		drawBuildingWall(renderPos, *ws, mode, outward, fogged)
+		render.DrawWall(renderPos, *ws, mode, outward, systems.CurrentCamera.Position, fogged)
 		g.Frame.WallsLive++
 	}
 	qst := g.Filt.StairsRender.Query()
 	for qst.Next() {
 		pos, st := qst.Get()
 		renderPos := pos.ToRenderSpace(systems.CurrentOriginChunk)
-		drawBuildingStairs(renderPos, *st)
+		render.DrawStairs(renderPos, *st)
 	}
 
 	// Outline boxes around hovered + selected buildings. 0.15 m pad keeps

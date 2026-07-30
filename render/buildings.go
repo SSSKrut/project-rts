@@ -1,4 +1,8 @@
-package main
+// Package render holds pure draw helpers shared by the game and the
+// generator sandbox. Nothing here touches ECS or game state — inputs are a
+// render-space position plus the component being drawn, so cmd/ tools render
+// exactly what the game renders.
+package render
 
 import (
 	"math"
@@ -6,13 +10,12 @@ import (
 	rl "github.com/gen2brain/raylib-go/raylib"
 
 	"rts-go/components"
-	"rts-go/systems"
 )
 
-// drawBuildingFloor draws a horizontal grey plate at the floor's WorldPos.
+// DrawFloor draws a horizontal grey plate at the floor's render position.
 // Floor.Y is the slab top - drop a thin slab below it. `fogged` desaturates
 // the slab when the level is un-discovered or stale.
-func drawBuildingFloor(pos rl.Vector3, f components.Floor, fogged bool) {
+func DrawFloor(pos rl.Vector3, f components.Floor, fogged bool) {
 	const slabThickness float32 = 0.15
 	col := rl.Color{R: 110, G: 110, B: 120, A: 255}
 	if fogged {
@@ -22,11 +25,12 @@ func drawBuildingFloor(pos rl.Vector3, f components.Floor, fogged bool) {
 	rl.DrawCubeV(c, rl.Vector3{X: f.SizeX, Y: slabThickness, Z: f.SizeZ}, col)
 }
 
-// drawBuildingWall renders a wall segment with optional opening (door /
-// window). WallSegment local axes after Rotatef(Yaw): +Z = along wall, +X =
-// thickness, +Y = up. `outward` is the wall's outward XZ unit vector used by
-// WallRenderCameraFacing to fade walls facing the camera.
-func drawBuildingWall(pos rl.Vector3, w components.WallSegment, mode components.WallRenderMode, outward rl.Vector3, fogged bool) {
+// DrawWall renders a wall segment with optional opening (door / window).
+// WallSegment local axes after Rotatef(Yaw): +Z = along wall, +X = thickness,
+// +Y = up. `outward` is the wall's outward XZ unit vector and `camPos` the
+// render-space camera, used by WallRenderCameraFacing to fade walls facing
+// the camera.
+func DrawWall(pos rl.Vector3, w components.WallSegment, mode components.WallRenderMode, outward rl.Vector3, camPos rl.Vector3, fogged bool) {
 	wallCol := rl.Color{R: 175, G: 170, B: 165, A: 255}
 	doorCol := rl.Color{R: 90, G: 60, B: 35, A: 255}
 	winCol := rl.Color{R: 160, G: 200, B: 230, A: 200}
@@ -47,7 +51,6 @@ func drawBuildingWall(pos rl.Vector3, w components.WallSegment, mode components.
 		c := float32(math.Cos(float64(w.Yaw)))
 		wcx := pos.X + (w.Length*0.5)*s
 		wcz := pos.Z + (w.Length*0.5)*c
-		camPos := systems.CurrentCamera.Position
 		dx := camPos.X - wcx
 		dz := camPos.Z - wcz
 		l := float32(math.Sqrt(float64(dx*dx + dz*dz)))
@@ -125,9 +128,9 @@ func drawBuildingWall(pos rl.Vector3, w components.WallSegment, mode components.
 	rl.PopMatrix()
 }
 
-// drawBuildingStairs draws a tilted slab approximating a stairwell. WorldPos
-// is the bottom-of-stairs anchor; slab tilts up along Yaw (+Z by default).
-func drawBuildingStairs(pos rl.Vector3, s components.Stairs) {
+// DrawStairs draws a tilted slab approximating a stairwell. `pos` is the
+// bottom-of-stairs anchor; the slab tilts up along Yaw (+Z by default).
+func DrawStairs(pos rl.Vector3, s components.Stairs) {
 	col := rl.Color{R: 130, G: 110, B: 95, A: 255}
 	rl.PushMatrix()
 	rl.Translatef(pos.X, pos.Y, pos.Z)
