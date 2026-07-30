@@ -227,8 +227,15 @@ func (b *Builder) addStair(s components.StairSpec) int {
 // don't repeat it. The deck inset is clamped so the flat top never collapses
 // into a ridge.
 func (b *Builder) AddRoof(local rl.Vector3, kind components.RoofKind, sizeX, sizeZ, height, inset float32, levelRef uint8) int {
-	eaveX := sizeX + 2*components.RoofOverhang
-	eaveZ := sizeZ + 2*components.RoofOverhang
+	return b.AddRoofSized(local, kind,
+		sizeX+2*components.RoofOverhang, sizeZ+2*components.RoofOverhang,
+		height, inset, levelRef)
+}
+
+// AddRoofSized takes the eave rectangle verbatim — no overhang added. For roof
+// pieces whose edges must line up with something else (a courtyard gallery,
+// where an overhang would poke into the well).
+func (b *Builder) AddRoofSized(local rl.Vector3, kind components.RoofKind, eaveX, eaveZ, height, inset float32, levelRef uint8) int {
 	if kind == components.RoofFlat {
 		inset = 0
 	}

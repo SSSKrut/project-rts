@@ -20,20 +20,20 @@ import (
 type aiUnitSpawn = func(components.WorldPos) ecs.Entity
 
 const (
-	aiSceneDoorSouth     = "ai_door_south"
-	aiSceneDoorNorth     = "ai_door_north"
-	aiSceneDoorEast      = "ai_door_east"
-	aiSceneDoorWest      = "ai_door_west"
-	aiSceneCompoundSouth = "ai_compound_south"
-	aiSceneCompoundEast  = "ai_compound_east"
-	aiSceneCompoundNorth = "ai_compound_north"
-	aiSceneCompoundWest  = "ai_compound_west"
-	aiSceneCompoundMain  = "ai_compound_main"
+	aiSceneDoorSouth         = "ai_door_south"
+	aiSceneDoorNorth         = "ai_door_north"
+	aiSceneDoorEast          = "ai_door_east"
+	aiSceneDoorWest          = "ai_door_west"
+	aiSceneCompoundSouth     = "ai_compound_south"
+	aiSceneCompoundEast      = "ai_compound_east"
+	aiSceneCompoundNorth     = "ai_compound_north"
+	aiSceneCompoundWest      = "ai_compound_west"
+	aiSceneCompoundMain      = "ai_compound_main"
 	aiSceneCompoundPlusSouth = "ai_compound_plus_south"
 	aiSceneCompoundPlusEast  = "ai_compound_plus_east"
 	aiSceneCompoundPlusNorth = "ai_compound_plus_north"
 	aiSceneCompoundPlusWest  = "ai_compound_plus_west"
-	aiSceneOfficeFront   = "ai_office_front"
+	aiSceneOfficeFront       = "ai_office_front"
 	// ai_office_l2 (ISSUES #20): the office is 3 storeys, so its stairs are
 	// CASCADES — the only template that exercises them. Sending a squad to the
 	// top storey is the integration half of the cascade-anchor fix: with the
@@ -440,8 +440,8 @@ func aiVehicleSceneSpawn(world *ecs.World, vehicleFactory *entities.VehicleFacto
 	tank := vehicleFactory.Spawn(wp(20, 16), components.VehicleTank,
 		components.FactionPlayer, components.ControllerLocal)
 	return &aiTestState{
-		sceneID:      aiSceneID(),
-		vehEnts:      []ecs.Entity{truck, tank},
+		sceneID: aiSceneID(),
+		vehEnts: []ecs.Entity{truck, tank},
 		// Leg 4 sits ~160° behind the leg-3 arrival heading: the truck
 		// (4×TurnRadius = 32 m > 23 m) backs out, the tank pivots.
 		vehWaypoints: []components.WorldPos{wp(55, 28), wp(80, -5), wp(45, -30), wp(60, -12)},
@@ -879,11 +879,11 @@ type aiTestState struct {
 
 	// Set for ai_los_* scenes: verdict counts Contacts on this entity and
 	// tallies Direct/Shared awareness across the roster.
-	losTarget         ecs.Entity
-	losExpectVisible  bool
-	losEarlyAt        float32 // >0: contacts must still be 0 at this time
-	losEarlyDone      bool
-	losEarlyContacts  int
+	losTarget        ecs.Entity
+	losExpectVisible bool
+	losEarlyAt       float32 // >0: contacts must still be 0 at this time
+	losEarlyDone     bool
+	losEarlyContacts int
 
 	// Set for ai_vehicle_* scenes: waypoints go straight into each
 	// vehicle's ActionQueue; verdict = all parked at the final point.
@@ -951,14 +951,14 @@ type aiTestState struct {
 	orderFired  bool
 	verdictDone bool
 
-	World        *ecs.World
-	SquadService *systems.SquadService
-	PosMap       *ecs.Map[components.WorldPos]
-	RosterMap    *ecs.Map[components.CommandRoster]
-	BuildingMap  *ecs.Map[components.Building]
-	MotionMap    *ecs.Map[components.Motion]
+	World         *ecs.World
+	SquadService  *systems.SquadService
+	PosMap        *ecs.Map[components.WorldPos]
+	RosterMap     *ecs.Map[components.CommandRoster]
+	BuildingMap   *ecs.Map[components.Building]
+	MotionMap     *ecs.Map[components.Motion]
 	BlackboardMap *ecs.Map[components.LocalBlackboard]
-	MicroPathMap *ecs.Map[components.MicroPath]
+	MicroPathMap  *ecs.Map[components.MicroPath]
 }
 
 // EnsureInit prints a one-time scene banner.

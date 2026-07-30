@@ -33,6 +33,9 @@ func (g *Game) handleInput() {
 		g.App.TimeScale = nextTimeScale(g.App.TimeScale, -1)
 		g.App.LastNonZeroScale = g.App.TimeScale
 	}
+	if rl.IsKeyPressed(rl.KeyR) {
+		debugOverlay.Roofs = !debugOverlay.Roofs
+	}
 
 	g.Frame.AnchorPos = g.Maps.Pos.Get(g.anchor)
 	g.Frame.AnchorSpeed = float32(20.0)

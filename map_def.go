@@ -118,6 +118,9 @@ func defaultMapDef() mapDef {
 			{Template: "house", Seed: 0xD4, X: 5, Z: 20, Stories: 1, SizeX: 20, SizeZ: 8, DoorSide: 4},
 			{Template: "office", Seed: 0xE5, X: 70, Z: -20},
 			{Template: "compound", Seed: 0xF6, X: -60, Z: 10},
+			// Toroidal experiment: gallery ring around an open well, so a
+			// squad can walk a closed loop indoors.
+			{Template: "courtyard", Seed: 0x2B, X: -20, Z: -60, Stories: 2, SizeX: 22, SizeZ: 18},
 		},
 		Roads: mapRoads{
 			Nodes: [][2]float32{{0, -50}, {15, -15}, {15, 50}, {-50, 80}},
@@ -149,6 +152,19 @@ func (d *mapDef) buildingPlans() []components.BuildingPlan {
 			for _, p := range buildings.GenerateCompound(b.Seed, pos) {
 				plans = append(plans, *p)
 			}
+		case "courtyard":
+			cp := buildings.DefaultCourtyardParams()
+			if b.Stories > 0 {
+				cp.Stories = b.Stories
+			}
+			if b.SizeX > 0 {
+				cp.SizeX = b.SizeX
+			}
+			if b.SizeZ > 0 {
+				cp.SizeZ = b.SizeZ
+			}
+			cp.WellX, cp.WellZ = cp.SizeX*0.42, cp.SizeZ*0.42
+			plans = append(plans, *buildings.GenerateCourtyard(b.Seed, cp, pos))
 		case "compound_plus":
 			for _, p := range buildings.GenerateCompoundPlus(b.Seed, pos) {
 				plans = append(plans, *p)

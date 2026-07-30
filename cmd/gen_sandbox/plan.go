@@ -15,9 +15,10 @@ const (
 	tplOffice
 	tplCompound
 	tplCompoundPlus
+	tplCourtyard
 )
 
-var templateNames = []string{"House", "Office", "Compnd", "Plus"}
+var templateNames = []string{"House", "Office", "Compnd", "Plus", "Court"}
 
 var wallModeNames = []string{"Solid", "Facing", "Wire"}
 
@@ -59,7 +60,11 @@ func (p genParams) paramLive(name string) bool {
 	switch name {
 	case "kind":
 		return p.template == tplHouse
-	case "stories", "size", "doors", "interior":
+	case "stories":
+		return p.template == tplHouse || p.template == tplCourtyard
+	case "size":
+		return p.template == tplHouse || p.template == tplCourtyard
+	case "doors", "interior":
 		return p.template == tplHouse
 	}
 	return true
@@ -92,6 +97,8 @@ func (p genParams) spacing() float32 {
 		return 40
 	case tplOffice:
 		return 24
+	case tplCourtyard:
+		return maxF(p.sizeX, p.sizeZ) + 12
 	}
 	return maxF(p.sizeX, p.sizeZ) + 8
 }
@@ -115,7 +122,7 @@ func (sb *sandbox) rebuild() {
 		for c := 0; c < p.cols; c++ {
 			seed := p.seed
 			stories := p.stories
-			if p.template == tplHouse {
+			if p.template == tplHouse || p.template == tplCourtyard {
 				// Columns walk the seed, rows walk storey count — the two axes
 				// that actually change house geometry.
 				seed = p.seed + uint64(c)*0x9E37
@@ -153,6 +160,13 @@ func buildCell(p genParams, seed uint64, stories int, origin rl.Vector3) cell {
 	case tplCompoundPlus:
 		plans = buildings.GenerateCompoundPlus(seed, pos)
 		label = fmt.Sprintf("compound+ %#x", seed)
+	case tplCourtyard:
+		cp := buildings.DefaultCourtyardParams()
+		cp.Stories = uint8(stories)
+		cp.SizeX, cp.SizeZ = p.sizeX+10, p.sizeZ+10
+		cp.WellX, cp.WellZ = cp.SizeX*0.42, cp.SizeZ*0.42
+		plans = []*components.BuildingPlan{buildings.GenerateCourtyard(seed, cp, pos)}
+		label = fmt.Sprintf("court %#x %dst", seed, stories)
 	default:
 		kind := components.BuildingHouse
 		if p.bunker {

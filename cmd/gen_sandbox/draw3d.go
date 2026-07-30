@@ -95,7 +95,10 @@ func (sb *sandbox) drawPlan(p *components.BuildingPlan, mode components.WallRend
 			if sb.levelFilter >= 0 {
 				continue
 			}
-			render.DrawRoof(planWorld(p, rs.Local), rs.Roof, false)
+			// Always solid here: the sandbox inspects the roof itself, so the
+			// game's camera-angle fade would just get in the way. The Roof
+			// toggle is the explicit control.
+			render.DrawRoof(planWorld(p, rs.Local), rs.Roof, 1, false)
 		}
 	}
 }

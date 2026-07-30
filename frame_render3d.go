@@ -12,6 +12,34 @@ import (
 	"rts-go/ui"
 )
 
+// Roof fade band, in sine-of-pitch. Near the horizon a roof is the building's
+// silhouette and should stay solid; from overhead it is a lid over the floor
+// plan the player is trying to read, so it goes. ~20 deg -> solid, ~45 -> gone.
+const (
+	roofFadeStartSin = 0.34
+	roofFadeEndSin   = 0.71
+)
+
+// roofFadeAlpha maps the camera's downward tilt to roof opacity.
+func roofFadeAlpha(cam rl.Camera3D) float32 {
+	dx := cam.Target.X - cam.Position.X
+	dy := cam.Target.Y - cam.Position.Y
+	dz := cam.Target.Z - cam.Position.Z
+	l := float32(math.Sqrt(float64(dx*dx + dy*dy + dz*dz)))
+	if l < 1e-4 {
+		return 1
+	}
+	// Looking down => dy negative; sin of the depression angle.
+	sinPitch := -dy / l
+	if sinPitch <= roofFadeStartSin {
+		return 1
+	}
+	if sinPitch >= roofFadeEndSin {
+		return 0
+	}
+	return 1 - (sinPitch-roofFadeStartSin)/(roofFadeEndSin-roofFadeStartSin)
+}
+
 // drawScene3D renders the world into the scene render texture: terrain, units,
 // vehicles, props, buildings, debug overlays, ghosts and particles.
 func (g *Game) drawScene3D() {
@@ -256,27 +284,38 @@ func (g *Game) drawScene3D() {
 		render.DrawStairs(renderPos, *st)
 	}
 
-	qrf := g.Filt.RoofRender.Query()
-	for qrf.Next() {
-		pos, rf := qrf.Get()
-		e := qrf.Entity()
-		// The roof caps the TOP level, so the "hide levels above current" rule
-		// only drops it while looking at a lower storey. Any open cutaway must
-		// lose it — otherwise opening the top floor just shows its lid.
-		if member := g.Maps.BuildingMember.Get(e); member != nil {
-			if bvm := g.Maps.BuildingViewMode.Get(member.Building); bvm != nil && bvm.InteriorOpen {
-				continue
+	roofAlpha := roofFadeAlpha(systems.CurrentCamera)
+	if !debugOverlay.Roofs {
+		roofAlpha = 0
+	}
+	// Decide BEFORE opening the query. Breaking out of a live Ark query without
+	// Close() leaves the world locked, and the next tick's first NewEntity
+	// panics in whatever system happens to run first — so gate the whole pass
+	// instead of bailing inside the loop.
+	if roofAlpha > 0.01 {
+		qrf := g.Filt.RoofRender.Query()
+		for qrf.Next() {
+			pos, rf := qrf.Get()
+			e := qrf.Entity()
+			// The roof caps the TOP level, so the "hide levels above current"
+			// rule only drops it while looking at a lower storey. Any open
+			// cutaway must lose it — otherwise opening the top floor just
+			// shows its lid.
+			if member := g.Maps.BuildingMember.Get(e); member != nil {
+				if bvm := g.Maps.BuildingViewMode.Get(member.Building); bvm != nil && bvm.InteriorOpen {
+					continue
+				}
 			}
-		}
-		fogged := false
-		if lm := g.Maps.LevelMember.Get(e); lm != nil {
-			if hiddenLevels[lm.Level] {
-				continue
+			fogged := false
+			if lm := g.Maps.LevelMember.Get(e); lm != nil {
+				if hiddenLevels[lm.Level] {
+					continue
+				}
+				fogged = levelFogged(lm.Level)
 			}
-			fogged = levelFogged(lm.Level)
+			renderPos := pos.ToRenderSpace(systems.CurrentOriginChunk)
+			render.DrawRoof(renderPos, *rf, roofAlpha, fogged)
 		}
-		renderPos := pos.ToRenderSpace(systems.CurrentOriginChunk)
-		render.DrawRoof(renderPos, *rf, fogged)
 	}
 
 	// Outline boxes around hovered + selected buildings. 0.15 m pad keeps

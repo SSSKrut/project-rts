@@ -13,9 +13,15 @@ import (
 // Winding is counter-clockwise seen from OUTSIDE each face, so raylib's
 // default backface culling keeps the shell solid and lets the camera see
 // through it from below when a cutaway removes the top storey.
-func DrawRoof(pos rl.Vector3, r components.Roof, fogged bool) {
-	if r.Kind == components.RoofNone || r.SizeX <= 0 || r.SizeZ <= 0 {
+// `alpha` scales opacity: 1 = solid, 0 = skip entirely. The caller fades a
+// roof out as the camera climbs, because a solid lid hides most of the floor
+// plan underneath it.
+func DrawRoof(pos rl.Vector3, r components.Roof, alpha float32, fogged bool) {
+	if r.Kind == components.RoofNone || r.SizeX <= 0 || r.SizeZ <= 0 || alpha <= 0.01 {
 		return
+	}
+	if alpha > 1 {
+		alpha = 1
 	}
 
 	slopeCol := rl.Color{R: 120, G: 78, B: 62, A: 255}
@@ -24,6 +30,8 @@ func DrawRoof(pos rl.Vector3, r components.Roof, fogged bool) {
 		slopeCol = rl.Color{R: 62, G: 52, B: 50, A: 220}
 		deckCol = rl.Color{R: 70, G: 60, B: 56, A: 220}
 	}
+	slopeCol.A = uint8(float32(slopeCol.A) * alpha)
+	deckCol.A = uint8(float32(deckCol.A) * alpha)
 
 	hx := r.SizeX * 0.5
 	hz := r.SizeZ * 0.5

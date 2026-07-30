@@ -21,9 +21,12 @@ type DebugOverlayState struct {
 	// Sticky twins of the hold-G / hold-K overlays.
 	RoadGraph  bool
 	SquadLines bool
+	// Roofs is a VIEW switch, not an overlay: default on, and it hard-hides
+	// roofs regardless of the camera-angle fade (hotkey R).
+	Roofs bool
 }
 
-var debugOverlay DebugOverlayState
+var debugOverlay = DebugOverlayState{Roofs: true}
 
 func debugOverlayToggles(s *DebugOverlayState) []ui.DebugToggle {
 	return []ui.DebugToggle{
@@ -36,6 +39,7 @@ func debugOverlayToggles(s *DebugOverlayState) []ui.DebugToggle {
 		{Label: "Unit paths", On: &s.UnitPaths},
 		{Label: "Road graph (G)", On: &s.RoadGraph},
 		{Label: "Squad lines (K)", On: &s.SquadLines},
+		{Label: "Roofs (R)", On: &s.Roofs},
 	}
 }
 

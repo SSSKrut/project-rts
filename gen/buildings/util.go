@@ -31,3 +31,7 @@ func vec2Dist(a, b rl.Vector3) float32 {
 	dz := b.Z - a.Z
 	return float32(math.Sqrt(float64(dx*dx + dz*dz)))
 }
+
+// halfPi: stair yaw convention — after Rotatef(yaw,+Y) local +Z runs along the
+// stair, so pi/2 makes a run head along world +X.
+const halfPi float32 = 1.5707963

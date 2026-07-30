@@ -156,6 +156,56 @@ func TestRoofCapsTopStorey(t *testing.T) {
 	}
 }
 
+// TestCourtyardIsAClosedRing locks the toroidal experiment: the well must stay
+// open (no floor strip covers its centre) and be sealed by an inner wall ring
+// on EVERY storey — LevelNavGrid seeds the whole level AABB walkable and only
+// walls carve it, so a missing inner ring means units cut straight across the
+// void instead of walking the loop.
+func TestCourtyardIsAClosedRing(t *testing.T) {
+	for _, seed := range []uint64{0xA1, 0xB2, 0xC3} {
+		for stories := uint8(1); stories <= 4; stories++ {
+			p := DefaultCourtyardParams()
+			p.Stories = stories
+			plan := GenerateCourtyard(seed, p, at(32, 32))
+
+			for _, iss := range Validate(plan) {
+				if iss.Severity == SeverityError {
+					t.Errorf("courtyard %#x/%dst: %s", seed, stories, iss)
+				}
+			}
+
+			cx, cz := plan.Pos.Local.X, plan.Pos.Local.Z
+			for i := range plan.Floors {
+				f := plan.Floors[i]
+				if absF(f.Local.X-cx) < f.Floor.SizeX*0.5 && absF(f.Local.Z-cz) < f.Floor.SizeZ*0.5 {
+					t.Errorf("courtyard %#x/%dst: floor[%d] covers the well centre",
+						seed, stories, i)
+				}
+			}
+
+			// 8 walls per storey: 4 outer + 4 inner.
+			if want := int(stories) * 8; len(plan.Walls) != want {
+				t.Errorf("courtyard %#x/%dst: %d walls, want %d (4 outer + 4 inner per storey)",
+					seed, stories, len(plan.Walls), want)
+			}
+			// A gallery narrower than a stair run cannot be walked around.
+			gx := (p.SizeX - p.WellX) * 0.5
+			gz := (p.SizeZ - p.WellZ) * 0.5
+			if gx < MinGalleryWidth-1e-3 || gz < MinGalleryWidth-1e-3 {
+				t.Errorf("courtyard %#x: gallery %.2f x %.2f below min %.2f",
+					seed, gx, gz, MinGalleryWidth)
+			}
+		}
+	}
+}
+
+func absF(v float32) float32 {
+	if v < 0 {
+		return -v
+	}
+	return v
+}
+
 // TestMultiStoreyHasStairs guards the other direction: a building with N
 // storeys must actually offer a way up, or OccupyBuilding on an upper level is
 // unreachable.
