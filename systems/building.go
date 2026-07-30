@@ -39,6 +39,7 @@ type BuildingSystem struct {
 	lodRelevantMap      *ecs.Map[components.LODRelevant]
 	levelMap            *ecs.Map[components.Level]
 	transitionMap       *ecs.Map[components.LevelTransition]
+	roofMap             *ecs.Map[components.Roof]
 	furnitureMap        *ecs.Map[components.Furniture]
 	markerMap           *ecs.Map[components.Marker]
 	stamper             *Stamper
@@ -72,6 +73,7 @@ func (sys *BuildingSystem) InitUI(w *ecs.World) {
 	sys.lodRelevantMap = ecs.NewMap[components.LODRelevant](w)
 	sys.levelMap = ecs.NewMap[components.Level](w)
 	sys.transitionMap = ecs.NewMap[components.LevelTransition](w)
+	sys.roofMap = ecs.NewMap[components.Roof](w)
 	sys.furnitureMap = ecs.NewMap[components.Furniture](w)
 	sys.markerMap = ecs.NewMap[components.Marker](w)
 	sys.stamper = NewStamper(w)
@@ -339,6 +341,24 @@ func (sys *BuildingSystem) spawnBuilding(ctx core.UpdateContext, idx *BuildingCh
 			toLev = resolveLevel(ss.Anchors[len(ss.Anchors)-1].LevelRef)
 		}
 		sys.stairLevelsMap.Add(e, &components.StairLevels{From: fromLev, To: toLev})
+		idx.Loaded[root] = append(idx.Loaded[root], e)
+	}
+
+	for i := range plan.Roofs {
+		rs := &plan.Roofs[i]
+		cc, local, hit := localToTarget(rs.Local)
+		if !hit {
+			continue
+		}
+		e := ctx.World.NewEntity()
+		sys.posMap.Add(e, &components.WorldPos{Chunk: cc, Local: local})
+		sys.memberMap.Add(e, &components.BuildingMember{Building: root})
+		sys.lodRelevantMap.Add(e, &components.LODRelevant{})
+		if lev := resolveLevel(rs.LevelRef); lev != (ecs.Entity{}) {
+			sys.levelMemberMap.Add(e, &components.LevelMember{Level: lev})
+		}
+		rf := rs.Roof
+		sys.roofMap.Add(e, &rf)
 		idx.Loaded[root] = append(idx.Loaded[root], e)
 	}
 

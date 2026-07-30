@@ -72,9 +72,18 @@ type BuildingPlan struct {
 	Walls            []WallSpec
 	Floors           []FloorSpec
 	Stairs           []StairSpec
+	Roofs            []RoofSpec
 	Furniture        []FurnitureSpec
 	Markers          []MarkerSpec
 	LevelTransitions []LevelTransitionSpec
+}
+
+// RoofSpec is one roof cap. LevelRef names the top storey so the cutaway
+// renderer can drop the roof together with the level it sits on.
+type RoofSpec struct {
+	Local    rl.Vector3
+	Roof     Roof
+	LevelRef uint8
 }
 
 type BuildingPlanList struct {
@@ -322,6 +331,39 @@ type Stairs struct {
 	Width     float32
 	Rise      float32
 }
+
+type RoofKind uint8
+
+const (
+	RoofNone RoofKind = iota
+	// RoofFlat is a plain deck at eave height — no slope at all.
+	RoofFlat
+	// RoofTruncHip slopes in from all four eaves to a flat top deck: the
+	// silhouette of a hip roof without the ridge maths, and the deck is a
+	// usable surface later (parapet / firing position — GAMEDESIGN P6).
+	RoofTruncHip
+)
+
+// Roof caps the top storey. WorldPos is the CENTRE of the eave rectangle at
+// eave height (same centre convention as Floor). SizeX/SizeZ already include
+// the overhang, so the renderer needs no wall context. Inset is the
+// horizontal pull-in per side from eave to deck; Inset == 0 degenerates to a
+// flat slab, which is exactly RoofFlat.
+type Roof struct {
+	Kind   RoofKind
+	SizeX  float32
+	SizeZ  float32
+	Height float32
+	Inset  float32
+}
+
+const (
+	RoofOverhang  float32 = 0.35
+	RoofThickness float32 = 0.18
+	// A deck narrower than this reads as a ridge, not a surface — clamp the
+	// inset instead so the flat top stays walkable-looking.
+	RoofMinDeck float32 = 1.6
+)
 
 type Occupancy struct {
 	Max     uint8

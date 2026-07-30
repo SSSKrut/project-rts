@@ -109,6 +109,23 @@ func GenerateHouse(seed uint64, p HouseParams, pos components.WorldPos, kind com
 		b.AddFloor(rl.Vector3{X: cx, Y: baseY, Z: cz}, p.SizeX, p.SizeZ, s, levelRefs[s])
 	}
 
+	// Roof caps the top storey. Bunkers get none — they are sunken, their lid
+	// is the ground itself, and a slope poking out of the pit reads wrong.
+	if kind != components.BuildingBunker {
+		roofRoll := splitMix64(seed ^ 0x8F17)
+		height := 1.3 + 0.9*hashFloatU64(roofRoll)
+		insetFrac := 0.20 + 0.16*hashFloatU64(splitMix64(roofRoll^0x5C5C))
+		topY := floorY + float32(p.Stories)*components.FloorHeight
+		b.AddRoof(
+			rl.Vector3{X: cx, Y: topY, Z: cz},
+			components.RoofTruncHip,
+			p.SizeX, p.SizeZ,
+			height,
+			minF(p.SizeX, p.SizeZ)*insetFrac,
+			levelRefs[p.Stories-1],
+		)
+	}
+
 	// Straight ladder for 2 storeys, switchback cascade for 3+. Cascade
 	// footprint = StairsLength x 2*StairsWidth, fits in the SW corner of an
 	// 8x8 plate. Tucked at minX+inset so the centre stays clear.

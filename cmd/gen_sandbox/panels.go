@@ -173,6 +173,10 @@ func (sb *sandbox) drawParamPanel(in ui.WidgetInput) {
 	if ui.Toggle(in, st, ui.SplitX(row, 1, 2, 3), "Box", sb.showFootprint) {
 		sb.showFootprint = !sb.showFootprint
 	}
+	row = col.Row(st.RowH)
+	if ui.Toggle(in, st, row, "Roof", sb.showRoof) {
+		sb.showRoof = !sb.showRoof
+	}
 
 	col.Skip(8)
 	ui.TextRow(&col, st, "MMB/RMB orbit  wheel zoom", st.TextDim)
@@ -290,7 +294,7 @@ func (sb *sandbox) drawStatusBar() {
 	rl.DrawLineEx(rl.Vector2{X: 0, Y: r.Y}, rl.Vector2{X: w, Y: r.Y}, 1, colPanelHR)
 
 	st := &sb.style
-	var walls, floors, stairs, levels, split int
+	var walls, floors, stairs, levels, roofs, split int
 	for i := range sb.cells {
 		c := &sb.cells[i]
 		for _, p := range c.plans {
@@ -298,6 +302,7 @@ func (sb *sandbox) drawStatusBar() {
 			floors += len(p.Floors)
 			stairs += len(p.Stairs)
 			levels += len(p.Levels)
+			roofs += len(p.Roofs)
 		}
 		if c.oversize {
 			split++
@@ -305,9 +310,9 @@ func (sb *sandbox) drawStatusBar() {
 	}
 
 	col := ui.Column{X: panelPad, Y: r.Y + 5, W: w - 2*panelPad, Gap: 1}
-	line1 := fmt.Sprintf("%s   cells %d   plans %d   walls %d   floors %d   stairs %d   levels %d",
+	line1 := fmt.Sprintf("%s   cells %d   plans %d   walls %d   floors %d   stairs %d   levels %d   roofs %d",
 		templateNames[sb.params.template], len(sb.cells), totalPlans(sb.cells),
-		walls, floors, stairs, levels)
+		walls, floors, stairs, levels, roofs)
 	ui.TextRow(&col, st, line1, st.Text)
 
 	if len(sb.cells) > 0 {

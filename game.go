@@ -140,6 +140,7 @@ type gameFilters struct {
 	WallRender    *ecs.Filter2[components.WorldPos, components.WallSegment]
 	FloorRender   *ecs.Filter2[components.WorldPos, components.Floor]
 	StairsRender  *ecs.Filter2[components.WorldPos, components.Stairs]
+	RoofRender    *ecs.Filter2[components.WorldPos, components.Roof]
 	LevelCutaway  *ecs.Filter2[components.Level, components.BuildingMember]
 	NavOverlay    *ecs.Filter4[components.WorldPos, components.ChunkCoord, components.NavGrid, components.Heightmap]
 	CoverOverlay  *ecs.Filter4[components.WorldPos, components.ChunkCoord, components.CoverMap, components.Heightmap]

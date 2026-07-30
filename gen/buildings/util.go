@@ -19,6 +19,13 @@ func hashFloatU64(h uint64) float32 {
 	return float32(h>>40) / float32(1<<24)
 }
 
+func minF(a, b float32) float32 {
+	if a < b {
+		return a
+	}
+	return b
+}
+
 func vec2Dist(a, b rl.Vector3) float32 {
 	dx := b.X - a.X
 	dz := b.Z - a.Z

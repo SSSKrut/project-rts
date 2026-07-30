@@ -360,6 +360,7 @@ func (g *Game) initRenderHandles() {
 	g.Filt.WallRender = ecs.NewFilter2[components.WorldPos, components.WallSegment](g.App.World)
 	g.Filt.FloorRender = ecs.NewFilter2[components.WorldPos, components.Floor](g.App.World)
 	g.Filt.StairsRender = ecs.NewFilter2[components.WorldPos, components.Stairs](g.App.World)
+	g.Filt.RoofRender = ecs.NewFilter2[components.WorldPos, components.Roof](g.App.World)
 	g.Filt.LevelCutaway = ecs.NewFilter2[components.Level, components.BuildingMember](g.App.World)
 	g.Maps.LevelMember = ecs.NewMap[components.LevelMember](g.App.World)
 	g.Maps.CoverDirRead = ecs.NewMap[components.CoverDirection](g.App.World)

@@ -163,6 +163,21 @@ func (b *Builder) AddCascadeStair(local rl.Vector3, yaw float32, fromLevelRef, t
 	usmidX, usmidZ := rotate(components.StairsWidth, 0)
 	upperEnd := rl.Vector3{X: usmidX, Y: local.Y + components.FloorHeight, Z: usmidZ}
 
+	// Both flights anchor BOTH endpoints to the pair of levels the cascade
+	// bridges — including the mid landing, which belongs to no level of its
+	// own. One anchor per flight would make spawnBuilding derive
+	// StairLevels{From: L, To: L} (it reads Anchors[0] and Anchors[len-1]),
+	// and the transition baker reads From == To as "bunker entrance" and wires
+	// level<->surface instead of level<->level: a 3+ storey building would
+	// then have no stair edge between its floors at all (ISSUES #20).
+	// Together the two flights decompose the climb as
+	// L(s)[bottom] -> landing -> L(s+1)[top].
+	anchors := func() []components.StairAnchor {
+		return []components.StairAnchor{
+			{WpIndex: 0, LevelRef: fromLevelRef},
+			{WpIndex: 1, LevelRef: toLevelRef},
+		}
+	}
 	lowerIdx := b.addStair(components.StairSpec{
 		Local: lowerStart,
 		Stairs: components.Stairs{
@@ -173,9 +188,7 @@ func (b *Builder) AddCascadeStair(local rl.Vector3, yaw float32, fromLevelRef, t
 			Rise:   components.FloorHeight * 0.5,
 		},
 		Waypoints: []rl.Vector3{lowerStart, lowerMid},
-		Anchors: []components.StairAnchor{
-			{WpIndex: 0, LevelRef: fromLevelRef},
-		},
+		Anchors:   anchors(),
 	})
 	upperIdx := b.addStair(components.StairSpec{
 		Local: lowerMid,
@@ -187,9 +200,7 @@ func (b *Builder) AddCascadeStair(local rl.Vector3, yaw float32, fromLevelRef, t
 			Rise:   components.FloorHeight * 0.5,
 		},
 		Waypoints: []rl.Vector3{lowerMid, upperEnd},
-		Anchors: []components.StairAnchor{
-			{WpIndex: 1, LevelRef: toLevelRef},
-		},
+		Anchors:   anchors(),
 	})
 	return lowerIdx, upperIdx
 }
@@ -208,6 +219,37 @@ func (b *Builder) AddCustomStair(local rl.Vector3, stairs components.Stairs, way
 func (b *Builder) addStair(s components.StairSpec) int {
 	idx := len(b.plan.Stairs)
 	b.plan.Stairs = append(b.plan.Stairs, s)
+	return idx
+}
+
+// AddRoof caps a storey. `local` is the CENTRE of the eave rectangle at eave
+// height; sizeX/sizeZ are wall extents, the overhang is added here so callers
+// don't repeat it. The deck inset is clamped so the flat top never collapses
+// into a ridge.
+func (b *Builder) AddRoof(local rl.Vector3, kind components.RoofKind, sizeX, sizeZ, height, inset float32, levelRef uint8) int {
+	eaveX := sizeX + 2*components.RoofOverhang
+	eaveZ := sizeZ + 2*components.RoofOverhang
+	if kind == components.RoofFlat {
+		inset = 0
+	}
+	if maxInset := (minF(eaveX, eaveZ) - components.RoofMinDeck) * 0.5; inset > maxInset {
+		inset = maxInset
+	}
+	if inset < 0 {
+		inset = 0
+	}
+	idx := len(b.plan.Roofs)
+	b.plan.Roofs = append(b.plan.Roofs, components.RoofSpec{
+		Local: local,
+		Roof: components.Roof{
+			Kind:   kind,
+			SizeX:  eaveX,
+			SizeZ:  eaveZ,
+			Height: height,
+			Inset:  inset,
+		},
+		LevelRef: levelRef,
+	})
 	return idx
 }
 

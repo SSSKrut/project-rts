@@ -256,6 +256,29 @@ func (g *Game) drawScene3D() {
 		render.DrawStairs(renderPos, *st)
 	}
 
+	qrf := g.Filt.RoofRender.Query()
+	for qrf.Next() {
+		pos, rf := qrf.Get()
+		e := qrf.Entity()
+		// The roof caps the TOP level, so the "hide levels above current" rule
+		// only drops it while looking at a lower storey. Any open cutaway must
+		// lose it — otherwise opening the top floor just shows its lid.
+		if member := g.Maps.BuildingMember.Get(e); member != nil {
+			if bvm := g.Maps.BuildingViewMode.Get(member.Building); bvm != nil && bvm.InteriorOpen {
+				continue
+			}
+		}
+		fogged := false
+		if lm := g.Maps.LevelMember.Get(e); lm != nil {
+			if hiddenLevels[lm.Level] {
+				continue
+			}
+			fogged = levelFogged(lm.Level)
+		}
+		renderPos := pos.ToRenderSpace(systems.CurrentOriginChunk)
+		render.DrawRoof(renderPos, *rf, fogged)
+	}
+
 	// Outline boxes around hovered + selected buildings. 0.15 m pad keeps
 	// the wireframe legible against wall surfaces.
 	drawBuildingOutline := func(root ecs.Entity, color rl.Color) {

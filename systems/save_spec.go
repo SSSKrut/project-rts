@@ -131,6 +131,7 @@ var saveComponents = map[string]saveEntry{
 	"components.Door":                     saveReg[components.Door](SaveMemcpy),
 	"components.Window":                   saveReg[components.Window](SaveMemcpy),
 	"components.Floor":                    saveReg[components.Floor](SaveMemcpy),
+	"components.Roof":                     saveReg[components.Roof](SaveMemcpy),
 	"components.Stairs":                   saveReg[components.Stairs](SaveMemcpy),
 	"components.StairLevels":              saveReg[components.StairLevels](SaveMemcpy),
 	"components.Furniture":                saveReg[components.Furniture](SaveMemcpy),

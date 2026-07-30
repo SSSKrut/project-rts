@@ -183,7 +183,11 @@ func buildCell(p genParams, seed uint64, stories int, origin rl.Vector3) cell {
 		c.bounds.MinZ = minF(c.bounds.MinZ, fp.MinZ)
 		c.bounds.MaxX = maxF(c.bounds.MaxX, fp.MaxX)
 		c.bounds.MaxZ = maxF(c.bounds.MaxZ, fp.MaxZ)
-		c.topY = maxF(c.topY, float32(pl.Stories)*components.FloorHeight)
+		roofH := float32(0)
+		for ri := range pl.Roofs {
+			roofH = maxF(roofH, pl.Roofs[ri].Roof.Height)
+		}
+		c.topY = maxF(c.topY, float32(pl.Stories)*components.FloorHeight+roofH)
 
 		for _, iss := range buildings.Validate(pl) {
 			c.issues = append(c.issues, cellIssue{planIdx: i, iss: iss})

@@ -87,6 +87,17 @@ func (sb *sandbox) drawPlan(p *components.BuildingPlan, mode components.WallRend
 		}
 		render.DrawStairs(planWorld(p, ss.Local), ss.Stairs)
 	}
+	if sb.showRoof {
+		for i := range p.Roofs {
+			rs := &p.Roofs[i]
+			// A level filter means "show me that storey" — the roof would sit
+			// on top of it and hide exactly what was asked for.
+			if sb.levelFilter >= 0 {
+				continue
+			}
+			render.DrawRoof(planWorld(p, rs.Local), rs.Roof, false)
+		}
+	}
 }
 
 func (sb *sandbox) levelVisible(ref int) bool {

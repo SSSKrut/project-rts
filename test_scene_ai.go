@@ -34,7 +34,13 @@ const (
 	aiSceneCompoundPlusNorth = "ai_compound_plus_north"
 	aiSceneCompoundPlusWest  = "ai_compound_plus_west"
 	aiSceneOfficeFront   = "ai_office_front"
-	aiSceneFarBuilding   = "ai_far_building"
+	// ai_office_l2 (ISSUES #20): the office is 3 storeys, so its stairs are
+	// CASCADES — the only template that exercises them. Sending a squad to the
+	// top storey is the integration half of the cascade-anchor fix: with the
+	// old single-anchor flights the bake wired stairs to the exterior surface
+	// and no path to L2 existed at all.
+	aiSceneOfficeL2    = "ai_office_l2"
+	aiSceneFarBuilding = "ai_far_building"
 
 	// ai_main_* run on the REAL main-map world data (mainWorldBuildings +
 	// roads + trenches) and send the squad into one specific section / storey
@@ -122,6 +128,9 @@ func aiMainSpecFor(id string) (aiMainSpec, bool) {
 		return aiMainSpec{wingX: -50, wingZ: 10, levelIdx: 0}, true
 	case aiSceneMainN:
 		return aiMainSpec{wingX: -60, wingZ: 20, levelIdx: 0}, true
+	// The office on the REAL main map (70, -20) — 3 storeys, cascade stairs.
+	case aiSceneOfficeL2:
+		return aiMainSpec{wingX: 70, wingZ: -20, levelIdx: 2}, true
 	}
 	return aiMainSpec{}, false
 }
@@ -160,6 +169,8 @@ func aiSceneAnchorPos() components.WorldPos {
 		return components.WorldPos{}.Add(rl.Vector3{X: 32, Z: 26})
 	case aiSceneOfficeFront:
 		return components.WorldPos{}.Add(rl.Vector3{X: 32, Z: 22})
+	case aiSceneOfficeL2:
+		return components.WorldPos{}.Add(rl.Vector3{X: 66, Z: -29})
 	case aiSceneFarBuilding:
 		return components.WorldPos{}.Add(rl.Vector3{X: 0, Z: 0})
 	case aiSceneMainM0, aiSceneMainM1, aiSceneMainE, aiSceneMainN:
@@ -335,6 +346,8 @@ func aiSpawnPos() components.WorldPos {
 		return components.WorldPos{}.Add(rl.Vector3{X: 10, Z: 32})
 	case aiSceneOfficeFront:
 		return components.WorldPos{}.Add(rl.Vector3{X: 32, Z: 18})
+	case aiSceneOfficeL2:
+		return components.WorldPos{}.Add(rl.Vector3{X: 70, Z: -33})
 	case aiSceneFarBuilding:
 		return components.WorldPos{}.Add(rl.Vector3{X: 0, Z: 0})
 	case aiSceneMainM0, aiSceneMainM1, aiSceneMainE, aiSceneMainN:

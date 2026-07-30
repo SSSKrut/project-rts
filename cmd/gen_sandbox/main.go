@@ -43,10 +43,11 @@ type sandbox struct {
 	focused int
 
 	// View
-	wallMode   int // index into wallModeNames
-	levelFilter int // -1 = all levels, else level index
-	showGrid   bool
+	wallMode      int // index into wallModeNames
+	levelFilter   int // -1 = all levels, else level index
+	showGrid      bool
 	showFootprint bool
+	showRoof      bool
 
 	// Camera
 	yaw, pitch, dist float32
@@ -104,6 +105,7 @@ func main() {
 		levelFilter:   -1,
 		showGrid:      true,
 		showFootprint: true,
+		showRoof:      true,
 		yaw:           float32(math.Pi * 0.25),
 		pitch:         float32(math.Pi * 0.17),
 		dist:          38,
