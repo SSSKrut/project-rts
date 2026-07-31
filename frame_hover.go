@@ -22,11 +22,9 @@ func (g *Game) updateHover() {
 	case ui.PanelMap:
 		mapCtx := ui.MapRenderCtx{
 			World: g.App.World, Cam: g.UI.MapCam, SquadFilter: g.Filt.Squad,
-			SquadCenter:        g.squadCenter,
-			MapMarkerCache:     &g.Res.MapMarkerCache,
-			ContactFilter:      g.Filt.Contact,
-			ContactMap:         g.Maps.Contact,
-			ContactOverrideMap: g.Maps.ContactOverride,
+			SquadCenter:    g.squadCenter,
+			MapMarkerCache: &g.Res.MapMarkerCache,
+			Clusters:       &g.Frame.MapClusters,
 		}
 		if h := ui.PickContactAt(g.Frame.Cursor, mapCtx, g.Frame.PanelMap, 14); h != (ecs.Entity{}) {
 			g.Sel.Hovered = h

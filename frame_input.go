@@ -255,8 +255,7 @@ func (g *Game) handleInput() {
 				World: g.App.World, Cam: g.UI.MapCam, SquadFilter: g.Filt.Squad,
 				SquadCenter:    g.squadCenter,
 				MapMarkerCache: &g.Res.MapMarkerCache,
-				ContactFilter:  g.Filt.Contact,
-				ContactMap:     g.Maps.Contact,
+				Clusters:       &g.Frame.MapClusters,
 			}
 			now := g.Svc.Squad.Clock()
 			const doubleClickWindow float32 = 0.35

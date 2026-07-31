@@ -28,8 +28,7 @@ func (g *Game) handleOrders() {
 			World: g.App.World, Cam: g.UI.MapCam, SquadFilter: g.Filt.Squad,
 			SquadCenter:    g.squadCenter,
 			MapMarkerCache: &g.Res.MapMarkerCache,
-			ContactFilter:  g.Filt.Contact,
-			ContactMap:     g.Maps.Contact,
+			Clusters:       &g.Frame.MapClusters,
 		}
 		if hit := ui.PickContactAt(g.Frame.Cursor, mapCtx, g.Frame.PanelMap, 14); hit != (ecs.Entity{}) && g.App.World.Alive(hit) {
 			sections := ui.BuildContactContextSections(&g.Res.Symbology)

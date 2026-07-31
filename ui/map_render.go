@@ -48,10 +48,9 @@ type MapRenderCtx struct {
 	SmoothedSquadPos map[ecs.Entity]components.WorldPos
 	MapPingFilter    *ecs.Filter2[components.WorldPos, components.MapPing]
 	Clock            float32
-	// Contacts — Phase 18.5 FoW. Nil filter → contact rendering skipped.
-	ContactFilter      *ecs.Filter1[components.Contact]
-	ContactMap         *ecs.Map[components.Contact]
-	ContactOverrideMap *ecs.Map[components.ContactSymbolOverride]
+	// Contacts — Phase 18.5 FoW, grouped into formations once per frame by
+	// ContactClusterSet.Rebuild. Nil → contact rendering and picking skipped.
+	Clusters *ContactClusterSet
 	// LOS preview (hold V) mirrored from the 3D overlay. Empty runs → skip.
 	LOSFanOrigin  components.WorldPos
 	LOSFanRuns    [][]components.VisRun

@@ -327,6 +327,11 @@ type frameState struct {
 	GhostTarget   components.WorldPos
 	GhostTargetOK bool
 
+	// Contact formations for the map, rebuilt once per frame after the tick.
+	// Input runs before the next Advance, so the set the pick path reads is
+	// exactly the one that was drawn.
+	MapClusters ui.ContactClusterSet
+
 	// Counters accumulated by drawScene3D, consumed by drawUI's census.
 	ChunksActive int
 	ChunksRel    int

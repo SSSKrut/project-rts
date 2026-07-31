@@ -31,6 +31,54 @@ func DrawSymbol(spec components.SymbolSpec, center rl.Vector2, half float32, alp
 	outline.A = uint8(float32(outline.A) * alpha)
 	drawSymbolFrame(spec.Affiliation, center, half, fill, outline)
 	drawSymbolIcon(spec.Icon, center, half, outline)
+	drawEchelon(spec, center, half, outline)
+}
+
+// drawEchelon stamps the APP-6 size marker above the frame: dots up to a
+// platoon, bars from a company. Team is bare by the standard, so an
+// aggregate of two or three tracks carries no marker at all.
+func drawEchelon(spec components.SymbolSpec, c rl.Vector2, half float32, col rl.Color) {
+	dots, bars := 0, 0
+	switch spec.Echelon {
+	case components.EchelonSquad:
+		dots = 1
+	case components.EchelonSection:
+		dots = 2
+	case components.EchelonPlatoon:
+		dots = 3
+	case components.EchelonCompany:
+		bars = 1
+	case components.EchelonBattalion:
+		bars = 2
+	case components.EchelonBrigade:
+		bars = 3
+	default:
+		return
+	}
+	top := SymbolBounds(spec.Affiliation, c, half).Y
+	r := half * 0.18
+	if r < 1.3 {
+		r = 1.3
+	}
+	if dots > 0 {
+		step := r * 3
+		x := c.X - step*float32(dots-1)*0.5
+		y := top - r - 2
+		for i := 0; i < dots; i++ {
+			rl.DrawCircleV(rl.Vector2{X: x + step*float32(i), Y: y}, r, col)
+		}
+		return
+	}
+	w := r * 0.9
+	h := r * 3
+	step := w * 2.6
+	x := c.X - step*float32(bars-1)*0.5
+	y := top - h - 2
+	for i := 0; i < bars; i++ {
+		rl.DrawRectangleRec(rl.Rectangle{
+			X: x + step*float32(i) - w*0.5, Y: y, Width: w, Height: h,
+		}, col)
+	}
 }
 
 // SymbolBounds is the frame's screen rectangle. Selection rings and hit
