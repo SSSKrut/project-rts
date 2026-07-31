@@ -558,14 +558,11 @@ func (g *Game) drawScene3D() {
 		g.Frame.GhostTarget = g.UI.RMB.PressTarget
 		g.Frame.GhostTargetOK = true
 	}
-	// Popup-hover swaps ghost placement per kind; anchored at press-time target.
-	var ghostPopupKind *components.OrderKindCode
-	var ghostPopupLevel ecs.Entity
+	// Popup-hover swaps ghost placement per item; anchored at press-time target.
+	var ghostPopupItem *ui.ContextMenuItem
 	if g.UI.CtxMenu.IsActive() {
 		if item, ok := g.UI.CtxMenu.HoveredItemDetails(); ok {
-			k := item.Kind
-			ghostPopupKind = &k
-			ghostPopupLevel = item.LevelEntity
+			ghostPopupItem = &item
 		}
 		g.Frame.GhostTarget = g.UI.RMB.PressTarget
 		g.Frame.GhostTargetOK = true
@@ -573,9 +570,10 @@ func (g *Game) drawScene3D() {
 	drawVehicleRoutes(g.Ctx.Route, g.Sel.Units,
 		g.Frame.Focused == ui.Panel3D && g.Frame.GhostTargetOK, g.Frame.GhostTarget)
 	drawSelectionGhost(g.Ctx.Ghost, g.Sel.Units, g.Frame.Focused == ui.Panel3D, g.Frame.GhostTarget, g.Frame.GhostTargetOK,
-		ghostDragFacing, ghostPopupKind, ghostPopupLevel, g.Maps.Level)
+		ghostDragFacing, ghostPopupItem, g.UI.RMB.HoveredBldg, g.UI.RMB.PressRaw, g.Maps.Level)
 
 	drawOrderMarkers3D(g.Ctx.OrderMarker, g.Sel.Units)
+	drawAssignedBuildingSlots(g.Ctx.Ghost, g.Sel.Units)
 
 	// Translucent: after every opaque draw, or the depth write would
 	// reject whatever stands beyond the surface.

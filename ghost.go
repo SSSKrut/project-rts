@@ -8,6 +8,7 @@ import (
 
 	"rts-go/components"
 	"rts-go/systems"
+	"rts-go/ui"
 )
 
 const ghostBodyAlpha uint8 = 80
@@ -23,17 +24,114 @@ type ghostContext struct {
 	movementMap      *ecs.Map[components.MovementProfile]
 	squadMemberMap   *ecs.Map[components.SquadMember]
 
-	hitTester      *HitTester
-	buildingIndex  *systems.BuildingChildIndex
-	wallMap        *ecs.Map[components.WallSegment]
-	windowMap      *ecs.Map[components.Window]
-	floorMap       *ecs.Map[components.Floor]
-	levelMemberMap *ecs.Map[components.LevelMember]
-	levelMap       *ecs.Map[components.Level]
-	trenches       *components.TrenchNetwork
-	trenchRootMap  *ecs.Map[components.TrenchRoot]
-	vehicleMap     *ecs.Map[components.Vehicle]
-	squadColor     func(ent ecs.Entity) rl.Color
+	hitTester     *HitTester
+	slotPlanner   *systems.BuildingSlotPlanner
+	levelMap      *ecs.Map[components.Level]
+	trenches      *components.TrenchNetwork
+	trenchRootMap *ecs.Map[components.TrenchRoot]
+	vehicleMap    *ecs.Map[components.Vehicle]
+	squadColor    func(ent ecs.Entity) rl.Color
+
+	// Committed-order slot markers (drawAssignedBuildingSlots).
+	orderQueueMap      *ecs.Map[components.OrderQueueHead]
+	orderKindMap       *ecs.Map[components.OrderKind]
+	orderTargetMap     *ecs.Map[components.OrderTarget]
+	orderFacingMap     *ecs.Map[components.OrderParamFacing]
+	orderEngagementMap *ecs.Map[components.OrderParamEngagementOverride]
+}
+
+// buildingPolicyForOrder mirrors FormationSystem's policy switch: one
+// place per consumer would drift.
+func buildingPolicyForOrder(g *ghostContext, ord ecs.Entity, kind components.OrderKindCode) (systems.SlotPolicy, bool) {
+	switch kind {
+	case components.OrderKindGarrison:
+		return systems.SlotWindows, true
+	case components.OrderKindClearBuilding:
+		return systems.SlotGroundFloor, true
+	case components.OrderKindOccupyBuilding:
+		if g.orderEngagementMap != nil && g.orderEngagementMap.Has(ord) {
+			return systems.SlotHidden, true
+		}
+		return systems.SlotRooms, true
+	}
+	return systems.SlotRooms, false
+}
+
+// drawAssignedBuildingSlots marks the planned interior slots of every
+// selected squad whose head order is a building order — the committed
+// counterpart of the hover ghost (squad-colour, dim).
+func drawAssignedBuildingSlots(g *ghostContext, selected []ecs.Entity) {
+	if g == nil || g.slotPlanner == nil || g.orderQueueMap == nil {
+		return
+	}
+	var squads []ecs.Entity
+	for _, e := range selected {
+		if e == (ecs.Entity{}) || !g.world.Alive(e) {
+			continue
+		}
+		sm := g.squadMemberMap.Get(e)
+		if sm == nil || sm.Squad == (ecs.Entity{}) {
+			continue
+		}
+		dup := false
+		for _, s := range squads {
+			if s == sm.Squad {
+				dup = true
+				break
+			}
+		}
+		if !dup {
+			squads = append(squads, sm.Squad)
+		}
+	}
+	for _, squad := range squads {
+		if !g.world.Alive(squad) {
+			continue
+		}
+		head := g.orderQueueMap.Get(squad)
+		if head == nil || head.First == (ecs.Entity{}) || !g.world.Alive(head.First) {
+			continue
+		}
+		kind := g.orderKindMap.Get(head.First)
+		if kind == nil {
+			continue
+		}
+		policy, ok := buildingPolicyForOrder(g, head.First, kind.Code)
+		if !ok {
+			continue
+		}
+		tgt := g.orderTargetMap.Get(head.First)
+		if tgt == nil || tgt.Entity == (ecs.Entity{}) {
+			continue
+		}
+		roster := g.rosterMap.Get(squad)
+		if roster == nil || roster.Count == 0 {
+			continue
+		}
+		hasFacing := false
+		var yaw float32
+		if f := g.orderFacingMap.Get(head.First); f != nil {
+			hasFacing = true
+			yaw = f.YawRad
+		}
+		slots := g.slotPlanner.PlanSlots(tgt.Entity, policy, int(roster.Count), hasFacing, yaw)
+		col := rl.Color{R: 200, G: 200, B: 220, A: 255}
+		if g.squadColor != nil {
+			col = g.squadColor(squad)
+		}
+		for _, s := range slots {
+			c := s.Pos.ToRenderSpace(systems.CurrentOriginChunk)
+			c.Y += 0.12
+			rl.DrawCubeV(c, rl.Vector3{X: 0.35, Y: 0.06, Z: 0.35},
+				rl.Color{R: col.R, G: col.G, B: col.B, A: 120})
+			if s.Window {
+				tip := c
+				tip.X += 0.5 * float32(math.Sin(float64(s.Yaw)))
+				tip.Z += 0.5 * float32(math.Cos(float64(s.Yaw)))
+				rl.DrawLine3D(c, tip, rl.Color{R: col.R, G: col.G, B: col.B, A: 170})
+			}
+		}
+	}
 }
 
 // primarySquadForGhost returns the first Squad entity touched by `selected`,
@@ -86,8 +184,9 @@ func drawSelectionGhost(
 	cursorTarget components.WorldPos,
 	targetOK bool,
 	dragFacing *float32,
-	popupKind *components.OrderKindCode,
-	popupLevel ecs.Entity,
+	popupItem *ui.ContextMenuItem,
+	popupBldg ecs.Entity,
+	popupRaw components.WorldPos,
 	levelMap *ecs.Map[components.Level],
 ) {
 	if !cursorOver3D || !targetOK || g == nil {
@@ -126,31 +225,36 @@ func drawSelectionGhost(
 
 	stance := g.ghostStanceFor(squad, roster)
 
-	// Popup-hover override: preview the popup's kind instead of the hit-test default.
-	if popupKind != nil && *popupKind == components.OrderKindDefendPosition {
-		drawGhostFormation(cursorTarget, fd.Type, fd.Spacing, roster.Count, forward, stance)
-		drawDefendPositionArc(cursorTarget, forward, squad, g.squadColor)
-		return
-	}
-
-	// Floor picker — ghost dots on the specific Level's centre.
-	if popupLevel != (ecs.Entity{}) && levelMap != nil {
-		if lvl := levelMap.Get(popupLevel); lvl != nil {
-			cWP := components.WorldPos{}
-			cWP = cWP.Add(rl.Vector3{X: lvl.AABB.CenterX(), Y: lvl.AABB.MinY, Z: lvl.AABB.CenterZ()})
-			drawGhostFormation(cWP, components.FormationLoose, 1.6, roster.Count, forward, stance)
+	// Popup-hover override: preview the hovered item through the SAME
+	// placement the commit will execute.
+	if popupItem != nil {
+		if popupItem.Kind == components.OrderKindDefendPosition {
+			drawGhostFormation(cursorTarget, fd.Type, fd.Spacing, roster.Count, forward, stance)
+			drawDefendPositionArc(cursorTarget, forward, squad, g.squadColor)
 			return
 		}
-	}
-
-	// "Attacking position at windows" — window-attached ghost (Garrison).
-	if popupKind != nil && *popupKind == components.OrderKindGarrison {
-		hit := HitTestResult{Kind: HitTerrain}
-		if g.hitTester != nil {
-			hit = g.hitTester.HitTest(cursorTarget)
+		// Floor picker — compact ghost at the room the click will target.
+		if popupItem.LevelEntity != (ecs.Entity{}) && levelMap != nil {
+			if lvl := levelMap.Get(popupItem.LevelEntity); lvl != nil {
+				cWP := pickRoomTarget(lvl, popupRaw)
+				drawGhostFormation(cWP, components.FormationLoose, 1.6, roster.Count, forward, stance)
+				return
+			}
 		}
-		if hit.Kind == HitBuilding {
-			if drawGhostAtWindows(g, hit.Entity, roster.Count, stance) {
+		if popupBldg != (ecs.Entity{}) {
+			policy := systems.SlotRooms
+			switch popupItem.Kind {
+			case components.OrderKindGarrison:
+				policy = systems.SlotWindows
+			case components.OrderKindClearBuilding:
+				policy = systems.SlotGroundFloor
+			case components.OrderKindOccupyBuilding:
+				if popupItem.HoldFireCrouchPreset {
+					policy = systems.SlotHidden
+					stance.Code = components.StanceCrouch
+				}
+			}
+			if drawPlannedSlots(g, popupBldg, policy, roster.Count, stance) {
 				return
 			}
 		}
@@ -164,7 +268,8 @@ func drawSelectionGhost(
 	}
 	switch hit.Kind {
 	case HitBuilding:
-		if drawGhostInBuilding(g, hit.Entity, roster.Count, stance) {
+		// Quick-RMB default = OccupyBuilding → rooms policy.
+		if drawPlannedSlots(g, hit.Entity, systems.SlotRooms, roster.Count, stance) {
 			return
 		}
 	case HitTrench:
@@ -175,41 +280,23 @@ func drawSelectionGhost(
 	drawGhostFormation(cursorTarget, fd.Type, fd.Spacing, roster.Count, forward, stance)
 }
 
-// drawGhostAtWindows places ghost cubes at the first N windows of `building`
-// (greedy first-N, no threat-aware ranking). Returns true on placement.
-func drawGhostAtWindows(g *ghostContext, building ecs.Entity, count uint8, stance components.Stance) bool {
-	if g.buildingIndex == nil || g.windowMap == nil || g.wallMap == nil {
+// drawPlannedSlots previews a building order through the SAME planner call
+// FormationSystem will execute — the ghost cannot promise a placement the
+// order won't deliver. Returns false when the plan is empty (floors not
+// streamed) so the caller can fall back to a plain formation ghost.
+func drawPlannedSlots(g *ghostContext, building ecs.Entity,
+	policy systems.SlotPolicy, count uint8, stance components.Stance) bool {
+	if g.slotPlanner == nil || count == 0 {
 		return false
 	}
-	children, ok := g.buildingIndex.Loaded[building]
-	if !ok || len(children) == 0 {
+	slots := g.slotPlanner.PlanSlots(building, policy, int(count), false, 0)
+	if len(slots) == 0 {
 		return false
 	}
-	placed := uint8(0)
-	for _, ch := range children {
-		if placed >= count {
-			break
-		}
-		if !g.world.Alive(ch) {
-			continue
-		}
-		if g.windowMap.Get(ch) == nil {
-			continue
-		}
-		wall := g.wallMap.Get(ch)
-		wPos := g.posMap.Get(ch)
-		if wall == nil || wPos == nil {
-			continue
-		}
-		offsetAlong := wall.OpeningCenterT * wall.Length
-		dx := offsetAlong * float32(math.Sin(float64(wall.Yaw)))
-		dz := offsetAlong * float32(math.Cos(float64(wall.Yaw)))
-		ghostWP := wPos.Add(rl.Vector3{X: dx, Y: 0, Z: dz})
-		ghostRender := ghostWP.ToRenderSpace(systems.CurrentOriginChunk)
-		drawGhostUnit(ghostRender, stance, ghostBodyAlpha)
-		placed++
+	for _, s := range slots {
+		drawGhostUnit(s.Pos.ToRenderSpace(systems.CurrentOriginChunk), stance, ghostBodyAlpha)
 	}
-	return placed > 0
+	return true
 }
 
 // drawDefendPositionArc draws a 90° wedge at the cursor target oriented
@@ -226,98 +313,6 @@ func drawDefendPositionArc(target components.WorldPos, forward rl.Vector3, squad
 	}
 	fill := rl.Color{R: col.R, G: col.G, B: col.B, A: 60}
 	drawGhostArc(center, yaw, halfAngle, length, fill)
-}
-
-// drawGhostInBuilding places ghost cubes at floor centres of `building`,
-// splitting the roster across storeys (ceil(N/M) per floor; last takes the
-// remainder). Returns false on missing index / no floors so caller can fall
-// back to standard formation.
-func drawGhostInBuilding(g *ghostContext, building ecs.Entity, count uint8, stance components.Stance) bool {
-	if g.buildingIndex == nil || g.floorMap == nil || count == 0 {
-		return false
-	}
-	children, ok := g.buildingIndex.Loaded[building]
-	if !ok || len(children) == 0 {
-		return false
-	}
-	// Sort floors by level ascending so distribution is deterministic.
-	type floorCentre struct {
-		pos    components.WorldPos
-		level  uint8
-		rooms  [components.MaxRoomsPerLevel]components.AABB2D
-		roomsN uint8
-	}
-	var floors []floorCentre
-	for _, ch := range children {
-		if !g.world.Alive(ch) {
-			continue
-		}
-		f := g.floorMap.Get(ch)
-		if f == nil {
-			continue
-		}
-		fp := g.posMap.Get(ch)
-		if fp == nil {
-			continue
-		}
-		// Floor.WorldPos IS the plate centre, NOT a corner — gen/buildings
-		// passes the building centre. render_buildings.go DrawCubeV and
-		// GroundStickSystem both treat fp as centre; do the same here.
-		fc := floorCentre{pos: *fp, level: f.Level}
-		if lm := g.levelMemberMap.Get(ch); lm != nil &&
-			lm.Level != (ecs.Entity{}) && g.world.Alive(lm.Level) {
-			if lv := g.levelMap.Get(lm.Level); lv != nil {
-				fc.rooms = lv.Rooms
-				fc.roomsN = lv.RoomCount
-			}
-		}
-		floors = append(floors, fc)
-	}
-	if len(floors) == 0 {
-		return false
-	}
-	for i := 1; i < len(floors); i++ {
-		for j := i; j > 0 && floors[j-1].level > floors[j].level; j-- {
-			floors[j-1], floors[j] = floors[j], floors[j-1]
-		}
-	}
-	m := uint8(len(floors))
-	perFloor := (count + m - 1) / m
-	if perFloor == 0 {
-		perFloor = 1
-	}
-	remaining := count
-	const ghostFloorSpacing float32 = 1.6
-	forward := rl.Vector3{X: 0, Y: 0, Z: 1}
-	for _, fl := range floors {
-		if remaining == 0 {
-			break
-		}
-		take := perFloor
-		if take > remaining {
-			take = remaining
-		}
-		if rc := uint8(fl.roomsN); rc > 1 {
-			// Same round-robin the FormationSystem interior branch executes:
-			// member k → room k%rc, Loose slot k/rc around the room centre.
-			for k := uint8(0); k < take; k++ {
-				room := fl.rooms[k%rc]
-				offX, offZ := systems.FormationOffset(components.FormationLoose,
-					k/rc, ghostFloorSpacing, forward)
-				wp := components.WorldPos{}.Add(rl.Vector3{
-					X: room.CenterX() + offX,
-					Y: fl.pos.Local.Y,
-					Z: room.CenterZ() + offZ,
-				})
-				drawGhostUnit(wp.ToRenderSpace(systems.CurrentOriginChunk), stance, ghostBodyAlpha)
-			}
-		} else {
-			drawGhostFormation(fl.pos, components.FormationLoose,
-				ghostFloorSpacing, take, forward, stance)
-		}
-		remaining -= take
-	}
-	return remaining < count
 }
 
 // drawGhostAlongTrench places ghost cubes equal-spaced along the polyline of

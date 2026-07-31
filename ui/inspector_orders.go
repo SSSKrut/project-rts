@@ -95,7 +95,34 @@ func drawOrderRow(ctx InspectorCtx, ord ecs.Entity, active bool, x, y, width int
 				x, y, inspectorFontSize, rl.Color{R: 230, G: 170, B: 90, A: 255})
 		}
 	}
+	// "Hidden position" carries a HoldFire RoE override — surface it, the
+	// player otherwise cannot tell it apart from a plain Occupy.
+	if ctx.OrderEngagementMap != nil && ctx.OrderEngagementMap.Get(ord) != nil {
+		drawRoEOverridePill(ctx.Font, x, y, width, hasAttackMove)
+	}
 	return y + inspectorRowH
+}
+
+// drawRoEOverridePill marks an order-scoped RoE override ("HF"). Shifts left
+// when the AT pill occupies the right edge.
+func drawRoEOverridePill(font rl.Font, rowX, rowY, width int32, atPillPresent bool) {
+	const pillW int32 = 24
+	const pillPadY int32 = 2
+	pillX := rowX + width - pillW
+	if atPillPresent {
+		pillX -= pillW + 4
+	}
+	pillY := rowY + pillPadY
+	pillH := inspectorRowH - 2*pillPadY
+	bg := rl.Color{R: 55, G: 65, B: 60, A: 255}
+	fg := rl.Color{R: 150, G: 210, B: 160, A: 255}
+	rl.DrawRectangle(pillX, pillY, pillW, pillH, bg)
+	rl.DrawRectangleLines(pillX, pillY, pillW, pillH, srChipBorder)
+	size := rl.MeasureTextEx(font, "HF", float32(inspectorFontSize), 1)
+	rl.DrawTextEx(font, "HF", rl.Vector2{
+		X: float32(pillX) + (float32(pillW)-size.X)*0.5,
+		Y: float32(pillY) + (float32(pillH)-size.Y)*0.5,
+	}, float32(inspectorFontSize), 1, fg)
 }
 
 func drawOrderProgressBar(rowX, rowY, width int32, active bool,
@@ -177,6 +204,8 @@ func orderTargetLabel(ctx InspectorCtx, kind components.OrderKindCode, t *compon
 	if t.Entity != (ecs.Entity{}) {
 		switch kind {
 		case components.OrderKindGarrison:
+			return fmt.Sprintf("@ windows Bldg #%X", t.Entity.ID()&0xFFF)
+		case components.OrderKindOccupyBuilding, components.OrderKindClearBuilding:
 			return fmt.Sprintf("@ Building #%X", t.Entity.ID()&0xFFF)
 		case components.OrderKindOccupyTrench:
 			idx := -1

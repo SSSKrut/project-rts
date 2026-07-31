@@ -22,10 +22,21 @@ func (sys *SpatialBakeSystem) bakeLevelNavPass(ctx core.UpdateContext) {
 		pos components.WorldPos
 		lvl components.Level
 	}
+	childIdx := sys.buildingIndexRes.Get()
 	var levelTodo []levelRec
 	qL := sys.levelFilter.Query()
 	for qL.Next() {
 		lvl, pos := qL.Get()
+		// Levels are AlwaysActive from boot, but their building's wall
+		// children spawn with the chunk. Baking before the children exist
+		// produced an EMPTY grid (walls=0) stamped LevelNavBaked forever —
+		// every interior A* then pathed straight through partitions and
+		// exterior walls, leaving colWall physics to catch the lie.
+		if bm := sys.buildingMemberMap.Get(qL.Entity()); bm != nil {
+			if childIdx == nil || len(childIdx.Loaded[bm.Building]) == 0 {
+				continue
+			}
+		}
 		levelTodo = append(levelTodo, levelRec{ent: qL.Entity(), pos: *pos, lvl: *lvl})
 	}
 	if debugLog && len(levelTodo) > 0 && !bakeDebugReported {
@@ -46,6 +57,12 @@ func (sys *SpatialBakeSystem) bakeLevelNavPass(ctx core.UpdateContext) {
 		levelMember     ecs.Entity
 	}
 	var wallSnaps []wallSnap
+	type stairSnapL struct {
+		pos      components.WorldPos
+		s        components.Stairs
+		from, to ecs.Entity
+	}
+	var stairSnapsL []stairSnapL
 	if len(levelTodo) > 0 {
 		qW := sys.wallFilter.Query()
 		for qW.Next() {
@@ -64,6 +81,16 @@ func (sys *SpatialBakeSystem) bakeLevelNavPass(ctx core.UpdateContext) {
 			wallSnaps = append(wallSnaps, wallSnap{
 				ent: e, pos: *pos, w: *w, openingPassable: passable, levelMember: lev,
 			})
+		}
+		qS := sys.stairsFilter.Query()
+		for qS.Next() {
+			pos, s := qS.Get()
+			var from, to ecs.Entity
+			if sl := sys.stairLevelsMap.Get(qS.Entity()); sl != nil {
+				from = sl.From
+				to = sl.To
+			}
+			stairSnapsL = append(stairSnapsL, stairSnapL{pos: *pos, s: *s, from: from, to: to})
 		}
 	}
 
@@ -103,6 +130,7 @@ func (sys *SpatialBakeSystem) bakeLevelNavPass(ctx core.UpdateContext) {
 
 		// Walls can live in any chunk crossed by a multi-chunk building;
 		// translate each wall's Local to the anchor chunk before rasterising.
+		wallsRasterized := 0
 		for _, ws := range wallSnaps {
 			if ws.levelMember != lr.ent {
 				continue
@@ -115,6 +143,55 @@ func (sys *SpatialBakeSystem) bakeLevelNavPass(ctx core.UpdateContext) {
 				Z: wallChunkBaseZ + ws.pos.Local.Z - chunkBaseZ,
 			}
 			rasterizeFloorWall(&grid, adjusted, ws.w, ws.openingPassable, originX, originZ)
+			wallsRasterized++
+		}
+
+		// Transition-endpoint carve: Pass 4 wires stair edges into the cells
+		// under the stair anchors; a stair standing 0.5 m off a wall lands
+		// its cell inside the wall's inflate band, and a blocked FROM cell
+		// makes the whole storey unreachable (ai_main_m1 0/8). The anchor
+		// cells are walkable by construction — force them open.
+		carve := func(worldX, worldZ float32) {
+			lx := worldX - (chunkBaseX + originX)
+			lz := worldZ - (chunkBaseZ + originZ)
+			ci := int(math.Floor(float64(lx)))
+			cj := int(math.Floor(float64(lz)))
+			if ci < 0 || cj < 0 || ci >= int(szi) || cj >= int(szj) {
+				return
+			}
+			cell := &grid.Cells[cj*components.MaxLevelSide+ci]
+			if cell.Cost == 0 {
+				cell.Cost = navCostOpen
+			}
+		}
+		for _, st := range stairSnapsL {
+			if st.s.Length <= 0 {
+				continue
+			}
+			baseX := float32(st.pos.Chunk.X) * components.ChunkSize
+			baseZ := float32(st.pos.Chunk.Z) * components.ChunkSize
+			bottomX := baseX + st.pos.Local.X
+			bottomZ := baseZ + st.pos.Local.Z
+			sa := float32(math.Sin(float64(st.s.Yaw)))
+			ca := float32(math.Cos(float64(st.s.Yaw)))
+			if st.from == lr.ent {
+				carve(bottomX, bottomZ)
+			}
+			if st.to == lr.ent && st.to != st.from {
+				carve(bottomX+sa*st.s.Length, bottomZ+ca*st.s.Length)
+			}
+		}
+		if debugLog {
+			blocked := 0
+			for cj := uint8(0); cj < szj; cj++ {
+				for ci := uint8(0); ci < szi; ci++ {
+					if grid.Cells[int(cj)*components.MaxLevelSide+int(ci)].Cost == 0 {
+						blocked++
+					}
+				}
+			}
+			fmt.Printf("[spatial_bake] Pass3 level=%v minY=%.1f walls=%d blocked=%d/%d\n",
+				lr.ent, lr.lvl.AABB.MinY, wallsRasterized, blocked, int(szi)*int(szj))
 		}
 
 		if existing := sys.floorNavMap.Get(lr.ent); existing != nil {

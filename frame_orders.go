@@ -41,6 +41,7 @@ func (g *Game) handleOrders() {
 	if rl.IsMouseButtonPressed(rl.MouseButtonRight) && !g.UI.Floating.IsBusy(g.Frame.Cursor) && !g.UI.ContactCtxMenu.IsActive() {
 		var (
 			pressTarget components.WorldPos
+			pressRaw    components.WorldPos
 			targetOK    bool
 		)
 		switch g.Frame.Focused {
@@ -48,6 +49,7 @@ func (g *Game) handleOrders() {
 			pressTarget, targetOK = mouseTargetWorldPos(systems.CurrentCamera,
 				g.Frame.AnchorPos.ToRenderSpace(systems.CurrentOriginChunk),
 				g.Frame.Panel3DLocal, g.Frame.Panel3DW, g.Frame.Panel3DH)
+			pressRaw = pressTarget
 			// Snap to ground-floor centre when cursor visually over a
 			// building but raycast lands just outside the footprint.
 			if targetOK && g.Sel.HoveredBuilding != (ecs.Entity{}) {
@@ -70,6 +72,7 @@ func (g *Game) handleOrders() {
 			}
 		case ui.PanelMap:
 			pressTarget = ui.MapPanelToWorld(g.Frame.Cursor, g.UI.MapCam, g.Frame.PanelMapContent)
+			pressRaw = pressTarget
 			targetOK = true
 		}
 		if targetOK && len(g.Sel.Units) > 0 && (g.Frame.Focused == ui.Panel3D || g.Frame.Focused == ui.PanelMap) {
@@ -78,6 +81,7 @@ func (g *Game) handleOrders() {
 			g.UI.RMB.SourcePanel = g.Frame.Focused
 			g.UI.RMB.PressOrigin = g.Frame.Cursor
 			g.UI.RMB.PressTarget = pressTarget
+			g.UI.RMB.PressRaw = pressRaw
 			g.UI.RMB.PressTimeSec = now
 			g.UI.RMB.HoveredBldg = g.Sel.HoveredBuilding
 			g.UI.RMB.HasSelection = true
@@ -124,14 +128,14 @@ func (g *Game) handleOrders() {
 				if item, ok := g.UI.CtxMenu.HoveredItemDetails(); ok && item.Enabled {
 					g.UI.CtxMenu.Reset()
 					issueBuildingPopupOrder(g.Sel.Units, item, g.UI.RMB.HoveredBldg,
-						g.UI.RMB.PressTarget, g.Frame.Shift,
+						g.UI.RMB.PressTarget, g.UI.RMB.PressRaw, g.Frame.Shift,
 						g.Svc.Squad, g.Svc.Nav, g.Maps.SquadMember, g.Maps.Pos, g.Maps.ActionQueue, g.Maps.Level)
 				} else {
 					g.UI.CtxMenu.Reset()
 				}
 			case res.Committed:
 				issueBuildingPopupOrder(g.Sel.Units, res.Item, g.UI.RMB.HoveredBldg,
-					g.UI.RMB.PressTarget, g.Frame.Shift,
+					g.UI.RMB.PressTarget, g.UI.RMB.PressRaw, g.Frame.Shift,
 					g.Svc.Squad, g.Svc.Nav, g.Maps.SquadMember, g.Maps.Pos, g.Maps.ActionQueue, g.Maps.Level)
 			}
 		}

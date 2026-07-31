@@ -252,10 +252,13 @@ type uiState struct {
 // release; PressOrigin / PressTarget are captured at press time so a release
 // commit does not drift with the cursor.
 type rmbSession struct {
-	Active       bool
-	SourcePanel  ui.PanelID
-	PressOrigin  rl.Vector2
-	PressTarget  components.WorldPos
+	Active      bool
+	SourcePanel ui.PanelID
+	PressOrigin rl.Vector2
+	PressTarget components.WorldPos
+	// PressRaw keeps the unsnapped cursor point (PressTarget snaps to the
+	// ground-floor centre over a building) — room picking needs the real XZ.
+	PressRaw     components.WorldPos
 	PressTimeSec float32
 	HoveredBldg  ecs.Entity
 	HasSelection bool

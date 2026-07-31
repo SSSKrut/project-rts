@@ -139,13 +139,20 @@ func (s *NavService) findPath(from, to components.WorldPos, opts NavOpts, allowF
 	}
 	toCell, toCellOK := s.cellAt(toNode, idx, floors)
 	if !toCellOK || toCell.Cost == 0 {
-		if debugLog {
-			fmt.Printf("[nav] EMPTY: to blocked kind=%d cost=%d flags=%d to=(%.1f,%.1f)\n",
-				toNode.Kind, toCell.Cost, toCell.Flags,
-				to.Local.X+float32(to.Chunk.X)*components.ChunkSize,
-				to.Local.Z+float32(to.Chunk.Z)*components.ChunkSize)
+		// Same recovery as the blocked start: a goal on a wall-inflated cell
+		// (window fire slot 0.6 m off the wall, click into a prop circle)
+		// otherwise leaves the walker pathless, walking blind into the wall.
+		if alt, ok := s.nearestWalkable(toNode, to, idx, floors); ok {
+			toNode = alt
+		} else {
+			if debugLog {
+				fmt.Printf("[nav] EMPTY: to blocked kind=%d cost=%d flags=%d to=(%.1f,%.1f)\n",
+					toNode.Kind, toCell.Cost, toCell.Flags,
+					to.Local.X+float32(to.Chunk.X)*components.ChunkSize,
+					to.Local.Z+float32(to.Chunk.Z)*components.ChunkSize)
+			}
+			return []components.WorldPos{}, nil
 		}
-		return []components.WorldPos{}, nil
 	}
 
 	type stateRec struct {

@@ -102,6 +102,20 @@ func (sys *OrderResolverSystem) evaluateCompletion(
 			return completionFailed
 		}
 		if inside == alive {
+			// Garrison additionally demands the window plan manned: member i
+			// parked at window slot i (the FormationSystem assignment).
+			// Completing on mere entry dropped squad management the moment
+			// the roster crossed the wall line — nobody ever reached the
+			// windows the popup promised.
+			if spec.Code == components.OrderKindGarrison {
+				manned, expected := sys.windowSlotsManned(ord, target.Entity, roster)
+				if manned < expected {
+					if pr := sys.orderProgressMap.Get(ord); pr != nil && expected > 0 {
+						pr.Value = float32(manned) / float32(expected)
+					}
+					return completionPending
+				}
+			}
 			return completionDone
 		}
 		return completionPending
@@ -176,6 +190,84 @@ func (sys *OrderResolverSystem) evaluateCompletion(
 		return completionPending
 	}
 	return completionPending
+}
+
+// windowSlotsManned recomputes the Garrison window plan (same planner call
+// FormationSystem executes) and pairs member i with slot i. Dead members
+// waive their slot; nil plan (floors not streamed) reports 0/0 = satisfied.
+func (sys *OrderResolverSystem) windowSlotsManned(
+	ord, building ecs.Entity, roster *components.CommandRoster,
+) (manned, expected int) {
+	if sys.slotPlanner == nil {
+		return 0, 0
+	}
+	hasFacing := false
+	var yaw float32
+	if f := sys.orderFacingMap.Get(ord); f != nil {
+		hasFacing = true
+		yaw = f.YawRad
+	}
+	slots := sys.slotPlanner.PlanSlots(building, SlotWindows, int(roster.Count), hasFacing, yaw)
+	for i := 0; i < len(slots) && i < int(roster.Count); i++ {
+		if !slots[i].Window {
+			continue
+		}
+		mem := roster.Members[i]
+		if mem == (ecs.Entity{}) || !sys.squadService.world.Alive(mem) {
+			continue
+		}
+		expected++
+		pos := sys.posMap.Get(mem)
+		if pos == nil {
+			continue
+		}
+		d := pos.Sub(slots[i].Pos)
+		r := SlotParkRadius + 0.2
+		if d.X*d.X+d.Z*d.Z <= r*r && d.Y >= -0.8 && d.Y <= 0.8 {
+			manned++
+		}
+	}
+	return manned, expected
+}
+
+// applyGarrisonFacing snaps every member parked on a window slot to the
+// opening's outward yaw at completion time.
+func (sys *OrderResolverSystem) applyGarrisonFacing(squad, ord, building ecs.Entity) {
+	if sys.slotPlanner == nil || sys.motionMap == nil {
+		return
+	}
+	roster := sys.rosterMap.Get(squad)
+	if roster == nil {
+		return
+	}
+	hasFacing := false
+	var yaw float32
+	if f := sys.orderFacingMap.Get(ord); f != nil {
+		hasFacing = true
+		yaw = f.YawRad
+	}
+	slots := sys.slotPlanner.PlanSlots(building, SlotWindows, int(roster.Count), hasFacing, yaw)
+	for i := 0; i < len(slots) && i < int(roster.Count); i++ {
+		if !slots[i].Window {
+			continue
+		}
+		mem := roster.Members[i]
+		if mem == (ecs.Entity{}) || !sys.squadService.world.Alive(mem) {
+			continue
+		}
+		pos := sys.posMap.Get(mem)
+		if pos == nil {
+			continue
+		}
+		d := pos.Sub(slots[i].Pos)
+		r := SlotParkRadius + 0.2
+		if d.X*d.X+d.Z*d.Z > r*r || d.Y < -0.8 || d.Y > 0.8 {
+			continue
+		}
+		if m := sys.motionMap.Get(mem); m != nil {
+			m.Yaw = slots[i].Yaw
+		}
+	}
 }
 
 // advanceOutOfRange updates the out-of-range tracker and returns accumulated

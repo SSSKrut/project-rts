@@ -415,9 +415,6 @@ func (g *Game) initRenderHandles() {
 		OwnFaction:      components.FactionPlayer,
 	}
 
-	ghostWallMap := ecs.NewMap[components.WallSegment](g.App.World)
-	ghostWindowMap := ecs.NewMap[components.Window](g.App.World)
-	ghostFloorMap := ecs.NewMap[components.Floor](g.App.World)
 	g.Ctx.Ghost = &ghostContext{
 		world:            g.App.World,
 		posMap:           g.Maps.Pos,
@@ -427,16 +424,18 @@ func (g *Game) initRenderHandles() {
 		movementMap:      g.Maps.MovementProfile,
 		squadMemberMap:   g.Maps.SquadMember,
 		hitTester:        g.Ctx.HitTest,
-		buildingIndex:    &g.Res.BuildingIndex,
-		wallMap:          ghostWallMap,
-		windowMap:        ghostWindowMap,
-		floorMap:         ghostFloorMap,
-		levelMemberMap:   ecs.NewMap[components.LevelMember](g.App.World),
+		slotPlanner:      systems.NewBuildingSlotPlanner(g.App.World),
 		levelMap:         g.Maps.Level,
 		trenches:         &g.Res.Trenches,
 		trenchRootMap:    g.Maps.TrenchRoot,
 		vehicleMap:       ecs.NewMap[components.Vehicle](g.App.World),
 		squadColor:       g.squadColor,
+
+		orderQueueMap:      g.Maps.OrderQueue,
+		orderKindMap:       g.Maps.OrderKind,
+		orderTargetMap:     g.Maps.OrderTarget,
+		orderFacingMap:     ecs.NewMap[components.OrderParamFacing](g.App.World),
+		orderEngagementMap: ecs.NewMap[components.OrderParamEngagementOverride](g.App.World),
 	}
 	g.Ctx.Route = &routePreviewCtx{
 		world:      g.App.World,

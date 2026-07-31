@@ -39,6 +39,7 @@ type OrderResolverSystem struct {
 	orderIssuedAtMap   *ecs.Map[components.OrderIssuedAt]
 	orderOwnerMap      *ecs.Map[components.OrderOwner]
 	orderFacingMap     *ecs.Map[components.OrderParamFacing]
+	slotPlanner        *BuildingSlotPlanner
 	orderSuppressMap   *ecs.Map[components.OrderParamSuppress]
 	orderOutOfRangeMap *ecs.Map[components.OrderOutOfRangeTracker]
 	// Used to compute the squad's effective weapon range (max across roster).
@@ -103,6 +104,7 @@ func (sys *OrderResolverSystem) InitUI(w *ecs.World) {
 	sys.orderIssuedAtMap = ecs.NewMap[components.OrderIssuedAt](w)
 	sys.orderOwnerMap = ecs.NewMap[components.OrderOwner](w)
 	sys.orderFacingMap = ecs.NewMap[components.OrderParamFacing](w)
+	sys.slotPlanner = NewBuildingSlotPlanner(w)
 	sys.orderSuppressMap = ecs.NewMap[components.OrderParamSuppress](w)
 	sys.orderOutOfRangeMap = ecs.NewMap[components.OrderOutOfRangeTracker](w)
 	sys.equipmentMap = ecs.NewMap[components.Equipment](w)
@@ -228,6 +230,12 @@ func (sys *OrderResolverSystem) Update(ctx core.UpdateContext) {
 					pr.Value = 1
 				}
 				sys.applyArrivedFacing(squad, ord)
+				if kind.Code == components.OrderKindGarrison {
+					// The last member to park can complete the order before
+					// FormationSystem's 100 ms parked-yaw pass reaches it —
+					// snap every window occupant to its opening once.
+					sys.applyGarrisonFacing(squad, ord, target.Entity)
+				}
 				sys.pushOrderEvent(components.EventOrderCompleted, squad, target.Pos)
 			case completionFailed:
 				state.Code = components.OrderStateFailed

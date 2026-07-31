@@ -50,6 +50,10 @@ const (
 	// surface while OUTSIDE the footprint (owner playtest: an MG rode the
 	// invisible outer ramp up the wall face).
 	aiSceneHouse2North = "ai_house2_north"
+	// ai_garrison_windows: Garrison on the office must MAN THE WINDOWS —
+	// every planned window slot (BuildingSlotPlanner SlotWindows) holds a
+	// member facing the opening; overflow waits inside as reserve.
+	aiSceneGarrisonWin = "ai_garrison_windows"
 	aiSceneFarBuilding = "ai_far_building"
 
 	// ai_main_* run on the REAL main-map world data (mainWorldBuildings +
@@ -183,7 +187,7 @@ func aiSceneAnchorPos() components.WorldPos {
 	case aiSceneCompoundPlusSouth, aiSceneCompoundPlusEast,
 		aiSceneCompoundPlusNorth, aiSceneCompoundPlusWest:
 		return components.WorldPos{}.Add(rl.Vector3{X: 32, Z: 26})
-	case aiSceneOfficeFront, aiSceneOfficeRooms:
+	case aiSceneOfficeFront, aiSceneOfficeRooms, aiSceneGarrisonWin:
 		return components.WorldPos{}.Add(rl.Vector3{X: 32, Z: 22})
 	case aiSceneHouse2North:
 		return components.WorldPos{}.Add(rl.Vector3{X: 32, Z: 40})
@@ -255,7 +259,7 @@ func aiSceneBuildings() []components.BuildingPlan {
 	case aiSceneCompoundPlusSouth, aiSceneCompoundPlusEast,
 		aiSceneCompoundPlusNorth, aiSceneCompoundPlusWest:
 		return aiBuildingsCompoundPlus()
-	case aiSceneOfficeFront, aiSceneOfficeRooms:
+	case aiSceneOfficeFront, aiSceneOfficeRooms, aiSceneGarrisonWin:
 		pos := components.WorldPos{}.Add(rl.Vector3{X: 32, Z: 32})
 		pos.Local.Y = systems.GroundHeight(
 			pos.Local.X+float32(pos.Chunk.X)*components.ChunkSize,
@@ -375,7 +379,7 @@ func aiSpawnPos() components.WorldPos {
 		return components.WorldPos{}.Add(rl.Vector3{X: 32, Z: 60})
 	case aiSceneCompoundPlusWest:
 		return components.WorldPos{}.Add(rl.Vector3{X: 10, Z: 32})
-	case aiSceneOfficeFront, aiSceneOfficeRooms:
+	case aiSceneOfficeFront, aiSceneOfficeRooms, aiSceneGarrisonWin:
 		return components.WorldPos{}.Add(rl.Vector3{X: 32, Z: 18})
 	case aiSceneHouse2North:
 		return components.WorldPos{}.Add(rl.Vector3{X: 27, Z: 44})
@@ -871,6 +875,10 @@ func aiSceneSpawn(
 		st.liftTrack = true
 		st.sampler = systems.NewHeightSampler(world)
 	}
+	if aiSceneID() == aiSceneGarrisonWin {
+		st.garrisonCheck = true
+		st.slotPlanner = systems.NewBuildingSlotPlanner(world)
+	}
 
 	// ai_office_rooms: snapshot every room band (rect + storey floor Y) of
 	// the target building — the verdict demands each one occupied.
@@ -948,6 +956,11 @@ type aiTestState struct {
 	// through the wall hoists outside walkers metres into the air.
 	liftTrack bool
 	liftMax   float32
+
+	// Set for ai_garrison_windows: order kind = Garrison, verdict demands
+	// every planned window slot manned by a member facing the opening.
+	garrisonCheck bool
+	slotPlanner   *systems.BuildingSlotPlanner
 
 	// Set for ai_los_* scenes: verdict counts Contacts on this entity and
 	// tallies Direct/Shared awareness across the roster.
@@ -1148,12 +1161,18 @@ func (s *aiTestState) Update(elapsed float32) {
 			X: bld.Footprint.CenterX(),
 			Z: bld.Footprint.CenterZ(),
 		})
+		kind := components.OrderKindOccupyBuilding
+		kindName := "OccupyBuilding"
+		if s.garrisonCheck {
+			kind = components.OrderKindGarrison
+			kindName = "Garrison"
+		}
 		s.SquadService.IssueOrder(s.squad,
-			components.OrderKindOccupyBuilding, targetPos, s.targetBuilding,
+			kind, targetPos, s.targetBuilding,
 			false, systems.OrderParams{})
 		s.orderFired = true
-		fmt.Printf("[ai-test %s] t=%.1fs ORDER ISSUED OccupyBuilding target=%v\n",
-			s.sceneID, elapsed, s.targetBuilding)
+		fmt.Printf("[ai-test %s] t=%.1fs ORDER ISSUED %s target=%v\n",
+			s.sceneID, elapsed, kindName, s.targetBuilding)
 	}
 
 	if s.orderFired && !s.verdictDone && elapsed >= s.nextSampleAt {
@@ -1166,6 +1185,11 @@ func (s *aiTestState) Update(elapsed float32) {
 			watch := roster.Members[0]
 			watchIdx := uint8(0)
 			fp := s.targetFootprint
+			var garrisonSlots []systems.BuildingSlot
+			if s.garrisonCheck && s.slotPlanner != nil {
+				garrisonSlots = s.slotPlanner.PlanSlots(s.targetBuilding,
+					systems.SlotWindows, int(roster.Count), false, 0)
+			}
 			for i := uint8(0); i < roster.Count; i++ {
 				mem := roster.Members[i]
 				if mem == (ecs.Entity{}) || !s.World.Alive(mem) {
@@ -1181,6 +1205,11 @@ func (s *aiTestState) Update(elapsed float32) {
 				if !bad && s.targetLevel != (ecs.Entity{}) {
 					dy := pos.Local.Y - s.targetLevelMinY
 					bad = dy < -0.8 || dy > 0.8
+				}
+				if !bad && int(i) < len(garrisonSlots) && garrisonSlots[i].Window {
+					d := pos.Sub(garrisonSlots[i].Pos)
+					r := systems.SlotParkRadius + 0.3
+					bad = d.X*d.X+d.Z*d.Z > r*r || d.Y < -0.8 || d.Y > 0.8
 				}
 				if bad {
 					watch = mem
@@ -1245,6 +1274,13 @@ func (s *aiTestState) Update(elapsed float32) {
 				verdict = "FAIL"
 			}
 			roomsInfo += fmt.Sprintf("  outsideLift=%.2fm", s.liftMax)
+		}
+		if s.garrisonCheck {
+			manned, faced, expected := s.countWindowSlots()
+			if manned < expected || faced < manned {
+				verdict = "FAIL"
+			}
+			roomsInfo += fmt.Sprintf("  windows=%d/%d faced=%d", manned, expected, faced)
 		}
 		fmt.Println("============================================================")
 		fmt.Printf("== VERDICT [%s]: %s  (%d/%d members inside)%s\n",
@@ -1925,6 +1961,63 @@ func (s *aiTestState) countRoomOccupancy() []int {
 		}
 	}
 	return counts
+}
+
+// countWindowSlots recomputes the Garrison window plan and tallies how many
+// planned window slots hold a member (XZ within SlotParkRadius+0.3, Y within
+// the storey band) and how many of those face the opening (yaw within
+// ~34 deg of outward).
+func (s *aiTestState) countWindowSlots() (manned, faced, expected int) {
+	roster := s.RosterMap.Get(s.squad)
+	if roster == nil || s.slotPlanner == nil {
+		return 0, 0, 0
+	}
+	slots := s.slotPlanner.PlanSlots(s.targetBuilding, systems.SlotWindows,
+		int(roster.Count), false, 0)
+	for si, slot := range slots {
+		if !slot.Window {
+			continue
+		}
+		expected++
+		bestD := float32(1e9)
+		bestIdx := -1
+		var bestYawDiff float32
+		for i := uint8(0); i < roster.Count; i++ {
+			mem := roster.Members[i]
+			if mem == (ecs.Entity{}) || !s.World.Alive(mem) {
+				continue
+			}
+			pos := s.PosMap.Get(mem)
+			mot := s.MotionMap.Get(mem)
+			if pos == nil || mot == nil {
+				continue
+			}
+			d := pos.Sub(slot.Pos)
+			if d.Y < -0.8 || d.Y > 0.8 {
+				continue
+			}
+			distSq := d.X*d.X + d.Z*d.Z
+			if distSq < bestD {
+				bestD = distSq
+				bestIdx = int(i)
+				bestYawDiff = angDiffAbs(mot.Yaw, slot.Yaw)
+			}
+		}
+		r := systems.SlotParkRadius + 0.3
+		ok := bestIdx >= 0 && bestD <= r*r
+		if ok {
+			manned++
+			if bestYawDiff < 0.6 {
+				faced++
+			}
+		}
+		sx := float32(slot.Pos.Chunk.X)*components.ChunkSize + slot.Pos.Local.X
+		sz := float32(slot.Pos.Chunk.Z)*components.ChunkSize + slot.Pos.Local.Z
+		fmt.Printf("    window[%d]=(%.1f,%.1f,Y%.1f) yaw=%.2f nearest=m%d dist=%.2f yawDiff=%.2f manned=%v\n",
+			si, sx, sz, slot.Pos.Local.Y, slot.Yaw, bestIdx,
+			float32(math.Sqrt(float64(bestD))), bestYawDiff, ok)
+	}
+	return manned, faced, expected
 }
 
 // dumpPositions prints each member's XZ + inside-footprint flag.

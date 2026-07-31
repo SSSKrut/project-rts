@@ -38,6 +38,7 @@ type InspectorMaps struct {
 	StaminaMap               *ecs.Map[components.Stamina]
 	OrderAttackMoveMap       *ecs.Map[components.OrderParamAttackMove]
 	OrderMovementOverrideMap *ecs.Map[components.OrderParamMovementProfile]
+	OrderEngagementMap       *ecs.Map[components.OrderParamEngagementOverride]
 	HPMap                    *ecs.Map[components.HP]
 	FactionMap               *ecs.Map[components.Faction]
 	TacticalOverrideMap      *ecs.Map[components.TacticalOverride]
@@ -82,6 +83,7 @@ func NewInspectorMaps(world *ecs.World) InspectorMaps {
 		StaminaMap:               ecs.NewMap[components.Stamina](world),
 		OrderAttackMoveMap:       ecs.NewMap[components.OrderParamAttackMove](world),
 		OrderMovementOverrideMap: ecs.NewMap[components.OrderParamMovementProfile](world),
+		OrderEngagementMap:       ecs.NewMap[components.OrderParamEngagementOverride](world),
 		HPMap:                    ecs.NewMap[components.HP](world),
 		FactionMap:               ecs.NewMap[components.Faction](world),
 		TacticalOverrideMap:      ecs.NewMap[components.TacticalOverride](world),

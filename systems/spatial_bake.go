@@ -62,6 +62,7 @@ type SpatialBakeSystem struct {
 	chunkIndexRes     ecs.Resource[TerrainChunkIndex]
 	coverSlotIndexRes ecs.Resource[CoverSlotIndex]
 	buildingIndexRes  ecs.Resource[BuildingChildIndex]
+	buildingMemberMap *ecs.Map[components.BuildingMember]
 	transitionRes     ecs.Resource[components.TransitionRegistry]
 	stairsFilter      *ecs.Filter2[components.WorldPos, components.Stairs]
 	floorComponentMap *ecs.Map[components.Floor]
@@ -101,6 +102,7 @@ func (sys *SpatialBakeSystem) InitUI(w *ecs.World) {
 	sys.chunkIndexRes = ecs.NewResource[TerrainChunkIndex](w)
 	sys.coverSlotIndexRes = ecs.NewResource[CoverSlotIndex](w)
 	sys.buildingIndexRes = ecs.NewResource[BuildingChildIndex](w)
+	sys.buildingMemberMap = ecs.NewMap[components.BuildingMember](w)
 	sys.transitionRes = ecs.NewResource[components.TransitionRegistry](w)
 	sys.stairsFilter = ecs.NewFilter2[components.WorldPos, components.Stairs](w)
 	sys.floorComponentMap = ecs.NewMap[components.Floor](w)

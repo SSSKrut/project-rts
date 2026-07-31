@@ -310,14 +310,33 @@ func buildBuildingPopupSections(
 	return []ui.ContextMenuSection{atk, inter}
 }
 
+// pickRoomTarget maps the raw press point to a room of `lvl`: XZ inside a
+// room rect picks that room's centre at the storey floor, otherwise the
+// level centre. Shared by the popup commit and the hover ghost so the
+// preview shows exactly what the click orders.
+func pickRoomTarget(lvl *components.Level, raw components.WorldPos) components.WorldPos {
+	wx := float32(raw.Chunk.X)*components.ChunkSize + raw.Local.X
+	wz := float32(raw.Chunk.Z)*components.ChunkSize + raw.Local.Z
+	cx, cz := lvl.AABB.CenterX(), lvl.AABB.CenterZ()
+	for r := uint8(0); r < lvl.RoomCount; r++ {
+		if lvl.Rooms[r].Contains(wx, wz) {
+			cx, cz = lvl.Rooms[r].CenterX(), lvl.Rooms[r].CenterZ()
+			break
+		}
+	}
+	return components.WorldPos{}.Add(rl.Vector3{X: cx, Y: lvl.AABB.MinY, Z: cz})
+}
+
 // issueBuildingPopupOrder commits a building-popup item, bypassing hit-test.
-// LevelEntity != zero ⇒ MoveTo on Level.AABB.Center (nav routes via stairs).
+// LevelEntity != zero ⇒ MoveTo on the picked room (rawTarget inside a room
+// rect) or the Level centre; nav routes via stairs.
 // HoldFireCrouchPreset ⇒ OccupyBuilding + PresetStealth + HoldFire RoE override.
 func issueBuildingPopupOrder(
 	selected []ecs.Entity,
 	item ui.ContextMenuItem,
 	building ecs.Entity,
 	pressTarget components.WorldPos,
+	rawTarget components.WorldPos,
 	shiftHeld bool,
 	squadService *systems.SquadService,
 	navService *systems.NavService,
@@ -333,24 +352,7 @@ func issueBuildingPopupOrder(
 
 	if item.LevelEntity != (ecs.Entity{}) && levelMap != nil {
 		if lvl := levelMap.Get(item.LevelEntity); lvl != nil {
-			wx := lvl.AABB.CenterX()
-			wz := lvl.AABB.CenterZ()
-			cx := int32(wx) / int32(components.ChunkSize)
-			cz := int32(wz) / int32(components.ChunkSize)
-			if wx < 0 {
-				cx--
-			}
-			if wz < 0 {
-				cz--
-			}
-			target = components.WorldPos{
-				Chunk: components.ChunkCoord{X: cx, Z: cz},
-				Local: rl.Vector3{
-					X: wx - float32(cx)*components.ChunkSize,
-					Y: lvl.AABB.MinY,
-					Z: wz - float32(cz)*components.ChunkSize,
-				},
-			}
+			target = pickRoomTarget(lvl, rawTarget)
 			entity = item.LevelEntity
 			kind = components.OrderKindMoveTo
 		}
