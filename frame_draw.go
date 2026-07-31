@@ -43,6 +43,9 @@ func (g *Game) drawUI() {
 		SmoothedSquadPos:   g.UI.SmoothedSquadPos,
 		MapMarkerCache:     &g.Res.MapMarkerCache,
 		RoleMap:            g.Maps.Role,
+		VehicleMap:         g.Maps.Vehicle,
+		FactionMap:         g.Maps.Faction,
+		SquadOverrideMap:   g.Maps.SquadOverride,
 		Font:               g.hudFont,
 		MapPingFilter:      g.Filt.MapPing,
 		Clock:              g.Svc.Squad.Clock(),
@@ -107,10 +110,16 @@ func (g *Game) drawUI() {
 		ui.SelectSquadRequest.Squad = ecs.Entity{}
 	}
 	if ui.SymbolApplyRequest.Active {
-		if len(g.Sel.Units) == 1 {
-			tgt := g.Sel.Units[0]
+		if tgt := g.symbolApplyTarget(); tgt != (ecs.Entity{}) {
 			if g.App.World.Alive(tgt) {
-				if g.Maps.Contact.Has(tgt) {
+				if g.Maps.Roster.Has(tgt) {
+					// Whole-squad selection → the marker on the map.
+					if ov := g.Maps.SquadOverride.Get(tgt); ov != nil {
+						ov.Spec = ui.SymbolApplyRequest.Spec
+					} else {
+						g.Maps.SquadOverride.Add(tgt, &components.SquadSymbolOverride{Spec: ui.SymbolApplyRequest.Spec})
+					}
+				} else if g.Maps.Contact.Has(tgt) {
 					if ov := g.Maps.ContactOverride.Get(tgt); ov != nil {
 						ov.Spec = ui.SymbolApplyRequest.Spec
 					} else {
@@ -135,7 +144,7 @@ func (g *Game) drawUI() {
 		ui.SymbolApplyRequest.Active = false
 	}
 
-	seEnabled := len(g.Sel.Units) == 1
+	seEnabled := g.symbolApplyTarget() != (ecs.Entity{})
 	_, feHomo := groupSelected(g.Sel.Units, g.Maps.SquadMember)
 	feEnabled := feHomo && len(g.Sel.Units) > 0
 	seActive := g.UI.PanelMgr.LeafFor(ui.PanelSymbology) != nil ||

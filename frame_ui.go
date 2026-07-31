@@ -58,14 +58,9 @@ func (g *Game) initUI() {
 	g.UI.FormationEditor = ui.NewFormationEditor(ecs.Entity{}, formationEditorCtx)
 
 	// Symbol Editor (Phase 18.5.D). Singleton shared between workspace leaf
-	// and any future floating instance. SelectionFn returns the single
-	// selected entity (Unit or Contact); Apply targets it.
-	g.UI.SymbolEditor = ui.NewSymbolEditor(func() ecs.Entity {
-		if len(g.Sel.Units) == 1 {
-			return g.Sel.Units[0]
-		}
-		return ecs.Entity{}
-	})
+	// and any future floating instance. Apply targets whatever
+	// symbolApplyTarget resolves to.
+	g.UI.SymbolEditor = ui.NewSymbolEditor(g.symbolApplyTarget)
 
 	g.applyShotSelection()
 }
@@ -87,6 +82,20 @@ func (g *Game) chromeBusy() bool {
 		g.UI.PanelMgr.IsTitleDragging() ||
 		g.UI.ChevronMenu.Open || g.UI.Floating.IsBusy(rl.GetMousePosition()) ||
 		g.UI.Floating.SwitchMenuOpen()
+}
+
+// symbolApplyTarget is what the Symbol Editor's [Apply to selection] writes
+// onto: a lone unit / contact, or the squad behind a whole-squad selection.
+// Zero entity = nothing applicable, which disables the button.
+func (g *Game) symbolApplyTarget() ecs.Entity {
+	if len(g.Sel.Units) == 1 {
+		return g.Sel.Units[0]
+	}
+	if squad, homo := groupSelected(g.Sel.Units, g.Maps.SquadMember); homo &&
+		squad != (ecs.Entity{}) && g.App.World.Alive(squad) {
+		return squad
+	}
+	return ecs.Entity{}
 }
 
 func (g *Game) isSelected(e ecs.Entity) int {
@@ -277,6 +286,9 @@ func (g *Game) renderFloatingWidget(id ui.PanelID, content rl.Rectangle,
 			SmoothedSquadPos:   g.UI.SmoothedSquadPos,
 			MapMarkerCache:     &g.Res.MapMarkerCache,
 			RoleMap:            g.Maps.Role,
+			VehicleMap:         g.Maps.Vehicle,
+			FactionMap:         g.Maps.Faction,
+			SquadOverrideMap:   g.Maps.SquadOverride,
 			Font:               font,
 			MapPingFilter:      g.Filt.MapPing,
 			Clock:              g.Svc.Squad.Clock(),

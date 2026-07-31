@@ -126,6 +126,8 @@ type gameMaps struct {
 	ContactOverride      *ecs.Map[components.ContactSymbolOverride]
 	ContactPlayerSet     *ecs.Map[components.ContactPlayerSet]
 	UnitOverride         *ecs.Map[components.UnitSymbolOverride]
+	SquadOverride        *ecs.Map[components.SquadSymbolOverride]
+	Vehicle              *ecs.Map[components.Vehicle]
 	ActionQueue          *ecs.Map[components.ActionQueue]
 }
 

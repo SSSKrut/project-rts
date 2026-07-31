@@ -25,9 +25,14 @@ type MapRenderCtx struct {
 	// as a fallback when MapMarkerCache has no entry (cold cache).
 	SquadCenter    func(world *ecs.World, roster *components.CommandRoster) (components.WorldPos, bool)
 	MapMarkerCache *components.MapMarkerCache
-	// RoleMap nil -> markers stay a plain coloured dot (no ShortLabel).
-	RoleMap *ecs.Map[components.UnitRole]
-	Font    rl.Font
+	// Squad marker symbology: SquadOverrideMap holds the player's assignment,
+	// the rest feed the composition fallback. All nil-tolerant — a missing
+	// handle degrades to a generic infantry symbol.
+	RoleMap          *ecs.Map[components.UnitRole]
+	VehicleMap       *ecs.Map[components.Vehicle]
+	FactionMap       *ecs.Map[components.Faction]
+	SquadOverrideMap *ecs.Map[components.SquadSymbolOverride]
+	Font             rl.Font
 	// SquadColor is injected to avoid a UI -> render-package cycle.
 	SquadColor      func(ent ecs.Entity) rl.Color
 	RoadGraph       *components.RoadGraph
@@ -339,39 +344,25 @@ func drawSquadMarkers(content rl.Rectangle, ctx MapRenderCtx) {
 		if ctx.SquadColor != nil {
 			col = ctx.SquadColor(ent)
 		}
-		// Radius 9 fits 1-2 char ShortLabel ("L", "MG", "AT") inside the disc.
-		const radius float32 = 9
-		rl.DrawCircleV(screen, radius, col)
-		rl.DrawCircleLines(int32(screen.X), int32(screen.Y), radius,
-			rl.Color{R: 20, G: 20, B: 20, A: 200})
-		// Contrast picked off the squad's palette colour so all squad
-		// tints stay readable.
-		if ctx.RoleMap != nil && roster.Count > 0 {
-			commander := roster.Members[0]
-			if commander != (ecs.Entity{}) && ctx.World.Alive(commander) {
-				if r := ctx.RoleMap.Get(commander); r != nil {
-					label := r.Kind.ShortLabel()
-					const fontSize float32 = 13
-					sz := rl.MeasureTextEx(ctx.Font, label, fontSize, 1)
-					txt := rl.Color{R: 0, G: 0, B: 0, A: 230}
-					if (0.299*float32(col.R) + 0.587*float32(col.G) + 0.114*float32(col.B)) < 140 {
-						txt = rl.Color{R: 255, G: 255, B: 255, A: 240}
-					}
-					rl.DrawTextEx(ctx.Font, label, rl.Vector2{
-						X: screen.X - sz.X*0.5,
-						Y: screen.Y - sz.Y*0.5,
-					}, fontSize, 1, txt)
-				}
-			}
-		}
+		spec := SquadSymbolSpec(ctx, ent, roster)
+		DrawSymbol(spec, screen, squadSymbolHalf, 1.0)
+		// The APP-6 frame carries affiliation only, so the squad's palette
+		// colour rides as a strip below it — as an outline it would vanish
+		// against a friend frame of the same blue.
+		bounds := SymbolBounds(spec.Affiliation, screen, squadSymbolHalf)
+		rl.DrawRectangleRec(rl.Rectangle{
+			X: bounds.X, Y: bounds.Y + bounds.Height + 1,
+			Width: bounds.Width, Height: squadTintStripH,
+		}, col)
+		marker := rl.Rectangle{X: bounds.X, Y: bounds.Y,
+			Width: bounds.Width, Height: bounds.Height + 1 + squadTintStripH}
 		hoverHere := ctx.Hovered == ent
 		selectedHere := mapAnyMemberSelected(ctx.Selected, roster)
 		if selectedHere {
-			rl.DrawCircleLines(int32(screen.X), int32(screen.Y), radius+3, mapSelectionRing)
-			rl.DrawCircleLines(int32(screen.X), int32(screen.Y), radius+4, mapSelectionRing)
+			rl.DrawRectangleLinesEx(InflateRect(marker, 2), 1.5, mapSelectionRing)
 		}
 		if hoverHere {
-			rl.DrawCircleLines(int32(screen.X), int32(screen.Y), radius+6, mapHoverRing)
+			rl.DrawRectangleLinesEx(InflateRect(marker, 4), 1.5, mapHoverRing)
 		}
 	}
 }

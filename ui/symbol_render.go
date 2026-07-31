@@ -33,6 +33,27 @@ func DrawSymbol(spec components.SymbolSpec, center rl.Vector2, half float32, alp
 	drawSymbolIcon(spec.Icon, center, half, outline)
 }
 
+// SymbolBounds is the frame's screen rectangle. Selection rings and hit
+// tests need the same geometry drawSymbolFrame paints, per affiliation.
+func SymbolBounds(a components.Affiliation, c rl.Vector2, half float32) rl.Rectangle {
+	w, h := half, half
+	switch a {
+	case components.AffilFriend:
+		w = half * 1.5
+	case components.AffilUnknown:
+		w, h = half*1.2, half*1.2
+	}
+	return rl.Rectangle{X: c.X - w, Y: c.Y - h, Width: w * 2, Height: h * 2}
+}
+
+// InflateRect grows a rect by d on every side.
+func InflateRect(r rl.Rectangle, d float32) rl.Rectangle {
+	return rl.Rectangle{
+		X: r.X - d, Y: r.Y - d,
+		Width: r.Width + 2*d, Height: r.Height + 2*d,
+	}
+}
+
 func drawSymbolFrame(a components.Affiliation, c rl.Vector2, half float32,
 	fill, outline rl.Color) {
 	switch a {

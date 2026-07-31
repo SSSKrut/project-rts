@@ -397,6 +397,8 @@ func (g *Game) initRenderHandles() {
 	g.Maps.ContactOverride = ecs.NewMap[components.ContactSymbolOverride](g.App.World)
 	g.Maps.ContactPlayerSet = ecs.NewMap[components.ContactPlayerSet](g.App.World)
 	g.Maps.UnitOverride = ecs.NewMap[components.UnitSymbolOverride](g.App.World)
+	g.Maps.SquadOverride = ecs.NewMap[components.SquadSymbolOverride](g.App.World)
+	g.Maps.Vehicle = ecs.NewMap[components.Vehicle](g.App.World)
 
 	g.Filt.Building = ecs.NewFilter1[components.Building](g.App.World)
 	g.Filt.TrenchRoot = ecs.NewFilter1[components.TrenchRoot](g.App.World)
