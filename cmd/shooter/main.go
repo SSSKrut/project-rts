@@ -99,14 +99,19 @@ type Character struct {
 	IsPlayer  bool
 	Brain     *Brain // nil = the hand-written NPC script
 	Last      Intent // net bots think at brainEvery, and coast on this between
+
+	Suppression   float32 // 0..1: rounds passing close shake the aim and the legs
+	SmokeCooldown float32
 }
 
 // Intent is what any controller — keyboard, script or network — hands to the
 // sim. Nothing downstream cares which one produced it.
 type Intent struct {
-	Move rl.Vector3 // direction, length ≤ 1 (the length is the throttle)
-	Aim  rl.Vector3 // world point to shoot at
-	Fire bool
+	Move    rl.Vector3 // direction, length ≤ 1 (the length is the throttle)
+	Aim     rl.Vector3 // world point to shoot at
+	Fire    bool
+	Smoke   bool
+	SmokeAt rl.Vector3
 }
 
 // Stat survives its owner's death, so the trainer can still read what a fallen
@@ -126,12 +131,22 @@ type World struct {
 	TeamColors [teamCount]rl.Color
 	Characters []Character
 	Bullets    []Bullet
+	Smokes     []Smoke
 	Phys       Physics
 	Stats      []Stat // indexed by ID-1, outlives the dead
 	Tick       int
-	Brains     [teamCount]*Brain // nil = that team fights on the script
+
+	SmokesThrown [teamCount]int
+	Brains       [teamCount]*Brain // nil = that team fights on the script
+	Spectate     bool              // no player slot: both sides are AI
+
+	Attacker int     // side that has to break through before the clock, -1 = neither
+	Limit    float32 // seconds until the clock decides, 0 = play until a wipe
+	Clock    float32
+	Winner   int
 
 	obs, hid, act []float32       // per-world scratch: brains hold weights only
+	seen          []bool          // per-character sight result of the last observation
 	slotEnemy     [neighbours]int // enemy slots the last observation reported
 
 	seed   uint64
@@ -140,12 +155,36 @@ type World struct {
 
 func newWorld(seed uint64) *World {
 	return &World{
-		seed: seed,
-		Phys: buildArena(),
-		obs:  make([]float32, obsN),
-		hid:  make([]float32, hiddenN),
-		act:  make([]float32, outN),
+		seed:     seed,
+		Phys:     buildArena(),
+		Attacker: -1,
+		Winner:   -1,
+		obs:      make([]float32, obsN),
+		hid:      make([]float32, hiddenN),
+		act:      make([]float32, outN),
 	}
+}
+
+// outcome is the single place the match rules live, so the trainer and the
+// window it is watched in can never disagree. Wiping the other side always
+// wins. When the clock decides instead, it hands the match to the defence —
+// that is what makes an attacker have to come out and an arms race possible.
+func (w *World) outcome() (winner int, done bool) {
+	switch a0, a1 := w.alive(0), w.alive(1); {
+	case a0 == 0 && a1 == 0:
+		return -1, true
+	case a1 == 0:
+		return 0, true
+	case a0 == 0:
+		return 1, true
+	}
+	if w.Limit > 0 && w.Clock >= w.Limit {
+		if w.Attacker >= 0 {
+			return 1 - w.Attacker, true
+		}
+		return -1, true
+	}
+	return -1, false
 }
 
 func main() {
@@ -153,7 +192,11 @@ func main() {
 	train := flag.Bool("train", false, "evolve bot brains headless instead of opening the game")
 	eval := flag.Bool("eval", false, "score the -brain genome against the scripted AI and exit")
 	brainPath := flag.String("brain", "", "genome file to drive NPCs with")
+	brainPathB := flag.String("brain-b", "", "second genome — the other team fights on it (implies -spectate)")
 	brainTeam := flag.Int("brain-team", 1, "team the loaded brain fights for (-1 = both)")
+	spectate := flag.Bool("spectate", false, "no player: watch the two sides fight")
+	flag.BoolVar(&cfg.Coevolve, "coevolve", cfg.Coevolve, "race two separate populations instead of one playing itself")
+	flag.IntVar(&cfg.HofRounds, "hof-rounds", cfg.HofRounds, "rounds per generation against the opponent's past champions")
 	seedFlag := flag.Uint64("seed", 0, "RNG seed (0 = clock)")
 	flag.IntVar(&cfg.Pop, "pop", cfg.Pop, "genomes in the population")
 	flag.IntVar(&cfg.Gens, "gens", cfg.Gens, "generations to run")
@@ -164,12 +207,13 @@ func main() {
 	mutRate := flag.Float64("mut-rate", float64(cfg.MutRate), "per-gene mutation chance")
 	mutSigma := flag.Float64("mut-sigma", float64(cfg.MutSigma), "mutation step size")
 	shape := flag.Float64("shape", float64(cfg.Shape), "weight of damage traded as a tie-breaker (0 = wins only)")
-	speed := flag.Float64("speed-bonus", float64(cfg.SpeedBonus), "extra points for winning with time to spare")
+	margin := flag.Float64("margin-bonus", float64(cfg.MarginBonus), "extra points for a decisive win (clock left for attack, squad left for defence)")
+	flag.BoolVar(&cfg.Roles, "roles", cfg.Roles, "with -coevolve: pool 0 attacks, pool 1 defends, the clock favours the defence")
 	matchSec := flag.Float64("match-sec", float64(cfg.MatchSec), "seconds before a match is called a draw")
 	flag.Parse()
 	cfg.MutRate, cfg.MutSigma = float32(*mutRate), float32(*mutSigma)
 	cfg.Shape, cfg.MatchSec = float32(*shape), float32(*matchSec)
-	cfg.SpeedBonus = float32(*speed)
+	cfg.MarginBonus = float32(*margin)
 
 	seed := *seedFlag
 	if seed == 0 {
@@ -183,28 +227,52 @@ func main() {
 			os.Exit(1)
 		}
 	case *eval:
-		if err := EvalGenome(*brainPath, cfg, seed); err != nil {
+		if err := EvalGenome(*brainPath, *brainPathB, cfg, seed); err != nil {
 			fmt.Fprintln(os.Stderr, "eval:", err)
 			os.Exit(1)
 		}
 	default:
-		runGame(seed, *brainPath, *brainTeam)
+		runGame(seed, watch{
+			brainA:   *brainPath,
+			brainB:   *brainPathB,
+			team:     *brainTeam,
+			spectate: *spectate || *brainPathB != "",
+			roles:    cfg.Roles,
+			limit:    cfg.MatchSec,
+		})
 	}
 }
 
-func runGame(seed uint64, brainPath string, brainTeam int) {
+// watch says who is driving whom in the windowed game.
+type watch struct {
+	brainA, brainB string
+	team           int
+	spectate       bool
+	roles          bool
+	limit          float32
+}
+
+func runGame(seed uint64, w watch) {
 	world := newWorld(seed)
-	if brainPath != "" {
-		genes, err := loadGenome(brainPath)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "brain:", err)
-			os.Exit(1)
-		}
-		brain := NewBrain(genes)
+	world.Spectate = w.spectate
+
+	if w.brainA != "" {
+		brain := mustLoadBrain(w.brainA)
 		for t := range teamCount {
-			if brainTeam < 0 || brainTeam == t {
+			if w.team < 0 || w.team == t {
 				world.Brains[t] = brain
 			}
+		}
+	}
+	if w.brainB != "" {
+		// Two brains means a duel: A holds the team it was given, B takes the other.
+		for t := range teamCount {
+			if world.Brains[t] == nil {
+				world.Brains[t] = mustLoadBrain(w.brainB)
+			}
+		}
+		if w.roles && w.team >= 0 {
+			world.Attacker, world.Limit = w.team, w.limit // -brain is the attacker
 		}
 	}
 
@@ -246,8 +314,13 @@ func runGame(seed uint64, brainPath string, brainTeam int) {
 			if aiming && rl.IsMouseButtonDown(rl.MouseButtonLeft) {
 				world.playerFire(aim)
 			}
-			if world.over() {
-				gameState = GameOver
+			if aiming && rl.IsKeyPressed(rl.KeyG) {
+				if p := world.player(); p != nil {
+					world.throwSmoke(p, aim)
+				}
+			}
+			if winner, done := world.outcome(); done {
+				world.Winner, gameState = winner, GameOver
 			}
 
 		case WaitingForInput, GameOver:
@@ -267,6 +340,7 @@ func runGame(seed uint64, brainPath string, brainTeam int) {
 		if aiming {
 			drawCrosshair(aim)
 		}
+		drawSmokes(world.Smokes) // last: translucent, blends over everything behind
 		rl.EndMode3D()
 
 		world.drawHUD(gameState)
@@ -274,7 +348,16 @@ func runGame(seed uint64, brainPath string, brainTeam int) {
 	}
 }
 
-func (w *World) gameStart() { w.reset(true) }
+func (w *World) gameStart() { w.reset(!w.Spectate) }
+
+func mustLoadBrain(path string) *Brain {
+	genes, err := loadGenome(path)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "brain:", err)
+		os.Exit(1)
+	}
+	return NewBrain(genes)
+}
 
 // reset lays out a fresh match. Without a player every slot is AI — that is the
 // shape the trainer runs headless.
@@ -282,8 +365,11 @@ func (w *World) reset(withPlayer bool) {
 	w.TeamColors = pickTeamColors(&w.seed)
 	w.Characters = w.Characters[:0]
 	w.Bullets = w.Bullets[:0]
+	w.Smokes = w.Smokes[:0]
 	w.Stats = w.Stats[:0]
-	w.Tick, w.nextID = 0, 0
+	w.Tick, w.nextID, w.Winner = 0, 0, -1
+	w.Clock = 0
+	w.SmokesThrown = [teamCount]int{}
 
 	for team := range teamCount {
 		lineX := float32(spawnLineX)
@@ -328,9 +414,11 @@ func (w *World) spawn(team int, pos rl.Vector3, isPlayer bool) {
 
 func (w *World) update(dt float32) {
 	w.Tick++
+	w.Clock += dt
 	for i := range w.Characters {
 		w.Characters[i].Cooldown -= dt
 	}
+	w.stepCombatState(dt)
 
 	w.stepPlayer(dt)
 	for i := range w.Characters {
@@ -362,11 +450,14 @@ func (w *World) think(c *Character) Intent {
 func (w *World) applyIntent(c *Character, in Intent, dt float32) {
 	if throttle := rl.Vector3Length(rl.Vector3{X: in.Move.X, Z: in.Move.Z}); throttle > 1e-3 {
 		dir := flatNormalize(in.Move)
-		step := rl.Vector3Scale(dir, c.Speed*min(throttle, 1)*dt)
-		c.Position = w.Phys.MoveCircle(c.Position, step, charRadius)
+		speed := c.Speed * (1 - suppressSlow*c.Suppression)
+		c.Position = w.Phys.MoveCircle(c.Position, rl.Vector3Scale(dir, speed*min(throttle, 1)*dt), charRadius)
 	}
 	if in.Fire && c.Cooldown <= 0 {
 		w.fire(c, in.Aim)
+	}
+	if in.Smoke {
+		w.throwSmoke(c, in.SmokeAt)
 	}
 }
 
@@ -414,7 +505,7 @@ func (w *World) scriptIntent(c *Character) Intent {
 		return Intent{}
 	}
 
-	sighted := !w.Phys.Blocked(muzzleOf(c.Position), muzzleOf(target))
+	sighted := w.sighted(muzzleOf(c.Position), muzzleOf(target))
 	dist := rl.Vector3Distance(c.Position, target)
 
 	var in Intent
@@ -427,6 +518,10 @@ func (w *World) scriptIntent(c *Character) Intent {
 	}
 	if sighted && dist <= npcRange {
 		in.Aim, in.Fire = target, true
+	}
+	// Pinned: put a cloud between us and whoever is doing the pinning.
+	if c.Suppression > 0.4 && c.SmokeCooldown <= 0 {
+		in.Smoke, in.SmokeAt = true, target
 	}
 	return in
 }
@@ -479,10 +574,10 @@ func (w *World) fire(c *Character, at rl.Vector3) {
 
 	muzzle := muzzleOf(c.Position)
 	dir := rl.Vector3Normalize(rl.Vector3Subtract(muzzleOf(at), muzzle))
-	if c.Spread > 0 {
+	if spread := c.Spread + suppressSpread*c.Suppression; spread > 0 {
 		dir = rl.Vector3Normalize(rl.Vector3Add(dir, rl.Vector3{
-			X: (pseudoRand(&w.seed) - 0.5) * c.Spread,
-			Z: (pseudoRand(&w.seed) - 0.5) * c.Spread,
+			X: (pseudoRand(&w.seed) - 0.5) * spread,
+			Z: (pseudoRand(&w.seed) - 0.5) * spread,
 		}))
 	}
 
@@ -507,7 +602,10 @@ func (w *World) stepBullets(dt float32) {
 		travel := bulletSpeed * dt
 		dir := rl.Vector3Scale(b.Velocity, 1/bulletSpeed)
 		t, victim, stopped := w.traceBullet(b, dir, travel)
-		b.Position = rl.Vector3Add(b.Position, rl.Vector3Scale(dir, t))
+
+		from := b.Position
+		b.Position = rl.Vector3Add(from, rl.Vector3Scale(dir, t))
+		w.suppress(from, b.Position, b.Owner)
 
 		if victim != nil {
 			victim.Health -= b.Damage
@@ -593,20 +691,34 @@ func (w *World) drawHUD(gameState int) {
 		return
 
 	case GameOver:
-		winner := "TEAM A WINS"
-		if w.alive(0) == 0 {
-			winner = "TEAM B WINS"
+		verdict := "DRAW"
+		if w.Winner >= 0 {
+			verdict = fmt.Sprintf("TEAM %c WINS", 'A'+w.Winner)
+			if w.Attacker >= 0 && w.Winner != w.Attacker && w.alive(w.Attacker) > 0 {
+				verdict += " - DEFENCE HELD"
+			}
 		}
-		drawCentered(winner, screenH/2-20, 32, colorText)
+		drawCentered(verdict, screenH/2-20, 32, colorText)
 		drawCentered("Press Space to restart", screenH/2+24, 20, colorText)
 	}
 
 	rl.DrawRectangle(12, 12, 260, 100, rl.Color{R: 0, G: 0, B: 0, A: 150})
+	if w.Limit > 0 {
+		rl.DrawText(fmt.Sprintf("%4.1fs / %.0fs", w.Clock, w.Limit), 190, 78, 18, colorText)
+	}
 	for team := range teamCount {
 		y := int32(22 + team*26)
 		tag := ""
 		if w.Brains[team] != nil {
 			tag = "   NET"
+		}
+		switch team {
+		case w.Attacker:
+			tag += " ATK"
+		default:
+			if w.Attacker >= 0 {
+				tag += " DEF"
+			}
 		}
 		rl.DrawRectangle(22, y, 16, 16, w.TeamColors[team])
 		rl.DrawText(fmt.Sprintf("TEAM %c   alive %d%s", 'A'+team, w.alive(team), tag), 46, y, 18, colorText)
@@ -615,7 +727,13 @@ func (w *World) drawHUD(gameState int) {
 	status, hint := "DEAD", "WASD pan   wheel zoom"
 	if p := w.player(); p != nil {
 		status = fmt.Sprintf("%d HP", int(p.Health))
-		hint = "WASD move   LMB fire   wheel zoom"
+		if p.Suppression > 0.02 {
+			status += fmt.Sprintf("   SUPPRESSED %.0f%%", p.Suppression*100)
+		}
+		if p.SmokeCooldown > 0 {
+			status += fmt.Sprintf("   smoke %.0fs", p.SmokeCooldown)
+		}
+		hint = "WASD move   LMB fire   G smoke   wheel zoom"
 	}
 	rl.DrawText("PLAYER   "+status, 22, 78, 18, colorText)
 	rl.DrawText(hint, 12, screenH-26, 16, colorText)
@@ -715,6 +833,7 @@ func drawCharacter(c *Character, teamColor rl.Color) {
 		rl.DrawCircle3D(ring, charRadius*1.5, rl.Vector3{X: 1}, 90, colorNet)
 	}
 	drawHealthBar(c)
+	drawSuppression(c)
 }
 
 func drawHealthBar(c *Character) {

@@ -116,6 +116,20 @@ func RayCylinderT(origin, dir rl.Vector3, maxT float32, base rl.Vector3, r, h fl
 	return t, true
 }
 
+// SegDistXZ is the closest horizontal distance from p to the segment ab — how
+// near a round actually passed, rather than where it ended up.
+func SegDistXZ(a, b, p rl.Vector3) float32 {
+	abx, abz := b.X-a.X, b.Z-a.Z
+	apx, apz := p.X-a.X, p.Z-a.Z
+
+	t := float32(0)
+	if den := abx*abx + abz*abz; den > 1e-9 {
+		t = rl.Clamp((apx*abx+apz*abz)/den, 0, 1)
+	}
+	dx, dz := apx-abx*t, apz-abz*t
+	return sqrt32(dx*dx + dz*dz)
+}
+
 // SeparateXZ pushes two overlapping bodies apart, half the overlap each.
 func SeparateXZ(a, b *rl.Vector3, minDist float32) {
 	dx, dz := b.X-a.X, b.Z-a.Z
