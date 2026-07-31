@@ -137,9 +137,28 @@ func (g *Game) handleInput() {
 		}
 	}
 
+	// Squad-list divider drag. Handled outside the focus gate so the column
+	// keeps following the cursor once it leaves the panel mid-drag.
+	if g.UI.TimelineLabelDrag {
+		panelTL := g.UI.PanelMgr.Get(ui.PanelTimeline)
+		if rl.IsMouseButtonDown(rl.MouseButtonLeft) {
+			g.UI.TimelineView.LabelW = ui.ClampTimelineLabelW(panelTL,
+				g.Frame.Cursor.X-ui.ContentRect(panelTL).X)
+			rl.SetMouseCursor(rl.MouseCursorResizeEW)
+		} else {
+			g.UI.TimelineLabelDrag = false
+		}
+	}
+
 	g.UI.TimelineHoverOK = false
 	if g.Frame.Focused == ui.PanelTimeline && !g.chromeBusy() {
 		panelTL := g.UI.PanelMgr.Get(ui.PanelTimeline)
+		if rl.CheckCollisionPointRec(g.Frame.Cursor, ui.TimelineDividerRect(panelTL, g.UI.TimelineView)) {
+			rl.SetMouseCursor(rl.MouseCursorResizeEW)
+			if rl.IsMouseButtonPressed(rl.MouseButtonLeft) && !g.scrollDragging() {
+				g.UI.TimelineLabelDrag = true
+			}
+		}
 		g.UI.TimelineHoverHit, g.UI.TimelineHoverOK = ui.TimelineHitTest(panelTL, g.UI.TimelineData, g.UI.TimelineView, g.Frame.Cursor)
 		if g.UI.TimelineHoverHit.HitOrder {
 			for _, r := range g.UI.TimelineData.Rows {
@@ -171,7 +190,7 @@ func (g *Game) handleInput() {
 				g.UI.TimelineView.Follow = false
 			}
 		}
-		if rl.IsMouseButtonPressed(rl.MouseButtonLeft) && !g.scrollDragging() {
+		if rl.IsMouseButtonPressed(rl.MouseButtonLeft) && !g.scrollDragging() && !g.UI.TimelineLabelDrag {
 			if g.UI.TimelineHoverOK && g.UI.TimelineHoverHit.Squad != (ecs.Entity{}) &&
 				g.App.World.Alive(g.UI.TimelineHoverHit.Squad) && g.isControllable(g.UI.TimelineHoverHit.Squad) {
 				if r := g.Maps.Roster.Get(g.UI.TimelineHoverHit.Squad); r != nil {

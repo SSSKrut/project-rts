@@ -13,6 +13,10 @@ const (
 	soloistDotR float32 = 3
 	unitDotEdge         = 0.55 // outline = dot colour scaled toward black
 
+	// vehicleSymbolHalf runs a touch larger than a squad marker: a hull is
+	// the heaviest single thing on the field and reads as such.
+	vehicleSymbolHalf float32 = 8
+
 	// ownDotsMinSpreadPx is deliberately far below the contact threshold:
 	// for enemy tracks the point is to suppress a scatter, for our own
 	// soldiers it is to reveal one as soon as the zoom can separate them.
@@ -31,6 +35,11 @@ func squadMemberPoints(ctx MapRenderCtx, roster *components.CommandRoster,
 	for i := uint8(0); i < roster.Count; i++ {
 		mem := roster.Members[i]
 		if mem == (ecs.Entity{}) || !ctx.World.Alive(mem) {
+			continue
+		}
+		// Vehicles carry their own marker; a hull must not shrink to a dot
+		// just because it rides in a mixed squad.
+		if ctx.VehicleMap != nil && ctx.VehicleMap.Has(mem) {
 			continue
 		}
 		p := ctx.PosMap.Get(mem)
@@ -71,6 +80,45 @@ func drawSquadMemberDots(content rl.Rectangle, ctx MapRenderCtx,
 		rl.DrawCircleV(p, unitDotR, col)
 		rl.DrawCircleLines(int32(p.X), int32(p.Y), unitDotR, edge)
 	}
+}
+
+// drawOwnVehicles gives every own vehicle its own symbol. A hull is a single
+// heavy asset, so it never collapses into a squad marker or a soldier dot —
+// one machine, one marker, at any zoom.
+func drawOwnVehicles(content rl.Rectangle, ctx MapRenderCtx) {
+	if ctx.VehicleFilter == nil {
+		return
+	}
+	q := ctx.VehicleFilter.Query()
+	for q.Next() {
+		pos, veh := q.Get()
+		ent := q.Entity()
+		if unitAffiliation(ctx, ent) != components.AffilFriend {
+			continue
+		}
+		p := MapWorldToPanel(*pos, ctx.Cam, content)
+		spec := components.SymbolSpec{
+			Affiliation: components.AffilFriend,
+			Dimension:   components.DimVehicleClass,
+			Icon:        vehicleIcon(veh.Kind),
+		}
+		DrawSymbol(spec, p, vehicleSymbolHalf, 1.0)
+		bounds := SymbolBounds(spec.Affiliation, p, vehicleSymbolHalf)
+		if isSelectedEntity(ctx.Selected, ent) {
+			rl.DrawRectangleLinesEx(InflateRect(bounds, 2), 1.5, mapSelectionRing)
+		}
+		if ctx.Hovered == ent {
+			rl.DrawRectangleLinesEx(InflateRect(bounds, 4), 1.5, mapHoverRing)
+		}
+	}
+}
+
+// vehicleIcon: a truck hauls, everything else in the current roster fights.
+func vehicleIcon(k components.VehicleKind) components.IconKind {
+	if k == components.VehicleTruck {
+		return components.IconSupply
+	}
+	return components.IconArmor
 }
 
 // drawSoloistUnits draws own units that belong to no squad — nothing else on

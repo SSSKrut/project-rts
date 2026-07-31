@@ -288,6 +288,7 @@ func (g *Game) renderFloatingWidget(id ui.PanelID, content rl.Rectangle,
 			RoleMap:          g.Maps.Role,
 			VehicleMap:       g.Maps.Vehicle,
 			UnitFilter:       g.Filt.UnitRender,
+			VehicleFilter:    g.Filt.VehicleRender,
 			FactionMap:       g.Maps.Faction,
 			SquadOverrideMap: g.Maps.SquadOverride,
 			Font:             font,
@@ -315,7 +316,8 @@ func (g *Game) renderFloatingWidget(id ui.PanelID, content rl.Rectangle,
 			SquadColor:    g.squadColor,
 		})
 	case ui.PanelTimeline:
-		ui.DrawTimelinePanel(syn("Timeline"), font, g.UI.TimelineData, &g.UI.TimelineView)
+		ui.DrawTimelinePanel(syn("Timeline"), font, g.UI.TimelineData, &g.UI.TimelineView,
+			cursor, false)
 	case ui.PanelDebug:
 		g.drawDebugWidget(syn("Debug"), font, cursor, lmbPress)
 	case ui.Panel3D:

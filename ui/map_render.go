@@ -30,8 +30,10 @@ type MapRenderCtx struct {
 	// handle degrades to a generic infantry symbol.
 	RoleMap    *ecs.Map[components.UnitRole]
 	VehicleMap *ecs.Map[components.Vehicle]
-	// UnitFilter drives the individual-soldier layer. Nil → squad symbols only.
+	// UnitFilter / VehicleFilter drive the individual-unit layer.
+	// Nil → squad symbols only.
 	UnitFilter       *ecs.Filter3[components.WorldPos, components.Unit, components.Stance]
+	VehicleFilter    *ecs.Filter2[components.WorldPos, components.Vehicle]
 	FactionMap       *ecs.Map[components.Faction]
 	SquadOverrideMap *ecs.Map[components.SquadSymbolOverride]
 	Font             rl.Font
@@ -88,6 +90,7 @@ func DrawMap(panel Panel, ctx MapRenderCtx) {
 	drawOrderMarkers(content, ctx)
 	drawMapPings(content, ctx)
 	drawSquadMarkers(content, ctx)
+	drawOwnVehicles(content, ctx)
 	drawSoloistUnits(content, ctx)
 	drawMapContacts(content, ctx)
 	drawAnchorMarker(content, ctx)

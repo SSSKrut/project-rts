@@ -13,10 +13,11 @@ import (
 // [StartT..EndT]; a "now" line marks current game-time.
 
 type TimelineSquadRow struct {
-	Squad  ecs.Entity
-	Name   string
-	Color  rl.Color
-	Orders []TimelineOrderBlock
+	Squad   ecs.Entity
+	Name    string
+	Color   rl.Color
+	Members int
+	Orders  []TimelineOrderBlock
 }
 
 type TimelineOrderBlock struct {
@@ -39,6 +40,8 @@ type TimelineViewState struct {
 	OffsetT      float32
 	PixelsPerSec float32
 	Follow       bool
+	// LabelW is the squad-list column width; 0 reads as the default.
+	LabelW float32
 }
 
 func NewTimelineView() TimelineViewState {
@@ -46,12 +49,51 @@ func NewTimelineView() TimelineViewState {
 		OffsetT:      0,
 		PixelsPerSec: 8,
 		Follow:       true,
+		LabelW:       timelineLabelW,
 	}
+}
+
+// TimelineLabelWidth resolves the gutter width, defaulting a zero value so
+// a view restored from an older state still lays out.
+func TimelineLabelWidth(view TimelineViewState) float32 {
+	if view.LabelW <= 0 {
+		return timelineLabelW
+	}
+	return view.LabelW
+}
+
+// TimelineDividerRect is the grab band between the squad list and the tracks.
+func TimelineDividerRect(panel Panel, view TimelineViewState) rl.Rectangle {
+	c := ContentRect(panel)
+	x := c.X + TimelineLabelWidth(view)
+	return rl.Rectangle{
+		X: x - timelineDividerGrab, Y: c.Y,
+		Width: timelineDividerGrab * 2, Height: c.Height,
+	}
+}
+
+// ClampTimelineLabelW keeps both halves usable: the list never eats the
+// tracks, and never shrinks below a readable name column.
+func ClampTimelineLabelW(panel Panel, w float32) float32 {
+	c := ContentRect(panel)
+	max := c.Width * 0.6
+	if max < timelineLabelMinW {
+		max = timelineLabelMinW
+	}
+	if w < timelineLabelMinW {
+		w = timelineLabelMinW
+	}
+	if w > max {
+		w = max
+	}
+	return w
 }
 
 const (
 	timelineHeaderH      float32 = 26
 	timelineLabelW       float32 = 150
+	timelineLabelMinW    float32 = 90
+	timelineDividerGrab  float32 = 4
 	timelineRowH         float32 = 32
 	timelineRowPad       float32 = 4
 	TimelineMinPxPerSec  float32 = 2
@@ -70,6 +112,8 @@ var (
 	timelineNowLine   = rl.Color{R: 90, G: 220, B: 255, A: 220}
 	timelineRowSep    = rl.Color{R: 28, G: 32, B: 38, A: 255}
 	timelineEmptyText = rl.Color{R: 110, G: 118, B: 128, A: 255}
+	timelineDivider   = rl.Color{R: 46, G: 54, B: 66, A: 255}
+	timelineDividerHi = rl.Color{R: 90, G: 130, B: 180, A: 255}
 )
 
 // Estimated block durations for display only (NOT simulation).
@@ -106,27 +150,39 @@ func orderKindColor(k components.OrderKindCode) rl.Color {
 
 // DrawTimelinePanel mutates view when Follow is enabled so the now-line
 // stays parked near the right edge.
-func DrawTimelinePanel(panel Panel, font rl.Font, data TimelineData, view *TimelineViewState) {
+func DrawTimelinePanel(panel Panel, font rl.Font, data TimelineData, view *TimelineViewState,
+	cursor rl.Vector2, dividerActive bool) {
 	content := ContentRect(panel)
 	rl.DrawRectangleRec(content, timelineBG)
 	if content.Width <= 0 || content.Height <= 0 {
 		return
 	}
 
+	labelW := TimelineLabelWidth(*view)
 	if view.Follow {
-		visibleSec := (content.Width - timelineLabelW) / view.PixelsPerSec
+		visibleSec := (content.Width - labelW) / view.PixelsPerSec
 		view.OffsetT = data.NowT - visibleSec*timelineFollowAnchor
 	}
 
-	gutter := rl.Rectangle{X: content.X, Y: content.Y, Width: timelineLabelW, Height: content.Height}
+	gutter := rl.Rectangle{X: content.X, Y: content.Y, Width: labelW, Height: content.Height}
 	rl.DrawRectangleRec(gutter, timelineGutterBG)
 
-	tracksX := content.X + timelineLabelW
-	tracksW := content.Width - timelineLabelW
+	tracksX := content.X + labelW
+	tracksW := content.Width - labelW
 
 	header := rl.Rectangle{X: tracksX, Y: content.Y, Width: tracksW, Height: timelineHeaderH}
 	rl.DrawRectangleRec(header, timelineHeaderBG)
 	drawTimelineTicks(font, header, content.Y+content.Height, view)
+
+	// The squad list is drawn before the tracks scissor opens — inside it the
+	// gutter sits outside the clip rect and vanished entirely.
+	rl.BeginScissorMode(int32(gutter.X), int32(gutter.Y+timelineHeaderH),
+		int32(gutter.Width), int32(gutter.Height-timelineHeaderH))
+	for i, row := range data.Rows {
+		drawTimelineRowLabel(font, content, labelW, i, row)
+	}
+	rl.EndScissorMode()
+	drawTimelineGutterHeader(font, gutter, len(data.Rows))
 
 	rl.BeginScissorMode(int32(tracksX), int32(content.Y+timelineHeaderH),
 		int32(tracksW), int32(content.Height-timelineHeaderH))
@@ -134,6 +190,13 @@ func DrawTimelinePanel(panel Panel, font rl.Font, data TimelineData, view *Timel
 		drawTimelineRow(font, content, tracksX, tracksW, i, row, view, data.NowT)
 	}
 	rl.EndScissorMode()
+
+	div := TimelineDividerRect(panel, *view)
+	divCol := timelineDivider
+	if dividerActive || pointInRect(cursor, div) {
+		divCol = timelineDividerHi
+	}
+	rl.DrawRectangle(int32(tracksX-1), int32(content.Y), 2, int32(content.Height), divCol)
 
 	if len(data.Rows) == 0 {
 		const sz int32 = 15
@@ -160,24 +223,81 @@ func drawTimelineRow(font rl.Font, content rl.Rectangle, tracksX, tracksW float3
 	if rowY > content.Y+content.Height {
 		return
 	}
-	// Gutter draws outside scissor so the label stays readable.
-	chip := rl.Rectangle{X: content.X + 6, Y: rowY + 4, Width: 12, Height: timelineRowH - 8}
-	rl.DrawRectangleRec(chip, row.Color)
-	const sz int32 = 15
-	name := row.Name
-	if name == "" {
-		name = fmt.Sprintf("Squad #%X", row.Squad.ID()&0xFFF)
-	}
-	rl.DrawTextEx(font, name,
-		rl.Vector2{X: chip.X + chip.Width + 6, Y: rowY + (timelineRowH-float32(sz))*0.5},
-		float32(sz), 1.0, timelineText)
-
 	rl.DrawLine(int32(tracksX), int32(rowY+timelineRowH),
 		int32(tracksX+tracksW), int32(rowY+timelineRowH), timelineRowSep)
 
 	for _, ord := range row.Orders {
 		drawTimelineBlock(font, ord, rowY, tracksX, view, nowT)
 	}
+}
+
+func drawTimelineGutterHeader(font rl.Font, gutter rl.Rectangle, rows int) {
+	head := rl.Rectangle{X: gutter.X, Y: gutter.Y, Width: gutter.Width, Height: timelineHeaderH}
+	rl.DrawRectangleRec(head, timelineHeaderBG)
+	const sz int32 = 13
+	label := fmt.Sprintf("Squads (%d)", rows)
+	rl.DrawTextEx(font, label,
+		rl.Vector2{X: head.X + 8, Y: head.Y + (timelineHeaderH-float32(sz))*0.5},
+		float32(sz), 1.0, timelineTextDim)
+}
+
+// drawTimelineRowLabel is the squad-list entry: colour chip, name, and what
+// the squad is doing right now — the whole point of the column.
+func drawTimelineRowLabel(font rl.Font, content rl.Rectangle, labelW float32,
+	rowIdx int, row TimelineSquadRow) {
+	rowY := content.Y + timelineHeaderH + float32(rowIdx)*timelineRowH
+	if rowY > content.Y+content.Height {
+		return
+	}
+	chip := rl.Rectangle{X: content.X + 6, Y: rowY + 4, Width: 4, Height: timelineRowH - 8}
+	rl.DrawRectangleRec(chip, row.Color)
+
+	textX := chip.X + chip.Width + 6
+	maxW := content.X + labelW - textX - 6
+	const nameSz int32 = 14
+	const subSz int32 = 12
+	name := row.Name
+	if name == "" {
+		name = fmt.Sprintf("Squad #%X", row.Squad.ID()&0xFFF)
+	}
+	rl.DrawTextEx(font, clipText(font, name, float32(nameSz), maxW),
+		rl.Vector2{X: textX, Y: rowY + 3}, float32(nameSz), 1.0, timelineText)
+	rl.DrawTextEx(font, clipText(font, rowActivity(row), float32(subSz), maxW),
+		rl.Vector2{X: textX, Y: rowY + 3 + float32(nameSz) + 1}, float32(subSz), 1.0, timelineTextDim)
+
+	rl.DrawLine(int32(content.X), int32(rowY+timelineRowH),
+		int32(content.X+labelW), int32(rowY+timelineRowH), timelineRowSep)
+}
+
+// rowActivity summarises the head order; an empty queue reads as strength
+// alone so a parked squad still shows how many bodies it has.
+func rowActivity(row TimelineSquadRow) string {
+	for _, ord := range row.Orders {
+		if !ord.IsHead {
+			continue
+		}
+		return fmt.Sprintf("%s %d%%  %d men",
+			orderKindLabel(ord.KindCode), int(ord.Progress*100), row.Members)
+	}
+	return fmt.Sprintf("idle  %d men", row.Members)
+}
+
+// clipText trims with an ellipsis so a narrowed column never bleeds text
+// across the divider.
+func clipText(font rl.Font, s string, size, maxW float32) string {
+	if maxW <= 0 {
+		return ""
+	}
+	if rl.MeasureTextEx(font, s, size, 1.0).X <= maxW {
+		return s
+	}
+	for len(s) > 1 {
+		s = s[:len(s)-1]
+		if rl.MeasureTextEx(font, s+"..", size, 1.0).X <= maxW {
+			return s + ".."
+		}
+	}
+	return ""
 }
 
 func drawTimelineBlock(font rl.Font, ord TimelineOrderBlock, rowY, tracksX float32,
@@ -256,6 +376,11 @@ func drawTimelineTicks(font rl.Font, header rl.Rectangle, panelBottomY float32, 
 	const sz int32 = 13
 	for i := firstMinor; i <= lastMinor; i++ {
 		t := float32(i) * minorEverySec
+		// Nothing happened before the mission clock started; drawing those
+		// ticks stamped a row of identical "T+00:00" labels at boot.
+		if t < 0 {
+			continue
+		}
 		x := timelineTimeToX(t, header.X, view)
 		if x < header.X || x > header.X+header.Width {
 			continue
@@ -324,7 +449,7 @@ func TimelineHitTest(panel Panel, data TimelineData, view TimelineViewState, cur
 	if !pointInRect(cursor, content) {
 		return TimelineHit{}, false
 	}
-	tracksX := content.X + timelineLabelW
+	tracksX := content.X + TimelineLabelWidth(view)
 	rowIdx := int((cursor.Y - content.Y - timelineHeaderH) / timelineRowH)
 	if rowIdx < 0 || rowIdx >= len(data.Rows) {
 		return TimelineHit{}, true

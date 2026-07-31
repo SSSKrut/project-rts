@@ -45,6 +45,7 @@ func (g *Game) drawUI() {
 		RoleMap:          g.Maps.Role,
 		VehicleMap:       g.Maps.Vehicle,
 		UnitFilter:       g.Filt.UnitRender,
+		VehicleFilter:    g.Filt.VehicleRender,
 		FactionMap:       g.Maps.Faction,
 		SquadOverrideMap: g.Maps.SquadOverride,
 		Font:             g.hudFont,
@@ -166,7 +167,8 @@ func (g *Game) drawUI() {
 		g.Maps.OrderQueue, g.Maps.OrderChain, g.Maps.OrderKind, g.Maps.OrderTarget, g.Maps.OrderState,
 		g.Maps.OrderProgress, g.Maps.OrderIssuedAt, g.squadColor,
 		float32(g.App.Elapsed().Seconds()))
-	ui.DrawTimelinePanel(g.UI.PanelMgr.Get(ui.PanelTimeline), g.hudFont, g.UI.TimelineData, &g.UI.TimelineView)
+	ui.DrawTimelinePanel(g.UI.PanelMgr.Get(ui.PanelTimeline), g.hudFont, g.UI.TimelineData,
+		&g.UI.TimelineView, g.Frame.Cursor, g.UI.TimelineLabelDrag)
 	if g.UI.TimelineHoverOK && g.UI.TimelineHoverHit.HitOrder {
 		ui.DrawTimelineTooltip(g.hudFont, g.Frame.Cursor, g.UI.TimelineHoverBlk)
 	}
@@ -419,9 +421,16 @@ func buildTimelineData(
 		center, _ := systems.SquadCenter(world, roster, posMap)
 
 		head := orderQueueMap.Get(squad)
+		live := 0
+		for i := uint8(0); i < roster.Count; i++ {
+			if m := roster.Members[i]; m != (ecs.Entity{}) && world.Alive(m) {
+				live++
+			}
+		}
 		row := ui.TimelineSquadRow{
-			Squad: squad,
-			Color: squadColor(squad),
+			Squad:   squad,
+			Color:   squadColor(squad),
+			Members: live,
 		}
 		if head != nil && head.First != (ecs.Entity{}) {
 			lastEnd := float32(0)

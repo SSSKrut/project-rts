@@ -234,12 +234,13 @@ type uiState struct {
 	MarqueeActive bool
 	MarqueeOrigin ui.PanelID
 
-	TimelineView     ui.TimelineViewState
-	TimelineData     ui.TimelineData
-	TimelineHoverHit ui.TimelineHit
-	TimelineHoverOK  bool
-	TimelineHoverBlk ui.TimelineOrderBlock
-	TopBarHits       ui.TopBarHits
+	TimelineView      ui.TimelineViewState
+	TimelineData      ui.TimelineData
+	TimelineHoverHit  ui.TimelineHit
+	TimelineHoverOK   bool
+	TimelineHoverBlk  ui.TimelineOrderBlock
+	TimelineLabelDrag bool
+	TopBarHits        ui.TopBarHits
 
 	FormationEditor *ui.FormationEditor
 	SymbolEditor    *ui.SymbolEditor
