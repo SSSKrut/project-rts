@@ -147,16 +147,24 @@ func GenerateHouse(seed uint64, p HouseParams, pos components.WorldPos, kind com
 	}
 
 	// Optional interior partition: single N-S wall biased by seed with a
-	// centred doorway. No Room metadata emitted yet.
+	// centred doorway. The two rooms it carves land on the LevelSpec so the
+	// occupation layer can split members per room.
 	if p.Interior {
+		partX := minX + p.SizeX*0.4
+		worldPartX := partX + chunkBaseX
 		for s := uint8(0); s < p.Stories; s++ {
 			baseY := floorY + float32(s)*components.FloorHeight
-			partX := minX + p.SizeX*0.4
 			from := rl.Vector3{X: partX, Y: baseY, Z: minZ + 0.1}
 			to := rl.Vector3{X: partX, Y: baseY, Z: maxZ - 0.1}
 			outward := rl.Vector3{X: 1, Y: 0, Z: 0}
 			wallIdx := b.AddWall(from, to, components.FloorHeight, components.WallThickness, outward, levelRefs[s])
 			b.SetOpening(wallIdx, components.OpeningDoor, 0.5, 1.0, 0, 2.0)
+			b.AddRoom(levelRefs[s], components.AABB2D{
+				MinX: worldMinX, MinZ: worldMinZ, MaxX: worldPartX, MaxZ: worldMaxZ,
+			})
+			b.AddRoom(levelRefs[s], components.AABB2D{
+				MinX: worldPartX, MinZ: worldMinZ, MaxX: worldMaxX, MaxZ: worldMaxZ,
+			})
 		}
 	}
 

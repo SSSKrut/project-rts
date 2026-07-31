@@ -97,10 +97,13 @@ const NoLevelRef uint8 = 0xFF
 // LevelSpec is one level volume in a BuildingPlan. AABB is world-space.
 // DisplayOrder is an optional override for UI chip ordering - 0 means
 // "use avgY ascending + alphabetical tiebreak".
+// Rooms are world-space XZ rects partitioning the storey along its interior
+// walls; empty = one implicit room spanning the whole plate.
 type LevelSpec struct {
 	Name         string
 	AABB         AABB3D
 	DisplayOrder uint8
+	Rooms        []AABB2D
 }
 
 // WallSpec is one external or internal wall. Local is the "from" endpoint
@@ -172,10 +175,17 @@ type LevelTransitionSpec struct {
 	ViaWall int16
 }
 
+// MaxRoomsPerLevel caps the POD room array on Level (snapshot memcpy).
+const MaxRoomsPerLevel = 4
+
 type Level struct {
 	AABB         AABB3D
 	Name         [8]byte // zero-padded label; keep POD for snapshots
 	DisplayOrder uint8
+	// Room rects from LevelSpec.Rooms (first MaxRoomsPerLevel). RoomCount 0
+	// = no partition data, the whole plate is one room.
+	Rooms     [MaxRoomsPerLevel]AABB2D
+	RoomCount uint8
 }
 
 func LevelName(s string) (out [8]byte) {

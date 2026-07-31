@@ -39,7 +39,17 @@ const (
 	// top storey is the integration half of the cascade-anchor fix: with the
 	// old single-anchor flights the bake wired stairs to the exterior surface
 	// and no path to L2 existed at all.
-	aiSceneOfficeL2    = "ai_office_l2"
+	aiSceneOfficeL2 = "ai_office_l2"
+	// ai_office_rooms: OccupyBuilding on the 3-storey office must land every
+	// room of every storey (Level.Rooms round-robin split): 8 members over
+	// 3 floors x 2 rooms.
+	aiSceneOfficeRooms = "ai_office_rooms"
+	// ai_house2_north: 2-storey house, south door, squad approaches from the
+	// NW so its path hugs the west wall — right through the strip where the
+	// padded stair footprint pokes outside. Verdict adds max lift above the
+	// surface while OUTSIDE the footprint (owner playtest: an MG rode the
+	// invisible outer ramp up the wall face).
+	aiSceneHouse2North = "ai_house2_north"
 	aiSceneFarBuilding = "ai_far_building"
 
 	// ai_main_* run on the REAL main-map world data (mainWorldBuildings +
@@ -118,6 +128,12 @@ type aiMainSpec struct {
 	levelIdx     int
 }
 
+// aiRoomBand is one room rect + its storey floor Y (ai_office_rooms verdict).
+type aiRoomBand struct {
+	room components.AABB2D
+	minY float32
+}
+
 func aiMainSpecFor(id string) (aiMainSpec, bool) {
 	switch id {
 	case aiSceneMainM0:
@@ -167,8 +183,10 @@ func aiSceneAnchorPos() components.WorldPos {
 	case aiSceneCompoundPlusSouth, aiSceneCompoundPlusEast,
 		aiSceneCompoundPlusNorth, aiSceneCompoundPlusWest:
 		return components.WorldPos{}.Add(rl.Vector3{X: 32, Z: 26})
-	case aiSceneOfficeFront:
+	case aiSceneOfficeFront, aiSceneOfficeRooms:
 		return components.WorldPos{}.Add(rl.Vector3{X: 32, Z: 22})
+	case aiSceneHouse2North:
+		return components.WorldPos{}.Add(rl.Vector3{X: 32, Z: 40})
 	case aiSceneOfficeL2:
 		return components.WorldPos{}.Add(rl.Vector3{X: 66, Z: -29})
 	case aiSceneFarBuilding:
@@ -237,13 +255,26 @@ func aiSceneBuildings() []components.BuildingPlan {
 	case aiSceneCompoundPlusSouth, aiSceneCompoundPlusEast,
 		aiSceneCompoundPlusNorth, aiSceneCompoundPlusWest:
 		return aiBuildingsCompoundPlus()
-	case aiSceneOfficeFront:
+	case aiSceneOfficeFront, aiSceneOfficeRooms:
 		pos := components.WorldPos{}.Add(rl.Vector3{X: 32, Z: 32})
 		pos.Local.Y = systems.GroundHeight(
 			pos.Local.X+float32(pos.Chunk.X)*components.ChunkSize,
 			pos.Local.Z+float32(pos.Chunk.Z)*components.ChunkSize,
 		)
 		return []components.BuildingPlan{*buildings.GenerateOffice(0xE5, pos)}
+	case aiSceneHouse2North:
+		pos := components.WorldPos{}.Add(rl.Vector3{X: 32, Z: 32})
+		pos.Local.Y = systems.GroundHeight(
+			pos.Local.X+float32(pos.Chunk.X)*components.ChunkSize,
+			pos.Local.Z+float32(pos.Chunk.Z)*components.ChunkSize,
+		)
+		plan := buildings.GenerateHouse(0xB2, buildings.HouseParams{
+			Stories:  2,
+			SizeX:    8,
+			SizeZ:    8,
+			DoorSide: 0,
+		}, pos, components.BuildingHouse)
+		return []components.BuildingPlan{*plan}
 	case aiSceneFarBuilding:
 		pos := components.WorldPos{}.Add(rl.Vector3{X: 0, Z: 50})
 		pos.Local.Y = systems.GroundHeight(
@@ -344,8 +375,10 @@ func aiSpawnPos() components.WorldPos {
 		return components.WorldPos{}.Add(rl.Vector3{X: 32, Z: 60})
 	case aiSceneCompoundPlusWest:
 		return components.WorldPos{}.Add(rl.Vector3{X: 10, Z: 32})
-	case aiSceneOfficeFront:
+	case aiSceneOfficeFront, aiSceneOfficeRooms:
 		return components.WorldPos{}.Add(rl.Vector3{X: 32, Z: 18})
+	case aiSceneHouse2North:
+		return components.WorldPos{}.Add(rl.Vector3{X: 27, Z: 44})
 	case aiSceneOfficeL2:
 		return components.WorldPos{}.Add(rl.Vector3{X: 70, Z: -33})
 	case aiSceneFarBuilding:
@@ -834,6 +867,36 @@ func aiSceneSpawn(
 		nextSampleAt:    aiOrderAt + 1,
 	}
 
+	if aiSceneID() == aiSceneHouse2North {
+		st.liftTrack = true
+		st.sampler = systems.NewHeightSampler(world)
+	}
+
+	// ai_office_rooms: snapshot every room band (rect + storey floor Y) of
+	// the target building — the verdict demands each one occupied.
+	if aiSceneID() == aiSceneOfficeRooms {
+		planIdxRes := ecs.NewResource[systems.BuildingPlanIndex](world)
+		levelMap := ecs.NewMap[components.Level](world)
+		if planIdx := planIdxRes.Get(); planIdx != nil {
+			for _, levEnt := range planIdx.Levels[target] {
+				lvl := levelMap.Get(levEnt)
+				if lvl == nil {
+					continue
+				}
+				for r := uint8(0); r < lvl.RoomCount; r++ {
+					st.roomBands = append(st.roomBands, aiRoomBand{
+						room: lvl.Rooms[r],
+						minY: lvl.AABB.MinY,
+					})
+				}
+			}
+		}
+		if len(st.roomBands) == 0 {
+			fmt.Printf("[ai-test %s] NO ROOM DATA on target building — aborting\n", aiSceneID())
+			return nil
+		}
+	}
+
 	// ai_main_* scenes target one storey: resolve the Level entity via
 	// BuildingPlanIndex (same path the in-game "Occupy L<n>" popup takes).
 	if isMainScene {
@@ -876,6 +939,15 @@ type aiTestState struct {
 	targetLevel     ecs.Entity
 	targetLevelMinY float32
 	targetLevelAABB components.AABB3D
+
+	// Set for ai_office_rooms: every band must hold >=1 member at verdict.
+	roomBands []aiRoomBand
+
+	// Set for ai_house2_north: per-frame max of (Y - surface) over members
+	// whose XZ is OUTSIDE the target footprint. A padded stair ramp poking
+	// through the wall hoists outside walkers metres into the air.
+	liftTrack bool
+	liftMax   float32
 
 	// Set for ai_los_* scenes: verdict counts Contacts on this entity and
 	// tallies Direct/Shared awareness across the roster.
@@ -1023,6 +1095,31 @@ func (s *aiTestState) Update(elapsed float32) {
 		return
 	}
 
+	if s.liftTrack && s.orderFired && !s.verdictDone && s.sampler != nil {
+		roster := s.RosterMap.Get(s.squad)
+		if roster != nil {
+			fp := s.targetFootprint
+			for i := uint8(0); i < roster.Count; i++ {
+				mem := roster.Members[i]
+				if mem == (ecs.Entity{}) || !s.World.Alive(mem) {
+					continue
+				}
+				pos := s.PosMap.Get(mem)
+				if pos == nil {
+					continue
+				}
+				mx := float32(pos.Chunk.X)*components.ChunkSize + pos.Local.X
+				mz := float32(pos.Chunk.Z)*components.ChunkSize + pos.Local.Z
+				if fp.Contains(mx, mz) {
+					continue
+				}
+				if lift := pos.Local.Y - s.sampler.Sample(mx, mz); lift > s.liftMax {
+					s.liftMax = lift
+				}
+			}
+		}
+	}
+
 	if !s.orderFired && elapsed >= s.orderAt {
 		bld := s.BuildingMap.Get(s.targetBuilding)
 		if bld == nil {
@@ -1133,9 +1230,25 @@ func (s *aiTestState) Update(elapsed float32) {
 		if inside >= alive && alive > 0 {
 			verdict = "PASS"
 		}
+		roomsInfo := ""
+		if len(s.roomBands) > 0 {
+			counts := s.countRoomOccupancy()
+			for _, c := range counts {
+				if c == 0 {
+					verdict = "FAIL"
+				}
+			}
+			roomsInfo = fmt.Sprintf("  rooms=%v", counts)
+		}
+		if s.liftTrack {
+			if s.liftMax > 0.5 {
+				verdict = "FAIL"
+			}
+			roomsInfo += fmt.Sprintf("  outsideLift=%.2fm", s.liftMax)
+		}
 		fmt.Println("============================================================")
-		fmt.Printf("== VERDICT [%s]: %s  (%d/%d members inside)\n",
-			s.sceneID, verdict, inside, alive)
+		fmt.Printf("== VERDICT [%s]: %s  (%d/%d members inside)%s\n",
+			s.sceneID, verdict, inside, alive, roomsInfo)
 		s.dumpPositions()
 		fmt.Println("============================================================")
 		s.verdictDone = true
@@ -1778,6 +1891,40 @@ func (s *aiTestState) countInside() (inside, alive uint8) {
 		inside++
 	}
 	return inside, alive
+}
+
+// countRoomOccupancy tallies live members per roomBand (XZ in rect, Y within
+// the storey band).
+func (s *aiTestState) countRoomOccupancy() []int {
+	counts := make([]int, len(s.roomBands))
+	roster := s.RosterMap.Get(s.squad)
+	if roster == nil {
+		return counts
+	}
+	for i := uint8(0); i < roster.Count; i++ {
+		mem := roster.Members[i]
+		if mem == (ecs.Entity{}) || !s.World.Alive(mem) {
+			continue
+		}
+		pos := s.PosMap.Get(mem)
+		if pos == nil {
+			continue
+		}
+		mx := float32(pos.Chunk.X)*components.ChunkSize + pos.Local.X
+		mz := float32(pos.Chunk.Z)*components.ChunkSize + pos.Local.Z
+		for b := range s.roomBands {
+			band := &s.roomBands[b]
+			if !band.room.Contains(mx, mz) {
+				continue
+			}
+			dy := pos.Local.Y - band.minY
+			if dy < -0.8 || dy > 0.8 {
+				continue
+			}
+			counts[b]++
+		}
+	}
+	return counts
 }
 
 // dumpPositions prints each member's XZ + inside-footprint flag.

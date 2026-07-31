@@ -47,6 +47,13 @@ type FormationSystem struct {
 	orderKindMap   *ecs.Map[components.OrderKind]
 	orderTargetMap *ecs.Map[components.OrderTarget]
 	levelMap       *ecs.Map[components.Level]
+	// Floor-spread for building orders (mirrors drawGhostInBuilding): the
+	// roster splits ceil(N/M) per storey instead of piling onto the ground
+	// floor the order target anchors on. Rooms (Level.Rooms) split each
+	// storey's share round-robin.
+	floorMap           *ecs.Map[components.Floor]
+	levelMemberMap     *ecs.Map[components.LevelMember]
+	buildingChildIndex ecs.Resource[BuildingChildIndex]
 
 	// Members carrying a TacticalOverride are AI-driven (e.g. SurvivalInstinct
 	// moving them to cover). FormationSystem reads but does not write their
@@ -103,6 +110,9 @@ func (sys *FormationSystem) InitUI(w *ecs.World) {
 	sys.orderKindMap = ecs.NewMap[components.OrderKind](w)
 	sys.orderTargetMap = ecs.NewMap[components.OrderTarget](w)
 	sys.levelMap = ecs.NewMap[components.Level](w)
+	sys.floorMap = ecs.NewMap[components.Floor](w)
+	sys.levelMemberMap = ecs.NewMap[components.LevelMember](w)
+	sys.buildingChildIndex = ecs.NewResource[BuildingChildIndex](w)
 	sys.sampler = NewHeightSampler(w)
 }
 
@@ -251,6 +261,7 @@ func (sys *FormationSystem) processSquad(world *ecs.World, w formationWork, dt f
 	// while the squad is still outside the building — otherwise units stop
 	// at outside-the-wall slots instead of pathing through the door.
 	interiorIntent := false
+	var interiorBuilding ecs.Entity
 	if head := sys.orderQueueMap.Get(w.squad); head != nil && head.First != (ecs.Entity{}) {
 		if kind := sys.orderKindMap.Get(head.First); kind != nil {
 			switch kind.Code {
@@ -258,6 +269,9 @@ func (sys *FormationSystem) processSquad(world *ecs.World, w formationWork, dt f
 				components.OrderKindOccupyBuilding,
 				components.OrderKindClearBuilding:
 				interiorIntent = true
+				if tgt := sys.orderTargetMap.Get(head.First); tgt != nil {
+					interiorBuilding = tgt.Entity
+				}
 			case components.OrderKindMoveTo:
 				// "Occupy L<n>" from the building popup is a MoveTo whose
 				// OrderTarget.Entity is a Level. Interior volumes are narrower
@@ -267,6 +281,51 @@ func (sys *FormationSystem) processSquad(world *ecs.World, w formationWork, dt f
 				if tgt := sys.orderTargetMap.Get(head.First); tgt != nil &&
 					tgt.Entity != (ecs.Entity{}) && sys.levelMap.Has(tgt.Entity) {
 					interiorIntent = true
+				}
+			}
+		}
+	}
+
+	// Storey split, same rule as drawGhostInBuilding: floors ascending by
+	// level, ceil(N/M) members each. Read-only against the child index —
+	// parallel-safe. Empty when the target isn't a building root (Occupy L<n>
+	// targets a Level) or its chunk isn't streamed in yet.
+	var floorPos [8]components.WorldPos
+	var floorLvl [8]uint8
+	var floorRooms [8][components.MaxRoomsPerLevel]components.AABB2D
+	var floorRoomN [8]uint8
+	floorN := 0
+	if interiorBuilding != (ecs.Entity{}) {
+		if idx := sys.buildingChildIndex.Get(); idx != nil {
+			for _, ch := range idx.Loaded[interiorBuilding] {
+				if !world.Alive(ch) {
+					continue
+				}
+				f := sys.floorMap.Get(ch)
+				if f == nil {
+					continue
+				}
+				fp := sys.posMap.Get(ch)
+				if fp == nil || floorN >= len(floorPos) {
+					continue
+				}
+				floorPos[floorN] = *fp
+				floorLvl[floorN] = f.Level
+				if lm := sys.levelMemberMap.Get(ch); lm != nil &&
+					lm.Level != (ecs.Entity{}) && world.Alive(lm.Level) {
+					if lv := sys.levelMap.Get(lm.Level); lv != nil {
+						floorRooms[floorN] = lv.Rooms
+						floorRoomN[floorN] = lv.RoomCount
+					}
+				}
+				floorN++
+			}
+			for i := 1; i < floorN; i++ {
+				for j := i; j > 0 && floorLvl[j-1] > floorLvl[j]; j-- {
+					floorLvl[j-1], floorLvl[j] = floorLvl[j], floorLvl[j-1]
+					floorPos[j-1], floorPos[j] = floorPos[j], floorPos[j-1]
+					floorRooms[j-1], floorRooms[j] = floorRooms[j], floorRooms[j-1]
+					floorRoomN[j-1], floorRoomN[j] = floorRoomN[j], floorRoomN[j-1]
 				}
 			}
 		}
@@ -395,8 +454,33 @@ func (sys *FormationSystem) processSquad(world *ecs.World, w formationWork, dt f
 			// through the door (ORCA queues + corner sliding slow to
 			// ~0 m/s); 1.2 m offsets let the planner route them through
 			// different cells and they stay spread out inside.
-			if mp.HasGoal {
-				const interiorSpreadSpacing float32 = 1.2
+			const interiorSpreadSpacing float32 = 1.2
+			if floorN > 0 {
+				// Building target: member i climbs to floor i/perFloor; the
+				// storey's share splits round-robin across its rooms (Loose
+				// around each room centre), or around the plate centre when
+				// the level carries no room data.
+				perFloor := (int(roster.Count) + floorN - 1) / floorN
+				fi := int(i) / perFloor
+				if fi >= floorN {
+					fi = floorN - 1
+				}
+				wi := int(i) % perFloor
+				if rc := int(floorRoomN[fi]); rc > 1 {
+					room := floorRooms[fi][wi%rc]
+					offX, offZ := FormationOffset(components.FormationLoose,
+						uint8(wi/rc), interiorSpreadSpacing, rl.Vector3{X: 0, Y: 0, Z: 1})
+					target = components.WorldPos{}.Add(rl.Vector3{
+						X: room.CenterX() + offX,
+						Y: floorPos[fi].Local.Y,
+						Z: room.CenterZ() + offZ,
+					})
+				} else {
+					offX, offZ := FormationOffset(components.FormationLoose,
+						uint8(wi), interiorSpreadSpacing, rl.Vector3{X: 0, Y: 0, Z: 1})
+					target = floorPos[fi].Add(rl.Vector3{X: offX, Y: 0, Z: offZ})
+				}
+			} else if mp.HasGoal {
 				offX, offZ := FormationOffset(components.FormationLoose, i, interiorSpreadSpacing, rl.Vector3{X: 0, Y: 0, Z: 1})
 				target = mp.Goal.Add(rl.Vector3{X: offX, Y: 0, Z: offZ})
 			} else {

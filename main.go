@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
+	"runtime/pprof"
 	"strconv"
 	"syscall"
 
@@ -28,8 +30,36 @@ var saveAtFlag = flag.Uint64("save-at", 0, "write world snapshot at tick N (0 = 
 var savePathFlag = flag.String("save-path", "save/snapshot.rtss", "snapshot path for -save-at")
 var loadFlag = flag.String("load", "", "load world snapshot and continue")
 var runTicksFlag = flag.Uint64("run-ticks", 0, "headless: exit after tick N (overrides verdict exit)")
+var fpsFlag = flag.Int("fps", 60, "target FPS; 0 = uncapped (for render profiling)")
+var memProfileFlag = flag.String("memprofile", "", "dev: write a heap profile at exit")
 
 var saveAtDone bool
+
+// writeMemProfile dumps a live-heap profile at clean shutdown. Runs GC first so
+// the profile shows what is actually retained, not garbage awaiting collection.
+func writeMemProfile() {
+	if *memProfileFlag == "" {
+		return
+	}
+	f, err := os.Create(*memProfileFlag)
+	if err != nil {
+		fmt.Printf("memprofile: %v\n", err)
+		return
+	}
+	defer f.Close()
+	var before runtime.MemStats
+	runtime.ReadMemStats(&before)
+	runtime.GC()
+	var after runtime.MemStats
+	runtime.ReadMemStats(&after)
+	const mb = 1024 * 1024
+	fmt.Printf("[mem] pre-GC HeapAlloc=%.1f MB  post-GC HeapAlloc=%.1f MB  TotalAlloc=%.1f MB  Sys=%.1f MB  NumGC=%d\n",
+		float64(before.HeapAlloc)/mb, float64(after.HeapAlloc)/mb,
+		float64(after.TotalAlloc)/mb, float64(after.Sys)/mb, after.NumGC)
+	if err := pprof.WriteHeapProfile(f); err != nil {
+		fmt.Printf("memprofile: %v\n", err)
+	}
+}
 
 func maybeSaveAt(app *core.App) {
 	if *saveAtFlag == 0 || saveAtDone || app.TickIndex() < *saveAtFlag {
@@ -111,6 +141,7 @@ func main() {
 
 	g := bootGame()
 	defer g.Shutdown()
+	defer writeMemProfile()
 
 	g.registerSystems()
 

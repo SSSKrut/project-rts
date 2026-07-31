@@ -23,15 +23,17 @@ type ghostContext struct {
 	movementMap      *ecs.Map[components.MovementProfile]
 	squadMemberMap   *ecs.Map[components.SquadMember]
 
-	hitTester     *HitTester
-	buildingIndex *systems.BuildingChildIndex
-	wallMap       *ecs.Map[components.WallSegment]
-	windowMap     *ecs.Map[components.Window]
-	floorMap      *ecs.Map[components.Floor]
-	trenches      *components.TrenchNetwork
-	trenchRootMap *ecs.Map[components.TrenchRoot]
-	vehicleMap    *ecs.Map[components.Vehicle]
-	squadColor    func(ent ecs.Entity) rl.Color
+	hitTester      *HitTester
+	buildingIndex  *systems.BuildingChildIndex
+	wallMap        *ecs.Map[components.WallSegment]
+	windowMap      *ecs.Map[components.Window]
+	floorMap       *ecs.Map[components.Floor]
+	levelMemberMap *ecs.Map[components.LevelMember]
+	levelMap       *ecs.Map[components.Level]
+	trenches       *components.TrenchNetwork
+	trenchRootMap  *ecs.Map[components.TrenchRoot]
+	vehicleMap     *ecs.Map[components.Vehicle]
+	squadColor     func(ent ecs.Entity) rl.Color
 }
 
 // primarySquadForGhost returns the first Squad entity touched by `selected`,
@@ -240,8 +242,10 @@ func drawGhostInBuilding(g *ghostContext, building ecs.Entity, count uint8, stan
 	}
 	// Sort floors by level ascending so distribution is deterministic.
 	type floorCentre struct {
-		pos   components.WorldPos
-		level uint8
+		pos    components.WorldPos
+		level  uint8
+		rooms  [components.MaxRoomsPerLevel]components.AABB2D
+		roomsN uint8
 	}
 	var floors []floorCentre
 	for _, ch := range children {
@@ -259,7 +263,15 @@ func drawGhostInBuilding(g *ghostContext, building ecs.Entity, count uint8, stan
 		// Floor.WorldPos IS the plate centre, NOT a corner — gen/buildings
 		// passes the building centre. render_buildings.go DrawCubeV and
 		// GroundStickSystem both treat fp as centre; do the same here.
-		floors = append(floors, floorCentre{pos: *fp, level: f.Level})
+		fc := floorCentre{pos: *fp, level: f.Level}
+		if lm := g.levelMemberMap.Get(ch); lm != nil &&
+			lm.Level != (ecs.Entity{}) && g.world.Alive(lm.Level) {
+			if lv := g.levelMap.Get(lm.Level); lv != nil {
+				fc.rooms = lv.Rooms
+				fc.roomsN = lv.RoomCount
+			}
+		}
+		floors = append(floors, fc)
 	}
 	if len(floors) == 0 {
 		return false
@@ -285,8 +297,24 @@ func drawGhostInBuilding(g *ghostContext, building ecs.Entity, count uint8, stan
 		if take > remaining {
 			take = remaining
 		}
-		drawGhostFormation(fl.pos, components.FormationLoose,
-			ghostFloorSpacing, take, forward, stance)
+		if rc := uint8(fl.roomsN); rc > 1 {
+			// Same round-robin the FormationSystem interior branch executes:
+			// member k → room k%rc, Loose slot k/rc around the room centre.
+			for k := uint8(0); k < take; k++ {
+				room := fl.rooms[k%rc]
+				offX, offZ := systems.FormationOffset(components.FormationLoose,
+					k/rc, ghostFloorSpacing, forward)
+				wp := components.WorldPos{}.Add(rl.Vector3{
+					X: room.CenterX() + offX,
+					Y: fl.pos.Local.Y,
+					Z: room.CenterZ() + offZ,
+				})
+				drawGhostUnit(wp.ToRenderSpace(systems.CurrentOriginChunk), stance, ghostBodyAlpha)
+			}
+		} else {
+			drawGhostFormation(fl.pos, components.FormationLoose,
+				ghostFloorSpacing, take, forward, stance)
+		}
 		remaining -= take
 	}
 	return remaining < count

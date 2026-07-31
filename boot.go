@@ -43,7 +43,9 @@ func bootGame() *Game {
 	if g.headless {
 		rl.SetTargetFPS(0)
 	} else {
-		rl.SetTargetFPS(60)
+		// -fps=0 uncaps the loop: at the 60 Hz default every frame_ms reads
+		// 16.67 and a trace says nothing about render headroom.
+		rl.SetTargetFPS(int32(*fpsFlag))
 	}
 
 	g.App = core.NewApp()

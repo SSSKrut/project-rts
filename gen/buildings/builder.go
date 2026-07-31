@@ -80,6 +80,16 @@ func (b *Builder) AddWall(from, to rl.Vector3, height, thickness float32, outwar
 // SetOpening writes a door or window onto an existing wall. At most one
 // opening per wall — multi-opening walls must be split by the caller.
 // `centerT` is [0,1] along the wall length.
+// AddRoom appends a world-space room rect to a level. Callers emit rooms
+// alongside the interior walls that bound them.
+func (b *Builder) AddRoom(levelRef uint8, room components.AABB2D) {
+	if int(levelRef) >= len(b.plan.Levels) {
+		return
+	}
+	lv := &b.plan.Levels[levelRef]
+	lv.Rooms = append(lv.Rooms, room)
+}
+
 func (b *Builder) SetOpening(wallIdx int, kind components.OpeningKind, centerT, width, bottom, height float32) {
 	w := &b.plan.Walls[wallIdx]
 	w.Segment.OpeningKind = kind

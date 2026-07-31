@@ -114,8 +114,14 @@ func (sys GroundStickSystem) Update(ctx core.UpdateContext) {
 		})
 	}
 	// stairRampY returns the ramp height under (wx, wz), ok=false outside
-	// every stair footprint.
-	stairRampY := func(wx, wz float32) (float32, bool) {
+	// every stair footprint. Stacked cascades share one XZ footprint (one
+	// flight per storey), so among covering stairs the ramp closest to refY
+	// wins — first-match always returned the ground-storey flight and the
+	// L1→L2 climb could never engage (ISSUES #21).
+	stairRampY := func(wx, wz, refY float32) (float32, bool) {
+		bestD := float32(math.MaxFloat32)
+		var bestY float32
+		found := false
 		for i := range stairs {
 			sr := &stairs[i]
 			dx := wx - sr.bx
@@ -134,9 +140,14 @@ func (sys GroundStickSystem) Update(ctx core.UpdateContext) {
 			} else if tc > sr.length {
 				tc = sr.length
 			}
-			return sr.y0 + sr.rise*tc/sr.length, true
+			y := sr.y0 + sr.rise*tc/sr.length
+			if d := absDelta(refY, y); d < bestD {
+				bestD = d
+				bestY = y
+				found = true
+			}
 		}
-		return 0, false
+		return bestY, found
 	}
 
 	// A carriageway rides above the terrain on its own embankment, so the
@@ -160,10 +171,12 @@ func (sys GroundStickSystem) Update(ctx core.UpdateContext) {
 		surfaceY := groundOrDeck(wx, wz) + AnchorEyeHeight
 		bestY := surfaceY
 		bestD := absDelta(pos.Local.Y, surfaceY)
+		overFloor := false
 		for _, fr := range floors {
 			if wx < fr.minX || wx > fr.maxX || wz < fr.minZ || wz > fr.maxZ {
 				continue
 			}
+			overFloor = true
 			candidateY := fr.y + AnchorEyeHeight
 			d := absDelta(pos.Local.Y, candidateY)
 			if d < bestD {
@@ -171,7 +184,7 @@ func (sys GroundStickSystem) Update(ctx core.UpdateContext) {
 				bestY = candidateY
 			}
 		}
-		if rampY, ok := stairRampY(wx, wz); ok {
+		if rampY, ok := stairRampY(wx, wz, pos.Local.Y-AnchorEyeHeight); ok && overFloor {
 			candidateY := rampY + AnchorEyeHeight
 			if d := absDelta(pos.Local.Y, candidateY); d < bestD {
 				bestD = d
@@ -189,17 +202,23 @@ func (sys GroundStickSystem) Update(ctx core.UpdateContext) {
 		surfaceY := groundOrDeck(wx, wz)
 		bestY := surfaceY
 		bestD := absDelta(pos.Local.Y, surfaceY)
+		// Ramps only count over a floor plate: the padded stair footprint
+		// pokes through the exterior wall, and the base magnet would hoist a
+		// walker passing OUTSIDE the building up the wall face
+		// (ai_house2_north). Every legit climb happens over a plate.
+		overFloor := false
 		for _, fr := range floors {
 			if wx < fr.minX || wx > fr.maxX || wz < fr.minZ || wz > fr.maxZ {
 				continue
 			}
+			overFloor = true
 			d := absDelta(pos.Local.Y, fr.y)
 			if d < bestD {
 				bestD = d
 				bestY = fr.y
 			}
 		}
-		if rampY, ok := stairRampY(wx, wz); ok {
+		if rampY, ok := stairRampY(wx, wz, pos.Local.Y); ok && overFloor {
 			if d := absDelta(pos.Local.Y, rampY); d < bestD {
 				bestD = d
 				bestY = rampY

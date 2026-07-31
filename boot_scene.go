@@ -117,11 +117,19 @@ func (g *Game) spawnWorldRoots() {
 			})
 			g.Maps.BuildingMember.Add(lev, &components.BuildingMember{Building: root})
 			g.Maps.AlwaysActive.Add(lev, &components.AlwaysActive{})
-			g.Maps.Level.Add(lev, &components.Level{
+			lc := components.Level{
 				AABB:         ls.AABB,
 				Name:         components.LevelName(ls.Name),
 				DisplayOrder: ls.DisplayOrder,
-			})
+			}
+			for _, room := range ls.Rooms {
+				if lc.RoomCount >= components.MaxRoomsPerLevel {
+					break
+				}
+				lc.Rooms[lc.RoomCount] = room
+				lc.RoomCount++
+			}
+			g.Maps.Level.Add(lev, &lc)
 			g.Maps.LevelVisibility.Add(lev, &components.LevelVisibility{})
 			levels[li] = lev
 		}
@@ -423,6 +431,8 @@ func (g *Game) initRenderHandles() {
 		wallMap:          ghostWallMap,
 		windowMap:        ghostWindowMap,
 		floorMap:         ghostFloorMap,
+		levelMemberMap:   ecs.NewMap[components.LevelMember](g.App.World),
+		levelMap:         g.Maps.Level,
 		trenches:         &g.Res.Trenches,
 		trenchRootMap:    g.Maps.TrenchRoot,
 		vehicleMap:       ecs.NewMap[components.Vehicle](g.App.World),

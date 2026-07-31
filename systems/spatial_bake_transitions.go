@@ -74,8 +74,14 @@ func (sys *SpatialBakeSystem) bakeTransitionsPass(ctx core.UpdateContext) {
 		return
 	}
 
+	// Nearest-MinY pick, same rule as NavService.resolveNode: stacked storeys
+	// share a boundary plane, so first-match binds a storey-1 partition door's
+	// samples to L0 and bakes a phantom L0↔L1 "door" through the ceiling
+	// (ISSUES #21).
 	findLevel := func(worldX, worldZ, y float32) *levelSnapshot {
 		const yPad float32 = 0.6
+		var best *levelSnapshot
+		bestDY := float32(math.MaxFloat32)
 		for i := range levels {
 			lv := &levels[i]
 			if !lv.aabb.ContainsXZ(worldX, worldZ) {
@@ -84,9 +90,12 @@ func (sys *SpatialBakeSystem) bakeTransitionsPass(ctx core.UpdateContext) {
 			if y < lv.aabb.MinY-yPad || y > lv.aabb.MaxY+yPad {
 				continue
 			}
-			return lv
+			if dy := absF(y - lv.aabb.MinY); dy < bestDY {
+				bestDY = dy
+				best = lv
+			}
 		}
-		return nil
+		return best
 	}
 	levelCell := func(lv *levelSnapshot, worldX, worldZ float32) (int16, int16, bool) {
 		chunkBaseX := float32(lv.chunk.X) * components.ChunkSize
