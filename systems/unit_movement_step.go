@@ -24,8 +24,72 @@ func (sys *UnitMovementSystem) step(
 	w unitWork,
 	dt, now float32,
 	hash *core.SpatialHash,
+	vehHash *core.SpatialHash,
 	walls map[components.ChunkCoord][]colWall,
 ) staminaMarkerOp {
+	selfX := float32(w.pos.Chunk.X)*components.ChunkSize + w.pos.Local.X
+	selfZ := float32(w.pos.Chunk.Z)*components.ChunkSize + w.pos.Local.Z
+	selfRadius := float32(0.4)
+	if col := sys.colliderMap.Get(w.ent); col != nil && col.Radius > 0 {
+		selfRadius = col.Radius
+	}
+	// Hulls move infantry, not vice versa (P5) — and idle units too, so this
+	// runs before the empty-queue early-out. Two cases per neighbour hull:
+	// already overlapping → radial shove; inside the projected corridor of a
+	// moving hull → lateral sidestep BEFORE contact. Worker-safe: reads the
+	// frozen vehicle snapshot, writes only own pos.
+	if vehHash != nil {
+		vehHash.ForEachEntryInRadius(selfX, selfZ, vehYieldQueryR, func(e *core.SpatialEntry, dSq float32) {
+			minD := e.Radius + selfRadius
+			if dSq < minD*minD {
+				d := float32(math.Sqrt(float64(dSq)))
+				var nx, nz float32
+				if d > 1e-4 {
+					nx, nz = (selfX-e.X)/d, (selfZ-e.Z)/d
+				} else {
+					nx, nz = 1, 0
+				}
+				push := minD - d
+				if lim := vehShoveCap * dt; push > lim {
+					push = lim
+				}
+				*w.pos = w.pos.Add(rl.Vector3{X: nx * push, Z: nz * push})
+				selfX = float32(w.pos.Chunk.X)*components.ChunkSize + w.pos.Local.X
+				selfZ = float32(w.pos.Chunk.Z)*components.ChunkSize + w.pos.Local.Z
+				return
+			}
+			vSq := e.VelX*e.VelX + e.VelZ*e.VelZ
+			if vSq < 1 {
+				return
+			}
+			v := float32(math.Sqrt(float64(vSq)))
+			ox, oz := selfX-e.X, selfZ-e.Z
+			ahead := (ox*e.VelX + oz*e.VelZ) / v
+			if ahead < 0 || ahead > v*vehYieldHorizon+minD {
+				return
+			}
+			lat := (ox*e.VelZ - oz*e.VelX) / v
+			absLat := lat
+			if absLat < 0 {
+				absLat = -absLat
+			}
+			if absLat >= minD+vehYieldLatPad {
+				return
+			}
+			// Step away from the corridor centreline; dead-centre picks a
+			// deterministic side from the entity ID.
+			var px, pz float32
+			if lat > 0 || (lat == 0 && w.ent.ID()&1 == 1) {
+				px, pz = e.VelZ/v, -e.VelX/v
+			} else {
+				px, pz = -e.VelZ/v, e.VelX/v
+			}
+			push := vehShoveCap * dt
+			*w.pos = w.pos.Add(rl.Vector3{X: px * push, Z: pz * push})
+			selfX = float32(w.pos.Chunk.X)*components.ChunkSize + w.pos.Local.X
+			selfZ = float32(w.pos.Chunk.Z)*components.ChunkSize + w.pos.Local.Z
+		})
+	}
 	// StaminaExhausted forces Walk; otherwise use the profile's Pace, one
 	// tier up while the member lags its formation slot (bb.CatchUp).
 	effectivePace := w.profile.Pace
@@ -136,8 +200,6 @@ func (sys *UnitMovementSystem) step(
 
 		// ORCA agent-agent avoidance via SpatialHash neighbours; walls go
 		// through reflectAgainstWalls.
-		selfX := float32(w.pos.Chunk.X)*components.ChunkSize + w.pos.Local.X
-		selfZ := float32(w.pos.Chunk.Z)*components.ChunkSize + w.pos.Local.Z
 		var neighbours []orcaAgent
 		if hash != nil {
 			// Snapshot-only: live neighbour map reads race with owner workers.
@@ -149,13 +211,21 @@ func (sys *UnitMovementSystem) step(
 					Pos:    orcaVec2{X: e.X, Z: e.Z},
 					Vel:    orcaVec2{X: e.VelX, Z: e.VelZ},
 					Radius: e.Radius,
+					Resp:   0.5,
 				})
 			})
 		}
-
-		selfRadius := float32(0.4)
-		if col := sys.colliderMap.Get(w.ent); col != nil && col.Radius > 0 {
-			selfRadius = col.Radius
+		if vehHash != nil {
+			// Hull neighbours enter with full responsibility on the unit —
+			// the vehicle never reciprocates (P5).
+			vehHash.ForEachEntryInRadius(selfX, selfZ, orcaVehNeighbourRadius, func(e *core.SpatialEntry, _ float32) {
+				neighbours = append(neighbours, orcaAgent{
+					Pos:    orcaVec2{X: e.X, Z: e.Z},
+					Vel:    orcaVec2{X: e.VelX, Z: e.VelZ},
+					Radius: e.Radius + vehOrcaPad,
+					Resp:   1,
+				})
+			})
 		}
 		// Current self velocity for ORCA's reciprocal share.
 		selfVx, selfVz := float32(0), float32(0)

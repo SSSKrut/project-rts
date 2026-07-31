@@ -40,6 +40,10 @@ type FormationData struct {
 	Type    FormationKind
 	Forward rl.Vector3
 	Spacing float32
+	// ReformPending: the player edited the layout (editor slot drag / kind /
+	// preset). An idle squad re-forms in place around the leader; a marching
+	// squad picks the new slots up on the fly and clears the flag.
+	ReformPending bool
 }
 
 // SquadMacroPathSize bounds the waypoint count of one macro path. After

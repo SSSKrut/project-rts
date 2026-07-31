@@ -1,6 +1,8 @@
 package systems
 
 import (
+	"fmt"
+
 	rl "github.com/gen2brain/raylib-go/raylib"
 	"github.com/mlange-42/ark/ecs"
 
@@ -45,6 +47,8 @@ type OrderResolverSystem struct {
 	// Used to compute the squad's effective weapon range (max across roster).
 	equipmentMap *ecs.Map[components.Equipment]
 	weaponMap    *ecs.Map[components.Weapon]
+	// Vehicle squads widen the MoveTo arrival ring (M7).
+	vehicleMap *ecs.Map[components.Vehicle]
 
 	// Read on MoveTo / DefendPosition completion to apply arrived-facing
 	// (instant snap) to every roster member's Motion.Yaw.
@@ -91,6 +95,7 @@ func NewOrderResolverSystem(svc *SquadService) *OrderResolverSystem {
 func (sys *OrderResolverSystem) InitUI(w *ecs.World) {
 	sys.squadFilter = ecs.NewFilter2[components.Squad, components.OrderQueueHead](w)
 	sys.rosterMap = ecs.NewMap[components.CommandRoster](w)
+	sys.vehicleMap = ecs.NewMap[components.Vehicle](w)
 	sys.posMap = ecs.NewMap[components.WorldPos](w)
 	sys.formationDataMap = ecs.NewMap[components.FormationData](w)
 	sys.macroPathMap = ecs.NewMap[components.MacroPath](w)
@@ -225,6 +230,9 @@ func (sys *OrderResolverSystem) Update(ctx core.UpdateContext) {
 			outcome := sys.evaluateCompletion(squad, ord, spec, target, float32(ctx.Delta.Seconds()))
 			switch outcome {
 			case completionDone:
+				if debugLog {
+					fmt.Printf("[order] kind=%d COMPLETED squad=%d\n", kind.Code, squad.ID())
+				}
 				state.Code = components.OrderStateCompleted
 				if pr := sys.orderProgressMap.Get(ord); pr != nil {
 					pr.Value = 1

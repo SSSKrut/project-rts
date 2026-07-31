@@ -46,9 +46,16 @@ func (s *SquadService) CreateFromUnits(units []ecs.Entity, kind components.Forma
 	// Stage 2 — detach each unit from its prior squad. May despawn old squads
 	// via cascaded Leave; new squad must NOT be spawned yet, otherwise Ark's
 	// storage compaction would invalidate a held rosterMap pointer.
+	// Stale personal actions die here too: a T-merge on the move otherwise
+	// leaves every member racing its old solo MoveTo — the fresh squad has
+	// no order yet, so FormationSystem never overwrites the queues and the
+	// group scatters until the player stops it by hand (owner 2026-07-31).
 	for _, u := range prepared {
 		if old := s.memberMap.Get(u); old != nil {
 			s.leaveInternal(u, *old)
+		}
+		if aq := s.actionQueueMap.Get(u); aq != nil {
+			ClearActions(aq)
 		}
 	}
 
@@ -62,10 +69,23 @@ func (s *SquadService) CreateFromUnits(units []ecs.Entity, kind components.Forma
 	squad := s.world.NewEntity()
 	s.squadMap.Add(squad, &components.Squad{})
 	s.rosterMap.Add(squad, &roster)
+	spacing := FormationSpacing(kind)
+	// Hull-scale spacing: infantry gaps (1.2-2 m) stack 3 m-radius vehicles
+	// into one another and formation fights the collision resolve forever.
+	for _, u := range prepared {
+		if !s.vehicleMap.Has(u) {
+			continue
+		}
+		if col := s.colliderMap.Get(u); col != nil {
+			if need := col.Radius*2 + 1; need > spacing {
+				spacing = need
+			}
+		}
+	}
 	s.formationMap.Add(squad, &components.FormationData{
 		Type:    kind,
 		Forward: rl.Vector3{X: 0, Y: 0, Z: 1},
-		Spacing: FormationSpacing(kind),
+		Spacing: spacing,
 	})
 	s.macroPathMap.Add(squad, &components.MacroPath{})
 	s.radioMap.Add(squad, &components.RadioNetwork{

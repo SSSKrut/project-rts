@@ -3,6 +3,8 @@ package systems
 import (
 	"fmt"
 
+	"github.com/mlange-42/ark/ecs"
+
 	"rts-go/components"
 )
 
@@ -74,8 +76,8 @@ func (sys *VehicleDriverSystem) planRoute(pos *components.WorldPos,
 // node chain edge by edge → along ExitEdge to the exit ramp. Writes
 // RoadFollower{Edge, T} whenever the hull rides a known edge — GroundStick
 // reads it for bridge-deck Y. Phase 3 hands control back to the direct leg.
-func (sys *VehicleDriverSystem) stepRoute(pos *components.WorldPos, mot *components.Motion,
-	spec *components.VehicleSpec, route *components.RoadRoute,
+func (sys *VehicleDriverSystem) stepRoute(ent ecs.Entity, pos *components.WorldPos,
+	mot *components.Motion, spec *components.VehicleSpec, route *components.RoadRoute,
 	follower *components.RoadFollower, dt float32) {
 	g := sys.router.Graph()
 	if g == nil {
@@ -100,7 +102,7 @@ func (sys *VehicleDriverSystem) stepRoute(pos *components.WorldPos, mot *compone
 					follower.Edge = -1
 				}
 				cruise := spec.MaxSpeedOffroad * sys.slopeMul(pos, mot.Yaw)
-				sys.drive(pos, mot, spec, ex-px, ez-pz, d, cruise, true, false, dt)
+				sys.drive(ent, follower, pos, mot, spec, ex-px, ez-pz, d, cruise, true, false, dt)
 				return
 			}
 		}
@@ -167,7 +169,7 @@ func (sys *VehicleDriverSystem) stepRoute(pos *components.WorldPos, mot *compone
 		}
 		cruise *= sys.slopeMul(pos, mot.Yaw)
 		allowRev := route.Head == 0 && route.EntryEdge < 0
-		sys.drive(pos, mot, spec, aimX-px, aimZ-pz, d, cruise, allowRev, false, dt)
+		sys.drive(ent, follower, pos, mot, spec, aimX-px, aimZ-pz, d, cruise, allowRev, false, dt)
 		return
 	}
 
@@ -195,6 +197,6 @@ func (sys *VehicleDriverSystem) stepRoute(pos *components.WorldPos, mot *compone
 			follower.T = t
 		}
 		cruise := roadSpeedForEdge(e.Kind, spec) * sys.slopeMul(pos, mot.Yaw)
-		sys.drive(pos, mot, spec, ex-px, ez-pz, d, cruise, false, false, dt)
+		sys.drive(ent, follower, pos, mot, spec, ex-px, ez-pz, d, cruise, false, false, dt)
 	}
 }

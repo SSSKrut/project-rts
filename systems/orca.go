@@ -63,11 +63,16 @@ type orcaAgent struct {
 	Pos    orcaVec2
 	Vel    orcaVec2
 	Radius float32
+	// Resp is the share of the avoidance vector SELF shoulders against this
+	// neighbour: 0.5 between reciprocating units, 1.0 against a vehicle hull
+	// (nonholonomic — it never dodges, P5: infantry yields). 0 → 0.5.
+	Resp float32
 }
 
 // orcaAgentConstraint builds the ORCA half-plane between `self` and `other`
-// for time horizon `tau`. Reciprocal — `self` shoulders half the avoidance
-// vector; `other` handles the rest via its own solver invocation.
+// for time horizon `tau`. Reciprocal — `self` shoulders `other.Resp` of the
+// avoidance vector; a reciprocating other handles the rest via its own
+// solver invocation.
 func orcaAgentConstraint(self, other orcaAgent, tau float32) orcaLine {
 	relPos := other.Pos.sub(self.Pos)
 	relVel := self.Vel.sub(other.Vel)
@@ -125,8 +130,11 @@ func orcaAgentConstraint(self, other orcaAgent, tau float32) orcaLine {
 		}
 	}
 
-	// Reciprocal share — each agent moves half-way out of the way.
-	line.Point = self.Vel.add(u.scale(0.5))
+	resp := other.Resp
+	if resp <= 0 {
+		resp = 0.5
+	}
+	line.Point = self.Vel.add(u.scale(resp))
 	return line
 }
 

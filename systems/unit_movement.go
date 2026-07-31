@@ -14,6 +14,19 @@ const (
 	separationWeight float32 = 4.0
 )
 
+// Vehicle-yield tuning (Phase 19 M6): hulls shove overlapped units aside,
+// units inside a moving hull's projected corridor sidestep before contact,
+// and hulls enter the ORCA neighbour set with full responsibility on the
+// unit.
+const (
+	vehYieldQueryR         float32 = 16.0 // covers the corridor horizon
+	vehYieldHorizon        float32 = 1.5  // s of hull travel projected ahead
+	vehYieldLatPad         float32 = 0.7  // extra corridor half-width
+	vehShoveCap            float32 = 5.0  // m/s — scramble, not stroll
+	orcaVehNeighbourRadius float32 = 14.0
+	vehOrcaPad             float32 = 0.3
+)
+
 // Per-stance acceleration cap (m/s²). Prone units take longer to spin up.
 var stanceAccel = [...]float32{
 	components.StanceStand:  4.0,
@@ -63,6 +76,9 @@ type UnitMovementSystem struct {
 	pool       *core.WorkerPool
 	// Neighbour data comes from the frozen SpatialEntry snapshot, never live maps.
 	spatialHash ecs.Resource[core.SpatialHash]
+	// Vehicle hulls: ORCA obstacles for moving units + shove source for idle
+	// ones (P5 — infantry yields, the hull never dodges).
+	vehHash ecs.Resource[core.VehicleSpatialHash]
 
 	memberMap                *ecs.Map[components.SquadMember]
 	staminaMap               *ecs.Map[components.Stamina]
@@ -118,6 +134,7 @@ func (sys *UnitMovementSystem) InitUI(w *ecs.World) {
 	sys.colliderMap = ecs.NewMap[components.Collider](w)
 	sys.blackboardMap = ecs.NewMap[components.LocalBlackboard](w)
 	sys.spatialHash = ecs.NewResource[core.SpatialHash](w)
+	sys.vehHash = ecs.NewResource[core.VehicleSpatialHash](w)
 	sys.wallFilter = ecs.NewFilter2[components.WorldPos, components.WallSegment](w)
 	sys.doorMap = ecs.NewMap[components.Door](w)
 }
@@ -155,6 +172,10 @@ func (sys *UnitMovementSystem) Update(ctx core.UpdateContext) {
 	now := float32(ctx.SimNow)
 
 	hash := sys.spatialHash.Get()
+	var vehHash *core.SpatialHash
+	if vh := sys.vehHash.Get(); vh != nil {
+		vehHash = &vh.SpatialHash
+	}
 
 	// Wall snapshot for the reflection pass: cleared + refilled each tick,
 	// workers read read-only.
@@ -212,7 +233,7 @@ func (sys *UnitMovementSystem) Update(ctx core.UpdateContext) {
 		}
 		for i := start; i < end; i++ {
 			w := work[i]
-			markerOp := sys.step(w, dt, now, hash, walls)
+			markerOp := sys.step(w, dt, now, hash, vehHash, walls)
 			switch markerOp {
 			case staminaMarkerAdd:
 				sys.workerExhaustedAdds[chunkIdx] = append(sys.workerExhaustedAdds[chunkIdx], w.ent)

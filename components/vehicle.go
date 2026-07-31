@@ -27,10 +27,14 @@ type Turret struct {
 // RoadFollower is the road-graph locomotion state. Edge indexes
 // RoadGraph.Edges, -1 while off-road; T is the hull projection param along
 // the edge. Always present on vehicles; GroundStick reads it for
-// bridge-deck Y.
+// bridge-deck Y. RevHold accumulates seconds the reverse-gear enter
+// condition has been continuously true — a transient aim flip behind the
+// hull (replan, ramp pop, formation slot swing) must persist before the
+// driver commits to backing up (Phase 19 M6).
 type RoadFollower struct {
-	Edge int32
-	T    float32
+	Edge    int32
+	T       float32
+	RevHold float32
 }
 
 // RoadRoute is the planned road itinerary for the head MoveTo action.

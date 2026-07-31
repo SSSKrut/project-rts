@@ -54,6 +54,8 @@ type FormationSystem struct {
 	orderFacingMap     *ecs.Map[components.OrderParamFacing]
 	orderEngagementMap *ecs.Map[components.OrderParamEngagementOverride]
 	motionMap          *ecs.Map[components.Motion]
+	vehicleMap         *ecs.Map[components.Vehicle]
+	colliderMap        *ecs.Map[components.Collider]
 
 	// Members carrying a TacticalOverride are AI-driven (e.g. SurvivalInstinct
 	// moving them to cover). FormationSystem reads but does not write their
@@ -114,6 +116,8 @@ func (sys *FormationSystem) InitUI(w *ecs.World) {
 	sys.orderFacingMap = ecs.NewMap[components.OrderParamFacing](w)
 	sys.orderEngagementMap = ecs.NewMap[components.OrderParamEngagementOverride](w)
 	sys.motionMap = ecs.NewMap[components.Motion](w)
+	sys.vehicleMap = ecs.NewMap[components.Vehicle](w)
+	sys.colliderMap = ecs.NewMap[components.Collider](w)
 	sys.sampler = NewHeightSampler(w)
 }
 
@@ -228,6 +232,21 @@ func (sys *FormationSystem) processSquad(world *ecs.World, w formationWork, dt f
 		return
 	}
 
+	// Hull floor on spacing: any writer (editor kind reset, F1-F4) can stomp
+	// Spacing back to infantry scale, and 3 m-radius hulls on 2 m slots fight
+	// the collision resolve forever.
+	for i := uint8(0); i < roster.Count; i++ {
+		mem := roster.Members[i]
+		if mem == (ecs.Entity{}) || !world.Alive(mem) || !sys.vehicleMap.Has(mem) {
+			continue
+		}
+		if col := sys.colliderMap.Get(mem); col != nil {
+			if need := col.Radius*2 + 1; need > fd.Spacing {
+				fd.Spacing = need
+			}
+		}
+	}
+
 	// The leader does NOT wait for stragglers — lagging members regain their
 	// slots at raised Pace instead (bb.CatchUp). Spread stats stay for HUD.
 	_, caughtUp, totalLive := SquadSpread(world, roster, center, sys.posMap, fd.Spacing)
@@ -236,10 +255,12 @@ func (sys *FormationSystem) processSquad(world *ecs.World, w formationWork, dt f
 	mp.StragglerTotal = totalLive
 
 	// SquadMacroPathSystem runs every 1 s, FormationSystem at 100 ms is the
-	// responsive pace for head advance.
+	// responsive pace for head advance. Reach widens for a vehicle anchor —
+	// see SquadWaypointReach (dead-ring livelock).
+	reach := SquadWaypointReach(world, roster, sys.vehicleMap)
 	for mp.Head < mp.Count {
 		d := center.Sub(mp.Waypoints[mp.Head])
-		if d.X*d.X+d.Z*d.Z < SquadWaypointReached*SquadWaypointReached {
+		if d.X*d.X+d.Z*d.Z < reach*reach {
 			mp.Head++
 		} else {
 			break
@@ -255,6 +276,22 @@ func (sys *FormationSystem) processSquad(world *ecs.World, w formationWork, dt f
 			centerTarget = mp.Goal
 		}
 		haveTarget = true
+	}
+
+	// Player layout edit (editor drag / kind / preset): a marching squad
+	// picks the new slots up through the normal pass — just drop the flag.
+	// An IDLE squad re-forms in place: hold slot targets until every driven
+	// member parks, then release.
+	reformHold := false
+	reformDone := true
+	if fd.ReformPending {
+		if haveTarget {
+			fd.ReformPending = false
+		} else {
+			centerTarget = center
+			haveTarget = true
+			reformHold = true
+		}
 	}
 
 	// Interior intent: when the squad's head order is Garrison /
@@ -303,6 +340,24 @@ func (sys *FormationSystem) processSquad(world *ecs.World, w formationWork, dt f
 				}
 			}
 		}
+	}
+
+	// Anchor the in-place reform so the LEADER'S OWN SLOT lands on the
+	// leader's current position — anchoring on the leader itself makes the
+	// formation chase its own reference point and drift (slot 0 is
+	// draggable in vehicle squads).
+	if reformHold {
+		fw := fd.Forward
+		if o := sys.orientMap.Get(w.squad); o != nil && o.Mode == components.OrientNorth {
+			fw = rl.Vector3{X: 0, Y: 0, Z: 1}
+		}
+		var offX0, offZ0 float32
+		if cs := sys.customSlotsMap.Get(w.squad); cs != nil {
+			offX0, offZ0 = customSlotWorld(cs.Slots[0], fw)
+		} else {
+			offX0, offZ0 = FormationOffset(fd.Type, 0, fd.Spacing, fw)
+		}
+		centerTarget = centerTarget.Add(rl.Vector3{X: -offX0, Y: 0, Z: -offZ0})
 	}
 
 	// Per-member building slots via the shared planner — the same call the
@@ -509,6 +564,17 @@ func (sys *FormationSystem) processSquad(world *ecs.World, w formationWork, dt f
 			target.Local.Y = sys.sampler.Sample(wx, wz)
 		}
 
+		if reformHold && ip == nil {
+			d := mPos.Sub(target)
+			tol := float32(1.5)
+			if veh := sys.vehicleMap.Get(mem); veh != nil {
+				tol = rampPopRadius(vehArrivalRadius, components.SpecForVehicle(veh.Kind)) + 0.5
+			}
+			if d.X*d.X+d.Z*d.Z > tol*tol {
+				reformDone = false
+			}
+		}
+
 		// Mirror the per-unit slot target into the blackboard so
 		// UtilityEvaluator's DistToSlot signal sees the same goal. CatchUp
 		// hysteresis: engage beyond 2xSpacing+2, relax within Spacing+1.
@@ -552,6 +618,10 @@ func (sys *FormationSystem) processSquad(world *ecs.World, w formationWork, dt f
 		if mp := sys.microPathMap.Get(mem); mp != nil {
 			mp.Dirty = true
 		}
+	}
+
+	if reformHold && reformDone {
+		fd.ReformPending = false
 	}
 }
 
