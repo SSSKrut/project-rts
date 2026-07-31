@@ -44,6 +44,7 @@ func (g *Game) drawUI() {
 		MapMarkerCache:   &g.Res.MapMarkerCache,
 		RoleMap:          g.Maps.Role,
 		VehicleMap:       g.Maps.Vehicle,
+		UnitFilter:       g.Filt.UnitRender,
 		FactionMap:       g.Maps.Faction,
 		SquadOverrideMap: g.Maps.SquadOverride,
 		Font:             g.hudFont,

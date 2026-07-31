@@ -28,8 +28,10 @@ type MapRenderCtx struct {
 	// Squad marker symbology: SquadOverrideMap holds the player's assignment,
 	// the rest feed the composition fallback. All nil-tolerant — a missing
 	// handle degrades to a generic infantry symbol.
-	RoleMap          *ecs.Map[components.UnitRole]
-	VehicleMap       *ecs.Map[components.Vehicle]
+	RoleMap    *ecs.Map[components.UnitRole]
+	VehicleMap *ecs.Map[components.Vehicle]
+	// UnitFilter drives the individual-soldier layer. Nil → squad symbols only.
+	UnitFilter       *ecs.Filter3[components.WorldPos, components.Unit, components.Stance]
 	FactionMap       *ecs.Map[components.Faction]
 	SquadOverrideMap *ecs.Map[components.SquadSymbolOverride]
 	Font             rl.Font
@@ -86,6 +88,7 @@ func DrawMap(panel Panel, ctx MapRenderCtx) {
 	drawOrderMarkers(content, ctx)
 	drawMapPings(content, ctx)
 	drawSquadMarkers(content, ctx)
+	drawSoloistUnits(content, ctx)
 	drawMapContacts(content, ctx)
 	drawAnchorMarker(content, ctx)
 }
@@ -344,6 +347,12 @@ func drawSquadMarkers(content rl.Rectangle, ctx MapRenderCtx) {
 			col = ctx.SquadColor(ent)
 		}
 		spec := SquadSymbolSpec(ctx, ent, roster)
+		// Own soldiers only: a hostile squad's real map presence is its
+		// contacts, and drawing its members here would hand the player
+		// positions the sensors never gave them.
+		if spec.Affiliation == components.AffilFriend {
+			drawSquadMemberDots(content, ctx, roster, screen, col)
+		}
 		DrawSymbol(spec, screen, squadSymbolHalf, 1.0)
 		// The APP-6 frame carries affiliation only, so the squad's palette
 		// colour rides as a strip below it — as an outline it would vanish
