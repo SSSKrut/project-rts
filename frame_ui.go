@@ -98,6 +98,24 @@ func (g *Game) symbolApplyTarget() ecs.Entity {
 	return ecs.Entity{}
 }
 
+// mapPickCtx is the slice of MapRenderCtx the map's hit-tests need. One
+// builder so hover / click / RMB can never disagree about what is drawn.
+func (g *Game) mapPickCtx() ui.MapRenderCtx {
+	return ui.MapRenderCtx{
+		World:          g.App.World,
+		Cam:            g.UI.MapCam,
+		PosMap:         g.Maps.Pos,
+		SquadFilter:    g.Filt.Squad,
+		SquadMemberMap: g.Maps.SquadMember,
+		SquadCenter:    g.squadCenter,
+		MapMarkerCache: &g.Res.MapMarkerCache,
+		FactionMap:     g.Maps.Faction,
+		UnitFilter:     g.Filt.UnitRender,
+		VehicleFilter:  g.Filt.VehicleRender,
+		Clusters:       &g.Frame.MapClusters,
+	}
+}
+
 func (g *Game) isSelected(e ecs.Entity) int {
 	for i := range g.Sel.Units {
 		if g.Sel.Units[i] == e {

@@ -92,3 +92,108 @@ func TestRowActivity(t *testing.T) {
 		t.Errorf("busy row should report the head order, got %q", got)
 	}
 }
+
+func rowsData(n int) TimelineData {
+	d := TimelineData{NowT: 10}
+	for i := 0; i < n; i++ {
+		d.Rows = append(d.Rows, TimelineSquadRow{Members: 4})
+	}
+	return d
+}
+
+func TestTimelineRowScrollClamps(t *testing.T) {
+	p := timelinePanel(800, 200)
+	view := NewTimelineView()
+
+	if got := TimelineScrollYMax(p, view, rowsData(3)); got != 0 {
+		t.Errorf("rows that fit must not scroll, got %v", got)
+	}
+	many := rowsData(12)
+	max := TimelineScrollYMax(p, view, many)
+	if max <= 0 {
+		t.Fatalf("overflowing rows should scroll, got %v", max)
+	}
+
+	ScrollTimelineRows(p, &view, many, 10_000)
+	if view.ScrollY != max {
+		t.Errorf("scroll past the end: got %v want %v", view.ScrollY, max)
+	}
+	ScrollTimelineRows(p, &view, many, -10_000)
+	if view.ScrollY != 0 {
+		t.Errorf("scroll past the start: got %v want 0", view.ScrollY)
+	}
+}
+
+func TestTimelineThumbsHideWhenEverythingFits(t *testing.T) {
+	p := timelinePanel(800, 200)
+	view := NewTimelineView()
+	view.PixelsPerSec = 2 // 650 px of track covers far more than the span
+	data := rowsData(2)
+	if got := TimelineVScrollThumb(p, view, data); got.Height != 0 {
+		t.Errorf("vertical thumb drawn with nothing to scroll: %+v", got)
+	}
+	if got := TimelineHScrollThumb(p, view, data); got.Width != 0 {
+		t.Errorf("horizontal thumb drawn with nothing to scroll: %+v", got)
+	}
+}
+
+func TestTimelineVThumbRoundTrip(t *testing.T) {
+	p := timelinePanel(800, 200)
+	view := NewTimelineView()
+	data := rowsData(12)
+	track := TimelineVScrollRect(p, view)
+
+	SetTimelineScrollFromThumb(p, &view, data, track.Y+track.Height) // dragged to the bottom
+	if want := TimelineScrollYMax(p, view, data); view.ScrollY != want {
+		t.Errorf("bottom drag: got %v want %v", view.ScrollY, want)
+	}
+	SetTimelineScrollFromThumb(p, &view, data, track.Y-50) // above the track
+	if view.ScrollY != 0 {
+		t.Errorf("top drag: got %v want 0", view.ScrollY)
+	}
+}
+
+func TestTimelineHThumbDropsFollow(t *testing.T) {
+	p := timelinePanel(800, 200)
+	view := NewTimelineView()
+	view.PixelsPerSec = 40
+	data := TimelineData{NowT: 600, Rows: []TimelineSquadRow{{
+		Orders: []TimelineOrderBlock{{EndT: 900, IsHead: true}},
+	}}}
+	track := TimelineHScrollRect(p, view)
+	SetTimelineOffsetFromThumb(p, &view, data, track.X+track.Width*0.5)
+	if view.Follow {
+		t.Error("grabbing the slider must stop following the now-line")
+	}
+	if view.OffsetT <= 0 {
+		t.Errorf("mid-track drag should land past the start, got %v", view.OffsetT)
+	}
+}
+
+func TestTimelineOverGutterFollowsWidth(t *testing.T) {
+	p := timelinePanel(800, 200)
+	c := ContentRect(p)
+	view := TimelineViewState{LabelW: 300}
+	if !TimelineOverGutter(p, view, rl.Vector2{X: c.X + 280, Y: c.Y + 40}) {
+		t.Error("point inside the widened list read as tracks")
+	}
+	if TimelineOverGutter(p, view, rl.Vector2{X: c.X + 320, Y: c.Y + 40}) {
+		t.Error("point past the divider read as the list")
+	}
+}
+
+// A click on the slider strip must not resolve to the row behind it.
+func TestTimelineHitTestSkipsScrollbars(t *testing.T) {
+	p := timelinePanel(800, 200)
+	view := NewTimelineView()
+	data := rowsData(3)
+	c := ContentRect(p)
+	cursor := rl.Vector2{X: c.X + 400, Y: c.Y + c.Height - 4}
+	hit, ok := TimelineHitTest(p, data, view, cursor)
+	if !ok {
+		t.Fatal("cursor inside the panel should hit-test")
+	}
+	if hit.HitOrder || hit.Squad != (ecs.Entity{}) {
+		t.Errorf("scrollbar strip resolved to a row: %+v", hit)
+	}
+}

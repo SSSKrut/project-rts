@@ -42,6 +42,9 @@ type TimelineViewState struct {
 	Follow       bool
 	// LabelW is the squad-list column width; 0 reads as the default.
 	LabelW float32
+	// ScrollY scrolls the squad rows; both halves of a row share it, so the
+	// list and its tracks can never drift apart.
+	ScrollY float32
 }
 
 func NewTimelineView() TimelineViewState {
@@ -60,6 +63,169 @@ func TimelineLabelWidth(view TimelineViewState) float32 {
 		return timelineLabelW
 	}
 	return view.LabelW
+}
+
+// TimelineRowsRect is the band the squad rows live in: below the header,
+// above the horizontal scrollbar, left of the vertical one.
+func TimelineRowsRect(panel Panel, view TimelineViewState) rl.Rectangle {
+	c := ContentRect(panel)
+	h := c.Height - timelineHeaderH - timelineScrollThick
+	if h < 0 {
+		h = 0
+	}
+	w := c.Width - timelineScrollThick
+	if w < 0 {
+		w = 0
+	}
+	return rl.Rectangle{X: c.X, Y: c.Y + timelineHeaderH, Width: w, Height: h}
+}
+
+// TimelineVScrollRect is the row slider, on the panel's right edge.
+func TimelineVScrollRect(panel Panel, view TimelineViewState) rl.Rectangle {
+	c := ContentRect(panel)
+	rows := TimelineRowsRect(panel, view)
+	return rl.Rectangle{
+		X: c.X + c.Width - timelineScrollThick, Y: rows.Y,
+		Width: timelineScrollThick, Height: rows.Height,
+	}
+}
+
+// TimelineHScrollRect is the time slider, under the tracks.
+func TimelineHScrollRect(panel Panel, view TimelineViewState) rl.Rectangle {
+	c := ContentRect(panel)
+	x := c.X + TimelineLabelWidth(view)
+	w := c.X + c.Width - timelineScrollThick - x
+	if w < 0 {
+		w = 0
+	}
+	return rl.Rectangle{
+		X: x, Y: c.Y + c.Height - timelineScrollThick,
+		Width: w, Height: timelineScrollThick,
+	}
+}
+
+// TimelineOverGutter routes the wheel: over the squad list it scrolls rows,
+// over the tracks it pans time.
+func TimelineOverGutter(panel Panel, view TimelineViewState, cursor rl.Vector2) bool {
+	c := ContentRect(panel)
+	return pointInRect(cursor, c) && cursor.X < c.X+TimelineLabelWidth(view)
+}
+
+// timelineTimeSpan is the scrollable time range: from mission start to the
+// last planned block, with a margin so the tail is reachable.
+func timelineTimeSpan(data TimelineData) (float32, float32) {
+	maxT := data.NowT
+	for _, r := range data.Rows {
+		for _, o := range r.Orders {
+			if o.EndT > maxT {
+				maxT = o.EndT
+			}
+		}
+	}
+	return 0, maxT + 15
+}
+
+func timelineRowsHeight(data TimelineData) float32 {
+	return float32(len(data.Rows)) * timelineRowH
+}
+
+// TimelineScrollYMax is 0 when every row already fits.
+func TimelineScrollYMax(panel Panel, view TimelineViewState, data TimelineData) float32 {
+	over := timelineRowsHeight(data) - TimelineRowsRect(panel, view).Height
+	if over < 0 {
+		return 0
+	}
+	return over
+}
+
+// ScrollTimelineRows moves the row viewport by dyPx and clamps it.
+func ScrollTimelineRows(panel Panel, view *TimelineViewState, data TimelineData, dyPx float32) {
+	view.ScrollY += dyPx
+	max := TimelineScrollYMax(panel, *view, data)
+	if view.ScrollY > max {
+		view.ScrollY = max
+	}
+	if view.ScrollY < 0 {
+		view.ScrollY = 0
+	}
+}
+
+// TimelineVScrollThumb returns a zero rect when there is nothing to scroll.
+func TimelineVScrollThumb(panel Panel, view TimelineViewState, data TimelineData) rl.Rectangle {
+	track := TimelineVScrollRect(panel, view)
+	total := timelineRowsHeight(data)
+	if total <= track.Height || track.Height <= 0 {
+		return rl.Rectangle{}
+	}
+	h := track.Height * track.Height / total
+	if h < timelineThumbMin {
+		h = timelineThumbMin
+	}
+	frac := view.ScrollY / (total - track.Height)
+	frac = clampUnit(frac)
+	return rl.Rectangle{
+		X: track.X, Y: track.Y + (track.Height-h)*frac,
+		Width: track.Width, Height: h,
+	}
+}
+
+// TimelineHScrollThumb mirrors the vertical one over the time axis.
+func TimelineHScrollThumb(panel Panel, view TimelineViewState, data TimelineData) rl.Rectangle {
+	track := TimelineHScrollRect(panel, view)
+	t0, t1 := timelineTimeSpan(data)
+	if view.PixelsPerSec <= 0 || track.Width <= 0 {
+		return rl.Rectangle{}
+	}
+	visible := track.Width / view.PixelsPerSec
+	span := t1 - t0
+	if span <= visible {
+		return rl.Rectangle{}
+	}
+	w := track.Width * visible / span
+	if w < timelineThumbMin {
+		w = timelineThumbMin
+	}
+	frac := clampUnit((view.OffsetT - t0) / (span - visible))
+	return rl.Rectangle{
+		X: track.X + (track.Width-w)*frac, Y: track.Y,
+		Width: w, Height: track.Height,
+	}
+}
+
+// SetTimelineOffsetFromThumb maps a thumb-left position back to a time and
+// drops Follow — grabbing the slider means the player took the wheel.
+func SetTimelineOffsetFromThumb(panel Panel, view *TimelineViewState, data TimelineData, thumbX float32) {
+	track := TimelineHScrollRect(panel, *view)
+	thumb := TimelineHScrollThumb(panel, *view, data)
+	if thumb.Width <= 0 || track.Width <= thumb.Width {
+		return
+	}
+	t0, t1 := timelineTimeSpan(data)
+	visible := track.Width / view.PixelsPerSec
+	frac := clampUnit((thumbX - track.X) / (track.Width - thumb.Width))
+	view.OffsetT = t0 + frac*((t1-t0)-visible)
+	view.Follow = false
+}
+
+// SetTimelineScrollFromThumb is the vertical twin.
+func SetTimelineScrollFromThumb(panel Panel, view *TimelineViewState, data TimelineData, thumbY float32) {
+	track := TimelineVScrollRect(panel, *view)
+	thumb := TimelineVScrollThumb(panel, *view, data)
+	if thumb.Height <= 0 || track.Height <= thumb.Height {
+		return
+	}
+	frac := clampUnit((thumbY - track.Y) / (track.Height - thumb.Height))
+	view.ScrollY = frac * TimelineScrollYMax(panel, *view, data)
+}
+
+func clampUnit(v float32) float32 {
+	if v < 0 {
+		return 0
+	}
+	if v > 1 {
+		return 1
+	}
+	return v
 }
 
 // TimelineDividerRect is the grab band between the squad list and the tracks.
@@ -94,6 +260,8 @@ const (
 	timelineLabelW       float32 = 150
 	timelineLabelMinW    float32 = 90
 	timelineDividerGrab  float32 = 4
+	timelineScrollThick  float32 = 8
+	timelineThumbMin     float32 = 24
 	timelineRowH         float32 = 32
 	timelineRowPad       float32 = 4
 	TimelineMinPxPerSec  float32 = 2
@@ -102,18 +270,21 @@ const (
 )
 
 var (
-	timelineBG        = rl.Color{R: 14, G: 16, B: 20, A: 255}
-	timelineGutterBG  = rl.Color{R: 20, G: 24, B: 30, A: 255}
-	timelineHeaderBG  = rl.Color{R: 22, G: 26, B: 33, A: 255}
-	timelineTickMaj   = rl.Color{R: 120, G: 130, B: 145, A: 255}
-	timelineTickMin   = rl.Color{R: 70, G: 78, B: 90, A: 255}
-	timelineText      = rl.Color{R: 220, G: 224, B: 230, A: 255}
-	timelineTextDim   = rl.Color{R: 130, G: 140, B: 150, A: 255}
-	timelineNowLine   = rl.Color{R: 90, G: 220, B: 255, A: 220}
-	timelineRowSep    = rl.Color{R: 28, G: 32, B: 38, A: 255}
-	timelineEmptyText = rl.Color{R: 110, G: 118, B: 128, A: 255}
-	timelineDivider   = rl.Color{R: 46, G: 54, B: 66, A: 255}
-	timelineDividerHi = rl.Color{R: 90, G: 130, B: 180, A: 255}
+	timelineBG          = rl.Color{R: 14, G: 16, B: 20, A: 255}
+	timelineGutterBG    = rl.Color{R: 20, G: 24, B: 30, A: 255}
+	timelineHeaderBG    = rl.Color{R: 22, G: 26, B: 33, A: 255}
+	timelineTickMaj     = rl.Color{R: 120, G: 130, B: 145, A: 255}
+	timelineTickMin     = rl.Color{R: 70, G: 78, B: 90, A: 255}
+	timelineText        = rl.Color{R: 220, G: 224, B: 230, A: 255}
+	timelineTextDim     = rl.Color{R: 130, G: 140, B: 150, A: 255}
+	timelineNowLine     = rl.Color{R: 90, G: 220, B: 255, A: 220}
+	timelineRowSep      = rl.Color{R: 28, G: 32, B: 38, A: 255}
+	timelineEmptyText   = rl.Color{R: 110, G: 118, B: 128, A: 255}
+	timelineDivider     = rl.Color{R: 46, G: 54, B: 66, A: 255}
+	timelineDividerHi   = rl.Color{R: 90, G: 130, B: 180, A: 255}
+	timelineScrollTrack = rl.Color{R: 24, G: 28, B: 34, A: 255}
+	timelineThumb       = rl.Color{R: 70, G: 80, B: 95, A: 230}
+	timelineThumbHot    = rl.Color{R: 110, G: 140, B: 180, A: 240}
 )
 
 // Estimated block durations for display only (NOT simulation).
@@ -174,22 +345,26 @@ func DrawTimelinePanel(panel Panel, font rl.Font, data TimelineData, view *Timel
 	rl.DrawRectangleRec(header, timelineHeaderBG)
 	drawTimelineTicks(font, header, content.Y+content.Height, view)
 
+	rows := TimelineRowsRect(panel, *view)
+	ScrollTimelineRows(panel, view, data, 0) // re-clamp after a resize
+
 	// The squad list is drawn before the tracks scissor opens — inside it the
 	// gutter sits outside the clip rect and vanished entirely.
-	rl.BeginScissorMode(int32(gutter.X), int32(gutter.Y+timelineHeaderH),
-		int32(gutter.Width), int32(gutter.Height-timelineHeaderH))
+	rl.BeginScissorMode(int32(gutter.X), int32(rows.Y), int32(gutter.Width), int32(rows.Height))
 	for i, row := range data.Rows {
-		drawTimelineRowLabel(font, content, labelW, i, row)
+		drawTimelineRowLabel(font, content, labelW, timelineRowY(rows, view, i), row)
 	}
 	rl.EndScissorMode()
 	drawTimelineGutterHeader(font, gutter, len(data.Rows))
 
-	rl.BeginScissorMode(int32(tracksX), int32(content.Y+timelineHeaderH),
-		int32(tracksW), int32(content.Height-timelineHeaderH))
+	rl.BeginScissorMode(int32(tracksX), int32(rows.Y),
+		int32(rows.X+rows.Width-tracksX), int32(rows.Height))
 	for i, row := range data.Rows {
-		drawTimelineRow(font, content, tracksX, tracksW, i, row, view, data.NowT)
+		drawTimelineRow(font, tracksX, rows.X+rows.Width-tracksX,
+			timelineRowY(rows, view, i), row, view, data.NowT)
 	}
 	rl.EndScissorMode()
+	drawTimelineScrollbars(panel, view, data, cursor)
 
 	div := TimelineDividerRect(panel, *view)
 	divCol := timelineDivider
@@ -217,18 +392,42 @@ func DrawTimelinePanel(panel Panel, font rl.Font, data TimelineData, view *Timel
 	}
 }
 
-func drawTimelineRow(font rl.Font, content rl.Rectangle, tracksX, tracksW float32,
-	rowIdx int, row TimelineSquadRow, view *TimelineViewState, nowT float32) {
-	rowY := content.Y + timelineHeaderH + float32(rowIdx)*timelineRowH
-	if rowY > content.Y+content.Height {
-		return
-	}
+// timelineRowY resolves a row's top edge, scroll included.
+func timelineRowY(rows rl.Rectangle, view *TimelineViewState, idx int) float32 {
+	return rows.Y + float32(idx)*timelineRowH - view.ScrollY
+}
+
+func drawTimelineRow(font rl.Font, tracksX, tracksW, rowY float32,
+	row TimelineSquadRow, view *TimelineViewState, nowT float32) {
 	rl.DrawLine(int32(tracksX), int32(rowY+timelineRowH),
 		int32(tracksX+tracksW), int32(rowY+timelineRowH), timelineRowSep)
 
 	for _, ord := range row.Orders {
 		drawTimelineBlock(font, ord, rowY, tracksX, view, nowT)
 	}
+}
+
+// drawTimelineScrollbars paints the two sliders; each hides itself when its
+// axis already fits.
+func drawTimelineScrollbars(panel Panel, view *TimelineViewState, data TimelineData,
+	cursor rl.Vector2) {
+	vTrack := TimelineVScrollRect(panel, *view)
+	if vThumb := TimelineVScrollThumb(panel, *view, data); vThumb.Height > 0 {
+		rl.DrawRectangleRec(vTrack, timelineScrollTrack)
+		rl.DrawRectangleRec(vThumb, timelineThumbColor(cursor, vThumb))
+	}
+	hTrack := TimelineHScrollRect(panel, *view)
+	if hThumb := TimelineHScrollThumb(panel, *view, data); hThumb.Width > 0 {
+		rl.DrawRectangleRec(hTrack, timelineScrollTrack)
+		rl.DrawRectangleRec(hThumb, timelineThumbColor(cursor, hThumb))
+	}
+}
+
+func timelineThumbColor(cursor rl.Vector2, thumb rl.Rectangle) rl.Color {
+	if pointInRect(cursor, thumb) {
+		return timelineThumbHot
+	}
+	return timelineThumb
 }
 
 func drawTimelineGutterHeader(font rl.Font, gutter rl.Rectangle, rows int) {
@@ -243,12 +442,8 @@ func drawTimelineGutterHeader(font rl.Font, gutter rl.Rectangle, rows int) {
 
 // drawTimelineRowLabel is the squad-list entry: colour chip, name, and what
 // the squad is doing right now — the whole point of the column.
-func drawTimelineRowLabel(font rl.Font, content rl.Rectangle, labelW float32,
-	rowIdx int, row TimelineSquadRow) {
-	rowY := content.Y + timelineHeaderH + float32(rowIdx)*timelineRowH
-	if rowY > content.Y+content.Height {
-		return
-	}
+func drawTimelineRowLabel(font rl.Font, content rl.Rectangle, labelW, rowY float32,
+	row TimelineSquadRow) {
 	chip := rl.Rectangle{X: content.X + 6, Y: rowY + 4, Width: 4, Height: timelineRowH - 8}
 	rl.DrawRectangleRec(chip, row.Color)
 
@@ -449,8 +644,12 @@ func TimelineHitTest(panel Panel, data TimelineData, view TimelineViewState, cur
 	if !pointInRect(cursor, content) {
 		return TimelineHit{}, false
 	}
+	rows := TimelineRowsRect(panel, view)
+	if !pointInRect(cursor, rows) {
+		return TimelineHit{}, true
+	}
 	tracksX := content.X + TimelineLabelWidth(view)
-	rowIdx := int((cursor.Y - content.Y - timelineHeaderH) / timelineRowH)
+	rowIdx := int((cursor.Y - rows.Y + view.ScrollY) / timelineRowH)
 	if rowIdx < 0 || rowIdx >= len(data.Rows) {
 		return TimelineHit{}, true
 	}
@@ -459,7 +658,7 @@ func TimelineHitTest(panel Panel, data TimelineData, view TimelineViewState, cur
 	if cursor.X < tracksX {
 		return hit, true
 	}
-	rowY := content.Y + timelineHeaderH + float32(rowIdx)*timelineRowH
+	rowY := timelineRowY(rows, &view, rowIdx)
 	for _, ord := range row.Orders {
 		x0 := timelineTimeToX(ord.StartT, tracksX, &view)
 		x1 := timelineTimeToX(ord.EndT, tracksX, &view)

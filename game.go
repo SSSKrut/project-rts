@@ -240,6 +240,9 @@ type uiState struct {
 	TimelineHoverOK   bool
 	TimelineHoverBlk  ui.TimelineOrderBlock
 	TimelineLabelDrag bool
+	TimelineHDrag     bool
+	TimelineVDrag     bool
+	TimelineDragOff   float32
 	TopBarHits        ui.TopBarHits
 
 	FormationEditor *ui.FormationEditor
@@ -293,8 +296,10 @@ type devState struct {
 const (
 	// 300 ms window for double-RMB — wide enough for relaxed chains, narrow
 	// enough that two deliberate sequential clicks don't fuse.
-	rmbDoubleWindow       float32 = 0.30
-	wheelScrollSpeed      float32 = 30
+	rmbDoubleWindow  float32 = 0.30
+	wheelScrollSpeed float32 = 30
+	// One notch scrolls two squad rows in the timeline's list.
+	timelineWheelRows     float32 = 64
 	marqueeClickThreshold float32 = 5
 )
 

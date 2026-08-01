@@ -152,6 +152,54 @@ func drawSoloistUnits(content rl.Rectangle, ctx MapRenderCtx) {
 	}
 }
 
+// PickOwnEntityAt hit-tests the individual-unit layer: vehicle symbols first
+// (they are the bigger, heavier target), then soloist soldier dots. Squad
+// members are not offered — their marker is the squad's, which PickSquadAt
+// owns. Zero entity when nothing is within pickRadiusPx.
+func PickOwnEntityAt(screenPos rl.Vector2, ctx MapRenderCtx, panel Panel,
+	pickRadiusPx float32) ecs.Entity {
+	content := ContentRect(panel)
+	if !pointInRect(screenPos, content) {
+		return ecs.Entity{}
+	}
+	var best ecs.Entity
+	bestD := pickRadiusPx * pickRadiusPx
+	test := func(p rl.Vector2, ent ecs.Entity) {
+		dx := p.X - screenPos.X
+		dy := p.Y - screenPos.Y
+		if d := dx*dx + dy*dy; d < bestD {
+			bestD = d
+			best = ent
+		}
+	}
+	if ctx.VehicleFilter != nil {
+		q := ctx.VehicleFilter.Query()
+		for q.Next() {
+			pos, _ := q.Get()
+			ent := q.Entity()
+			if unitAffiliation(ctx, ent) != components.AffilFriend {
+				continue
+			}
+			test(MapWorldToPanel(*pos, ctx.Cam, content), ent)
+		}
+	}
+	if ctx.UnitFilter != nil && ctx.SquadMemberMap != nil {
+		q := ctx.UnitFilter.Query()
+		for q.Next() {
+			pos, _, _ := q.Get()
+			ent := q.Entity()
+			if ctx.SquadMemberMap.Has(ent) {
+				continue
+			}
+			if unitAffiliation(ctx, ent) != components.AffilFriend {
+				continue
+			}
+			test(MapWorldToPanel(*pos, ctx.Cam, content), ent)
+		}
+	}
+	return best
+}
+
 // unitAffiliation reads the unit's own faction; legacy spawns without one
 // fall through to the player faction, matching the selection path.
 func unitAffiliation(ctx MapRenderCtx, ent ecs.Entity) components.Affiliation {

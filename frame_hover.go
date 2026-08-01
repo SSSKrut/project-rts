@@ -20,14 +20,13 @@ func (g *Game) updateHover() {
 			g.Sel.Hovered = hit
 		}
 	case ui.PanelMap:
-		mapCtx := ui.MapRenderCtx{
-			World: g.App.World, Cam: g.UI.MapCam, SquadFilter: g.Filt.Squad,
-			SquadCenter:    g.squadCenter,
-			MapMarkerCache: &g.Res.MapMarkerCache,
-			Clusters:       &g.Frame.MapClusters,
-		}
+		mapCtx := g.mapPickCtx()
+		// Own hulls and soloists sit above the squad layer: they are the
+		// finer target, and no squad marker stands in for them.
 		if h := ui.PickContactAt(g.Frame.Cursor, mapCtx, g.Frame.PanelMap, 14); h != (ecs.Entity{}) {
 			g.Sel.Hovered = h
+		} else if own := ui.PickOwnEntityAt(g.Frame.Cursor, mapCtx, g.Frame.PanelMap, 12); own != (ecs.Entity{}) {
+			g.Sel.Hovered = own
 		} else {
 			g.Sel.Hovered = ui.PickSquadAt(g.Frame.Cursor, mapCtx, g.Frame.PanelMap, 12)
 		}
