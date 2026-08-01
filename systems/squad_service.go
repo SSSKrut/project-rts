@@ -63,47 +63,55 @@ type SquadService struct {
 	// AttackMove orders wipe every member's IndividualPosition so the squad
 	// falls back into formation before charging.
 	individualPosMap *ecs.Map[components.IndividualPosition]
-	clock            float32
+	// Vehicle members widen formation spacing to hull scale (M7).
+	colliderMap *ecs.Map[components.Collider]
+	vehicleMap  *ecs.Map[components.Vehicle]
+	// CreateFromUnits wipes stale personal actions on merge.
+	actionQueueMap *ecs.Map[components.ActionQueue]
+	clock          float32
 }
 
 func NewSquadService(w *ecs.World) *SquadService {
 	return &SquadService{
-		world:                    w,
-		squadMap:                 ecs.NewMap[components.Squad](w),
-		rosterMap:                ecs.NewMap[components.CommandRoster](w),
-		formationMap:             ecs.NewMap[components.FormationData](w),
-		macroPathMap:             ecs.NewMap[components.MacroPath](w),
-		radioMap:                 ecs.NewMap[components.RadioNetwork](w),
-		memberMap:                ecs.NewMap[components.SquadMember](w),
-		alwaysActiveMap:          ecs.NewMap[components.AlwaysActive](w),
-		orderQueueMap:            ecs.NewMap[components.OrderQueueHead](w),
-		orderMap:                 ecs.NewMap[components.Order](w),
-		orderKindMap:             ecs.NewMap[components.OrderKind](w),
-		orderStateMap:            ecs.NewMap[components.OrderState](w),
-		orderOwnerMap:            ecs.NewMap[components.OrderOwner](w),
-		orderTargetMap:           ecs.NewMap[components.OrderTarget](w),
-		orderIssuedAtMap:         ecs.NewMap[components.OrderIssuedAt](w),
-		orderProgressMap:         ecs.NewMap[components.OrderProgress](w),
-		orderChainMap:            ecs.NewMap[components.OrderChain](w),
-		orderFacingMap:           ecs.NewMap[components.OrderParamFacing](w),
-		orderPatrolMap:           ecs.NewMap[components.OrderParamPatrol](w),
-		equipmentMap:             ecs.NewMap[components.Equipment](w),
-		radioGearMap:             ecs.NewMap[components.Radio](w),
-		movementProfileMap:       ecs.NewMap[components.MovementProfile](w),
-		engagementRulesMap:       ecs.NewMap[components.EngagementRules](w),
-		behaviorRulesMap:         ecs.NewMap[components.BehaviorRules](w),
-		orderMovementOverrideMap: ecs.NewMap[components.OrderParamMovementProfile](w),
-		orderAttackMoveMap:       ecs.NewMap[components.OrderParamAttackMove](w),
+		world:                      w,
+		squadMap:                   ecs.NewMap[components.Squad](w),
+		rosterMap:                  ecs.NewMap[components.CommandRoster](w),
+		formationMap:               ecs.NewMap[components.FormationData](w),
+		macroPathMap:               ecs.NewMap[components.MacroPath](w),
+		radioMap:                   ecs.NewMap[components.RadioNetwork](w),
+		memberMap:                  ecs.NewMap[components.SquadMember](w),
+		alwaysActiveMap:            ecs.NewMap[components.AlwaysActive](w),
+		orderQueueMap:              ecs.NewMap[components.OrderQueueHead](w),
+		orderMap:                   ecs.NewMap[components.Order](w),
+		orderKindMap:               ecs.NewMap[components.OrderKind](w),
+		orderStateMap:              ecs.NewMap[components.OrderState](w),
+		orderOwnerMap:              ecs.NewMap[components.OrderOwner](w),
+		orderTargetMap:             ecs.NewMap[components.OrderTarget](w),
+		orderIssuedAtMap:           ecs.NewMap[components.OrderIssuedAt](w),
+		orderProgressMap:           ecs.NewMap[components.OrderProgress](w),
+		orderChainMap:              ecs.NewMap[components.OrderChain](w),
+		orderFacingMap:             ecs.NewMap[components.OrderParamFacing](w),
+		orderPatrolMap:             ecs.NewMap[components.OrderParamPatrol](w),
+		equipmentMap:               ecs.NewMap[components.Equipment](w),
+		radioGearMap:               ecs.NewMap[components.Radio](w),
+		movementProfileMap:         ecs.NewMap[components.MovementProfile](w),
+		engagementRulesMap:         ecs.NewMap[components.EngagementRules](w),
+		behaviorRulesMap:           ecs.NewMap[components.BehaviorRules](w),
+		orderMovementOverrideMap:   ecs.NewMap[components.OrderParamMovementProfile](w),
+		orderAttackMoveMap:         ecs.NewMap[components.OrderParamAttackMove](w),
 		orderSuppressMap:           ecs.NewMap[components.OrderParamSuppress](w),
 		orderEngagementOverrideMap: ecs.NewMap[components.OrderParamEngagementOverride](w),
-		orderOutOfRangeMap:       ecs.NewMap[components.OrderOutOfRangeTracker](w),
-		factionMap:               ecs.NewMap[components.Faction](w),
-		controllerMap:            ecs.NewMap[components.Controller](w),
-		posMap:                   ecs.NewMap[components.WorldPos](w),
-		buildingMap:              ecs.NewMap[components.Building](w),
-		tacticalOverrideMap:      ecs.NewMap[components.TacticalOverride](w),
-		squadStateMap:            ecs.NewMap[components.SquadState](w),
-		individualPosMap:         ecs.NewMap[components.IndividualPosition](w),
+		orderOutOfRangeMap:         ecs.NewMap[components.OrderOutOfRangeTracker](w),
+		factionMap:                 ecs.NewMap[components.Faction](w),
+		controllerMap:              ecs.NewMap[components.Controller](w),
+		posMap:                     ecs.NewMap[components.WorldPos](w),
+		buildingMap:                ecs.NewMap[components.Building](w),
+		tacticalOverrideMap:        ecs.NewMap[components.TacticalOverride](w),
+		squadStateMap:              ecs.NewMap[components.SquadState](w),
+		individualPosMap:           ecs.NewMap[components.IndividualPosition](w),
+		colliderMap:                ecs.NewMap[components.Collider](w),
+		vehicleMap:                 ecs.NewMap[components.Vehicle](w),
+		actionQueueMap:             ecs.NewMap[components.ActionQueue](w),
 	}
 }
 

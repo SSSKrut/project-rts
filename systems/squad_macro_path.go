@@ -28,12 +28,16 @@ type SquadMacroPathSystem struct {
 	posMap         *ecs.Map[components.WorldPos]
 	orderKindMap   *ecs.Map[components.OrderKind]
 	orderTargetMap *ecs.Map[components.OrderTarget]
-	orderStateMap *ecs.Map[components.OrderState]
+	orderStateMap  *ecs.Map[components.OrderState]
 	// MovementProfile.PathStyle (or order-level override) feeds FindPath.
 	movementProfileMap       *ecs.Map[components.MovementProfile]
 	orderMovementOverrideMap *ecs.Map[components.OrderParamMovementProfile]
-	nav                      *NavService
-	pool                     *core.WorkerPool
+	// Forward snap on a standstill order reads member speeds; the
+	// waypoint-reach radius widens for a vehicle anchor (M7).
+	motionMap  *ecs.Map[components.Motion]
+	vehicleMap *ecs.Map[components.Vehicle]
+	nav        *NavService
+	pool       *core.WorkerPool
 
 	workBuf []macroPathWork
 }
@@ -55,6 +59,8 @@ func (sys *SquadMacroPathSystem) InitUI(w *ecs.World) {
 	sys.orderStateMap = ecs.NewMap[components.OrderState](w)
 	sys.movementProfileMap = ecs.NewMap[components.MovementProfile](w)
 	sys.orderMovementOverrideMap = ecs.NewMap[components.OrderParamMovementProfile](w)
+	sys.motionMap = ecs.NewMap[components.Motion](w)
+	sys.vehicleMap = ecs.NewMap[components.Vehicle](w)
 }
 
 func (SquadMacroPathSystem) Name() string { return "squad_macro_path" }
@@ -171,9 +177,10 @@ func (sys *SquadMacroPathSystem) processSquad(world *ecs.World, w macroPathWork,
 	// for stragglers so the FormationSystem gate stays consistent across
 	// the slower 1 s SquadMacroPath cadence.
 	if !mp.WaitingForStragglers {
+		reach := SquadWaypointReach(world, roster, sys.vehicleMap)
 		for mp.Head < mp.Count {
 			d := center.Sub(mp.Waypoints[mp.Head])
-			if d.X*d.X+d.Z*d.Z < SquadWaypointReached*SquadWaypointReached {
+			if d.X*d.X+d.Z*d.Z < reach*reach {
 				mp.Head++
 			} else {
 				break
@@ -193,9 +200,10 @@ func (sys *SquadMacroPathSystem) processSquad(world *ecs.World, w macroPathWork,
 	// drifted off it — a fresh path every second from a moving start flips
 	// between near-equal A* routes and swings the march heading (#12).
 	// Drift / exhaustion are rate-limited to the old 1 s interval.
+	freshOrder := mp.ReplanAt == 0
 	needReplan := false
 	switch {
-	case mp.ReplanAt == 0:
+	case freshOrder:
 		needReplan = true
 	case elapsed < mp.LastPlanned+SquadReplanInterval:
 	case mp.Head >= mp.Count:
@@ -260,10 +268,16 @@ func (sys *SquadMacroPathSystem) processSquad(world *ecs.World, w macroPathWork,
 		}
 	}
 
-	// Seed Forward only when it's still zero (fresh squad); FormationSystem
-	// owns the live heading via its slew-limited update (#12) — a second
-	// writer at replan cadence would snap it around.
-	if fd.Forward.X == 0 && fd.Forward.Z == 0 {
+	// Seed Forward when it's still zero (fresh squad) OR on a fresh order
+	// issued from standstill: snapping the heading before anyone moves is
+	// free for infantry and saves a vehicle the 20 m U-turn loop it takes
+	// chasing a slot that sweeps 90° during the slew (M7 owner repro).
+	// Mid-march the slew-limited FormationSystem stays the only writer (#12).
+	seed := fd.Forward.X == 0 && fd.Forward.Z == 0
+	if !seed && freshOrder && squadStationary(world, roster, sys.motionMap) {
+		seed = true
+	}
+	if seed {
 		var target components.WorldPos
 		if mp.Count > 0 {
 			target = mp.Waypoints[0]
@@ -279,6 +293,43 @@ func (sys *SquadMacroPathSystem) processSquad(world *ecs.World, w macroPathWork,
 
 	mp.LastPlanned = elapsed
 	mp.ReplanAt = elapsed + SquadReplanInterval
+}
+
+// SquadWaypointReach is the waypoint-advance radius for a squad: the
+// infantry 2 m ring, widened when the anchor is a vehicle — the M6 arrival
+// scaling parks a hull rampPopRadius (up to 6 m) short of the point, and a
+// reach tighter than that livelocks the march in the dead ring between the
+// two radii (M7: convoy froze mid-field, every queue empty).
+func SquadWaypointReach(world *ecs.World, roster *components.CommandRoster,
+	vehicleMap *ecs.Map[components.Vehicle]) float32 {
+	r := SquadWaypointReached
+	if roster.Count > 0 {
+		if lead := roster.Members[0]; lead != (ecs.Entity{}) && world.Alive(lead) {
+			if veh := vehicleMap.Get(lead); veh != nil {
+				spec := components.SpecForVehicle(veh.Kind)
+				if vr := rampPopRadius(vehArrivalRadius, spec) + 0.5; vr > r {
+					r = vr
+				}
+			}
+		}
+	}
+	return r
+}
+
+// squadStationary reports every live member as (near) parked — the gate for
+// the Forward snap on a fresh order.
+func squadStationary(world *ecs.World, roster *components.CommandRoster,
+	motionMap *ecs.Map[components.Motion]) bool {
+	for i := uint8(0); i < roster.Count; i++ {
+		mem := roster.Members[i]
+		if mem == (ecs.Entity{}) || !world.Alive(mem) {
+			continue
+		}
+		if m := motionMap.Get(mem); m != nil && (m.Speed > 0.5 || m.Speed < -0.5) {
+			return false
+		}
+	}
+	return true
 }
 
 // SquadAnchorPos — the formation reference point: the commander (slot 0)

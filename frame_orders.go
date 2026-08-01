@@ -252,6 +252,7 @@ func (g *Game) handleOrders() {
 				if fd := g.Maps.FormationData.Get(commonSquad); fd != nil {
 					fd.Type = newKind
 					fd.Spacing = systems.FormationSpacing(newKind)
+					fd.ReformPending = true
 				}
 			}
 		}

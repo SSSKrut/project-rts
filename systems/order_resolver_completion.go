@@ -175,6 +175,18 @@ func (sys *OrderResolverSystem) evaluateCompletion(
 		if r <= 0 {
 			r = 2.5
 		}
+		// A vehicle squad parks as a column: the leader stops rampPopRadius
+		// short of the point and the CENTROID trails by half the column
+		// depth — the infantry 2.5 m ring never closes (M7).
+		if reach := SquadWaypointReach(sys.squadService.world, roster, sys.vehicleMap); reach > SquadWaypointReached {
+			depth := float32(0)
+			if fd := sys.formationDataMap.Get(squad); fd != nil {
+				depth = fd.Spacing * float32(roster.Count) * 0.5
+			}
+			if vr := reach + depth; vr > r {
+				r = vr
+			}
+		}
 		if centerXZDistSq(center, target.Pos) < r*r {
 			// Storey-target MoveTo ("Occupy L<n>"): the squad centre passes
 			// the goal XZ on the way to the stairs while still a floor below

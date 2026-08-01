@@ -298,6 +298,9 @@ func (e *FormationEditor) drawCanvas(canvas rl.Rectangle, cursor rl.Vector2,
 				localY = -maxMeters
 			}
 			e.setSlot(uint8(e.draggedSlot), rl.Vector2{X: localX, Y: localY})
+			// An idle squad re-forms in place, a marching one picks the
+			// slot up on the fly (FormationSystem.ReformPending).
+			fd.ReformPending = true
 		}
 	}
 
@@ -549,6 +552,7 @@ func (e *FormationEditor) drawKindMenu(content rl.Rectangle, cursor rl.Vector2,
 			}
 			if drawMenuItem(label, false) {
 				e.applyPreset(p, roster)
+				fd.ReformPending = true
 				e.kindMenuOpen = false
 				return
 			}
@@ -568,6 +572,7 @@ func (e *FormationEditor) drawKindMenu(content rl.Rectangle, cursor rl.Vector2,
 func (e *FormationEditor) applyKind(k components.FormationKind, fd *components.FormationData) {
 	fd.Type = k
 	fd.Spacing = formationSpacingDefault(k)
+	fd.ReformPending = true
 	if e.Ctx.CustomSlotsMap != nil && e.Ctx.CustomSlotsMap.Has(e.Squad) {
 		e.Ctx.CustomSlotsMap.Remove(e.Squad)
 	}

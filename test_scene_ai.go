@@ -112,6 +112,27 @@ const (
 	// field and reverses, the truck flees. PASS = all three conditions in
 	// one run.
 	aiSceneVehReflex = "ai_vehicle_reflex"
+
+	// ai_vehicle_* M6 collision scenes. Per-vehicle goals; the verdict
+	// tracks per-tick collision metrics on top of arrival.
+	// _avoid: two BTRs swap positions head-on — min pairwise distance must
+	// stay above the collider sum (ID priority + tangent steer).
+	aiSceneVehAvoid = "ai_vehicle_avoid"
+	// _building: a truck ordered straight through a house must loop around —
+	// zero ticks with the hull centre inside the footprint.
+	aiSceneVehBuilding = "ai_vehicle_building"
+	// _yield: a BTR drives through a standing rifle line — corridor sidestep
+	// + shove keep every unit outside the hull radius (P5: infantry yields).
+	aiSceneVehYield = "ai_vehicle_yield"
+	// _group: three trucks share one goal — regression for the owner-reported
+	// spontaneous three-point turn (zero reverse ticks allowed after spin-up)
+	// and adjacent parking around the occupied point.
+	aiSceneVehGroup = "ai_vehicle_group"
+	// _convoy (M7): BMP leader (11 m/s) + two trucks (6 m/s) merged into one
+	// squad march 110 m — squadPaceCap must hold the column together
+	// (owner repro 2026-07-31: fast members «укатывают вперёд»). PASS = all
+	// parked at the goal AND max member spread over the run stays bounded.
+	aiSceneVehConvoy = "ai_vehicle_convoy"
 )
 
 // aiSceneMapName lets a scene demand a specific map manifest ("" = default).
@@ -211,6 +232,16 @@ func aiSceneAnchorPos() components.WorldPos {
 		return components.WorldPos{}.Add(rl.Vector3{X: 40, Z: -30})
 	case aiSceneVehCombat:
 		return components.WorldPos{}.Add(rl.Vector3{X: 40, Z: -30})
+	case aiSceneVehAvoid:
+		return components.WorldPos{}.Add(rl.Vector3{X: 40, Z: -20})
+	case aiSceneVehBuilding:
+		return components.WorldPos{}.Add(rl.Vector3{X: 32, Z: 10})
+	case aiSceneVehYield:
+		return components.WorldPos{}.Add(rl.Vector3{X: 35, Z: 5})
+	case aiSceneVehGroup:
+		return components.WorldPos{}.Add(rl.Vector3{X: 50, Z: -18})
+	case aiSceneVehConvoy:
+		return components.WorldPos{}.Add(rl.Vector3{X: 70, Z: -24})
 	}
 	return components.WorldPos{}
 }
@@ -289,6 +320,17 @@ func aiSceneBuildings() []components.BuildingPlan {
 			Stories:  1,
 			SizeX:    8,
 			SizeZ:    8,
+			DoorSide: 0,
+		}, pos, components.BuildingHouse)
+		return []components.BuildingPlan{*plan}
+	case aiSceneVehBuilding:
+		// Dead centre on the truck's straight line to its goal.
+		pos := components.WorldPos{}.Add(rl.Vector3{X: 32, Z: 0})
+		pos.Local.Y = systems.GroundHeight(32, 0)
+		plan := buildings.GenerateHouse(0xC7, buildings.HouseParams{
+			Stories:  1,
+			SizeX:    10,
+			SizeZ:    10,
 			DoorSide: 0,
 		}, pos, components.BuildingHouse)
 		return []components.BuildingPlan{*plan}
@@ -528,6 +570,130 @@ func aiVehicleRoadSceneSpawn(world *ecs.World, vehicleFactory *entities.VehicleF
 	}
 }
 
+// aiVehicleAvoidSpawn covers the four M6 collision scenes; the layout
+// switches on the scene ID, the metrics + verdict live in updateVehAvoid.
+func aiVehicleAvoidSpawn(world *ecs.World, vehicleFactory *entities.VehicleFactory,
+	unitFactory aiUnitSpawn, posMap *ecs.Map[components.WorldPos]) *aiTestState {
+	if vehicleFactory == nil {
+		fmt.Printf("[ai-test %s] NO VEHICLE FACTORY — aborting\n", aiSceneID())
+		return nil
+	}
+	wp := func(x, z float32) components.WorldPos {
+		p := components.WorldPos{}.Add(rl.Vector3{X: x, Z: z})
+		p.Local.Y = systems.GroundHeight(x, z)
+		return p
+	}
+	s := &aiTestState{
+		sceneID:      aiSceneID(),
+		avoidActive:  true,
+		avoidMinPair: 1e9,
+		World:        world,
+		PosMap:       posMap,
+		MotionMap:    ecs.NewMap[components.Motion](world),
+		VehQueueMap:  ecs.NewMap[components.ActionQueue](world),
+		orderAt:      aiOrderAt,
+		verdictAt:    75,
+		nextSampleAt: aiOrderAt + 3,
+	}
+	spawn := func(x, z float32, kind components.VehicleKind, gx, gz float32) {
+		v := vehicleFactory.Spawn(wp(x, z), kind,
+			components.FactionPlayer, components.ControllerLocal)
+		s.vehEnts = append(s.vehEnts, v)
+		s.avoidGoals = append(s.avoidGoals, wp(gx, gz))
+		s.avoidRadii = append(s.avoidRadii, components.SpecForVehicle(kind).ColliderR)
+	}
+	switch aiSceneID() {
+	case aiSceneVehAvoid:
+		// Head-on swap on one lane: A (lower ID) holds course, B yields.
+		spawn(10, -20, components.VehicleBTR, 70, -20)
+		spawn(70, -20, components.VehicleBTR, 10, -20)
+	case aiSceneVehBuilding:
+		// The 10×10 house at (32, 0) sits dead centre on the straight line.
+		spawn(4, 0, components.VehicleTruck, 60, 0)
+		s.avoidFoots = append(s.avoidFoots,
+			components.AABB2D{MinX: 27, MinZ: -5, MaxX: 37, MaxZ: 5})
+	case aiSceneVehYield:
+		// Standing rifle line across the BTR's path at x=35.
+		spawn(5, 12, components.VehicleBTR, 65, 12)
+		for i := 0; i < 6; i++ {
+			u := unitFactory(wp(35, 12+(-3.0+1.2*float32(i))))
+			s.avoidYield = append(s.avoidYield, u)
+		}
+	case aiSceneVehGroup:
+		// Three trucks, one shared goal: regression for the spontaneous
+		// three-point turn; reversals allowed only during the first 2 s.
+		spawn(15, -28, components.VehicleTruck, 85, -18)
+		spawn(15, -18, components.VehicleTruck, 85, -18)
+		spawn(15, -8, components.VehicleTruck, 85, -18)
+		s.avoidRevFree = aiOrderAt + 2
+	}
+	return s
+}
+
+// aiVehicleConvoySpawn (M7): fast leader + slow followers in one squad.
+func aiVehicleConvoySpawn(world *ecs.World, squadService *systems.SquadService,
+	vehicleFactory *entities.VehicleFactory, posMap *ecs.Map[components.WorldPos],
+	rosterMap *ecs.Map[components.CommandRoster]) *aiTestState {
+	if vehicleFactory == nil || squadService == nil {
+		fmt.Printf("[ai-test %s] NO FACTORY/SERVICE — aborting\n", aiSceneID())
+		return nil
+	}
+	wp := func(x, z float32) components.WorldPos {
+		p := components.WorldPos{}.Add(rl.Vector3{X: x, Z: z})
+		p.Local.Y = systems.GroundHeight(x, z)
+		return p
+	}
+	// BMP first → roster slot 0 → leader; the fast hull must be the one
+	// that has to hold back.
+	bmp := vehicleFactory.Spawn(wp(15, -24), components.VehicleBMP,
+		components.FactionPlayer, components.ControllerLocal)
+	t1 := vehicleFactory.Spawn(wp(8, -30), components.VehicleTruck,
+		components.FactionPlayer, components.ControllerLocal)
+	t2 := vehicleFactory.Spawn(wp(8, -18), components.VehicleTruck,
+		components.FactionPlayer, components.ControllerLocal)
+	// Stale personal MoveTos: a T-merge on the move must wipe these, or the
+	// fresh squad (no order yet) scatters racing them (owner repro).
+	aqMap := ecs.NewMap[components.ActionQueue](world)
+	for _, v := range []ecs.Entity{bmp, t1, t2} {
+		if aq := aqMap.Get(v); aq != nil {
+			systems.PushAction(aq, components.Action{
+				Kind: components.ActionMoveTo, Target: wp(-60, 40),
+			})
+		}
+	}
+	squad := squadService.CreateFromUnits([]ecs.Entity{bmp, t1, t2},
+		components.FormationColumn)
+	if squad == (ecs.Entity{}) {
+		fmt.Printf("[ai-test %s] FAILED TO MERGE SQUAD — aborting\n", aiSceneID())
+		return nil
+	}
+	mergeOK := true
+	for _, v := range []ecs.Entity{bmp, t1, t2} {
+		if aq := aqMap.Get(v); aq == nil || aq.Count != 0 {
+			mergeOK = false
+		}
+	}
+	return &aiTestState{
+		sceneID:       aiSceneID(),
+		convoyActive:  true,
+		convoySquad:   squad,
+		convoyGoal:    wp(125, -24),
+		convoyMergeOK: mergeOK,
+		vehEnts:       []ecs.Entity{bmp, t1, t2},
+		World:         world,
+		SquadService:  squadService,
+		PosMap:        posMap,
+		RosterMap:     rosterMap,
+		MotionMap:     ecs.NewMap[components.Motion](world),
+		VehQueueMap:   aqMap,
+		FdMap:         ecs.NewMap[components.FormationData](world),
+		CSMap:         ecs.NewMap[components.FormationCustomSlots](world),
+		orderAt:       aiOrderAt,
+		verdictAt:     90,
+		nextSampleAt:  aiOrderAt + 3,
+	}
+}
+
 // aiCoverSceneSpawn (#18): lone oak at (40,-38), 2-man squad north of it at
 // z=-30, synthetic shooter position further north at (40,-10).
 func aiCoverSceneSpawn(
@@ -722,6 +888,13 @@ func aiSceneSpawn(
 	}
 	if aiSceneID() == aiSceneVehReflex {
 		return aiVehicleReflexSpawn(world, vehicleFactory, posMap)
+	}
+	if id := aiSceneID(); id == aiSceneVehAvoid || id == aiSceneVehBuilding ||
+		id == aiSceneVehYield || id == aiSceneVehGroup {
+		return aiVehicleAvoidSpawn(world, vehicleFactory, unitFactory, posMap)
+	}
+	if aiSceneID() == aiSceneVehConvoy {
+		return aiVehicleConvoySpawn(world, squadService, vehicleFactory, posMap, rosterMap)
 	}
 	squad := squadService.CreateFromTemplate(
 		systems.TmplMotorRifle, aiSpawnPos(),
@@ -986,6 +1159,31 @@ type aiTestState struct {
 	vehFoes         []ecs.Entity
 	HPMap           *ecs.Map[components.HP]
 
+	// Set for ai_vehicle_{avoid,building,yield,group} (M6): per-vehicle
+	// goals + per-tick collision metrics.
+	avoidActive   bool
+	avoidGoals    []components.WorldPos // parallel to vehEnts
+	avoidRadii    []float32             // spec ColliderR, parallel to vehEnts
+	avoidFoots    []components.AABB2D   // building footprints to stay out of
+	avoidYield    []ecs.Entity          // infantry that must stay clear
+	avoidMinPair  float32               // min over run: pairwise dist − ΣR
+	avoidFootBad  int                   // ticks with a hull centre inside a footprint
+	avoidYieldBad int                   // ticks with a unit inside a hull radius
+	avoidRevTicks int                   // reverse ticks past avoidRevFree
+	avoidRevFree  float32               // >0: count reversals after this elapsed
+
+	// Set for ai_vehicle_convoy (M7): squad march cohesion metric, then an
+	// in-place reform via CustomSlots+ReformPending (owner 2026-07-31).
+	convoyActive    bool
+	convoySquad     ecs.Entity
+	convoyGoal      components.WorldPos
+	convoyMaxSpread float32
+	convoyPhase     uint8
+	convoyMarchAt   float32
+	convoyMergeOK   bool
+	convoyReformOK  bool
+	CSMap           *ecs.Map[components.FormationCustomSlots]
+
 	// Set for ai_vehicle_reflex (M4): each vehicle runs its class reflex
 	// under synthetic fire from reflexSource.
 	reflexActive     bool
@@ -1095,6 +1293,14 @@ func (s *aiTestState) Update(elapsed float32) {
 	}
 	if s.marchActive {
 		s.updateMarch(elapsed)
+		return
+	}
+	if s.avoidActive {
+		s.updateVehAvoid(elapsed)
+		return
+	}
+	if s.convoyActive {
+		s.updateConvoy(elapsed)
 		return
 	}
 	if len(s.vehEnts) > 0 {
@@ -1761,6 +1967,278 @@ func (s *aiTestState) updateVehicles(elapsed float32) {
 	}
 }
 
+// updateVehAvoid drives the M6 collision scenes: per-vehicle goals, per-tick
+// metrics (pairwise clearance / footprint intrusion / infantry inside a hull
+// / reverse ticks), verdict on all-arrived or timeout.
+func (s *aiTestState) updateVehAvoid(elapsed float32) {
+	if s.verdictDone {
+		return
+	}
+	if !s.orderFired {
+		if elapsed < s.orderAt {
+			return
+		}
+		fmt.Println("============================================================")
+		fmt.Printf("== AI VEHICLE AVOID SCENE: %s  vehicles=%d\n", s.sceneID, len(s.vehEnts))
+		fmt.Println("============================================================")
+		for i, v := range s.vehEnts {
+			if aq := s.VehQueueMap.Get(v); aq != nil {
+				systems.PushAction(aq, components.Action{
+					Kind: components.ActionMoveTo, Target: s.avoidGoals[i],
+				})
+			}
+		}
+		s.orderFired = true
+		return
+	}
+
+	type xz struct{ x, z float32 }
+	hulls := make([]xz, len(s.vehEnts))
+	for i, v := range s.vehEnts {
+		if v == (ecs.Entity{}) || !s.World.Alive(v) {
+			hulls[i] = xz{1e9, 1e9}
+			continue
+		}
+		p := s.PosMap.Get(v)
+		if p == nil {
+			hulls[i] = xz{1e9, 1e9}
+			continue
+		}
+		hulls[i] = xz{
+			float32(p.Chunk.X)*components.ChunkSize + p.Local.X,
+			float32(p.Chunk.Z)*components.ChunkSize + p.Local.Z,
+		}
+	}
+	for i := 0; i < len(hulls); i++ {
+		for j := i + 1; j < len(hulls); j++ {
+			dx, dz := hulls[j].x-hulls[i].x, hulls[j].z-hulls[i].z
+			clear := float32(math.Sqrt(float64(dx*dx+dz*dz))) -
+				s.avoidRadii[i] - s.avoidRadii[j]
+			if clear < s.avoidMinPair {
+				s.avoidMinPair = clear
+			}
+		}
+	}
+	for i := range hulls {
+		for _, fp := range s.avoidFoots {
+			if hulls[i].x >= fp.MinX && hulls[i].x <= fp.MaxX &&
+				hulls[i].z >= fp.MinZ && hulls[i].z <= fp.MaxZ {
+				s.avoidFootBad++
+			}
+		}
+		for _, u := range s.avoidYield {
+			if u == (ecs.Entity{}) || !s.World.Alive(u) {
+				continue
+			}
+			up := s.PosMap.Get(u)
+			if up == nil {
+				continue
+			}
+			ux := float32(up.Chunk.X)*components.ChunkSize + up.Local.X
+			uz := float32(up.Chunk.Z)*components.ChunkSize + up.Local.Z
+			dx, dz := ux-hulls[i].x, uz-hulls[i].z
+			lim := s.avoidRadii[i] - 0.3
+			if dx*dx+dz*dz < lim*lim {
+				s.avoidYieldBad++
+			}
+		}
+	}
+	if s.avoidRevFree > 0 && elapsed >= s.avoidRevFree {
+		for _, v := range s.vehEnts {
+			if m := s.MotionMap.Get(v); m != nil && m.Speed < -0.05 {
+				s.avoidRevTicks++
+			}
+		}
+	}
+
+	if elapsed >= s.nextSampleAt && elapsed < s.verdictAt {
+		s.nextSampleAt = elapsed + aiSampleEvery
+		for i := range hulls {
+			fmt.Printf("[ai-test %s] t=%.1fs veh%d=(%.1f,%.1f) minPair=%.2f foot=%d yield=%d rev=%d\n",
+				s.sceneID, elapsed, i, hulls[i].x, hulls[i].z,
+				s.avoidMinPair, s.avoidFootBad, s.avoidYieldBad, s.avoidRevTicks)
+		}
+	}
+
+	arrived := 0
+	for i, v := range s.vehEnts {
+		if v == (ecs.Entity{}) || !s.World.Alive(v) {
+			continue
+		}
+		aq := s.VehQueueMap.Get(v)
+		if aq == nil || aq.Count != 0 {
+			continue
+		}
+		g := s.avoidGoals[i]
+		gx := float32(g.Chunk.X)*components.ChunkSize + g.Local.X
+		gz := float32(g.Chunk.Z)*components.ChunkSize + g.Local.Z
+		dx, dz := hulls[i].x-gx, hulls[i].z-gz
+		// 15 m: TurnRadius-scaled arrival + goalCrowded adjacent parking.
+		if dx*dx+dz*dz < 225 {
+			arrived++
+		}
+	}
+	if arrived == len(s.vehEnts) || elapsed >= s.verdictAt {
+		pass := arrived == len(s.vehEnts) &&
+			s.avoidMinPair >= -0.3 &&
+			s.avoidFootBad == 0 &&
+			s.avoidYieldBad == 0 &&
+			s.avoidRevTicks == 0
+		verdict := "FAIL"
+		if pass {
+			verdict = "PASS"
+		}
+		fmt.Println("============================================================")
+		fmt.Printf("== VERDICT [%s]: %s  (arrived=%d/%d minPair=%.2f foot=%d yield=%d rev=%d t=%.1fs)\n",
+			s.sceneID, verdict, arrived, len(s.vehEnts),
+			s.avoidMinPair, s.avoidFootBad, s.avoidYieldBad, s.avoidRevTicks, elapsed)
+		fmt.Println("============================================================")
+		s.verdictDone = true
+	}
+}
+
+// updateConvoy (M7): one squad MoveTo; the metric is the max pairwise member
+// distance over the whole march — without pacing the BMP leader (11 m/s)
+// leaves the trucks (6 m/s) ~60 m behind, with pacing the column stays inside
+// formation depth + drift.
+func (s *aiTestState) updateConvoy(elapsed float32) {
+	if s.verdictDone {
+		return
+	}
+	// All scene-driven sim mutations happen BEFORE the saveload gate's
+	// SAVE_AT tick (1000): the loaded run has no scene harness, so a
+	// post-save mutation can never replay (SAVELOAD MISMATCH). Hence the
+	// order: reform in place first (t=2), march second (fixed t=12).
+	if !s.orderFired {
+		if elapsed < s.orderAt {
+			return
+		}
+		fmt.Println("============================================================")
+		fmt.Printf("== AI VEHICLE CONVOY SCENE: %s  members=%d\n", s.sceneID, len(s.vehEnts))
+		fmt.Println("============================================================")
+		var cs components.FormationCustomSlots
+		cs.Slots[0] = rl.Vector2{X: 0, Y: 0}
+		cs.Slots[1] = rl.Vector2{X: -24, Y: 0}
+		cs.Slots[2] = rl.Vector2{X: 24, Y: 0}
+		if s.CSMap.Has(s.convoySquad) {
+			*s.CSMap.Get(s.convoySquad) = cs
+		} else {
+			s.CSMap.Add(s.convoySquad, &cs)
+		}
+		if fd := s.FdMap.Get(s.convoySquad); fd != nil {
+			fd.ReformPending = true
+		}
+		s.convoyPhase = 1
+		fmt.Printf("[ai-test %s] t=%.1fs REFORM APPLIED (line abreast +/-24, no order)\n", s.sceneID, elapsed)
+		s.orderFired = true
+		return
+	}
+
+	type xz struct{ x, z float32 }
+	pts := make([]xz, 0, len(s.vehEnts))
+	for _, v := range s.vehEnts {
+		if v == (ecs.Entity{}) || !s.World.Alive(v) {
+			continue
+		}
+		p := s.PosMap.Get(v)
+		if p == nil {
+			continue
+		}
+		pts = append(pts, xz{
+			float32(p.Chunk.X)*components.ChunkSize + p.Local.X,
+			float32(p.Chunk.Z)*components.ChunkSize + p.Local.Z,
+		})
+	}
+	// March-cohesion metric: only in phase 2, after a grace window that lets
+	// the line-abreast start fold back into the column.
+	if s.convoyPhase == 2 && elapsed > s.convoyMarchAt+12 {
+		for i := 0; i < len(pts); i++ {
+			for j := i + 1; j < len(pts); j++ {
+				dx, dz := pts[j].x-pts[i].x, pts[j].z-pts[i].z
+				if d := float32(math.Sqrt(float64(dx*dx + dz*dz))); d > s.convoyMaxSpread {
+					s.convoyMaxSpread = d
+				}
+			}
+		}
+	}
+
+	gx := float32(s.convoyGoal.Chunk.X)*components.ChunkSize + s.convoyGoal.Local.X
+	gz := float32(s.convoyGoal.Chunk.Z)*components.ChunkSize + s.convoyGoal.Local.Z
+	arrived := 0
+	for _, p := range pts {
+		dx, dz := p.x-gx, p.z-gz
+		if dx*dx+dz*dz < 625 { // 25 m: column depth behind the parked leader
+			arrived++
+		}
+	}
+
+	if elapsed >= s.nextSampleAt && elapsed < s.verdictAt {
+		s.nextSampleAt = elapsed + aiSampleEvery
+		fmt.Printf("[ai-test %s] t=%.1fs ph=%d arrived=%d/%d spread=%.1f",
+			s.sceneID, elapsed, s.convoyPhase, arrived, len(pts), s.convoyMaxSpread)
+		for i, p := range pts {
+			spd, qn := float32(0), uint8(0)
+			if i < len(s.vehEnts) && s.World.Alive(s.vehEnts[i]) {
+				if m := s.MotionMap.Get(s.vehEnts[i]); m != nil {
+					spd = m.Speed
+				}
+				if aq := s.VehQueueMap.Get(s.vehEnts[i]); aq != nil {
+					qn = aq.Count
+				}
+			}
+			fmt.Printf(" v%d=(%.0f,%.0f|%.1f,q%d)", i, p.x, p.z, spd, qn)
+		}
+		rc := -1
+		if s.World.Alive(s.convoySquad) {
+			if r := s.RosterMap.Get(s.convoySquad); r != nil {
+				rc = int(r.Count)
+			}
+		}
+		fmt.Printf(" roster=%d\n", rc)
+	}
+
+	// Phase 1: watch the in-place reform succeed (line abreast formed
+	// without any order), then at FIXED t=12 clear the custom layout and
+	// order the march — a deterministic pre-save mutation time.
+	if s.convoyPhase == 1 {
+		if len(pts) == 3 && !s.convoyReformOK {
+			d01 := dist2Dxz(pts[0].x, pts[0].z, pts[1].x, pts[1].z)
+			d02 := dist2Dxz(pts[0].x, pts[0].z, pts[2].x, pts[2].z)
+			d12 := dist2Dxz(pts[1].x, pts[1].z, pts[2].x, pts[2].z)
+			if d12 > 32 && d01 > 15 && d02 > 15 {
+				s.convoyReformOK = true
+				fmt.Printf("[ai-test %s] t=%.1fs REFORM OK (d12=%.1f)\n", s.sceneID, elapsed, d12)
+			}
+		}
+		if elapsed >= s.orderAt+10 {
+			if s.CSMap.Has(s.convoySquad) {
+				s.CSMap.Remove(s.convoySquad)
+			}
+			s.SquadService.OrderMoveTo(s.convoySquad, s.convoyGoal)
+			s.convoyPhase = 2
+			s.convoyMarchAt = elapsed
+			fmt.Printf("[ai-test %s] t=%.1fs MARCH ORDERED (reform=%v)\n",
+				s.sceneID, elapsed, s.convoyReformOK)
+		}
+		return
+	}
+
+	if (s.convoyPhase == 2 && arrived == len(pts) && len(pts) > 0 &&
+		elapsed > s.convoyMarchAt+13) || elapsed >= s.verdictAt {
+		pass := arrived == len(pts) && len(pts) > 0 &&
+			s.convoyReformOK && s.convoyMaxSpread < 30 && s.convoyMergeOK
+		verdict := "FAIL"
+		if pass {
+			verdict = "PASS"
+		}
+		fmt.Println("============================================================")
+		fmt.Printf("== VERDICT [%s]: %s  (arrived=%d/%d reform=%v mergeClear=%v maxSpread=%.1f t=%.1fs)\n",
+			s.sceneID, verdict, arrived, len(pts), s.convoyReformOK, s.convoyMergeOK, s.convoyMaxSpread, elapsed)
+		fmt.Println("============================================================")
+		s.verdictDone = true
+	}
+}
+
 // vehOnBridge: true when any scene vehicle's RoadFollower sits on a
 // RoadBridge edge this tick.
 func (s *aiTestState) vehOnBridge() bool {
@@ -1803,7 +2281,10 @@ func (s *aiTestState) vehArrivedCount() int {
 		wx := float32(pos.Chunk.X)*components.ChunkSize + pos.Local.X
 		wz := float32(pos.Chunk.Z)*components.ChunkSize + pos.Local.Z
 		dx, dz := wx-fx, wz-fz
-		if dx*dx+dz*dz < 36 {
+		// 13 m: arrival scales with TurnRadius since M6 and a shared goal
+		// parks followers adjacent to the first hull (goalCrowded), not on
+		// the point.
+		if dx*dx+dz*dz < 169 {
 			n++
 		}
 	}

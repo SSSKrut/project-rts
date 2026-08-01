@@ -20,13 +20,24 @@ import (
 // wins on time (RoadRoute); on edges the hull cruises at road speed and
 // writes RoadFollower for bridge-deck Y (vehicle_driver_road.go).
 type VehicleDriverSystem struct {
-	filter      *ecs.Filter3[components.Vehicle, components.WorldPos, components.Motion]
-	queueMap    *ecs.Map[components.ActionQueue]
-	routeMap    *ecs.Map[components.RoadRoute]
-	followerMap *ecs.Map[components.RoadFollower]
-	overrideMap *ecs.Map[components.VehicleOverride]
-	sampler     *HeightSampler
-	router      *RoadRouter
+	filter         *ecs.Filter3[components.Vehicle, components.WorldPos, components.Motion]
+	queueMap       *ecs.Map[components.ActionQueue]
+	routeMap       *ecs.Map[components.RoadRoute]
+	followerMap    *ecs.Map[components.RoadFollower]
+	overrideMap    *ecs.Map[components.VehicleOverride]
+	buildingFilter *ecs.Filter2[components.Building, components.WorldPos]
+	vehHash        ecs.Resource[core.VehicleSpatialHash]
+	sampler        *HeightSampler
+	router         *RoadRouter
+	obstacles      []vehObstacle
+	// Convoy pacing (M7): squad members read roster mates to derive the
+	// column speed cap.
+	worldRef       *ecs.World
+	posMap         *ecs.Map[components.WorldPos]
+	squadMemberMap *ecs.Map[components.SquadMember]
+	rosterMap      *ecs.Map[components.CommandRoster]
+	formationMap   *ecs.Map[components.FormationData]
+	vehicleMap     *ecs.Map[components.Vehicle]
 }
 
 const (
@@ -36,6 +47,10 @@ const (
 	vehTurnSlowSpeed float32 = 3.0
 	// Uphill grade beyond which speed scales down; slopeMul floors at 0.25.
 	vehSlopeGain float32 = 1.2
+	// The reverse-gear enter condition must hold this long before the driver
+	// commits — transient aim flips (replan, ramp pop, formation slot swing)
+	// must not trigger a three-point turn (Phase 19 M6 owner bug).
+	vehReverseHold float32 = 0.4
 )
 
 func (sys *VehicleDriverSystem) InitUI(w *ecs.World) {
@@ -44,8 +59,16 @@ func (sys *VehicleDriverSystem) InitUI(w *ecs.World) {
 	sys.routeMap = ecs.NewMap[components.RoadRoute](w)
 	sys.followerMap = ecs.NewMap[components.RoadFollower](w)
 	sys.overrideMap = ecs.NewMap[components.VehicleOverride](w)
+	sys.buildingFilter = ecs.NewFilter2[components.Building, components.WorldPos](w)
+	sys.vehHash = ecs.NewResource[core.VehicleSpatialHash](w)
 	sys.sampler = NewHeightSampler(w)
 	sys.router = NewRoadRouter(w)
+	sys.worldRef = w
+	sys.posMap = ecs.NewMap[components.WorldPos](w)
+	sys.squadMemberMap = ecs.NewMap[components.SquadMember](w)
+	sys.rosterMap = ecs.NewMap[components.CommandRoster](w)
+	sys.formationMap = ecs.NewMap[components.FormationData](w)
+	sys.vehicleMap = ecs.NewMap[components.Vehicle](w)
 }
 
 func (VehicleDriverSystem) Name() string { return "vehicle_driver" }
@@ -66,21 +89,21 @@ func (sys *VehicleDriverSystem) Update(ctx core.UpdateContext) {
 	if dt <= 0 {
 		return
 	}
+	sys.snapshotObstacles()
 	q := sys.filter.Query()
 	for q.Next() {
 		veh, pos, mot := q.Get()
 		ent := q.Entity()
-		aq := sys.queueMap.Get(ent)
-		if aq == nil {
-			continue
+		if aq := sys.queueMap.Get(ent); aq != nil {
+			sys.step(ent, veh, pos, mot, aq, sys.routeMap.Get(ent),
+				sys.followerMap.Get(ent), sys.overrideMap.Get(ent), dt)
 		}
-		sys.step(veh, pos, mot, aq, sys.routeMap.Get(ent),
-			sys.followerMap.Get(ent), sys.overrideMap.Get(ent), dt)
+		sys.resolveOverlaps(ent, pos, components.SpecForVehicle(veh.Kind), dt)
 	}
 }
 
-func (sys *VehicleDriverSystem) step(veh *components.Vehicle, pos *components.WorldPos,
-	mot *components.Motion, aq *components.ActionQueue,
+func (sys *VehicleDriverSystem) step(ent ecs.Entity, veh *components.Vehicle,
+	pos *components.WorldPos, mot *components.Motion, aq *components.ActionQueue,
 	route *components.RoadRoute, follower *components.RoadFollower,
 	ov *components.VehicleOverride, dt float32) {
 	spec := components.SpecForVehicle(veh.Kind)
@@ -113,12 +136,27 @@ func (sys *VehicleDriverSystem) step(veh *components.Vehicle, pos *components.Wo
 		return
 	}
 
-	if route != nil && (route.Planned == 0 || route.Goal != action.Target) {
-		sys.planRoute(pos, action.Target, spec, route)
+	// Squad members drive STRAIGHT to their formation slots — the slot is a
+	// short moving hop, and per-member road routing tears the column apart
+	// (a truck's wheeled planning bias detours it onto a highway while a
+	// tracked mate cuts straight; owner repro 2026-07-31). Squad-level road
+	// use stays with the squad macro path.
+	inSquad := false
+	if sm := sys.squadMemberMap.Get(ent); sm != nil && sm.Squad != (ecs.Entity{}) {
+		inSquad = true
 	}
-	if route != nil && route.Planned == 1 && route.Phase < 3 {
-		sys.stepRoute(pos, mot, spec, route, follower, dt)
-		return
+	if inSquad {
+		if route != nil && route.Planned == 1 {
+			clearRoute(route, follower)
+		}
+	} else {
+		if route != nil && (route.Planned == 0 || route.Goal != action.Target) {
+			sys.planRoute(pos, action.Target, spec, route)
+		}
+		if route != nil && route.Planned == 1 && route.Phase < 3 {
+			sys.stepRoute(ent, pos, mot, spec, route, follower, dt)
+			return
+		}
 	}
 	if follower != nil {
 		follower.Edge = -1
@@ -126,24 +164,40 @@ func (sys *VehicleDriverSystem) step(veh *components.Vehicle, pos *components.Wo
 
 	diff := action.Target.Sub(*pos)
 	distSq := diff.X*diff.X + diff.Z*diff.Z
-	if distSq < vehArrivalRadius*vehArrivalRadius {
+	// Arrival scales with the turning circle (a truck cannot pin a 2 m
+	// point); a stopped hull already parked on a shared goal also counts as
+	// arrival — stopping short beats orbiting the occupied spot.
+	arrive := rampPopRadius(vehArrivalRadius, spec)
+	arrived := distSq < arrive*arrive
+	if !arrived && distSq < (arrive+2*spec.ColliderR)*(arrive+2*spec.ColliderR) {
+		gx, gz := worldXZ(action.Target)
+		arrived = sys.goalCrowded(ent, gx, gz, arrive+spec.ColliderR)
+	}
+	if arrived {
 		clearRoute(route, follower)
 		popAction(aq)
 		return
 	}
 	dist := float32(math.Sqrt(float64(distSq)))
 	cruise := spec.MaxSpeedOffroad * sys.slopeMul(pos, mot.Yaw)
-	sys.drive(pos, mot, spec, diff.X, diff.Z, dist, cruise, true, true, dt)
+	sys.drive(ent, follower, pos, mot, spec, diff.X, diff.Z, dist, cruise, true, true, dt)
 }
 
 // drive steers toward the point at (dx, dz) relative to the hull and
 // advances. envelope enables the brake-to-stop arrival envelope; allowReverse
 // enables the reverse-gear hysteresis (enter when the target sits far behind
-// and close — no room for a forward arc; exit once the nose is near enough or
-// the target has drifted away).
-func (sys *VehicleDriverSystem) drive(pos *components.WorldPos, mot *components.Motion,
+// and close — no room for a forward arc — and has STAYED there vehReverseHold
+// seconds; exit once the nose is near enough or the target has drifted away).
+func (sys *VehicleDriverSystem) drive(ent ecs.Entity, follower *components.RoadFollower,
+	pos *components.WorldPos, mot *components.Motion,
 	spec *components.VehicleSpec, dx, dz, dist, cruise float32,
 	allowReverse, envelope bool, dt float32) {
+	if pace := sys.squadPaceCap(ent, pos); pace > 0 && cruise > pace {
+		cruise = pace
+	}
+	if mot.Speed >= -0.01 {
+		dx, dz, cruise = sys.avoid(ent, pos, mot, spec, dx, dz, dist, cruise)
+	}
 	desiredYaw := float32(math.Atan2(float64(dx), float64(dz)))
 	yawErr := wrapAngle(desiredYaw - mot.Yaw)
 	absErr := yawErr
@@ -154,11 +208,21 @@ func (sys *VehicleDriverSystem) drive(pos *components.WorldPos, mot *components.
 	reversing := false
 	if allowReverse {
 		reversing = mot.Speed < -0.01
-		if !reversing && absErr > 2.1 && dist < 4*spec.TurnRadiusM {
-			reversing = true
+		enter := absErr > 2.1 && dist < 4*spec.TurnRadiusM
+		if !reversing && enter {
+			if follower == nil {
+				reversing = true
+			} else if follower.RevHold += dt; follower.RevHold >= vehReverseHold {
+				reversing = true
+			}
 		} else if reversing && (absErr < 1.2 || dist > 6*spec.TurnRadiusM) {
 			reversing = false
 		}
+		if follower != nil && (!enter || reversing) {
+			follower.RevHold = 0
+		}
+	} else if follower != nil {
+		follower.RevHold = 0
 	}
 
 	var target float32
