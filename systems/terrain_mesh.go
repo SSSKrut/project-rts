@@ -32,10 +32,10 @@ var reliefStops = [...]struct {
 	{14, 220, 215, 205}, // peak
 }
 
-// reliefColor maps (height, normal-Y) to RGB. Linear blend between
-// reliefStops, multiplied by a slope-based shade so the form reads on
-// flat-shaded geometry without a runtime light.
-func reliefColor(y, ny float32) (uint8, uint8, uint8) {
+// reliefColor maps height to the ground's albedo — a linear blend between
+// reliefStops. Pure colour: the slope shade that used to be baked in here now
+// comes from the world shader's sun.
+func reliefColor(y float32) (uint8, uint8, uint8) {
 	var rr, gg, bb float32
 	switch {
 	case y <= reliefStops[0].H:
@@ -56,14 +56,7 @@ func reliefColor(y, ny float32) (uint8, uint8, uint8) {
 			}
 		}
 	}
-	if ny < 0 {
-		ny = 0
-	} else if ny > 1 {
-		ny = 1
-	}
-	// 0.45 darkest (vertical wall) → 1.0 brightest (flat).
-	shade := 0.45 + 0.55*ny
-	return uint8(rr * shade), uint8(gg * shade), uint8(bb * shade)
+	return uint8(rr), uint8(gg), uint8(bb)
 }
 
 // TerrainMeshSystem rebuilds GPU mesh for any chunk marked MeshDirty.
@@ -270,7 +263,7 @@ func assembleGrid(heightAt func(i, j int) float32, srcRes, dstRes int) builtMesh
 
 			verts = append(verts, x, y, z)
 			norms = append(norms, nx, ny, nz)
-			cr, cg, cb := reliefColor(y, ny)
+			cr, cg, cb := reliefColor(y)
 			colors = append(colors, cr, cg, cb, 255)
 		}
 	}

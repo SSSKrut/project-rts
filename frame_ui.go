@@ -18,6 +18,8 @@ var devSpawnLabels = []string{"Rifleman", "Enemy", "Truck", "BTR", "BMP", "Tank"
 // singletons. Teardown is shutdownUI, deferred by main right after this runs.
 func (g *Game) initUI() {
 	g.terrainMaterial = rl.LoadMaterialDefault()
+	g.Ctx.WorldShader = newWorldShader()
+	g.Ctx.WorldShader.apply(&g.terrainMaterial)
 	g.Ctx.Ribbons.upload()
 
 	g.UI.ScreenW, g.UI.ScreenH = initialScreenWidth, initialScreenHeight
@@ -72,6 +74,7 @@ func (g *Game) shutdownUI() {
 	g.UI.Scene3DRT.Unload()
 	saveLayout(g.UI.PanelMgr)
 	g.Ctx.Ribbons.unload()
+	g.Ctx.WorldShader.unload()
 	rl.UnloadMaterial(g.terrainMaterial)
 }
 

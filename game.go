@@ -174,6 +174,7 @@ type renderCtx struct {
 	OrderMarker orderMarkerCtx
 	Particle    ParticleRenderCtx
 	Ribbons     ribbonSet
+	WorldShader *worldShader
 }
 
 // sceneHarness holds the scripted test scenes (-scene=...); nil in normal play.

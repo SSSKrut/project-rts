@@ -50,6 +50,9 @@ func (g *Game) drawScene3D() {
 	rl.ClearBackground(rl.RayWhite)
 	rl.BeginMode3D(systems.CurrentCamera)
 
+	g.Ctx.WorldShader.beginFrame()
+	g.Ctx.WorldShader.setGround(true)
+
 	g.Frame.ChunksActive = 0
 	g.Frame.ChunksRel = 0
 	qcA := g.Filt.ChunkActive.Query()
@@ -75,6 +78,7 @@ func (g *Game) drawScene3D() {
 		rl.DrawMesh(mesh.Mesh, g.terrainMaterial, xform)
 	}
 
+	g.Ctx.WorldShader.setGround(false)
 	g.Frame.RibbonsDrawn = g.Ctx.Ribbons.Roads.draw(g.terrainMaterial)
 
 	rl.DrawCircle3D(anchorRender, 1, rl.Vector3{X: 1, Y: 0, Z: 0}, 90, rl.Blue)
@@ -161,6 +165,7 @@ func (g *Game) drawScene3D() {
 		}
 	}
 
+	g.Ctx.WorldShader.beginObjects()
 	g.Frame.PropsLive = 0
 	camPos := systems.CurrentCamera.Position
 	camFwdX := systems.CurrentCamera.Target.X - camPos.X
@@ -193,6 +198,7 @@ func (g *Game) drawScene3D() {
 		drawProp(meta, renderPos, prop.Yaw, prop.Scale)
 		g.Frame.PropsLive++
 	}
+	g.Ctx.WorldShader.endObjects()
 
 	// A Level is hidden when its building has InteriorOpen AND its avgY
 	// sits above CurrentLevel's avgY + epsilon.
@@ -232,6 +238,7 @@ func (g *Game) drawScene3D() {
 		return now-vis.LastSeenAt > components.FogVisibleDuration
 	}
 
+	g.Ctx.WorldShader.beginObjects()
 	g.Frame.FloorsLive = 0
 	qf := g.Filt.FloorRender.Query()
 	for qf.Next() {
@@ -317,6 +324,7 @@ func (g *Game) drawScene3D() {
 			render.DrawRoof(renderPos, *rf, roofAlpha, fogged)
 		}
 	}
+	g.Ctx.WorldShader.endObjects()
 
 	// Outline boxes around hovered + selected buildings. 0.15 m pad keeps
 	// the wireframe legible against wall surfaces.

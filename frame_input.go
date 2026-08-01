@@ -36,6 +36,9 @@ func (g *Game) handleInput() {
 	if rl.IsKeyPressed(rl.KeyR) {
 		debugOverlay.Roofs = !debugOverlay.Roofs
 	}
+	if rl.IsKeyPressed(rl.KeyN) {
+		debugOverlay.TerrainDetail = !debugOverlay.TerrainDetail
+	}
 
 	g.Frame.AnchorPos = g.Maps.Pos.Get(g.anchor)
 	g.Frame.AnchorSpeed = float32(20.0)

@@ -24,9 +24,11 @@ type DebugOverlayState struct {
 	// Roofs is a VIEW switch, not an overlay: default on, and it hard-hides
 	// roofs regardless of the camera-angle fade (hotkey R).
 	Roofs bool
+	// TerrainDetail is the normal-mapped ground micro-relief (hotkey N).
+	TerrainDetail bool
 }
 
-var debugOverlay = DebugOverlayState{Roofs: true}
+var debugOverlay = DebugOverlayState{Roofs: true, TerrainDetail: true}
 
 func debugOverlayToggles(s *DebugOverlayState) []ui.DebugToggle {
 	return []ui.DebugToggle{
@@ -40,6 +42,7 @@ func debugOverlayToggles(s *DebugOverlayState) []ui.DebugToggle {
 		{Label: "Road graph (G)", On: &s.RoadGraph},
 		{Label: "Squad lines (K)", On: &s.SquadLines},
 		{Label: "Roofs (R)", On: &s.Roofs},
+		{Label: "Terrain detail (N)", On: &s.TerrainDetail},
 	}
 }
 
