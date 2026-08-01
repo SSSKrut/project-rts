@@ -126,6 +126,8 @@ type gameMaps struct {
 	ContactOverride      *ecs.Map[components.ContactSymbolOverride]
 	ContactPlayerSet     *ecs.Map[components.ContactPlayerSet]
 	UnitOverride         *ecs.Map[components.UnitSymbolOverride]
+	SquadOverride        *ecs.Map[components.SquadSymbolOverride]
+	Vehicle              *ecs.Map[components.Vehicle]
 	ActionQueue          *ecs.Map[components.ActionQueue]
 }
 
@@ -232,12 +234,16 @@ type uiState struct {
 	MarqueeActive bool
 	MarqueeOrigin ui.PanelID
 
-	TimelineView     ui.TimelineViewState
-	TimelineData     ui.TimelineData
-	TimelineHoverHit ui.TimelineHit
-	TimelineHoverOK  bool
-	TimelineHoverBlk ui.TimelineOrderBlock
-	TopBarHits       ui.TopBarHits
+	TimelineView      ui.TimelineViewState
+	TimelineData      ui.TimelineData
+	TimelineHoverHit  ui.TimelineHit
+	TimelineHoverOK   bool
+	TimelineHoverBlk  ui.TimelineOrderBlock
+	TimelineLabelDrag bool
+	TimelineHDrag     bool
+	TimelineVDrag     bool
+	TimelineDragOff   float32
+	TopBarHits        ui.TopBarHits
 
 	FormationEditor *ui.FormationEditor
 	SymbolEditor    *ui.SymbolEditor
@@ -290,8 +296,10 @@ type devState struct {
 const (
 	// 300 ms window for double-RMB — wide enough for relaxed chains, narrow
 	// enough that two deliberate sequential clicks don't fuse.
-	rmbDoubleWindow       float32 = 0.30
-	wheelScrollSpeed      float32 = 30
+	rmbDoubleWindow  float32 = 0.30
+	wheelScrollSpeed float32 = 30
+	// One notch scrolls two squad rows in the timeline's list.
+	timelineWheelRows     float32 = 64
 	marqueeClickThreshold float32 = 5
 )
 
@@ -324,6 +332,11 @@ type frameState struct {
 
 	GhostTarget   components.WorldPos
 	GhostTargetOK bool
+
+	// Contact formations for the map, rebuilt once per frame after the tick.
+	// Input runs before the next Advance, so the set the pick path reads is
+	// exactly the one that was drawn.
+	MapClusters ui.ContactClusterSet
 
 	// Counters accumulated by drawScene3D, consumed by drawUI's census.
 	ChunksActive int

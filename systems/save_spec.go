@@ -147,6 +147,7 @@ var saveComponents = map[string]saveEntry{
 	"components.ContactPlayerSet":      saveReg[components.ContactPlayerSet](SaveMemcpy),
 	"components.ContactSymbolOverride": saveReg[components.ContactSymbolOverride](SaveMemcpy),
 	"components.UnitSymbolOverride":    saveReg[components.UnitSymbolOverride](SaveMemcpy),
+	"components.SquadSymbolOverride":   saveReg[components.SquadSymbolOverride](SaveMemcpy),
 	"components.MapPing":               saveReg[components.MapPing](SaveMemcpy),
 
 	"components.Particle":       saveReg[components.Particle](SaveMemcpy),

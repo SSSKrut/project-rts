@@ -75,6 +75,14 @@ type UnitSymbolOverride struct {
 	Spec SymbolSpec
 }
 
+// SquadSymbolOverride is the player-assigned Spec for a Squad marker. Set
+// via the Symbol Editor's "Apply to selection" while a whole squad is
+// selected. Lookup order for a squad marker: SquadSymbolOverride > roster
+// composition.
+type SquadSymbolOverride struct {
+	Spec SymbolSpec
+}
+
 // ContactSymbolOverride is the player-classified Spec for a Contact. Set
 // by RMB context menu (Track 18.5.F, copies a preset's Spec) or the Symbol
 // Editor "Apply to selection" (Track 18.5.D). Co-exists with ContactPlayerSet.

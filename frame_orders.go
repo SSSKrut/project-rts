@@ -24,13 +24,7 @@ func (g *Game) handleOrders() {
 	// instead of going through the order pathway.
 	if rl.IsMouseButtonPressed(rl.MouseButtonRight) && !g.UI.Floating.IsBusy(g.Frame.Cursor) &&
 		g.Frame.Focused == ui.PanelMap && !g.UI.CtxMenu.IsActive() && !g.UI.ContactCtxMenu.IsActive() {
-		mapCtx := ui.MapRenderCtx{
-			World: g.App.World, Cam: g.UI.MapCam, SquadFilter: g.Filt.Squad,
-			SquadCenter:    g.squadCenter,
-			MapMarkerCache: &g.Res.MapMarkerCache,
-			ContactFilter:  g.Filt.Contact,
-			ContactMap:     g.Maps.Contact,
-		}
+		mapCtx := g.mapPickCtx()
 		if hit := ui.PickContactAt(g.Frame.Cursor, mapCtx, g.Frame.PanelMap, 14); hit != (ecs.Entity{}) && g.App.World.Alive(hit) {
 			sections := ui.BuildContactContextSections(&g.Res.Symbology)
 			g.UI.ContactCtxMenu.Begin(g.Frame.Cursor, sections, ui.PanelMap, g.Frame.PanelMapContent)

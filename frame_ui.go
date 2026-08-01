@@ -58,14 +58,9 @@ func (g *Game) initUI() {
 	g.UI.FormationEditor = ui.NewFormationEditor(ecs.Entity{}, formationEditorCtx)
 
 	// Symbol Editor (Phase 18.5.D). Singleton shared between workspace leaf
-	// and any future floating instance. SelectionFn returns the single
-	// selected entity (Unit or Contact); Apply targets it.
-	g.UI.SymbolEditor = ui.NewSymbolEditor(func() ecs.Entity {
-		if len(g.Sel.Units) == 1 {
-			return g.Sel.Units[0]
-		}
-		return ecs.Entity{}
-	})
+	// and any future floating instance. Apply targets whatever
+	// symbolApplyTarget resolves to.
+	g.UI.SymbolEditor = ui.NewSymbolEditor(g.symbolApplyTarget)
 
 	g.applyShotSelection()
 }
@@ -87,6 +82,38 @@ func (g *Game) chromeBusy() bool {
 		g.UI.PanelMgr.IsTitleDragging() ||
 		g.UI.ChevronMenu.Open || g.UI.Floating.IsBusy(rl.GetMousePosition()) ||
 		g.UI.Floating.SwitchMenuOpen()
+}
+
+// symbolApplyTarget is what the Symbol Editor's [Apply to selection] writes
+// onto: a lone unit / contact, or the squad behind a whole-squad selection.
+// Zero entity = nothing applicable, which disables the button.
+func (g *Game) symbolApplyTarget() ecs.Entity {
+	if len(g.Sel.Units) == 1 {
+		return g.Sel.Units[0]
+	}
+	if squad, homo := groupSelected(g.Sel.Units, g.Maps.SquadMember); homo &&
+		squad != (ecs.Entity{}) && g.App.World.Alive(squad) {
+		return squad
+	}
+	return ecs.Entity{}
+}
+
+// mapPickCtx is the slice of MapRenderCtx the map's hit-tests need. One
+// builder so hover / click / RMB can never disagree about what is drawn.
+func (g *Game) mapPickCtx() ui.MapRenderCtx {
+	return ui.MapRenderCtx{
+		World:          g.App.World,
+		Cam:            g.UI.MapCam,
+		PosMap:         g.Maps.Pos,
+		SquadFilter:    g.Filt.Squad,
+		SquadMemberMap: g.Maps.SquadMember,
+		SquadCenter:    g.squadCenter,
+		MapMarkerCache: &g.Res.MapMarkerCache,
+		FactionMap:     g.Maps.Faction,
+		UnitFilter:     g.Filt.UnitRender,
+		VehicleFilter:  g.Filt.VehicleRender,
+		Clusters:       &g.Frame.MapClusters,
+	}
 }
 
 func (g *Game) isSelected(e ecs.Entity) int {
@@ -254,40 +281,43 @@ func (g *Game) renderFloatingWidget(id ui.PanelID, content rl.Rectangle,
 		g.UI.SymbolEditor.DrawPanel(syn("Symbology"), font, cursor, lmbPress, true, nil)
 	case ui.PanelMap:
 		ui.DrawMap(syn("Map"), ui.MapRenderCtx{
-			World:              g.App.World,
-			Cam:                g.UI.MapCam,
-			Underlay:           &g.UI.Underlay,
-			AnchorPos:          *g.Maps.Pos.Get(g.anchor),
-			Selected:           g.Sel.Units,
-			Hovered:            g.Sel.Hovered,
-			PosMap:             g.Maps.Pos,
-			RosterMap:          g.Maps.Roster,
-			SquadMemberMap:     g.Maps.SquadMember,
-			SquadFilter:        g.Filt.Squad,
-			SquadCenter:        g.squadCenter,
-			SquadColor:         g.squadColor,
-			RoadGraph:          &g.Res.RoadGraph,
-			Rivers:             &g.Res.Rivers,
-			Buildings:          &g.Res.BuildingPlans,
-			ShowDebugLayers:    g.UI.ShowMapDebugLy,
-			OrderQueueMap:      g.Maps.OrderQueue,
-			OrderKindMap:       g.Maps.OrderKind,
-			OrderTargetMap:     g.Maps.OrderTarget,
-			OrderChainMap:      g.Maps.OrderChain,
-			SmoothedSquadPos:   g.UI.SmoothedSquadPos,
-			MapMarkerCache:     &g.Res.MapMarkerCache,
-			RoleMap:            g.Maps.Role,
-			Font:               font,
-			MapPingFilter:      g.Filt.MapPing,
-			Clock:              g.Svc.Squad.Clock(),
-			ContactFilter:      g.Filt.Contact,
-			ContactMap:         g.Maps.Contact,
-			ContactOverrideMap: g.Maps.ContactOverride,
-			LOSFanOrigin:       g.Ctx.LOS.origin,
-			LOSFanRuns:         g.Ctx.LOS.fanRuns(),
-			LOSFanRange:        g.Ctx.LOS.sensorR,
-			LOSFanFalloff:      g.Ctx.LOS.falloff,
-			LOSWeaponRs:        g.Ctx.LOS.weaponRs,
+			World:            g.App.World,
+			Cam:              g.UI.MapCam,
+			Underlay:         &g.UI.Underlay,
+			AnchorPos:        *g.Maps.Pos.Get(g.anchor),
+			Selected:         g.Sel.Units,
+			Hovered:          g.Sel.Hovered,
+			PosMap:           g.Maps.Pos,
+			RosterMap:        g.Maps.Roster,
+			SquadMemberMap:   g.Maps.SquadMember,
+			SquadFilter:      g.Filt.Squad,
+			SquadCenter:      g.squadCenter,
+			SquadColor:       g.squadColor,
+			RoadGraph:        &g.Res.RoadGraph,
+			Rivers:           &g.Res.Rivers,
+			Buildings:        &g.Res.BuildingPlans,
+			ShowDebugLayers:  g.UI.ShowMapDebugLy,
+			OrderQueueMap:    g.Maps.OrderQueue,
+			OrderKindMap:     g.Maps.OrderKind,
+			OrderTargetMap:   g.Maps.OrderTarget,
+			OrderChainMap:    g.Maps.OrderChain,
+			SmoothedSquadPos: g.UI.SmoothedSquadPos,
+			MapMarkerCache:   &g.Res.MapMarkerCache,
+			RoleMap:          g.Maps.Role,
+			VehicleMap:       g.Maps.Vehicle,
+			UnitFilter:       g.Filt.UnitRender,
+			VehicleFilter:    g.Filt.VehicleRender,
+			FactionMap:       g.Maps.Faction,
+			SquadOverrideMap: g.Maps.SquadOverride,
+			Font:             font,
+			MapPingFilter:    g.Filt.MapPing,
+			Clock:            g.Svc.Squad.Clock(),
+			Clusters:         &g.Frame.MapClusters,
+			LOSFanOrigin:     g.Ctx.LOS.origin,
+			LOSFanRuns:       g.Ctx.LOS.fanRuns(),
+			LOSFanRange:      g.Ctx.LOS.sensorR,
+			LOSFanFalloff:    g.Ctx.LOS.falloff,
+			LOSWeaponRs:      g.Ctx.LOS.weaponRs,
 		})
 	case ui.PanelInspect:
 		ui.DrawInspector(syn("Inspector"), ui.InspectorCtx{
@@ -304,7 +334,8 @@ func (g *Game) renderFloatingWidget(id ui.PanelID, content rl.Rectangle,
 			SquadColor:    g.squadColor,
 		})
 	case ui.PanelTimeline:
-		ui.DrawTimelinePanel(syn("Timeline"), font, g.UI.TimelineData, &g.UI.TimelineView)
+		ui.DrawTimelinePanel(syn("Timeline"), font, g.UI.TimelineData, &g.UI.TimelineView,
+			cursor, false)
 	case ui.PanelDebug:
 		g.drawDebugWidget(syn("Debug"), font, cursor, lmbPress)
 	case ui.Panel3D:

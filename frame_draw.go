@@ -20,40 +20,43 @@ func (g *Game) drawUI() {
 
 	// Panel content drawn before chrome so title bars overlay cleanly.
 	mapCtx := ui.MapRenderCtx{
-		World:              g.App.World,
-		Cam:                g.UI.MapCam,
-		Underlay:           &g.UI.Underlay,
-		AnchorPos:          *g.Frame.AnchorPos,
-		Selected:           g.Sel.Units,
-		Hovered:            g.Sel.Hovered,
-		PosMap:             g.Maps.Pos,
-		RosterMap:          g.Maps.Roster,
-		SquadMemberMap:     g.Maps.SquadMember,
-		SquadFilter:        g.Filt.Squad,
-		SquadCenter:        g.squadCenter,
-		SquadColor:         g.squadColor,
-		RoadGraph:          &g.Res.RoadGraph,
-		Rivers:             &g.Res.Rivers,
-		Buildings:          &g.Res.BuildingPlans,
-		ShowDebugLayers:    g.UI.ShowMapDebugLy,
-		OrderQueueMap:      g.Maps.OrderQueue,
-		OrderKindMap:       g.Maps.OrderKind,
-		OrderTargetMap:     g.Maps.OrderTarget,
-		OrderChainMap:      g.Maps.OrderChain,
-		SmoothedSquadPos:   g.UI.SmoothedSquadPos,
-		MapMarkerCache:     &g.Res.MapMarkerCache,
-		RoleMap:            g.Maps.Role,
-		Font:               g.hudFont,
-		MapPingFilter:      g.Filt.MapPing,
-		Clock:              g.Svc.Squad.Clock(),
-		ContactFilter:      g.Filt.Contact,
-		ContactMap:         g.Maps.Contact,
-		ContactOverrideMap: g.Maps.ContactOverride,
-		LOSFanOrigin:       g.Ctx.LOS.origin,
-		LOSFanRuns:         g.Ctx.LOS.fanRuns(),
-		LOSFanRange:        g.Ctx.LOS.sensorR,
-		LOSFanFalloff:      g.Ctx.LOS.falloff,
-		LOSWeaponRs:        g.Ctx.LOS.weaponRs,
+		World:            g.App.World,
+		Cam:              g.UI.MapCam,
+		Underlay:         &g.UI.Underlay,
+		AnchorPos:        *g.Frame.AnchorPos,
+		Selected:         g.Sel.Units,
+		Hovered:          g.Sel.Hovered,
+		PosMap:           g.Maps.Pos,
+		RosterMap:        g.Maps.Roster,
+		SquadMemberMap:   g.Maps.SquadMember,
+		SquadFilter:      g.Filt.Squad,
+		SquadCenter:      g.squadCenter,
+		SquadColor:       g.squadColor,
+		RoadGraph:        &g.Res.RoadGraph,
+		Rivers:           &g.Res.Rivers,
+		Buildings:        &g.Res.BuildingPlans,
+		ShowDebugLayers:  g.UI.ShowMapDebugLy,
+		OrderQueueMap:    g.Maps.OrderQueue,
+		OrderKindMap:     g.Maps.OrderKind,
+		OrderTargetMap:   g.Maps.OrderTarget,
+		OrderChainMap:    g.Maps.OrderChain,
+		SmoothedSquadPos: g.UI.SmoothedSquadPos,
+		MapMarkerCache:   &g.Res.MapMarkerCache,
+		RoleMap:          g.Maps.Role,
+		VehicleMap:       g.Maps.Vehicle,
+		UnitFilter:       g.Filt.UnitRender,
+		VehicleFilter:    g.Filt.VehicleRender,
+		FactionMap:       g.Maps.Faction,
+		SquadOverrideMap: g.Maps.SquadOverride,
+		Font:             g.hudFont,
+		MapPingFilter:    g.Filt.MapPing,
+		Clock:            g.Svc.Squad.Clock(),
+		Clusters:         &g.Frame.MapClusters,
+		LOSFanOrigin:     g.Ctx.LOS.origin,
+		LOSFanRuns:       g.Ctx.LOS.fanRuns(),
+		LOSFanRange:      g.Ctx.LOS.sensorR,
+		LOSFanFalloff:    g.Ctx.LOS.falloff,
+		LOSWeaponRs:      g.Ctx.LOS.weaponRs,
 	}
 	ui.DrawMap(g.Frame.PanelMap, mapCtx)
 
@@ -107,10 +110,16 @@ func (g *Game) drawUI() {
 		ui.SelectSquadRequest.Squad = ecs.Entity{}
 	}
 	if ui.SymbolApplyRequest.Active {
-		if len(g.Sel.Units) == 1 {
-			tgt := g.Sel.Units[0]
+		if tgt := g.symbolApplyTarget(); tgt != (ecs.Entity{}) {
 			if g.App.World.Alive(tgt) {
-				if g.Maps.Contact.Has(tgt) {
+				if g.Maps.Roster.Has(tgt) {
+					// Whole-squad selection → the marker on the map.
+					if ov := g.Maps.SquadOverride.Get(tgt); ov != nil {
+						ov.Spec = ui.SymbolApplyRequest.Spec
+					} else {
+						g.Maps.SquadOverride.Add(tgt, &components.SquadSymbolOverride{Spec: ui.SymbolApplyRequest.Spec})
+					}
+				} else if g.Maps.Contact.Has(tgt) {
 					if ov := g.Maps.ContactOverride.Get(tgt); ov != nil {
 						ov.Spec = ui.SymbolApplyRequest.Spec
 					} else {
@@ -135,7 +144,7 @@ func (g *Game) drawUI() {
 		ui.SymbolApplyRequest.Active = false
 	}
 
-	seEnabled := len(g.Sel.Units) == 1
+	seEnabled := g.symbolApplyTarget() != (ecs.Entity{})
 	_, feHomo := groupSelected(g.Sel.Units, g.Maps.SquadMember)
 	feEnabled := feHomo && len(g.Sel.Units) > 0
 	seActive := g.UI.PanelMgr.LeafFor(ui.PanelSymbology) != nil ||
@@ -158,7 +167,8 @@ func (g *Game) drawUI() {
 		g.Maps.OrderQueue, g.Maps.OrderChain, g.Maps.OrderKind, g.Maps.OrderTarget, g.Maps.OrderState,
 		g.Maps.OrderProgress, g.Maps.OrderIssuedAt, g.squadColor,
 		float32(g.App.Elapsed().Seconds()))
-	ui.DrawTimelinePanel(g.UI.PanelMgr.Get(ui.PanelTimeline), g.hudFont, g.UI.TimelineData, &g.UI.TimelineView)
+	ui.DrawTimelinePanel(g.UI.PanelMgr.Get(ui.PanelTimeline), g.hudFont, g.UI.TimelineData,
+		&g.UI.TimelineView, g.Frame.Cursor, g.UI.TimelineLabelDrag)
 	if g.UI.TimelineHoverOK && g.UI.TimelineHoverHit.HitOrder {
 		ui.DrawTimelineTooltip(g.hudFont, g.Frame.Cursor, g.UI.TimelineHoverBlk)
 	}
@@ -411,9 +421,16 @@ func buildTimelineData(
 		center, _ := systems.SquadCenter(world, roster, posMap)
 
 		head := orderQueueMap.Get(squad)
+		live := 0
+		for i := uint8(0); i < roster.Count; i++ {
+			if m := roster.Members[i]; m != (ecs.Entity{}) && world.Alive(m) {
+				live++
+			}
+		}
 		row := ui.TimelineSquadRow{
-			Squad: squad,
-			Color: squadColor(squad),
+			Squad:   squad,
+			Color:   squadColor(squad),
+			Members: live,
 		}
 		if head != nil && head.First != (ecs.Entity{}) {
 			lastEnd := float32(0)

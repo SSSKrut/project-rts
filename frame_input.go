@@ -137,9 +137,58 @@ func (g *Game) handleInput() {
 		}
 	}
 
+	// Squad-list divider drag. Handled outside the focus gate so the column
+	// keeps following the cursor once it leaves the panel mid-drag.
+	if g.UI.TimelineLabelDrag {
+		panelTL := g.UI.PanelMgr.Get(ui.PanelTimeline)
+		if rl.IsMouseButtonDown(rl.MouseButtonLeft) {
+			g.UI.TimelineView.LabelW = ui.ClampTimelineLabelW(panelTL,
+				g.Frame.Cursor.X-ui.ContentRect(panelTL).X)
+			rl.SetMouseCursor(rl.MouseCursorResizeEW)
+		} else {
+			g.UI.TimelineLabelDrag = false
+		}
+	}
+
+	// Slider drags, outside the focus gate for the same reason as the divider.
+	if g.UI.TimelineHDrag || g.UI.TimelineVDrag {
+		panelTL := g.UI.PanelMgr.Get(ui.PanelTimeline)
+		if rl.IsMouseButtonDown(rl.MouseButtonLeft) {
+			if g.UI.TimelineHDrag {
+				ui.SetTimelineOffsetFromThumb(panelTL, &g.UI.TimelineView, g.UI.TimelineData,
+					g.Frame.Cursor.X-g.UI.TimelineDragOff)
+			} else {
+				ui.SetTimelineScrollFromThumb(panelTL, &g.UI.TimelineView, g.UI.TimelineData,
+					g.Frame.Cursor.Y-g.UI.TimelineDragOff)
+			}
+		} else {
+			g.UI.TimelineHDrag, g.UI.TimelineVDrag = false, false
+		}
+	}
+
 	g.UI.TimelineHoverOK = false
 	if g.Frame.Focused == ui.PanelTimeline && !g.chromeBusy() {
 		panelTL := g.UI.PanelMgr.Get(ui.PanelTimeline)
+		// Sliders claim the press before rows do, or grabbing one would also
+		// select the squad underneath.
+		if rl.IsMouseButtonPressed(rl.MouseButtonLeft) && !g.scrollDragging() {
+			hThumb := ui.TimelineHScrollThumb(panelTL, g.UI.TimelineView, g.UI.TimelineData)
+			vThumb := ui.TimelineVScrollThumb(panelTL, g.UI.TimelineView, g.UI.TimelineData)
+			switch {
+			case hThumb.Width > 0 && rl.CheckCollisionPointRec(g.Frame.Cursor, hThumb):
+				g.UI.TimelineHDrag = true
+				g.UI.TimelineDragOff = g.Frame.Cursor.X - hThumb.X
+			case vThumb.Height > 0 && rl.CheckCollisionPointRec(g.Frame.Cursor, vThumb):
+				g.UI.TimelineVDrag = true
+				g.UI.TimelineDragOff = g.Frame.Cursor.Y - vThumb.Y
+			}
+		}
+		if rl.CheckCollisionPointRec(g.Frame.Cursor, ui.TimelineDividerRect(panelTL, g.UI.TimelineView)) {
+			rl.SetMouseCursor(rl.MouseCursorResizeEW)
+			if rl.IsMouseButtonPressed(rl.MouseButtonLeft) && !g.scrollDragging() {
+				g.UI.TimelineLabelDrag = true
+			}
+		}
 		g.UI.TimelineHoverHit, g.UI.TimelineHoverOK = ui.TimelineHitTest(panelTL, g.UI.TimelineData, g.UI.TimelineView, g.Frame.Cursor)
 		if g.UI.TimelineHoverHit.HitOrder {
 			for _, r := range g.UI.TimelineData.Rows {
@@ -154,7 +203,11 @@ func (g *Game) handleInput() {
 				}
 			}
 		}
-		if wheel := rl.GetMouseWheelMove(); wheel != 0 {
+		if wheel := rl.GetMouseWheelMove(); wheel != 0 &&
+			ui.TimelineOverGutter(panelTL, g.UI.TimelineView, g.Frame.Cursor) {
+			ui.ScrollTimelineRows(panelTL, &g.UI.TimelineView, g.UI.TimelineData,
+				-wheel*timelineWheelRows)
+		} else if wheel != 0 {
 			if g.Frame.Shift {
 				factor := float32(math.Pow(1.15, float64(wheel)))
 				next := g.UI.TimelineView.PixelsPerSec * factor
@@ -171,7 +224,8 @@ func (g *Game) handleInput() {
 				g.UI.TimelineView.Follow = false
 			}
 		}
-		if rl.IsMouseButtonPressed(rl.MouseButtonLeft) && !g.scrollDragging() {
+		if rl.IsMouseButtonPressed(rl.MouseButtonLeft) && !g.scrollDragging() &&
+			!g.UI.TimelineLabelDrag && !g.UI.TimelineHDrag && !g.UI.TimelineVDrag {
 			if g.UI.TimelineHoverOK && g.UI.TimelineHoverHit.Squad != (ecs.Entity{}) &&
 				g.App.World.Alive(g.UI.TimelineHoverHit.Squad) && g.isControllable(g.UI.TimelineHoverHit.Squad) {
 				if r := g.Maps.Roster.Get(g.UI.TimelineHoverHit.Squad); r != nil {
@@ -251,13 +305,7 @@ func (g *Game) handleInput() {
 			g.UI.MarqueeActive = true
 			g.UI.MarqueeOrigin = ui.Panel3D
 		case ui.PanelMap:
-			mapCtx := ui.MapRenderCtx{
-				World: g.App.World, Cam: g.UI.MapCam, SquadFilter: g.Filt.Squad,
-				SquadCenter:    g.squadCenter,
-				MapMarkerCache: &g.Res.MapMarkerCache,
-				ContactFilter:  g.Filt.Contact,
-				ContactMap:     g.Maps.Contact,
-			}
+			mapCtx := g.mapPickCtx()
 			now := g.Svc.Squad.Clock()
 			const doubleClickWindow float32 = 0.35
 			if cHit := ui.PickContactAt(g.Frame.Cursor, mapCtx, g.Frame.PanelMap, 14); cHit != (ecs.Entity{}) && g.App.World.Alive(cHit) {
@@ -276,6 +324,20 @@ func (g *Game) handleInput() {
 					}
 				}
 				g.Sel.LastMapClickEnt = cHit
+				g.Sel.LastMapClickTime = now
+			} else if own := ui.PickOwnEntityAt(g.Frame.Cursor, mapCtx, g.Frame.PanelMap, 12); own != (ecs.Entity{}) && g.App.World.Alive(own) && g.isControllable(own) {
+				// Second click on the same marker centres the camera — the
+				// gesture the contact layer already uses.
+				if own == g.Sel.LastMapClickEnt && now-g.Sel.LastMapClickTime <= doubleClickWindow {
+					if p := g.Maps.Pos.Get(own); p != nil {
+						*g.Maps.Pos.Get(g.anchor) = *p
+					}
+				} else if g.Frame.Shift {
+					g.toggleSelected(own)
+				} else {
+					g.Sel.Units = append(g.Sel.Units[:0], own)
+				}
+				g.Sel.LastMapClickEnt = own
 				g.Sel.LastMapClickTime = now
 			} else if hit := ui.PickSquadAt(g.Frame.Cursor, mapCtx, g.Frame.PanelMap, 12); hit != (ecs.Entity{}) && g.App.World.Alive(hit) && g.isControllable(hit) {
 				if r := g.Maps.Roster.Get(hit); r != nil {
