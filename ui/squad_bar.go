@@ -285,7 +285,10 @@ func drawBarCard(ctx SquadBarCtx, c BarCard) {
 		lab := rl.Rectangle{X: c.Rect.X + 1, Y: c.Rect.Y + c.Rect.Height - 34,
 			Width: c.Rect.Width - 2, Height: 13}
 		rl.DrawRectangleRec(lab, rl.Color{R: 22, G: 19, B: 14, A: 235})
-		TextCentered(&ctx.st, lab, components.VehicleReflexLabel(kind), barReflexEdge)
+		// Clipped, not centred: "Smoke and reverse" is wider than the card.
+		TextClipped(&ctx.st, rl.Rectangle{X: lab.X + 2, Y: lab.Y,
+			Width: lab.Width - 4, Height: lab.Height},
+			components.VehicleReflexLabel(kind), barReflexEdge)
 	}
 	if ctx.in.Clicked(c.Rect) {
 		SelectUnitRequest.Active = true
