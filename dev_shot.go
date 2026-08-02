@@ -20,6 +20,7 @@ var (
 	shotSelectFlag = flag.Int("shot-select", 0, "dev: preselect N units so panels render populated")
 	shotScrollFlag = flag.Float64("shot-scroll", 0, "dev: scroll offset applied to every scrollable panel for -shot")
 	shotPanelFlag  = flag.String("shot-panel", "", "dev: show this widget kind in the Inspector leaf for -shot (e.g. behavior)")
+	shotVehFlag    = flag.Int("shot-select-veh", 0, "dev: also preselect N vehicles (squad bar / vehicle panels)")
 )
 
 // applyShotSelection preselects units for a capture — inspector panels are
@@ -39,18 +40,32 @@ func (g *Game) applyShotSelection() {
 			g.UI.PanelMgr.ScrollByID(id).OffsetY = float32(*shotScrollFlag)
 		}
 	}
-	if *shotSelectFlag <= 0 {
-		return
-	}
-	q := g.Filt.UnitHit.Query()
-	for q.Next() {
-		if len(g.Sel.Units) >= *shotSelectFlag {
-			q.Close()
-			break
+	if *shotSelectFlag > 0 {
+		q := g.Filt.UnitHit.Query()
+		for q.Next() {
+			if len(g.Sel.Units) >= *shotSelectFlag {
+				q.Close()
+				break
+			}
+			ent := q.Entity()
+			if g.isControllable(ent) {
+				g.Sel.Units = append(g.Sel.Units, ent)
+			}
 		}
-		ent := q.Entity()
-		if g.isControllable(ent) {
-			g.Sel.Units = append(g.Sel.Units, ent)
+	}
+	if *shotVehFlag > 0 {
+		picked := 0
+		qv := g.Filt.VehicleRender.Query()
+		for qv.Next() {
+			if picked >= *shotVehFlag {
+				qv.Close()
+				break
+			}
+			ent := qv.Entity()
+			if g.isControllable(ent) {
+				g.Sel.Units = append(g.Sel.Units, ent)
+				picked++
+			}
 		}
 	}
 }

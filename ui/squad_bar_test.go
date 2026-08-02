@@ -62,6 +62,27 @@ func TestBarLayoutReportsOverflow(t *testing.T) {
 	}
 }
 
+// A hull needs a wider card, so the layout is not a fixed grid: neighbours
+// must shift by the actual width, not by the infantry one.
+func TestBarLayoutMixedWidths(t *testing.T) {
+	groups := []BarGroup{{Members: []BarMember{
+		{Slot: 0}, {Slot: 1, Wide: true}, {Slot: 2},
+	}}}
+	l := ComputeSquadBarLayout(groups, barArea(600))
+	if len(l.Cards) != 3 {
+		t.Fatalf("want 3 cards, got %d", len(l.Cards))
+	}
+	if l.Cards[1].Rect.Width <= l.Cards[0].Rect.Width {
+		t.Error("hull card must be wider than an infantry card")
+	}
+	for i := 1; i < len(l.Cards); i++ {
+		prev := l.Cards[i-1].Rect
+		if l.Cards[i].Rect.X < prev.X+prev.Width {
+			t.Errorf("card %d overlaps its predecessor: %v vs %v", i, l.Cards[i].Rect, prev)
+		}
+	}
+}
+
 // A dead man keeps his place for the tombstone window: cards that reshuffle
 // the moment someone falls break the muscle memory the bar is built on.
 func TestBarStateTombstoneKeepsPosition(t *testing.T) {

@@ -17,7 +17,10 @@ import (
 // workspace panel: no splitter ever fights it for space.
 
 const (
-	barCardW     float32 = 56
+	barCardW float32 = 56
+	// A hull carries two weapon slots and a longer name, so it gets a wider
+	// card rather than a cramped one — mixed squads read as mixed at a glance.
+	barVehCardW  float32 = 88
 	barCardH     float32 = 64
 	barPad       float32 = 6
 	barCardGap   float32 = 4
@@ -31,26 +34,36 @@ const (
 const BarHeight = barCardH + 2*barPad
 
 var (
-	barBG        = rl.Color{R: 14, G: 16, B: 20, A: 225}
-	barCardBG    = rl.Color{R: 30, G: 34, B: 42, A: 255}
-	barCardSel   = rl.Color{R: 40, G: 74, B: 104, A: 255}
-	barCardHover = rl.Color{R: 52, G: 60, B: 74, A: 255}
-	barCardDead  = rl.Color{R: 34, G: 34, B: 36, A: 255}
-	barBorder    = rl.Color{R: 12, G: 14, B: 18, A: 255}
-	barSelEdge   = rl.Color{R: 120, G: 200, B: 235, A: 255}
-	barThreat    = rl.Color{R: 235, G: 110, B: 80, A: 255}
-	barHPFill    = rl.Color{R: 90, G: 190, B: 90, A: 255}
-	barHPLow     = rl.Color{R: 220, G: 70, B: 60, A: 255}
-	barStamFill  = rl.Color{R: 210, G: 190, B: 70, A: 255}
-	barTrack     = rl.Color{R: 22, G: 24, B: 30, A: 255}
+	barBG         = rl.Color{R: 14, G: 16, B: 20, A: 225}
+	barCardBG     = rl.Color{R: 30, G: 34, B: 42, A: 255}
+	barCardSel    = rl.Color{R: 40, G: 74, B: 104, A: 255}
+	barCardHover  = rl.Color{R: 52, G: 60, B: 74, A: 255}
+	barCardDead   = rl.Color{R: 34, G: 34, B: 36, A: 255}
+	barBorder     = rl.Color{R: 12, G: 14, B: 18, A: 255}
+	barSelEdge    = rl.Color{R: 120, G: 200, B: 235, A: 255}
+	barThreat     = rl.Color{R: 235, G: 110, B: 80, A: 255}
+	barReflexEdge = rl.Color{R: 240, G: 190, B: 90, A: 255}
+	barHPFill     = rl.Color{R: 90, G: 190, B: 90, A: 255}
+	barHPLow      = rl.Color{R: 220, G: 70, B: 60, A: 255}
+	barStamFill   = rl.Color{R: 210, G: 190, B: 70, A: 255}
+	barTrack      = rl.Color{R: 22, G: 24, B: 30, A: 255}
 )
 
 // BarMember is one card's identity. Slot is the roster position it was last
 // seen in; DeadAt > 0 marks a tombstone and holds the stamp it died at.
+// Wide marks a hull, which needs a bigger card than a man.
 type BarMember struct {
 	Unit   ecs.Entity
 	Slot   uint8
 	DeadAt float32
+	Wide   bool
+}
+
+func (m BarMember) width() float32 {
+	if m.Wide {
+		return barVehCardW
+	}
+	return barCardW
 }
 
 // BarGroup is a squad's worth of cards. Squad == zero entity is the soloist
@@ -112,17 +125,18 @@ func ComputeSquadBarLayout(groups []BarGroup, area rl.Rectangle) BarLayout {
 
 		placed := 0
 		for _, m := range g.Members {
-			if x+barCardW > limit {
+			w := m.width()
+			if x+w > limit {
 				out.Hidden += len(g.Members) - placed
 				break
 			}
 			out.Cards = append(out.Cards, BarCard{
-				Rect:  rl.Rectangle{X: x, Y: top, Width: barCardW, Height: barCardH},
+				Rect:  rl.Rectangle{X: x, Y: top, Width: w, Height: barCardH},
 				Unit:  m.Unit,
 				Squad: g.Squad,
 				Dead:  m.DeadAt > 0,
 			})
-			x += barCardW + barCardGap
+			x += w + barCardGap
 			placed++
 		}
 		if placed == 0 {
@@ -233,10 +247,19 @@ func drawBarCard(ctx SquadBarCtx, c BarCard) {
 		}
 	}
 
-	// Weapon line: what this card is here to answer.
-	weapon := rl.Rectangle{X: c.Rect.X + 3, Y: band.Y + band.Height + 2,
+	// The body is what the card exists to answer: what this thing is armed
+	// with. One line for a man, one per barrel for a hull.
+	body := rl.Rectangle{X: c.Rect.X + 3, Y: band.Y + band.Height + 2,
 		Width: c.Rect.Width - 6, Height: 14}
-	TextClipped(&ctx.st, weapon, barWeaponLabel(ctx, c.Unit), ctx.st.Text)
+	if isHull(ctx, c.Unit) {
+		for i, w := range barVehicleWeapons(ctx, c.Unit) {
+			row := body
+			row.Y += float32(i) * 13
+			TextClipped(&ctx.st, row, w, ctx.st.Text)
+		}
+	} else {
+		TextClipped(&ctx.st, body, barWeaponLabel(ctx, c.Unit), ctx.st.Text)
+	}
 
 	drawBarMeter(ctx, c, 0, ctx.HPMap != nil, barHPRatio(ctx, c.Unit))
 	drawBarMeter(ctx, c, 1, ctx.StaminaMap != nil, barStaminaRatio(ctx, c.Unit))
@@ -252,6 +275,17 @@ func drawBarCard(ctx SquadBarCtx, c BarCard) {
 		if int(ctx.Now*4)%2 == 0 {
 			rl.DrawRectangleLinesEx(c.Rect, 2, barThreat)
 		}
+	}
+	// A live reflex means the hull is driving itself; amber and labelled,
+	// because what it is obeying right now is not the player's order.
+	if kind := barReflex(ctx, c.Unit); kind != components.VehicleReflexNone {
+		rl.DrawRectangleLinesEx(c.Rect, 2, barReflexEdge)
+		// Backed strip: a tank's second barrel line sits right here, and the
+		// reflex is the more urgent fact while it lasts.
+		lab := rl.Rectangle{X: c.Rect.X + 1, Y: c.Rect.Y + c.Rect.Height - 34,
+			Width: c.Rect.Width - 2, Height: 13}
+		rl.DrawRectangleRec(lab, rl.Color{R: 22, G: 19, B: 14, A: 235})
+		TextCentered(&ctx.st, lab, components.VehicleReflexLabel(kind), barReflexEdge)
 	}
 	if ctx.in.Clicked(c.Rect) {
 		SelectUnitRequest.Active = true
@@ -295,6 +329,36 @@ func barIdentity(ctx SquadBarCtx, unit ecs.Entity) (string, rl.Color) {
 		}
 	}
 	return role.ShortLabel(), components.RoleColor(role)
+}
+
+// barVehicleWeapons lists the hull's barrels, best first — the loadout is the
+// reason a hull card is wider than a man's.
+func barVehicleWeapons(ctx SquadBarCtx, unit ecs.Entity) []string {
+	eq := ctx.EquipmentMap.Get(unit)
+	if eq == nil {
+		return nil
+	}
+	out := make([]string, 0, 2)
+	for _, w := range [2]ecs.Entity{eq.Primary, eq.Secondary} {
+		if w == (ecs.Entity{}) || !ctx.World.Alive(w) {
+			continue
+		}
+		if wc := ctx.WeaponMap.Get(w); wc != nil {
+			out = append(out, fmt.Sprintf("%s %d", components.SpecForWeapon(wc.Kind).Name, wc.Ammo))
+		}
+	}
+	return out
+}
+
+func barReflex(ctx SquadBarCtx, unit ecs.Entity) components.VehicleReflexKind {
+	if ctx.VehicleOverrideMap == nil {
+		return components.VehicleReflexNone
+	}
+	ov := ctx.VehicleOverrideMap.Get(unit)
+	if ov == nil {
+		return components.VehicleReflexNone
+	}
+	return ov.Kind
 }
 
 func barWeaponLabel(ctx SquadBarCtx, unit ecs.Entity) string {
@@ -447,7 +511,9 @@ func (s *SquadBarState) scope(ctx SquadBarCtx) map[ecs.Entity][]BarMember {
 		}
 		if squad == (ecs.Entity{}) || !ctx.World.Alive(squad) {
 			if !containsUnit(soloists, sel) {
-				soloists = append(soloists, BarMember{Unit: sel, Slot: uint8(len(soloists))})
+				soloists = append(soloists, BarMember{
+					Unit: sel, Slot: uint8(len(soloists)), Wide: isHull(ctx, sel),
+				})
 			}
 			continue
 		}
@@ -473,9 +539,13 @@ func rosterMembers(ctx SquadBarCtx, squad ecs.Entity) []BarMember {
 		if mem == (ecs.Entity{}) || !ctx.World.Alive(mem) {
 			continue
 		}
-		out = append(out, BarMember{Unit: mem, Slot: i})
+		out = append(out, BarMember{Unit: mem, Slot: i, Wide: isHull(ctx, mem)})
 	}
 	return out
+}
+
+func isHull(ctx SquadBarCtx, e ecs.Entity) bool {
+	return ctx.VehicleMap != nil && ctx.VehicleMap.Has(e)
 }
 
 func containsUnit(list []BarMember, e ecs.Entity) bool {
