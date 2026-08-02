@@ -182,6 +182,10 @@ func (sys *OrderResolverSystem) Update(ctx core.UpdateContext) {
 		reissueTarget components.WorldPos
 		reissueEntity ecs.Entity
 		reissue       bool
+		// Set only when oldHead reached a terminal state this pass; the
+		// "head entity already gone" path has nothing to file.
+		outcome    components.OrderOutcome
+		hasOutcome bool
 	}
 	var advances []advance
 	var pendingLODAnchors []ecs.Entity
@@ -211,6 +215,12 @@ func (sys *OrderResolverSystem) Update(ctx core.UpdateContext) {
 		switch state.Code {
 		case components.OrderStateIssued:
 			state.Code = components.OrderStateInProgress
+			// Queued orders can wait minutes for their turn; OrderHistory
+			// draws the past from when the order actually ran, not from when
+			// the player clicked.
+			if iss := sys.orderIssuedAtMap.Get(ord); iss != nil {
+				iss.StartedTime = sys.squadService.Clock()
+			}
 			if mp := sys.macroPathMap.Get(squad); mp != nil {
 				mp.ReplanAt = 0
 			}
@@ -255,7 +265,10 @@ func (sys *OrderResolverSystem) Update(ctx core.UpdateContext) {
 		case components.OrderStateCompleted,
 			components.OrderStateCancelled,
 			components.OrderStateFailed:
-			adv := advance{squad: squad, oldHead: ord}
+			adv := advance{
+				squad: squad, oldHead: ord, hasOutcome: true,
+				outcome: outcomeForState(state.Code),
+			}
 			if ch := sys.orderChainMap.Get(ord); ch != nil {
 				adv.newHead = ch.Next
 			}
@@ -269,6 +282,10 @@ func (sys *OrderResolverSystem) Update(ctx core.UpdateContext) {
 					adv.reissueKind = components.OrderKindPatrol
 					adv.reissueTarget = target.Pos
 					adv.reissueEntity = target.Entity
+					// A lap is not an ending: the order loops on one player
+					// decision. Filing every lap would flush every other
+					// squad's history out of the ring over a long operation.
+					adv.hasOutcome = false
 				}
 			}
 			// ClearBuilding auto-chains OccupyBuilding on Done so the
@@ -299,6 +316,9 @@ func (sys *OrderResolverSystem) Update(ctx core.UpdateContext) {
 
 	for _, a := range advances {
 		if a.oldHead != (ecs.Entity{}) && ctx.World.Alive(a.oldHead) {
+			if a.hasOutcome {
+				sys.squadService.RecordOrderEnd(a.oldHead, a.outcome)
+			}
 			ctx.World.RemoveEntity(a.oldHead)
 		}
 		head := getOrderHead(sys.squadService, a.squad)
@@ -327,6 +347,16 @@ func (sys *OrderResolverSystem) Update(ctx core.UpdateContext) {
 			}
 		}
 	}
+}
+
+func outcomeForState(s components.OrderStateCode) components.OrderOutcome {
+	switch s {
+	case components.OrderStateFailed:
+		return components.OutcomeFailed
+	case components.OrderStateCancelled:
+		return components.OutcomeCancelled
+	}
+	return components.OutcomeCompleted
 }
 
 // getOrderHead exposes the head pointer through SquadService's typed map.

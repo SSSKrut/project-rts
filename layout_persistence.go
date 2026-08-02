@@ -15,6 +15,9 @@ import (
 
 const layoutSavePath = "./save/layout.json"
 
+// Unchanged by the timeline block: an older file simply has no "timeline" key,
+// which reads as absent and leaves the constructor defaults in place. Bumping
+// would throw away the player's saved workspace tree for no reason.
 const layoutFileVersion uint16 = 3
 
 type nodeJSON struct {
@@ -26,10 +29,20 @@ type nodeJSON struct {
 	Children []nodeJSON `json:"children,omitempty"`
 }
 
+// timelineJSON is the part of the timeline view worth surviving a restart:
+// how the player sized and scaled the panel. OffsetT / ScrollY are where they
+// happened to be looking and are rebuilt by Follow on the next frame.
+type timelineJSON struct {
+	LabelW       float32 `json:"label_w"`
+	PixelsPerSec float32 `json:"px_per_sec"`
+	Follow       bool    `json:"follow"`
+}
+
 type layoutFile struct {
-	Version uint16   `json:"version"`
-	Preset  uint8    `json:"layout_preset"`
-	Tree    nodeJSON `json:"tree"`
+	Version  uint16       `json:"version"`
+	Preset   uint8        `json:"layout_preset"`
+	Tree     nodeJSON     `json:"tree"`
+	Timeline timelineJSON `json:"timeline"`
 }
 
 func encodeNode(n *ui.LayoutNode) nodeJSON {
@@ -81,8 +94,9 @@ func decodeNode(j nodeJSON) *ui.LayoutNode {
 }
 
 // loadLayout installs the persisted tree on the PanelManager BEFORE the
-// first Recompute. Missing / parse-fail / wrong version ⇒ defaults stay.
-func loadLayout(panelMgr *ui.PanelManager) {
+// first Recompute, and restores the timeline leaf's view. Missing /
+// parse-fail / wrong version ⇒ defaults stay.
+func loadLayout(panelMgr *ui.PanelManager, tl *ui.TimelineViewState) {
 	if panelMgr == nil {
 		return
 	}
@@ -110,11 +124,19 @@ func loadLayout(panelMgr *ui.PanelManager) {
 	}
 	panelMgr.SetWorkspace(root)
 	panelMgr.Layout = ui.LayoutPreset(lf.Preset)
+	// A pre-timeline file leaves the block zeroed; PixelsPerSec is never zero
+	// once written, so it doubles as "this file has a timeline section".
+	if tl != nil && lf.Timeline.PixelsPerSec > 0 {
+		tl.LabelW = lf.Timeline.LabelW
+		tl.PixelsPerSec = lf.Timeline.PixelsPerSec
+		tl.Follow = lf.Timeline.Follow
+		tl.Normalize()
+	}
 }
 
 // saveLayout marshals the current workspace tree + active preset into
 // layout.json. Atomic via .tmp + os.Rename. Errors are logged.
-func saveLayout(panelMgr *ui.PanelManager) {
+func saveLayout(panelMgr *ui.PanelManager, tl *ui.TimelineViewState) {
 	if panelMgr == nil {
 		return
 	}
@@ -127,6 +149,13 @@ func saveLayout(panelMgr *ui.PanelManager) {
 		Version: layoutFileVersion,
 		Preset:  uint8(panelMgr.Layout),
 		Tree:    encodeNode(panelMgr.Workspace),
+	}
+	if tl != nil {
+		lf.Timeline = timelineJSON{
+			LabelW:       ui.TimelineLabelWidth(*tl),
+			PixelsPerSec: tl.PixelsPerSec,
+			Follow:       tl.Follow,
+		}
 	}
 	data, err := json.MarshalIndent(&lf, "", "  ")
 	if err != nil {

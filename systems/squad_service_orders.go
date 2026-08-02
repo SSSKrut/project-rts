@@ -137,7 +137,9 @@ func (s *SquadService) issueOrderRaw(
 	s.orderStateMap.Add(ord, &components.OrderState{Code: components.OrderStateIssued})
 	s.orderOwnerMap.Add(ord, &components.OrderOwner{Squad: squad})
 	s.orderTargetMap.Add(ord, &components.OrderTarget{Pos: target, Entity: entityTarget})
-	s.orderIssuedAtMap.Add(ord, &components.OrderIssuedAt{Time: s.clock})
+	s.orderIssuedAtMap.Add(ord, &components.OrderIssuedAt{
+		Time: s.clock, StartedTime: components.OrderNeverStarted,
+	})
 	s.orderProgressMap.Add(ord, &components.OrderProgress{})
 	s.orderChainMap.Add(ord, &components.OrderChain{})
 	if params.HasFacing {
@@ -273,7 +275,9 @@ func (s *SquadService) clearIndividualPositions(squad ecs.Entity) {
 }
 
 // cancelChain walks Next pointers from `start`, removes each order. Keeps
-// the "no dangling orders after CancelAllOrders" invariant.
+// the "no dangling orders after CancelAllOrders" invariant. Queued orders that
+// never ran are filed too — the player cancelled them, and not seeing why the
+// second leg never happened is exactly the gap OrderHistory closes.
 func (s *SquadService) cancelChain(start ecs.Entity) {
 	cur := start
 	for cur != (ecs.Entity{}) {
@@ -284,9 +288,45 @@ func (s *SquadService) cancelChain(start ecs.Entity) {
 		if ch := s.orderChainMap.Get(cur); ch != nil {
 			next = ch.Next
 		}
+		s.RecordOrderEnd(cur, components.OutcomeCancelled)
 		s.world.RemoveEntity(cur)
 		cur = next
 	}
+}
+
+// RecordOrderEnd files an order's tombstone in OrderHistory. Called from the
+// only two places an order can die — cancelChain and the resolver's terminal
+// branch — and always immediately before the entity is removed, because after
+// that nothing remembers the order at all. Read-only on the world, so it is
+// safe to call from inside a live query.
+func (s *SquadService) RecordOrderEnd(ord ecs.Entity, outcome components.OrderOutcome) {
+	hist := s.orderHistoryRes.Get()
+	if hist == nil || ord == (ecs.Entity{}) || !s.world.Alive(ord) {
+		return
+	}
+	kind := s.orderKindMap.Get(ord)
+	owner := s.orderOwnerMap.Get(ord)
+	if kind == nil || owner == nil {
+		return
+	}
+	rec := components.OrderRecord{
+		Squad:    owner.Squad,
+		Kind:     kind.Code,
+		Outcome:  outcome,
+		IssuedT:  s.clock,
+		StartedT: components.OrderNeverStarted,
+		EndedT:   s.clock,
+	}
+	if t := s.orderTargetMap.Get(ord); t != nil {
+		rec.Target = t.Pos
+	}
+	if iss := s.orderIssuedAtMap.Get(ord); iss != nil {
+		rec.IssuedT, rec.StartedT = iss.Time, iss.StartedTime
+	}
+	if pr := s.orderProgressMap.Get(ord); pr != nil {
+		rec.Progress = pr.Value
+	}
+	hist.Push(rec)
 }
 
 // OrderMoveTo is a compat wrapper around IssueOrder.

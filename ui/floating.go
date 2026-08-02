@@ -59,7 +59,17 @@ type FloatingState struct {
 
 	switchMenuIdx    int
 	switchMenuAnchor rl.Rectangle
+
+	// drawing is the floater whose Render is on the stack. A render callback
+	// is built per widget kind, but per-surface state (scroll, timeline view)
+	// belongs to the floater — and its ID cannot be derived from the kind,
+	// since a chevron switch changes the kind and keeps the ID.
+	drawing *FloatingPanel
 }
+
+// Drawing is the floater currently rendering, valid only inside a
+// FloatingRenderFn.
+func (s *FloatingState) Drawing() *FloatingPanel { return s.drawing }
 
 // resizeEdges: any combination valid; corners set two flags, edges one.
 type resizeEdges struct {
@@ -580,7 +590,9 @@ func (s *FloatingState) DrawAll(font rl.Font, cursor rl.Vector2, lmbPress bool) 
 		if p.Render != nil {
 			rl.BeginScissorMode(int32(content.X), int32(content.Y),
 				int32(content.Width), int32(content.Height))
+			s.drawing = p
 			closed := p.Render(content, cursor, font, callbackLMB)
+			s.drawing = nil
 			rl.EndScissorMode()
 			// After the widget released its own scissor, so the bar isn't
 			// clipped away; a no-op unless the widget reported an overflow.

@@ -35,6 +35,12 @@ func appendResourceSection(w *ecs.World, out *saveBuf) error {
 			return err
 		}
 	}
+	ohRes := ecs.NewResource[components.OrderHistory](w)
+	if oh := ohRes.Get(); oh != nil {
+		if err := add("OrderHistory", oh); err != nil {
+			return err
+		}
+	}
 	fpRes := ecs.NewResource[components.FormationPresets](w)
 	if fp := fpRes.Get(); fp != nil {
 		if err := add("FormationPresets", fp); err != nil {
@@ -63,6 +69,9 @@ func readResourceSection(w *ecs.World, r *saveReader) error {
 		switch name {
 		case "EventLog":
 			res := ecs.NewResource[components.EventLog](w)
+			err = json.Unmarshal(data, res.Get())
+		case "OrderHistory":
+			res := ecs.NewResource[components.OrderHistory](w)
 			err = json.Unmarshal(data, res.Get())
 		case "FormationPresets":
 			res := ecs.NewResource[components.FormationPresets](w)

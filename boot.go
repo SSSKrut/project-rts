@@ -124,6 +124,9 @@ func (g *Game) initResources() {
 	r.EventLog = components.NewEventLog()
 	ecs.AddResource(g.World, r.EventLog)
 
+	r.OrderHistory = components.NewOrderHistory()
+	ecs.AddResource(g.World, r.OrderHistory)
+
 	r.ContactRegistry = components.NewContactRegistry()
 	ecs.AddResource(g.World, &r.ContactRegistry)
 

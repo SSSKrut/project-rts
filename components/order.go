@@ -70,10 +70,17 @@ type OrderTarget struct {
 	Entity ecs.Entity
 }
 
-// OrderIssuedAt records the session-time when the order was created. Name
-// avoids clash with OrderStateIssued.
+// OrderNeverStarted marks an order that was cancelled while still queued.
+// Zero is a legitimate start time (mission tick 0), so the sentinel is negative.
+const OrderNeverStarted float32 = -1
+
+// OrderIssuedAt records the session-time when the order was created, and when
+// it actually began. Name avoids clash with OrderStateIssued. The queue can
+// hold an order for minutes before its turn, so "issued" and "started" are the
+// difference between the plan and what happened — OrderHistory keeps both.
 type OrderIssuedAt struct {
-	Time float32
+	Time        float32
+	StartedTime float32
 }
 
 // OrderProgress is 0..1 progress toward completion. Per-kind semantics:

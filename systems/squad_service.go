@@ -68,7 +68,10 @@ type SquadService struct {
 	vehicleMap  *ecs.Map[components.Vehicle]
 	// CreateFromUnits wipes stale personal actions on merge.
 	actionQueueMap *ecs.Map[components.ActionQueue]
-	clock          float32
+	// An order entity is the only record of itself; RecordOrderEnd files a
+	// tombstone here before it is removed.
+	orderHistoryRes ecs.Resource[components.OrderHistory]
+	clock           float32
 }
 
 func NewSquadService(w *ecs.World) *SquadService {
@@ -112,6 +115,7 @@ func NewSquadService(w *ecs.World) *SquadService {
 		colliderMap:                ecs.NewMap[components.Collider](w),
 		vehicleMap:                 ecs.NewMap[components.Vehicle](w),
 		actionQueueMap:             ecs.NewMap[components.ActionQueue](w),
+		orderHistoryRes:            ecs.NewResource[components.OrderHistory](w),
 	}
 }
 

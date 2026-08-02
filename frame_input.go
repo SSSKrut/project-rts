@@ -140,118 +140,7 @@ func (g *Game) handleInput() {
 		}
 	}
 
-	// Squad-list divider drag. Handled outside the focus gate so the column
-	// keeps following the cursor once it leaves the panel mid-drag.
-	if g.UI.TimelineLabelDrag {
-		panelTL := g.UI.PanelMgr.Get(ui.PanelTimeline)
-		if rl.IsMouseButtonDown(rl.MouseButtonLeft) {
-			g.UI.TimelineView.LabelW = ui.ClampTimelineLabelW(panelTL,
-				g.Frame.Cursor.X-ui.ContentRect(panelTL).X)
-			rl.SetMouseCursor(rl.MouseCursorResizeEW)
-		} else {
-			g.UI.TimelineLabelDrag = false
-		}
-	}
-
-	// Slider drags, outside the focus gate for the same reason as the divider.
-	if g.UI.TimelineHDrag || g.UI.TimelineVDrag {
-		panelTL := g.UI.PanelMgr.Get(ui.PanelTimeline)
-		if rl.IsMouseButtonDown(rl.MouseButtonLeft) {
-			if g.UI.TimelineHDrag {
-				ui.SetTimelineOffsetFromThumb(panelTL, &g.UI.TimelineView, g.UI.TimelineData,
-					g.Frame.Cursor.X-g.UI.TimelineDragOff)
-			} else {
-				ui.SetTimelineScrollFromThumb(panelTL, &g.UI.TimelineView, g.UI.TimelineData,
-					g.Frame.Cursor.Y-g.UI.TimelineDragOff)
-			}
-		} else {
-			g.UI.TimelineHDrag, g.UI.TimelineVDrag = false, false
-		}
-	}
-
-	g.UI.TimelineHoverOK = false
-	if g.Frame.Focused == ui.PanelTimeline && !g.chromeBusy() {
-		panelTL := g.UI.PanelMgr.Get(ui.PanelTimeline)
-		// Sliders claim the press before rows do, or grabbing one would also
-		// select the squad underneath.
-		if rl.IsMouseButtonPressed(rl.MouseButtonLeft) && !g.scrollDragging() {
-			hThumb := ui.TimelineHScrollThumb(panelTL, g.UI.TimelineView, g.UI.TimelineData)
-			vThumb := ui.TimelineVScrollThumb(panelTL, g.UI.TimelineView, g.UI.TimelineData)
-			switch {
-			case hThumb.Width > 0 && rl.CheckCollisionPointRec(g.Frame.Cursor, hThumb):
-				g.UI.TimelineHDrag = true
-				g.UI.TimelineDragOff = g.Frame.Cursor.X - hThumb.X
-			case vThumb.Height > 0 && rl.CheckCollisionPointRec(g.Frame.Cursor, vThumb):
-				g.UI.TimelineVDrag = true
-				g.UI.TimelineDragOff = g.Frame.Cursor.Y - vThumb.Y
-			}
-		}
-		if rl.CheckCollisionPointRec(g.Frame.Cursor, ui.TimelineDividerRect(panelTL, g.UI.TimelineView)) {
-			rl.SetMouseCursor(rl.MouseCursorResizeEW)
-			if rl.IsMouseButtonPressed(rl.MouseButtonLeft) && !g.scrollDragging() {
-				g.UI.TimelineLabelDrag = true
-			}
-		}
-		g.UI.TimelineHoverHit, g.UI.TimelineHoverOK = ui.TimelineHitTest(panelTL, g.UI.TimelineData, g.UI.TimelineView, g.Frame.Cursor)
-		if g.UI.TimelineHoverHit.HitOrder {
-			for _, r := range g.UI.TimelineData.Rows {
-				if r.Squad != g.UI.TimelineHoverHit.Squad {
-					continue
-				}
-				for _, ob := range r.Orders {
-					if ob.Order == g.UI.TimelineHoverHit.Order {
-						g.UI.TimelineHoverBlk = ob
-						break
-					}
-				}
-			}
-		}
-		if wheel := rl.GetMouseWheelMove(); wheel != 0 &&
-			ui.TimelineOverGutter(panelTL, g.UI.TimelineView, g.Frame.Cursor) {
-			ui.ScrollTimelineRows(panelTL, &g.UI.TimelineView, g.UI.TimelineData,
-				-wheel*timelineWheelRows)
-		} else if wheel != 0 {
-			if g.Frame.Shift {
-				factor := float32(math.Pow(1.15, float64(wheel)))
-				next := g.UI.TimelineView.PixelsPerSec * factor
-				if next < ui.TimelineMinPxPerSec {
-					next = ui.TimelineMinPxPerSec
-				}
-				if next > ui.TimelineMaxPxPerSec {
-					next = ui.TimelineMaxPxPerSec
-				}
-				g.UI.TimelineView.PixelsPerSec = next
-				g.UI.TimelineView.Follow = false
-			} else {
-				g.UI.TimelineView.OffsetT -= wheel * 30 / g.UI.TimelineView.PixelsPerSec
-				g.UI.TimelineView.Follow = false
-			}
-		}
-		if rl.IsMouseButtonPressed(rl.MouseButtonLeft) && !g.scrollDragging() &&
-			!g.UI.TimelineLabelDrag && !g.UI.TimelineHDrag && !g.UI.TimelineVDrag {
-			if g.UI.TimelineHoverOK && g.UI.TimelineHoverHit.Squad != (ecs.Entity{}) &&
-				g.App.World.Alive(g.UI.TimelineHoverHit.Squad) && g.isControllable(g.UI.TimelineHoverHit.Squad) {
-				if r := g.Maps.Roster.Get(g.UI.TimelineHoverHit.Squad); r != nil {
-					g.Sel.Units = g.Sel.Units[:0]
-					for i := uint8(0); i < r.Count; i++ {
-						if m := r.Members[i]; m != (ecs.Entity{}) && g.App.World.Alive(m) {
-							g.Sel.Units = append(g.Sel.Units, m)
-						}
-					}
-					g.Sel.NavPath = nil
-				}
-				if g.UI.TimelineHoverHit.HitOrder && g.App.World.Alive(g.UI.TimelineHoverHit.Order) {
-					if t := g.Maps.OrderTarget.Get(g.UI.TimelineHoverHit.Order); t != nil {
-						*g.Maps.Pos.Get(g.anchor) = t.Pos
-					}
-				}
-			}
-		}
-		// RMB on background -> re-enable Follow.
-		if rl.IsMouseButtonPressed(rl.MouseButtonRight) && g.UI.TimelineHoverOK && !g.UI.TimelineHoverHit.HitOrder {
-			g.UI.TimelineView.Follow = true
-		}
-	}
+	g.handleTimelineInput()
 
 	// 3D panel cursor (content-rect-local). viewW/H match the content
 	// rect (= RT size) so screen<->world projections match what's drawn.
@@ -418,6 +307,142 @@ func (g *Game) handleInput() {
 			}
 		}
 		g.UI.MarqueeActive = false
+	}
+}
+
+// handleTimelineInput drives every timeline on screen — the workspace leaf and
+// any floater. A live drag is serviced first and outside the focus gate, so a
+// divider or slider keeps following the cursor once it leaves the panel.
+func (g *Game) handleTimelineInput() {
+	g.UI.TimelineHoverOK = false
+	surfaces := g.timelineSurfaces()
+
+	if g.UI.TimelineDragKind != timelineDragNone && !rl.IsMouseButtonDown(rl.MouseButtonLeft) {
+		g.UI.TimelineDragKind, g.UI.TimelineDragKey = timelineDragNone, ""
+	}
+	for _, sf := range surfaces {
+		if g.UI.TimelineDragKey == sf.key {
+			g.dragTimeline(sf)
+		}
+	}
+	// chromeBusy folds in "cursor is over a floater", which would veto the very
+	// floater we are driving; only live chrome drags block content input.
+	if g.chromeDragging() || g.scrollDragging() {
+		return
+	}
+	for _, sf := range surfaces {
+		if sf.focused {
+			g.handleTimelineSurface(sf)
+		}
+	}
+}
+
+// dragTimeline advances whichever drag this surface owns.
+func (g *Game) dragTimeline(sf timelineSurface) {
+	switch g.UI.TimelineDragKind {
+	case timelineDragLabel:
+		sf.view.LabelW = ui.ClampTimelineLabelW(sf.panel,
+			g.Frame.Cursor.X-ui.ContentRect(sf.panel).X)
+		rl.SetMouseCursor(rl.MouseCursorResizeEW)
+	case timelineDragH:
+		ui.SetTimelineOffsetFromThumb(sf.panel, sf.view, g.UI.TimelineData,
+			g.Frame.Cursor.X-g.UI.TimelineDragOff)
+	case timelineDragV:
+		ui.SetTimelineScrollFromThumb(sf.panel, sf.view, g.UI.TimelineData,
+			g.Frame.Cursor.Y-g.UI.TimelineDragOff)
+	}
+}
+
+func (g *Game) handleTimelineSurface(sf timelineSurface) {
+	press := rl.IsMouseButtonPressed(rl.MouseButtonLeft)
+	dragging := g.UI.TimelineDragKind != timelineDragNone
+
+	// Sliders and the divider claim the press before rows do, or grabbing one
+	// would also select the squad underneath.
+	if press && !dragging {
+		hThumb := ui.TimelineHScrollThumb(sf.panel, *sf.view, g.UI.TimelineData)
+		vThumb := ui.TimelineVScrollThumb(sf.panel, *sf.view, g.UI.TimelineData)
+		switch {
+		case hThumb.Width > 0 && rl.CheckCollisionPointRec(g.Frame.Cursor, hThumb):
+			g.beginTimelineDrag(sf.key, timelineDragH, g.Frame.Cursor.X-hThumb.X)
+		case vThumb.Height > 0 && rl.CheckCollisionPointRec(g.Frame.Cursor, vThumb):
+			g.beginTimelineDrag(sf.key, timelineDragV, g.Frame.Cursor.Y-vThumb.Y)
+		}
+		dragging = g.UI.TimelineDragKind != timelineDragNone
+	}
+	if rl.CheckCollisionPointRec(g.Frame.Cursor, ui.TimelineDividerRect(sf.panel, *sf.view)) {
+		rl.SetMouseCursor(rl.MouseCursorResizeEW)
+		if press && !dragging {
+			g.beginTimelineDrag(sf.key, timelineDragLabel, 0)
+			dragging = true
+		}
+	}
+
+	g.UI.TimelineHoverHit, g.UI.TimelineHoverOK =
+		ui.TimelineHitTest(sf.panel, g.UI.TimelineData, *sf.view, g.Frame.Cursor)
+	if blk, ok := g.UI.TimelineData.Block(g.UI.TimelineHoverHit); ok {
+		g.UI.TimelineHoverBlk = blk
+	} else {
+		g.UI.TimelineHoverHit.HitOrder = false
+	}
+
+	if wheel := rl.GetMouseWheelMove(); wheel != 0 {
+		g.wheelTimeline(sf, wheel)
+	}
+	if press && !dragging {
+		g.clickTimeline()
+	}
+	// RMB on background -> re-enable Follow.
+	if rl.IsMouseButtonPressed(rl.MouseButtonRight) && g.UI.TimelineHoverOK &&
+		!g.UI.TimelineHoverHit.HitOrder {
+		sf.view.Follow = true
+	}
+}
+
+func (g *Game) beginTimelineDrag(key string, kind timelineDragKind, offset float32) {
+	g.UI.TimelineDragKey = key
+	g.UI.TimelineDragKind = kind
+	g.UI.TimelineDragOff = offset
+}
+
+// wheelTimeline: over the squad list the wheel scrolls rows, over the tracks
+// it pans time (Shift zooms).
+func (g *Game) wheelTimeline(sf timelineSurface, wheel float32) {
+	if ui.TimelineOverGutter(sf.panel, *sf.view, g.Frame.Cursor) {
+		ui.ScrollTimelineRows(sf.panel, sf.view, g.UI.TimelineData, -wheel*timelineWheelRows)
+		return
+	}
+	if g.Frame.Shift {
+		next := sf.view.PixelsPerSec * float32(math.Pow(1.15, float64(wheel)))
+		if next < ui.TimelineMinPxPerSec {
+			next = ui.TimelineMinPxPerSec
+		}
+		if next > ui.TimelineMaxPxPerSec {
+			next = ui.TimelineMaxPxPerSec
+		}
+		sf.view.PixelsPerSec = next
+	} else {
+		sf.view.OffsetT -= wheel * wheelScrollSpeed / sf.view.PixelsPerSec
+	}
+	sf.view.Follow = false
+	// Without the clamp the wheel walks the view off the end of the mission
+	// and only RMB-Follow brings it back.
+	ui.ClampTimelineOffset(sf.panel, sf.view, g.UI.TimelineData)
+}
+
+// clickTimeline selects the squad under the cursor and, on a block, moves the
+// anchor to that order's target. The block carries its own target, so a
+// finished order — whose entity is long gone — is just as clickable.
+func (g *Game) clickTimeline() {
+	hit := g.UI.TimelineHoverHit
+	if !g.UI.TimelineHoverOK || hit.Squad == (ecs.Entity{}) ||
+		!g.App.World.Alive(hit.Squad) || !g.isControllable(hit.Squad) {
+		return
+	}
+	g.selectSquad(hit.Squad)
+	g.Sel.NavPath = nil
+	if blk, ok := g.UI.TimelineData.Block(hit); ok {
+		*g.Maps.Pos.Get(g.anchor) = blk.Target
 	}
 }
 

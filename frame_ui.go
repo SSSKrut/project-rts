@@ -25,7 +25,7 @@ func (g *Game) initUI() {
 	g.UI.ScreenW, g.UI.ScreenH = initialScreenWidth, initialScreenHeight
 	g.UI.PanelMgr = ui.NewPanelManager()
 	// Restore split ratios from disk before the first Recompute.
-	loadLayout(g.UI.PanelMgr)
+	loadLayout(g.UI.PanelMgr, g.timelineLeafView())
 	g.UI.PanelMgr.Recompute(g.UI.ScreenW, g.UI.ScreenH)
 	g.UI.Scene3DRT = ui.NewScene3DRT(g.UI.PanelMgr.Get(ui.Panel3D))
 
@@ -34,7 +34,6 @@ func (g *Game) initUI() {
 		return systems.GroundHeight(wx, wz)
 	})
 	g.UI.MapCam = ui.NewMapCamera()
-	g.UI.TimelineView = ui.NewTimelineView()
 	g.UI.Floating = ui.NewFloatingState()
 	g.UI.SmoothedSquadPos = make(map[ecs.Entity]components.WorldPos, 8)
 
@@ -75,7 +74,7 @@ func (g *Game) shutdownUI() {
 	// A capture run may have swapped a leaf for -shot-panel; persisting that
 	// would leak a throwaway layout into the player's saved one.
 	if *shotPathFlag == "" {
-		saveLayout(g.UI.PanelMgr)
+		saveLayout(g.UI.PanelMgr, g.timelineLeafView())
 	}
 	g.Ctx.Ribbons.unload()
 	// Order is load-bearing: hand the borrowed shader / surface textures back
@@ -248,6 +247,76 @@ func (g *Game) handlePanelScroll() {
 	}
 }
 
+// timelineDragKind names what a timeline drag is moving; the surface it acts
+// on is TimelineDragKey.
+type timelineDragKind uint8
+
+const (
+	timelineDragNone timelineDragKind = iota
+	timelineDragLabel
+	timelineDragH
+	timelineDragV
+)
+
+// timelineSurface is one instance of the timeline widget on screen. Like
+// scrollSurface, state is per-surface: a leaf and a floater showing the same
+// panel have different widths, so they cannot share a time offset.
+type timelineSurface struct {
+	key     string
+	panel   ui.Panel
+	view    *ui.TimelineViewState
+	focused bool
+}
+
+// timelineView lazily creates a surface's view. A zero TimelineViewState has
+// PixelsPerSec 0, which is not a usable scale, so every surface starts from
+// NewTimelineView.
+func (g *Game) timelineView(key string) *ui.TimelineViewState {
+	if g.UI.TimelineViews == nil {
+		g.UI.TimelineViews = map[string]*ui.TimelineViewState{}
+	}
+	if v, ok := g.UI.TimelineViews[key]; ok {
+		return v
+	}
+	v := ui.NewTimelineView()
+	g.UI.TimelineViews[key] = &v
+	return &v
+}
+
+// timelineLeafView is the workspace leaf's view — the one that persists.
+func (g *Game) timelineLeafView() *ui.TimelineViewState {
+	return g.timelineView(string(ui.PanelTimeline))
+}
+
+// timelineSurfaces enumerates every timeline on screen this frame. Focus
+// mirrors scrollSurfaces: a leaf under a floater is vetoed explicitly, since
+// Frame.Focused only knows the workspace tree.
+func (g *Game) timelineSurfaces() []timelineSurface {
+	out := g.UI.TimelineSurf[:0]
+	top := g.UI.Floating.HitTest(g.Frame.Cursor)
+	if g.UI.PanelMgr.LeafFor(ui.PanelTimeline) != nil {
+		out = append(out, timelineSurface{
+			key:     string(ui.PanelTimeline),
+			panel:   g.UI.PanelMgr.Get(ui.PanelTimeline),
+			view:    g.timelineLeafView(),
+			focused: g.Frame.Focused == ui.PanelTimeline && top == nil,
+		})
+	}
+	for _, p := range g.UI.Floating.Panels {
+		if p.PanelID != ui.PanelTimeline {
+			continue
+		}
+		out = append(out, timelineSurface{
+			key:     p.ID,
+			panel:   p.AsPanel(),
+			view:    g.timelineView(p.ID),
+			focused: p == top,
+		})
+	}
+	g.UI.TimelineSurf = out
+	return out
+}
+
 // behaviorCtx builds the per-frame context both flavours of the Behavior
 // panel share (workspace leaf and floater differ only in focus and scroll).
 func (g *Game) behaviorCtx(font rl.Font, cursor rl.Vector2, lmbPress, focused bool,
@@ -268,13 +337,23 @@ func (g *Game) behaviorCtx(font rl.Font, cursor rl.Vector2, lmbPress, focused bo
 // into components (Contact.LastSeenTime, OrderIssuedAt).
 func (g *Game) simNow() float32 { return float32(g.App.Elapsed().Seconds()) }
 
-// floatScroll is the scroll state of the floater hosting `id`, if any.
-// Mirrors the ID convention floatSpawn writes.
-func (g *Game) floatScroll(id ui.PanelID) *ui.ScrollState {
-	if p := g.UI.Floating.Get("float:" + string(id)); p != nil {
+// floatScroll is the scroll state of the floater being rendered. Valid only
+// inside renderFloatingWidget — and keyed off the live floater rather than the
+// "float:"+kind convention, which a chevron switch invalidates (the switch
+// changes PanelID and keeps ID).
+func (g *Game) floatScroll() *ui.ScrollState {
+	if p := g.UI.Floating.Drawing(); p != nil {
 		return &p.Scroll
 	}
 	return nil
+}
+
+// floatSurfaceKey identifies the floater being rendered for per-surface state.
+func (g *Game) floatSurfaceKey(id ui.PanelID) string {
+	if p := g.UI.Floating.Drawing(); p != nil {
+		return p.ID
+	}
+	return "float:" + string(id)
 }
 
 // selectSquad replaces the selection with a squad's living members — what
@@ -384,7 +463,7 @@ func (g *Game) renderFloatingWidget(id ui.PanelID, content rl.Rectangle,
 		g.UI.FormationEditor.DrawPanel(syn("Formation"), font, cursor, lmbPress)
 	case ui.PanelSymbology:
 		g.UI.SymbolEditor.DrawPanel(syn("Symbology"), font, cursor, lmbPress, true,
-			g.floatScroll(ui.PanelSymbology))
+			g.floatScroll())
 	case ui.PanelMap:
 		ui.DrawMap(syn("Map"), ui.MapRenderCtx{
 			World:            g.App.World,
@@ -438,16 +517,17 @@ func (g *Game) renderFloatingWidget(id ui.PanelID, content rl.Rectangle,
 			Cursor:        cursor,
 			LMBPressed:    lmbPress,
 			PanelFocused:  true,
-			Scroll:        g.floatScroll(ui.PanelInspect),
+			Scroll:        g.floatScroll(),
 			SquadColor:    g.squadColor,
 			RoadGraph:     &g.Res.RoadGraph,
 		})
 	case ui.PanelBehavior:
 		ui.DrawBehaviorPanel(syn("Behavior"), g.behaviorCtx(font, cursor, lmbPress, true,
-			g.floatScroll(ui.PanelBehavior)))
+			g.floatScroll()))
 	case ui.PanelTimeline:
-		ui.DrawTimelinePanel(syn("Timeline"), font, g.UI.TimelineData, &g.UI.TimelineView,
-			cursor, false)
+		key := g.floatSurfaceKey(ui.PanelTimeline)
+		ui.DrawTimelinePanel(syn("Timeline"), font, g.UI.TimelineData, g.timelineView(key),
+			cursor, g.UI.TimelineDragKey == key && g.UI.TimelineDragKind == timelineDragLabel)
 	case ui.PanelDebug:
 		g.drawDebugWidget(syn("Debug"), font, cursor, lmbPress)
 	case ui.Panel3D:

@@ -66,6 +66,7 @@ type worldRes struct {
 	UnitHash         *core.SpatialHash
 	VehicleHash      *core.VehicleSpatialHash
 	EventLog         *components.EventLog
+	OrderHistory     *components.OrderHistory
 	ContactRegistry  components.ContactRegistry
 	Symbology        components.SymbologyPresets
 }
@@ -240,16 +241,20 @@ type uiState struct {
 	MarqueeActive bool
 	MarqueeOrigin ui.PanelID
 
-	TimelineView      ui.TimelineViewState
-	TimelineData      ui.TimelineData
-	TimelineHoverHit  ui.TimelineHit
-	TimelineHoverOK   bool
-	TimelineHoverBlk  ui.TimelineOrderBlock
-	TimelineLabelDrag bool
-	TimelineHDrag     bool
-	TimelineVDrag     bool
-	TimelineDragOff   float32
-	TopBarHits        ui.TopBarHits
+	// One view per surface: the same widget open as a leaf and as a floater
+	// has two widths, so it needs two offsets, two zooms and two gutters.
+	// Keyed like ScrollDragKey — PanelID for a leaf, floater ID otherwise.
+	TimelineViews map[string]*ui.TimelineViewState
+	TimelineSurf  []timelineSurface
+	TimelineData  ui.TimelineData
+	// Hover belongs to whichever surface the cursor is over — only one can be.
+	TimelineHoverHit ui.TimelineHit
+	TimelineHoverOK  bool
+	TimelineHoverBlk ui.TimelineOrderBlock
+	TimelineDragKey  string
+	TimelineDragKind timelineDragKind
+	TimelineDragOff  float32
+	TopBarHits       ui.TopBarHits
 
 	FormationEditor *ui.FormationEditor
 	SymbolEditor    *ui.SymbolEditor

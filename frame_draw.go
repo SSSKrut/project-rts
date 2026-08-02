@@ -183,14 +183,12 @@ func (g *Game) drawUI() {
 		},
 		g.Frame.Cursor)
 
-	g.UI.TimelineData = buildTimelineData(g.App.World, g.Filt.Squad, g.Maps.Pos, g.Maps.Faction,
-		g.Maps.OrderQueue, g.Maps.OrderChain, g.Maps.OrderKind, g.Maps.OrderTarget, g.Maps.OrderState,
-		g.Maps.OrderProgress, g.Maps.OrderIssuedAt, g.squadColor,
-		float32(g.App.Elapsed().Seconds()))
-	ui.DrawTimelinePanel(g.UI.PanelMgr.Get(ui.PanelTimeline), g.hudFont, g.UI.TimelineData,
-		&g.UI.TimelineView, g.Frame.Cursor, g.UI.TimelineLabelDrag)
-	if g.UI.TimelineHoverOK && g.UI.TimelineHoverHit.HitOrder {
-		ui.DrawTimelineTooltip(g.hudFont, g.Frame.Cursor, g.UI.TimelineHoverBlk)
+	g.UI.TimelineData = g.buildTimelineData(g.simNow())
+	if g.UI.PanelMgr.LeafFor(ui.PanelTimeline) != nil {
+		key := string(ui.PanelTimeline)
+		ui.DrawTimelinePanel(g.UI.PanelMgr.Get(ui.PanelTimeline), g.hudFont, g.UI.TimelineData,
+			g.timelineLeafView(), g.Frame.Cursor,
+			g.UI.TimelineDragKey == key && g.UI.TimelineDragKind == timelineDragLabel)
 	}
 
 	if leaf := g.UI.PanelMgr.LeafFor(ui.PanelFormation); leaf != nil {
@@ -310,6 +308,12 @@ func (g *Game) drawUI() {
 	g.UI.Floating.DrawAll(g.hudFont, g.Frame.Cursor, rl.IsMouseButtonPressed(rl.MouseButtonLeft))
 	g.UI.Floating.DrawSwitchMenu(g.hudFont, g.Frame.Cursor)
 
+	// After the floaters: the hovered block may belong to one of them, and a
+	// tooltip drawn earlier would be painted over by its own panel.
+	if g.UI.TimelineHoverOK && g.UI.TimelineHoverHit.HitOrder {
+		ui.DrawTimelineTooltip(g.hudFont, g.Frame.Cursor, g.UI.TimelineHoverBlk)
+	}
+
 	g.UI.CtxMenu.Draw(g.hudFont, g.Frame.Cursor)
 
 	// Phase 18.5.F: contact RMB menu — separate tick + draw lane so it
@@ -428,90 +432,108 @@ func (g *Game) drawUI() {
 	handleTraceHotkeys(g.App)
 }
 
-// buildTimelineData flattens all squads + their order queues for
-// ui.DrawTimelinePanel. Queued blocks stack right after the head's estimated
-// end so the timeline reads left-to-right.
-func buildTimelineData(
-	world *ecs.World,
-	squadFilter *ecs.Filter2[components.Squad, components.CommandRoster],
-	posMap *ecs.Map[components.WorldPos],
-	factionMap *ecs.Map[components.Faction],
-	orderQueueMap *ecs.Map[components.OrderQueueHead],
-	orderChainMap *ecs.Map[components.OrderChain],
-	orderKindMap *ecs.Map[components.OrderKind],
-	orderTargetMap *ecs.Map[components.OrderTarget],
-	orderStateMap *ecs.Map[components.OrderState],
-	orderProgressMap *ecs.Map[components.OrderProgress],
-	orderIssuedAtMap *ecs.Map[components.OrderIssuedAt],
-	squadColor func(ent ecs.Entity) rl.Color,
-	nowT float32,
-) ui.TimelineData {
+// buildTimelineData flattens the player's squads into rows: finished orders
+// from OrderHistory first, then the live queue. Queued blocks stack right after
+// the head's estimated end so the timeline reads left-to-right. AI squads are
+// skipped — the panel is the player's command surface, not an omniscient
+// overlay on enemy plans.
+func (g *Game) buildTimelineData(nowT float32) ui.TimelineData {
 	data := ui.TimelineData{NowT: nowT}
-	q := squadFilter.Query()
+	past := g.timelineHistoryBySquad()
+
+	q := g.Filt.Squad.Query()
 	for q.Next() {
 		squad := q.Entity()
 		_, roster := q.Get()
-		center, _ := systems.SquadCenter(world, roster, posMap)
+		if c := g.Maps.Controller.Get(squad); c == nil || c.Owner != components.ControllerLocal {
+			continue
+		}
+		center, _ := systems.SquadCenter(g.App.World, roster, g.Maps.Pos)
 
-		head := orderQueueMap.Get(squad)
 		live := 0
 		for i := uint8(0); i < roster.Count; i++ {
-			if m := roster.Members[i]; m != (ecs.Entity{}) && world.Alive(m) {
+			if m := roster.Members[i]; m != (ecs.Entity{}) && g.App.World.Alive(m) {
 				live++
 			}
 		}
 		row := ui.TimelineSquadRow{
 			Squad:   squad,
-			Color:   squadColor(squad),
+			Color:   g.squadColor(squad),
 			Members: live,
+			Orders:  past[squad],
 		}
-		if head != nil && head.First != (ecs.Entity{}) {
-			lastEnd := float32(0)
-			cur := head.First
-			isHead := true
-			for cur != (ecs.Entity{}) && world.Alive(cur) {
-				kind := orderKindMap.Get(cur)
-				state := orderStateMap.Get(cur)
-				target := orderTargetMap.Get(cur)
-				if kind == nil || state == nil || target == nil {
-					break
-				}
-				startT := nowT
-				if iss := orderIssuedAtMap.Get(cur); iss != nil {
-					startT = iss.Time
-				}
-				if !isHead && startT < lastEnd {
-					startT = lastEnd
-				}
-				est := estimateOrderDuration(kind.Code, center, target.Pos)
-				endT := startT + est
-				prog := float32(0)
-				if pr := orderProgressMap.Get(cur); pr != nil {
-					prog = pr.Value
-				}
-				row.Orders = append(row.Orders, ui.TimelineOrderBlock{
-					Order:     cur,
-					KindCode:  kind.Code,
-					StateCode: state.Code,
-					StartT:    startT,
-					EndT:      endT,
-					Progress:  prog,
-					IsHead:    isHead,
-				})
-				lastEnd = endT
-				ch := orderChainMap.Get(cur)
-				if ch == nil {
-					break
-				}
-				cur = ch.Next
-				isHead = false
-			}
+		if head := g.Maps.OrderQueue.Get(squad); head != nil {
+			g.appendPlannedOrders(&row, head.First, center, nowT)
 		}
 		data.Rows = append(data.Rows, row)
 	}
 	q.Close()
-	_ = factionMap
 	return data
+}
+
+// timelineHistoryBySquad buckets the tombstone ring into per-squad blocks,
+// oldest first. Records whose squad is gone have no row to land in and are
+// dropped (ghost rows for dead squads are a separate job).
+func (g *Game) timelineHistoryBySquad() map[ecs.Entity][]ui.TimelineOrderBlock {
+	out := make(map[ecs.Entity][]ui.TimelineOrderBlock, len(g.UI.TimelineData.Rows)+1)
+	if g.Res.OrderHistory == nil {
+		return out
+	}
+	g.Res.OrderHistory.Each(func(r components.OrderRecord) {
+		out[r.Squad] = append(out[r.Squad], ui.HistoryBlock(r))
+	})
+	return out
+}
+
+// appendPlannedOrders walks the live chain from `first`, laying queued blocks
+// end to end after the head.
+func (g *Game) appendPlannedOrders(row *ui.TimelineSquadRow, first ecs.Entity,
+	center components.WorldPos, nowT float32) {
+	lastEnd := float32(0)
+	isHead := true
+	cur := first
+	for cur != (ecs.Entity{}) && g.App.World.Alive(cur) {
+		kind := g.Maps.OrderKind.Get(cur)
+		state := g.Maps.OrderState.Get(cur)
+		target := g.Maps.OrderTarget.Get(cur)
+		if kind == nil || state == nil || target == nil {
+			return
+		}
+		startT := nowT
+		if iss := g.Maps.OrderIssuedAt.Get(cur); iss != nil {
+			startT = iss.Time
+		}
+		if !isHead && startT < lastEnd {
+			startT = lastEnd
+		}
+		endT := startT + estimateOrderDuration(kind.Code, center, target.Pos)
+		// An order that outlived its estimate is still running: letting the
+		// block end left of the now-line reads as "finished".
+		if isHead && endT < nowT {
+			endT = nowT
+		}
+		prog := float32(0)
+		if pr := g.Maps.OrderProgress.Get(cur); pr != nil {
+			prog = pr.Value
+		}
+		row.Orders = append(row.Orders, ui.TimelineOrderBlock{
+			Order:     cur,
+			Target:    target.Pos,
+			KindCode:  kind.Code,
+			StateCode: state.Code,
+			StartT:    startT,
+			EndT:      endT,
+			Progress:  prog,
+			IsHead:    isHead,
+		})
+		lastEnd = endT
+		ch := g.Maps.OrderChain.Get(cur)
+		if ch == nil {
+			return
+		}
+		cur = ch.Next
+		isHead = false
+	}
 }
 
 // estimateOrderDuration is a heuristic display-only duration per order kind.

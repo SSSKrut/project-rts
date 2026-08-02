@@ -226,6 +226,7 @@ var resourceClasses = map[string]ResourceClass{
 	"components.StreamingMap": ResFromManifest, // empty since the smart-space demo graph was removed
 
 	"components.EventLog":         ResCodec,
+	"components.OrderHistory":     ResCodec,
 	"components.FormationPresets": ResCodec,
 	"components.SymbologyPresets": ResCodec, // sidecar save/symbols.json (closes deferred 18.5)
 }

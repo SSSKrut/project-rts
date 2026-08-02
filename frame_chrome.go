@@ -66,7 +66,7 @@ func (g *Game) handleChrome() {
 			it := g.UI.ChevronMenu.Items[idx]
 			if !it.Disabled {
 				handleMenuItem(g.UI.PanelMgr, &g.UI.ChevronMenu, it, g.floatSpawn)
-				saveLayout(g.UI.PanelMgr)
+				saveLayout(g.UI.PanelMgr, g.timelineLeafView())
 			}
 			g.UI.ChevronMenu.Close()
 		} else {
@@ -89,7 +89,7 @@ func (g *Game) handleChrome() {
 		if rl.IsMouseButtonDown(rl.MouseButtonLeft) {
 			g.UI.PanelMgr.UpdateDrag(g.Frame.Cursor)
 		} else if g.UI.PanelMgr.EndDrag() {
-			saveLayout(g.UI.PanelMgr)
+			saveLayout(g.UI.PanelMgr, g.timelineLeafView())
 		}
 		g.syncPanelRects()
 	}
@@ -101,7 +101,7 @@ func (g *Game) handleChrome() {
 			g.UI.PanelMgr.UpdateCornerDrag(g.Frame.Cursor)
 		default:
 			if g.UI.PanelMgr.CommitCornerDrag(g.Frame.Cursor) {
-				saveLayout(g.UI.PanelMgr)
+				saveLayout(g.UI.PanelMgr, g.timelineLeafView())
 			}
 		}
 		g.syncPanelRects()
@@ -114,7 +114,7 @@ func (g *Game) handleChrome() {
 			g.UI.PanelMgr.UpdateTitleDrag(g.Frame.Cursor)
 		default:
 			if g.UI.PanelMgr.CommitTitleDrag(g.Frame.Cursor) {
-				saveLayout(g.UI.PanelMgr)
+				saveLayout(g.UI.PanelMgr, g.timelineLeafView())
 			}
 			g.syncPanelRects()
 		}
