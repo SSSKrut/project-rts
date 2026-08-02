@@ -362,7 +362,7 @@ func ClampTimelineLabelW(panel Panel, w float32) float32 {
 }
 
 const (
-	timelineHeaderH      float32 = 26
+	timelineHeaderH float32 = 26
 	// Wide enough for "idle N  <Kind> cancelled" — the status line is the
 	// column's reason to exist, and a truncated one reads as a bug.
 	timelineLabelW       float32 = 176
