@@ -28,6 +28,21 @@ type FloatingPanel struct {
 	// RenderFor enables the switch button by building a new Render
 	// closure for the chosen PanelID; Title is updated via WidgetTitle.
 	RenderFor func(id PanelID) FloatingRenderFn
+
+	// Scroll belongs to the floater, not to the widget kind: a floater has
+	// its own size, so it needs its own offset and content height. Widgets
+	// that don't scroll leave ContentHeight at 0 and the bar stays hidden.
+	Scroll ScrollState
+}
+
+// ContentRect is the area a floater hands to its widget — the panel minus
+// chrome. Exported so the host can build scroll surfaces over floaters.
+func (p *FloatingPanel) ContentRect() rl.Rectangle { return floatingContentRect(p) }
+
+// AsPanel synthesises the workspace-style Panel whose ContentRect matches
+// this floater's, so Panel-shaped helpers (scrollbar, widgets) work on both.
+func (p *FloatingPanel) AsPanel() Panel {
+	return ContentToPanel(p.ContentRect(), p.Title, p.PanelID)
 }
 
 type FloatingState struct {
@@ -567,6 +582,11 @@ func (s *FloatingState) DrawAll(font rl.Font, cursor rl.Vector2, lmbPress bool) 
 				int32(content.Width), int32(content.Height))
 			closed := p.Render(content, cursor, font, callbackLMB)
 			rl.EndScissorMode()
+			// After the widget released its own scissor, so the bar isn't
+			// clipped away; a no-op unless the widget reported an overflow.
+			synth := p.AsPanel()
+			ClampScrollOffset(synth, &p.Scroll)
+			DrawScrollbar(synth, &p.Scroll)
 			if closed {
 				pendingClose = append(pendingClose, p.ID)
 			}

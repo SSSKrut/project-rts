@@ -72,10 +72,18 @@ func (g *Game) initUI() {
 func (g *Game) shutdownUI() {
 	g.UI.Underlay.Unload()
 	g.UI.Scene3DRT.Unload()
-	saveLayout(g.UI.PanelMgr)
+	// A capture run may have swapped a leaf for -shot-panel; persisting that
+	// would leak a throwaway layout into the player's saved one.
+	if *shotPathFlag == "" {
+		saveLayout(g.UI.PanelMgr)
+	}
 	g.Ctx.Ribbons.unload()
-	g.Ctx.WorldShader.unload()
+	// Order is load-bearing: hand the borrowed shader / surface textures back
+	// first, then free the material (only its map array is raylib's), then let
+	// their real owner free them exactly once.
+	g.Ctx.WorldShader.release(&g.terrainMaterial)
 	rl.UnloadMaterial(g.terrainMaterial)
+	g.Ctx.WorldShader.unload()
 }
 
 // chromeBusy = "UI chrome currently owns mouse/keyboard"; content layers
@@ -85,6 +93,16 @@ func (g *Game) chromeBusy() bool {
 		g.UI.PanelMgr.IsTitleDragging() ||
 		g.UI.ChevronMenu.Open || g.UI.Floating.IsBusy(rl.GetMousePosition()) ||
 		g.UI.Floating.SwitchMenuOpen()
+}
+
+// chromeDragging is chromeBusy without the "cursor is over a floater" clause:
+// for input that belongs to a floater's own content, hovering it is the
+// precondition, not a veto.
+func (g *Game) chromeDragging() bool {
+	return g.UI.PanelMgr.IsDragging() || g.UI.PanelMgr.IsCornerDragging() ||
+		g.UI.PanelMgr.IsTitleDragging() ||
+		g.UI.ChevronMenu.Open || g.UI.Floating.IsDragging() ||
+		g.UI.Floating.IsResizing() || g.UI.Floating.SwitchMenuOpen()
 }
 
 // symbolApplyTarget is what the Symbol Editor's [Apply to selection] writes
@@ -130,49 +148,133 @@ func (g *Game) isSelected(e ecs.Entity) int {
 
 // scrollablePanels get wheel + thumb-drag handling. A widget only reports how
 // tall its content came out; everything else is here.
-var scrollablePanels = [...]ui.PanelID{ui.PanelInspect, ui.PanelSymbology}
+var scrollablePanels = [...]ui.PanelID{ui.PanelInspect, ui.PanelSymbology, ui.PanelBehavior}
 
-func (g *Game) scrollDragging() bool { return g.UI.ScrollDragID != ui.PanelNone }
+func (g *Game) scrollDragging() bool { return g.UI.ScrollDragKey != "" }
 
-func (g *Game) handlePanelScroll() {
+// scrollSurface is one scrollable instance of a widget. The same kind can be
+// on screen twice (workspace leaf + floater) with different sizes, so state
+// is per-surface and keyed by a stable string rather than by PanelID.
+type scrollSurface struct {
+	key     string
+	panel   ui.Panel
+	state   *ui.ScrollState
+	focused bool
+}
+
+// scrollSurfaces enumerates what the wheel and the thumb can act on this
+// frame: the workspace leaf of every scrollable kind, plus any floater
+// hosting one. Floater focus is "topmost under the cursor" — its own chrome
+// already shields whatever is beneath it.
+func (g *Game) scrollSurfaces() []scrollSurface {
+	out := g.UI.ScrollSurf[:0]
+	// Frame.Focused only knows the workspace tree, so a leaf under a floater
+	// still reads as focused — the floater has to veto it explicitly.
+	top := g.UI.Floating.HitTest(g.Frame.Cursor)
 	for _, id := range scrollablePanels {
-		panel := g.UI.PanelMgr.Get(id)
-		scroll := g.UI.PanelMgr.ScrollByID(id)
-		if scroll == nil {
+		if g.UI.PanelMgr.LeafFor(id) == nil {
 			continue
 		}
-		if g.Frame.Focused == id && !g.chromeBusy() {
+		if s := g.UI.PanelMgr.ScrollByID(id); s != nil {
+			out = append(out, scrollSurface{
+				key:     string(id),
+				panel:   g.UI.PanelMgr.Get(id),
+				state:   s,
+				focused: g.Frame.Focused == id && top == nil,
+			})
+		}
+	}
+	for _, p := range g.UI.Floating.Panels {
+		if !isScrollableKind(p.PanelID) {
+			continue
+		}
+		out = append(out, scrollSurface{
+			key:     p.ID,
+			panel:   p.AsPanel(),
+			state:   &p.Scroll,
+			focused: p == top,
+		})
+	}
+	g.UI.ScrollSurf = out
+	return out
+}
+
+func isScrollableKind(id ui.PanelID) bool {
+	for _, s := range scrollablePanels {
+		if s == id {
+			return true
+		}
+	}
+	return false
+}
+
+func (g *Game) handlePanelScroll() {
+	// Release unconditionally: the surface being dragged can vanish mid-drag
+	// (floater closed), and a stale key would wedge every LMB behind it.
+	if g.UI.ScrollDragKey != "" && !rl.IsMouseButtonDown(rl.MouseButtonLeft) {
+		g.UI.ScrollDragKey = ""
+	}
+	// chromeBusy folds in "cursor is over a floater", which would veto the
+	// very surface we are trying to scroll — only live drags block here.
+	busy := g.chromeDragging()
+	for _, sf := range g.scrollSurfaces() {
+		if sf.focused && !busy {
 			if wheel := rl.GetMouseWheelMove(); wheel != 0 {
-				scroll.OffsetY -= wheel * wheelScrollSpeed
-				ui.ClampScrollOffset(panel, scroll)
+				sf.state.OffsetY -= wheel * wheelScrollSpeed
+				ui.ClampScrollOffset(sf.panel, sf.state)
 			}
 		}
 
-		thumb := ui.ScrollbarThumbRect(panel, scroll)
-		if !g.chromeBusy() && !g.scrollDragging() &&
+		thumb := ui.ScrollbarThumbRect(sf.panel, sf.state)
+		if !busy && !g.scrollDragging() && sf.focused &&
 			thumb.Width > 0 && thumb.Height > 0 &&
 			rl.IsMouseButtonPressed(rl.MouseButtonLeft) &&
 			rl.CheckCollisionPointRec(g.Frame.Cursor, thumb) {
-			g.UI.ScrollDragID = id
+			g.UI.ScrollDragKey = sf.key
 			g.UI.ScrollDragStartY = g.Frame.Cursor.Y
-			g.UI.ScrollDragStartO = scroll.OffsetY
+			g.UI.ScrollDragStartO = sf.state.OffsetY
 		}
-		if g.UI.ScrollDragID != id {
+		if g.UI.ScrollDragKey != sf.key {
 			continue
 		}
-		if !rl.IsMouseButtonDown(rl.MouseButtonLeft) {
-			g.UI.ScrollDragID = ui.PanelNone
-			continue
-		}
-		track := ui.ScrollbarRect(panel)
-		maxOffset := scroll.ContentHeight - track.Height
+		track := ui.ScrollbarRect(sf.panel)
+		maxOffset := sf.state.ContentHeight - track.Height
 		scrollableTrack := track.Height - thumb.Height
 		if scrollableTrack > 0 && maxOffset > 0 {
 			dy := g.Frame.Cursor.Y - g.UI.ScrollDragStartY
-			scroll.OffsetY = g.UI.ScrollDragStartO + dy*(maxOffset/scrollableTrack)
-			ui.ClampScrollOffset(panel, scroll)
+			sf.state.OffsetY = g.UI.ScrollDragStartO + dy*(maxOffset/scrollableTrack)
+			ui.ClampScrollOffset(sf.panel, sf.state)
 		}
 	}
+}
+
+// behaviorCtx builds the per-frame context both flavours of the Behavior
+// panel share (workspace leaf and floater differ only in focus and scroll).
+func (g *Game) behaviorCtx(font rl.Font, cursor rl.Vector2, lmbPress, focused bool,
+	scroll *ui.ScrollState) ui.BehaviorCtx {
+	return ui.BehaviorCtx{
+		BehaviorMaps: g.Ctx.Behavior,
+		World:        g.App.World,
+		Selected:     g.Sel.Units,
+		Font:         font,
+		Cursor:       cursor,
+		LMBPressed:   lmbPress,
+		PanelFocused: focused,
+		Scroll:       scroll,
+	}
+}
+
+// simNow is the canonical UI clock: sim seconds, the same one systems stamp
+// into components (Contact.LastSeenTime, OrderIssuedAt).
+func (g *Game) simNow() float32 { return float32(g.App.Elapsed().Seconds()) }
+
+// floatScroll is the scroll state of the floater hosting `id`, if any.
+// Mirrors the ID convention floatSpawn writes.
+func (g *Game) floatScroll(id ui.PanelID) *ui.ScrollState {
+	if p := g.UI.Floating.Get("float:" + string(id)); p != nil {
+		return &p.Scroll
+	}
+	return nil
 }
 
 // selectSquad replaces the selection with a squad's living members — what
@@ -281,7 +383,8 @@ func (g *Game) renderFloatingWidget(id ui.PanelID, content rl.Rectangle,
 	case ui.PanelFormation:
 		g.UI.FormationEditor.DrawPanel(syn("Formation"), font, cursor, lmbPress)
 	case ui.PanelSymbology:
-		g.UI.SymbolEditor.DrawPanel(syn("Symbology"), font, cursor, lmbPress, true, nil)
+		g.UI.SymbolEditor.DrawPanel(syn("Symbology"), font, cursor, lmbPress, true,
+			g.floatScroll(ui.PanelSymbology))
 	case ui.PanelMap:
 		ui.DrawMap(syn("Map"), ui.MapRenderCtx{
 			World:            g.App.World,
@@ -330,12 +433,17 @@ func (g *Game) renderFloatingWidget(id ui.PanelID, content rl.Rectangle,
 			Hovered:       g.Sel.Hovered,
 			Font:          font,
 			EventLog:      g.Res.EventLog,
+			Now:           g.simNow(),
 			Cursor:        cursor,
 			LMBPressed:    lmbPress,
 			PanelFocused:  true,
-			Scroll:        nil,
+			Scroll:        g.floatScroll(ui.PanelInspect),
 			SquadColor:    g.squadColor,
+			RoadGraph:     &g.Res.RoadGraph,
 		})
+	case ui.PanelBehavior:
+		ui.DrawBehaviorPanel(syn("Behavior"), g.behaviorCtx(font, cursor, lmbPress, true,
+			g.floatScroll(ui.PanelBehavior)))
 	case ui.PanelTimeline:
 		ui.DrawTimelinePanel(syn("Timeline"), font, g.UI.TimelineData, &g.UI.TimelineView,
 			cursor, false)

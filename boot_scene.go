@@ -178,6 +178,7 @@ func (g *Game) initGameplayHandles() {
 	g.Ctx.LOS = newLOSPreview(g.App.World)
 
 	g.Ctx.Inspector = ui.NewInspectorMaps(g.App.World)
+	g.Ctx.Behavior = ui.NewBehaviorMaps(g.App.World)
 	weaponMap := ecs.NewMap[components.Weapon](g.App.World)
 	_ = weaponMap
 	g.Maps.Role = ecs.NewMap[components.UnitRole](g.App.World)

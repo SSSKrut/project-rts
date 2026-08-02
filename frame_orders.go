@@ -267,6 +267,18 @@ func (g *Game) handleOrders() {
 		}
 	}
 
+	// Q -> toggle behavior panel floating. Uses the floatSpawn ID convention
+	// so the panel shares its scroll state with the workspace flavour.
+	if rl.IsKeyPressed(rl.KeyQ) {
+		id := "float:" + string(ui.PanelBehavior)
+		if g.UI.Floating.IsOpen(id) {
+			g.UI.Floating.Close(id)
+		} else {
+			g.floatSpawn(ui.PanelBehavior, ui.WidgetTitle(ui.PanelBehavior),
+				rl.Rectangle{X: 220, Y: 80, Width: 380, Height: 440})
+		}
+	}
+
 	// [ / ] cycle MovementProfile presets; ' toggles Posture.
 	if len(g.Sel.Units) > 0 {
 		if commonSquad, homo := groupSelected(g.Sel.Units, g.Maps.SquadMember); homo && commonSquad != (ecs.Entity{}) {

@@ -112,10 +112,6 @@ func drawInspectorSquad(ctx InspectorCtx, squad ecs.Entity, x, y, width int32) i
 		y += inspectorRowH
 	}
 
-	if ctx.MovementProfileMap != nil && ctx.EngagementRulesMap != nil && ctx.BehaviorRulesMap != nil {
-		y += inspectorRowH / 2
-		y = drawStandingRulesSections(ctx, squad, x, y, width)
-	}
 	return y
 }
 

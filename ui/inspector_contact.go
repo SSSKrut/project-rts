@@ -57,7 +57,7 @@ func drawInspectorContact(ctx InspectorCtx, ent ecs.Entity, x, y int32) int32 {
 	y += inspectorRowH
 
 	if c.LastSeenTime > 0 {
-		ageS := timelineNow(ctx) - c.LastSeenTime
+		ageS := ctx.Now - c.LastSeenTime
 		drawText(ctx.Font, fmt.Sprintf("Last seen: %.1fs ago", ageS),
 			x, y, inspectorFontSize, inspectorTextDim)
 		y += inspectorRowH
@@ -139,12 +139,4 @@ func sourceLabel(s components.ClassificationSource) string {
 		return "Player classified"
 	}
 	return "Sensor"
-}
-
-// timelineNow extracts a clock value the contact panel can use to compute
-// "last seen Xs ago". Borrowed from SquadClock via the InspectorCtx by way
-// of a hack — we approximate it via raylib's GetTime since neither InspectorCtx
-// nor InspectorMaps expose Clock. Track 18.5.E will add a proper clock pipe.
-func timelineNow(_ InspectorCtx) float32 {
-	return float32(rl.GetTime())
 }

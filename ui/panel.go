@@ -33,6 +33,7 @@ const (
 	PanelTimeline  PanelID = "timeline"
 	PanelFormation PanelID = "formation"
 	PanelSymbology PanelID = "symbology"
+	PanelBehavior  PanelID = "behavior"
 	PanelDebug     PanelID = "debug"
 	PanelNone      PanelID = ""
 )

@@ -70,6 +70,7 @@ func (g *Game) drawUI() {
 		Hovered:       g.Sel.Hovered,
 		Font:          g.hudFont,
 		EventLog:      g.Res.EventLog,
+		Now:           g.simNow(),
 		Cursor:        g.Frame.Cursor,
 		LMBPressed:    !g.chromeBusy() && !g.scrollDragging() && rl.IsMouseButtonPressed(rl.MouseButtonLeft),
 		PanelFocused:  inspectorFocused,
@@ -192,6 +193,19 @@ func (g *Game) drawUI() {
 		// After DrawPanel so its scissor has been released.
 		ui.ClampScrollOffset(symPanel, symScroll)
 		ui.DrawScrollbar(symPanel, symScroll)
+	}
+
+	if g.UI.PanelMgr.LeafFor(ui.PanelBehavior) != nil {
+		behPanel := g.UI.PanelMgr.Get(ui.PanelBehavior)
+		behScroll := g.UI.PanelMgr.ScrollByID(ui.PanelBehavior)
+		behFocused := g.UI.PanelMgr.FocusedAt(g.Frame.Cursor) == ui.PanelBehavior
+		behLMB := behFocused && !g.chromeBusy() && !g.scrollDragging() &&
+			rl.IsMouseButtonPressed(rl.MouseButtonLeft)
+		ui.DrawBehaviorPanel(behPanel,
+			g.behaviorCtx(g.hudFont, g.Frame.Cursor, behLMB, behFocused, behScroll))
+		// After the panel released its scissor.
+		ui.ClampScrollOffset(behPanel, behScroll)
+		ui.DrawScrollbar(behPanel, behScroll)
 	}
 
 	if leaf := g.UI.PanelMgr.LeafFor(ui.PanelDebug); leaf != nil {

@@ -13,92 +13,78 @@ import (
 // NewInspectorMaps; embedded into InspectorCtx so call sites stay
 // `ctx.StanceMap.Get(...)` via Go field promotion.
 type InspectorMaps struct {
-	PosMap                   *ecs.Map[components.WorldPos]
-	StanceMap                *ecs.Map[components.Stance]
-	MotionMap                *ecs.Map[components.Motion]
-	ThreatMap                *ecs.Map[components.Threat]
-	EquipmentMap             *ecs.Map[components.Equipment]
-	SquadMemberMap           *ecs.Map[components.SquadMember]
-	RosterMap                *ecs.Map[components.CommandRoster]
-	FormationDataMap         *ecs.Map[components.FormationData]
-	MacroPathMap             *ecs.Map[components.MacroPath]
-	SquadFilter              *ecs.Filter2[components.Squad, components.CommandRoster]
-	OrderQueueMap            *ecs.Map[components.OrderQueueHead]
-	OrderKindMap             *ecs.Map[components.OrderKind]
-	OrderStateMap            *ecs.Map[components.OrderState]
-	OrderTargetMap           *ecs.Map[components.OrderTarget]
-	OrderProgressMap         *ecs.Map[components.OrderProgress]
-	OrderChainMap            *ecs.Map[components.OrderChain]
-	BuildingMap              *ecs.Map[components.Building]
-	TrenchRootMap            *ecs.Map[components.TrenchRoot]
-	RoleMap                  *ecs.Map[components.UnitRole]
-	MovementProfileMap       *ecs.Map[components.MovementProfile]
-	EngagementRulesMap       *ecs.Map[components.EngagementRules]
-	BehaviorRulesMap         *ecs.Map[components.BehaviorRules]
-	StaminaMap               *ecs.Map[components.Stamina]
-	OrderAttackMoveMap       *ecs.Map[components.OrderParamAttackMove]
-	OrderMovementOverrideMap *ecs.Map[components.OrderParamMovementProfile]
-	OrderEngagementMap       *ecs.Map[components.OrderParamEngagementOverride]
-	HPMap                    *ecs.Map[components.HP]
-	FactionMap               *ecs.Map[components.Faction]
-	TacticalOverrideMap      *ecs.Map[components.TacticalOverride]
-	SquadStateMap            *ecs.Map[components.SquadState]
-	IndividualPositionMap    *ecs.Map[components.IndividualPosition]
-	ActiveDoctrineMap        *ecs.Map[components.ActiveDoctrine]
-	ActiveAutonomyMap        *ecs.Map[components.ActiveAutonomy]
-	BehaviorRulesEditMap     *ecs.Map[components.BehaviorRulesEdit]
-	ContactMap               *ecs.Map[components.Contact]
-	ContactOverrideMap       *ecs.Map[components.ContactSymbolOverride]
-	UnitOverrideMap          *ecs.Map[components.UnitSymbolOverride]
-	VehicleMap               *ecs.Map[components.Vehicle]
-	RoadFollowerMap          *ecs.Map[components.RoadFollower]
-	WeaponMap                *ecs.Map[components.Weapon]
-	VehicleOverrideMap       *ecs.Map[components.VehicleOverride]
+	PosMap                *ecs.Map[components.WorldPos]
+	StanceMap             *ecs.Map[components.Stance]
+	MotionMap             *ecs.Map[components.Motion]
+	ThreatMap             *ecs.Map[components.Threat]
+	EquipmentMap          *ecs.Map[components.Equipment]
+	SquadMemberMap        *ecs.Map[components.SquadMember]
+	RosterMap             *ecs.Map[components.CommandRoster]
+	FormationDataMap      *ecs.Map[components.FormationData]
+	MacroPathMap          *ecs.Map[components.MacroPath]
+	SquadFilter           *ecs.Filter2[components.Squad, components.CommandRoster]
+	OrderQueueMap         *ecs.Map[components.OrderQueueHead]
+	OrderKindMap          *ecs.Map[components.OrderKind]
+	OrderStateMap         *ecs.Map[components.OrderState]
+	OrderTargetMap        *ecs.Map[components.OrderTarget]
+	OrderProgressMap      *ecs.Map[components.OrderProgress]
+	OrderChainMap         *ecs.Map[components.OrderChain]
+	TrenchRootMap         *ecs.Map[components.TrenchRoot]
+	RoleMap               *ecs.Map[components.UnitRole]
+	EngagementRulesMap    *ecs.Map[components.EngagementRules]
+	BehaviorRulesMap      *ecs.Map[components.BehaviorRules]
+	StaminaMap            *ecs.Map[components.Stamina]
+	OrderAttackMoveMap    *ecs.Map[components.OrderParamAttackMove]
+	OrderEngagementMap    *ecs.Map[components.OrderParamEngagementOverride]
+	HPMap                 *ecs.Map[components.HP]
+	FactionMap            *ecs.Map[components.Faction]
+	TacticalOverrideMap   *ecs.Map[components.TacticalOverride]
+	SquadStateMap         *ecs.Map[components.SquadState]
+	IndividualPositionMap *ecs.Map[components.IndividualPosition]
+	ContactMap            *ecs.Map[components.Contact]
+	ContactOverrideMap    *ecs.Map[components.ContactSymbolOverride]
+	VehicleMap            *ecs.Map[components.Vehicle]
+	RoadFollowerMap       *ecs.Map[components.RoadFollower]
+	WeaponMap             *ecs.Map[components.Weapon]
+	VehicleOverrideMap    *ecs.Map[components.VehicleOverride]
 }
 
 func NewInspectorMaps(world *ecs.World) InspectorMaps {
 	return InspectorMaps{
-		PosMap:                   ecs.NewMap[components.WorldPos](world),
-		StanceMap:                ecs.NewMap[components.Stance](world),
-		MotionMap:                ecs.NewMap[components.Motion](world),
-		ThreatMap:                ecs.NewMap[components.Threat](world),
-		EquipmentMap:             ecs.NewMap[components.Equipment](world),
-		SquadMemberMap:           ecs.NewMap[components.SquadMember](world),
-		RosterMap:                ecs.NewMap[components.CommandRoster](world),
-		FormationDataMap:         ecs.NewMap[components.FormationData](world),
-		MacroPathMap:             ecs.NewMap[components.MacroPath](world),
-		SquadFilter:              ecs.NewFilter2[components.Squad, components.CommandRoster](world),
-		OrderQueueMap:            ecs.NewMap[components.OrderQueueHead](world),
-		OrderKindMap:             ecs.NewMap[components.OrderKind](world),
-		OrderStateMap:            ecs.NewMap[components.OrderState](world),
-		OrderTargetMap:           ecs.NewMap[components.OrderTarget](world),
-		OrderProgressMap:         ecs.NewMap[components.OrderProgress](world),
-		OrderChainMap:            ecs.NewMap[components.OrderChain](world),
-		BuildingMap:              ecs.NewMap[components.Building](world),
-		TrenchRootMap:            ecs.NewMap[components.TrenchRoot](world),
-		RoleMap:                  ecs.NewMap[components.UnitRole](world),
-		MovementProfileMap:       ecs.NewMap[components.MovementProfile](world),
-		EngagementRulesMap:       ecs.NewMap[components.EngagementRules](world),
-		BehaviorRulesMap:         ecs.NewMap[components.BehaviorRules](world),
-		StaminaMap:               ecs.NewMap[components.Stamina](world),
-		OrderAttackMoveMap:       ecs.NewMap[components.OrderParamAttackMove](world),
-		OrderMovementOverrideMap: ecs.NewMap[components.OrderParamMovementProfile](world),
-		OrderEngagementMap:       ecs.NewMap[components.OrderParamEngagementOverride](world),
-		HPMap:                    ecs.NewMap[components.HP](world),
-		FactionMap:               ecs.NewMap[components.Faction](world),
-		TacticalOverrideMap:      ecs.NewMap[components.TacticalOverride](world),
-		SquadStateMap:            ecs.NewMap[components.SquadState](world),
-		IndividualPositionMap:    ecs.NewMap[components.IndividualPosition](world),
-		ActiveDoctrineMap:        ecs.NewMap[components.ActiveDoctrine](world),
-		ActiveAutonomyMap:        ecs.NewMap[components.ActiveAutonomy](world),
-		BehaviorRulesEditMap:     ecs.NewMap[components.BehaviorRulesEdit](world),
-		ContactMap:               ecs.NewMap[components.Contact](world),
-		ContactOverrideMap:       ecs.NewMap[components.ContactSymbolOverride](world),
-		UnitOverrideMap:          ecs.NewMap[components.UnitSymbolOverride](world),
-		VehicleMap:               ecs.NewMap[components.Vehicle](world),
-		RoadFollowerMap:          ecs.NewMap[components.RoadFollower](world),
-		WeaponMap:                ecs.NewMap[components.Weapon](world),
-		VehicleOverrideMap:       ecs.NewMap[components.VehicleOverride](world),
+		PosMap:                ecs.NewMap[components.WorldPos](world),
+		StanceMap:             ecs.NewMap[components.Stance](world),
+		MotionMap:             ecs.NewMap[components.Motion](world),
+		ThreatMap:             ecs.NewMap[components.Threat](world),
+		EquipmentMap:          ecs.NewMap[components.Equipment](world),
+		SquadMemberMap:        ecs.NewMap[components.SquadMember](world),
+		RosterMap:             ecs.NewMap[components.CommandRoster](world),
+		FormationDataMap:      ecs.NewMap[components.FormationData](world),
+		MacroPathMap:          ecs.NewMap[components.MacroPath](world),
+		SquadFilter:           ecs.NewFilter2[components.Squad, components.CommandRoster](world),
+		OrderQueueMap:         ecs.NewMap[components.OrderQueueHead](world),
+		OrderKindMap:          ecs.NewMap[components.OrderKind](world),
+		OrderStateMap:         ecs.NewMap[components.OrderState](world),
+		OrderTargetMap:        ecs.NewMap[components.OrderTarget](world),
+		OrderProgressMap:      ecs.NewMap[components.OrderProgress](world),
+		OrderChainMap:         ecs.NewMap[components.OrderChain](world),
+		TrenchRootMap:         ecs.NewMap[components.TrenchRoot](world),
+		RoleMap:               ecs.NewMap[components.UnitRole](world),
+		EngagementRulesMap:    ecs.NewMap[components.EngagementRules](world),
+		BehaviorRulesMap:      ecs.NewMap[components.BehaviorRules](world),
+		StaminaMap:            ecs.NewMap[components.Stamina](world),
+		OrderAttackMoveMap:    ecs.NewMap[components.OrderParamAttackMove](world),
+		OrderEngagementMap:    ecs.NewMap[components.OrderParamEngagementOverride](world),
+		HPMap:                 ecs.NewMap[components.HP](world),
+		FactionMap:            ecs.NewMap[components.Faction](world),
+		TacticalOverrideMap:   ecs.NewMap[components.TacticalOverride](world),
+		SquadStateMap:         ecs.NewMap[components.SquadState](world),
+		IndividualPositionMap: ecs.NewMap[components.IndividualPosition](world),
+		ContactMap:            ecs.NewMap[components.Contact](world),
+		ContactOverrideMap:    ecs.NewMap[components.ContactSymbolOverride](world),
+		VehicleMap:            ecs.NewMap[components.Vehicle](world),
+		RoadFollowerMap:       ecs.NewMap[components.RoadFollower](world),
+		WeaponMap:             ecs.NewMap[components.Weapon](world),
+		VehicleOverrideMap:    ecs.NewMap[components.VehicleOverride](world),
 	}
 }
 
@@ -106,11 +92,14 @@ func NewInspectorMaps(world *ecs.World) InspectorMaps {
 // gates chip clicks so they don't react to drags from other panels.
 type InspectorCtx struct {
 	InspectorMaps
-	World        *ecs.World
-	Selected     []ecs.Entity
-	Hovered      ecs.Entity
-	Font         rl.Font
-	EventLog     *components.EventLog
+	World    *ecs.World
+	Selected []ecs.Entity
+	Hovered  ecs.Entity
+	Font     rl.Font
+	EventLog *components.EventLog
+	// Now is sim time in seconds (App.Elapsed) — the same clock
+	// ContactSystem stamps into Contact.LastSeenTime.
+	Now          float32
 	Cursor       rl.Vector2
 	LMBPressed   bool
 	PanelFocused bool

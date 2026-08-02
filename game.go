@@ -168,6 +168,7 @@ type gameFilters struct {
 type renderCtx struct {
 	LOS         *losPreviewState
 	Inspector   ui.InspectorMaps
+	Behavior    ui.BehaviorMaps
 	HitTest     *HitTester
 	Ghost       *ghostContext
 	Route       *routePreviewCtx
@@ -226,10 +227,14 @@ type uiState struct {
 	RMB            rmbSession
 	LastRMBPressAt float32
 
-	// Which panel's scrollbar thumb is being dragged; PanelNone = none.
-	ScrollDragID     ui.PanelID
+	// Which surface's scrollbar thumb is being dragged ("" = none): a
+	// workspace leaf keys on PanelID, a floater on its own ID.
+	ScrollDragKey    string
 	ScrollDragStartY float32
 	ScrollDragStartO float32
+	// ScrollSurf is the per-frame surface list, retained to avoid a
+	// per-frame allocation.
+	ScrollSurf []scrollSurface
 
 	MarqueeStart  rl.Vector2
 	MarqueeActive bool

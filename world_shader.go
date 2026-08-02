@@ -299,6 +299,27 @@ func (ws *worldShader) apply(mat *rl.Material) {
 	mat.GetMap(rl.MapNormal).Texture = ws.macro
 }
 
+// release takes the borrowed handles back out of a material before it is
+// unloaded. UnloadMaterial frees the shader and every non-default texture it
+// finds, but those belong to worldShader — leaving them in place made the
+// shutdown path RL_FREE(shader.locs) twice and SIGSEGV (ISSUES #27). Zeroed
+// ids are no-ops for glDeleteProgram / glDeleteTextures, so UnloadMaterial is
+// left with just the map array raylib allocated itself. Unconditional (not
+// gated on ok) so it cannot be defeated by unload() clearing the flag first.
+func (ws *worldShader) release(mat *rl.Material) {
+	if mat == nil {
+		return
+	}
+	mat.Shader = rl.Shader{}
+	if mat.Maps == nil {
+		return
+	}
+	for i := range groundSurfaces {
+		mat.GetMap(groundSurfaces[i].mapSlot).Texture.ID = 0
+	}
+	mat.GetMap(rl.MapNormal).Texture.ID = 0
+}
+
 // beginFrame re-anchors the UV origin (the render origin shifts by whole
 // chunks as the camera travels) and updates the camera position the fade
 // needs.

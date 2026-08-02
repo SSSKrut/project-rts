@@ -10,9 +10,105 @@ import (
 	"rts-go/components"
 )
 
-// Immediate-mode quick-bars for Squad standing rules
-// (MovementProfile / EngagementRules / BehaviorRules) + Stamina avg.
+// The Behavior panel: a squad's standing rules (Doctrine / Autonomy /
+// Movement / Engagement / Behavior) plus its average stamina. Configuration,
+// not status — it lives apart from the Inspector because it is written rarely
+// and read on demand, while the Inspector is glanced at constantly.
+//
+// Stateless by design: every value shown is a component, so the panel is a
+// pure function of the world. No singleton, unlike the formation editor.
 // Drawing is ui/widget.go primitives; this file is layout and semantics.
+
+// BehaviorMaps bundles the write-handles the standing-rule sections need.
+type BehaviorMaps struct {
+	RosterMap            *ecs.Map[components.CommandRoster]
+	SquadMemberMap       *ecs.Map[components.SquadMember]
+	MovementProfileMap   *ecs.Map[components.MovementProfile]
+	EngagementRulesMap   *ecs.Map[components.EngagementRules]
+	BehaviorRulesMap     *ecs.Map[components.BehaviorRules]
+	BehaviorRulesEditMap *ecs.Map[components.BehaviorRulesEdit]
+	ActiveDoctrineMap    *ecs.Map[components.ActiveDoctrine]
+	ActiveAutonomyMap    *ecs.Map[components.ActiveAutonomy]
+	StaminaMap           *ecs.Map[components.Stamina]
+}
+
+func NewBehaviorMaps(world *ecs.World) BehaviorMaps {
+	return BehaviorMaps{
+		RosterMap:            ecs.NewMap[components.CommandRoster](world),
+		SquadMemberMap:       ecs.NewMap[components.SquadMember](world),
+		MovementProfileMap:   ecs.NewMap[components.MovementProfile](world),
+		EngagementRulesMap:   ecs.NewMap[components.EngagementRules](world),
+		BehaviorRulesMap:     ecs.NewMap[components.BehaviorRules](world),
+		BehaviorRulesEditMap: ecs.NewMap[components.BehaviorRulesEdit](world),
+		ActiveDoctrineMap:    ecs.NewMap[components.ActiveDoctrine](world),
+		ActiveAutonomyMap:    ecs.NewMap[components.ActiveAutonomy](world),
+		StaminaMap:           ecs.NewMap[components.Stamina](world),
+	}
+}
+
+// BehaviorCtx is built per frame and passed by value, like InspectorCtx.
+type BehaviorCtx struct {
+	BehaviorMaps
+	World        *ecs.World
+	Selected     []ecs.Entity
+	Font         rl.Font
+	Cursor       rl.Vector2
+	LMBPressed   bool
+	PanelFocused bool
+	Scroll       *ScrollState
+
+	st Style
+	in WidgetInput
+}
+
+// DrawBehaviorPanel renders the standing rules of the squad behind the
+// current selection. Selection that resolves to no single squad gets a hint
+// instead — the rules are squad-scoped, there is nothing to edit for a
+// soloist or for a mixed bag of squads.
+func DrawBehaviorPanel(panel Panel, ctx BehaviorCtx) {
+	ctx.st = InspectorStyle(ctx.Font)
+	ctx.in = WidgetInput{Cursor: ctx.Cursor, Press: ctx.LMBPressed, Enabled: ctx.PanelFocused}
+	content := ContentRect(panel)
+	rl.DrawRectangleRec(content, inspectorBG)
+	sc := BeginScroll(content, ctx.Scroll, float32(inspectorPadX), float32(inspectorPadY))
+	defer sc.End()
+
+	squad, ok := behaviorSquad(ctx)
+	if !ok {
+		col := Column{X: sc.Col.X, Y: sc.Col.Y, W: sc.Col.W}
+		TextRow(&col, &ctx.st, behaviorEmptyHint(ctx), ctx.st.TextDim)
+		sc.Col.Y = col.Y
+		return
+	}
+
+	col := Column{X: sc.Col.X, Y: sc.Col.Y, W: sc.Col.W}
+	TextRow(&col, &ctx.st,
+		fmt.Sprintf("Squad #%X", squad.ID()&0xFFF), ctx.st.Text)
+	col.Skip(ctx.st.RowH * 0.5)
+
+	sc.Col.Y = float32(drawStandingRulesSections(ctx, squad,
+		int32(col.X), int32(col.Y), int32(col.W)))
+}
+
+// behaviorSquad resolves the selection to one squad: every selected entity
+// must belong to the same one.
+func behaviorSquad(ctx BehaviorCtx) (ecs.Entity, bool) {
+	if len(ctx.Selected) == 0 || ctx.SquadMemberMap == nil {
+		return ecs.Entity{}, false
+	}
+	squad, homo := groupSelectedHelper(ctx.Selected, ctx.SquadMemberMap)
+	if !homo || squad == (ecs.Entity{}) || !ctx.World.Alive(squad) {
+		return ecs.Entity{}, false
+	}
+	return squad, true
+}
+
+func behaviorEmptyHint(ctx BehaviorCtx) string {
+	if len(ctx.Selected) == 0 {
+		return "Select a squad to edit its standing rules"
+	}
+	return "Standing rules are per squad - select one squad"
+}
 
 var (
 	srSectionHdr  = rl.Color{R: 90, G: 100, B: 120, A: 255}
@@ -35,7 +131,7 @@ const (
 
 // drawStandingRulesSections returns the next free Y. Defensive nil checks
 // keep callers safe across hot-reloads.
-func drawStandingRulesSections(ctx InspectorCtx, squad ecs.Entity, x, y, width int32) int32 {
+func drawStandingRulesSections(ctx BehaviorCtx, squad ecs.Entity, x, y, width int32) int32 {
 	if !ctx.World.Alive(squad) {
 		return y
 	}
@@ -74,7 +170,7 @@ func drawStandingRulesSections(ctx InspectorCtx, squad ecs.Entity, x, y, width i
 
 // drawAutonomySection: click applies AutonomySpec to br (skipping dirty
 // fields) and stamps ActiveAutonomy.Code for highlight.
-func drawAutonomySection(ctx InspectorCtx, col *Column, squad ecs.Entity,
+func drawAutonomySection(ctx BehaviorCtx, col *Column, squad ecs.Entity,
 	br *components.BehaviorRules) {
 	Header(col, &ctx.st, "Autonomy")
 
@@ -106,7 +202,7 @@ func drawAutonomySection(ctx InspectorCtx, col *Column, squad ecs.Entity,
 
 // drawDoctrineSection: click writes DoctrineSpec into the squad's three
 // components and stamps ActiveDoctrine.Code.
-func drawDoctrineSection(ctx InspectorCtx, col *Column, squad ecs.Entity,
+func drawDoctrineSection(ctx BehaviorCtx, col *Column, squad ecs.Entity,
 	mp *components.MovementProfile, er *components.EngagementRules,
 	br *components.BehaviorRules) {
 	Header(col, &ctx.st, "Doctrine")
@@ -133,7 +229,7 @@ func drawDoctrineSection(ctx InspectorCtx, col *Column, squad ecs.Entity,
 	}
 }
 
-func drawMovementSection(ctx InspectorCtx, col *Column, squad ecs.Entity,
+func drawMovementSection(ctx BehaviorCtx, col *Column, squad ecs.Entity,
 	mp *components.MovementProfile) {
 	Header(col, &ctx.st, "Movement")
 
@@ -178,7 +274,7 @@ func drawMovementSection(ctx InspectorCtx, col *Column, squad ecs.Entity,
 	drawStaminaBar(ctx, col.Band(srChipH), squadStaminaAverage(ctx, squad))
 }
 
-func drawEngagementSection(ctx InspectorCtx, col *Column, er *components.EngagementRules) {
+func drawEngagementSection(ctx BehaviorCtx, col *Column, er *components.EngagementRules) {
 	Header(col, &ctx.st, "Engagement")
 
 	modes := [3]components.EngagementMode{
@@ -224,7 +320,7 @@ func drawEngagementSection(ctx InspectorCtx, col *Column, er *components.Engagem
 	TextRow(col, &ctx.st, sectorLabel, ctx.st.TextDim)
 }
 
-func drawBehaviorSection(ctx InspectorCtx, col *Column, squad ecs.Entity,
+func drawBehaviorSection(ctx BehaviorCtx, col *Column, squad ecs.Entity,
 	br *components.BehaviorRules) {
 	Header(col, &ctx.st, "Behavior")
 
@@ -279,13 +375,13 @@ func drawBehaviorSection(ctx InspectorCtx, col *Column, squad ecs.Entity,
 }
 
 // cycle is a Chip that never latches — the caller advances the value.
-func cycle(ctx InspectorCtx, r rl.Rectangle, label string) bool {
+func cycle(ctx BehaviorCtx, r rl.Rectangle, label string) bool {
 	return Chip(ctx.in, &ctx.st, r, label, false)
 }
 
 // drawStaminaBar: ratio < 0 means "no readings", drawn as a flat dim track
 // with "-" label.
-func drawStaminaBar(ctx InspectorCtx, r rl.Rectangle, ratio float32) {
+func drawStaminaBar(ctx BehaviorCtx, r rl.Rectangle, ratio float32) {
 	label := "Stamina: -"
 	if ratio >= 0 {
 		colour := srStaminaHigh
@@ -304,7 +400,7 @@ func drawStaminaBar(ctx InspectorCtx, r rl.Rectangle, ratio float32) {
 }
 
 // squadStaminaAverage returns -1 when no readable Stamina components found.
-func squadStaminaAverage(ctx InspectorCtx, squad ecs.Entity) float32 {
+func squadStaminaAverage(ctx BehaviorCtx, squad ecs.Entity) float32 {
 	if ctx.StaminaMap == nil {
 		return -1
 	}
