@@ -10,45 +10,41 @@ import (
 )
 
 func drawInspectorSquad(ctx InspectorCtx, squad ecs.Entity, x, y, width int32) int32 {
+	col := Column{X: float32(x), Y: float32(y), W: float32(width)}
 	if !ctx.World.Alive(squad) {
-		drawText(ctx.Font, "(squad destroyed)", x, y, inspectorFontSize, inspectorTextDim)
-		return y + inspectorRowH
+		TextRow(&col, &ctx.st, "(squad destroyed)", ctx.st.TextDim)
+		return int32(col.Y)
 	}
 	roster := ctx.RosterMap.Get(squad)
 	if roster == nil {
-		drawText(ctx.Font, "(no roster)", x, y, inspectorFontSize, inspectorTextDim)
-		return y + inspectorRowH
+		TextRow(&col, &ctx.st, "(no roster)", ctx.st.TextDim)
+		return int32(col.Y)
 	}
 
+	head := col.Band(ctx.st.RowH)
 	colorChip := rl.Color{R: 80, G: 80, B: 80, A: 255}
 	if ctx.SquadColor != nil {
 		colorChip = ctx.SquadColor(squad)
 	}
-	rl.DrawRectangle(x, y+3, 12, 12, colorChip)
-	drawText(ctx.Font, fmt.Sprintf("Squad #%X", squad.ID()&0xFFF),
-		x+18, y, inspectorFontSize, inspectorText)
-	y += inspectorRowH
+	rl.DrawRectangle(int32(head.X), int32(head.Y)+3, 12, 12, colorChip)
+	TextClipped(&ctx.st, rl.Rectangle{X: head.X + 18, Y: head.Y,
+		Width: head.Width - 18, Height: head.Height},
+		fmt.Sprintf("Squad #%X", squad.ID()&0xFFF), ctx.st.Text)
 
-	drawText(ctx.Font, fmt.Sprintf("Members: %d / %d", roster.Count, components.SquadRosterSize),
-		x, y, inspectorFontSize, inspectorText)
-	y += inspectorRowH
+	TextRowClipped(&col, &ctx.st, fmt.Sprintf("Members: %d / %d",
+		roster.Count, components.SquadRosterSize), ctx.st.Text)
 
 	if fd := ctx.FormationDataMap.Get(squad); fd != nil {
-		drawText(ctx.Font, fmt.Sprintf("Formation: %s  spacing %.1f m",
-			formationLabel(fd.Type), fd.Spacing),
-			x, y, inspectorFontSize, inspectorText)
-		y += inspectorRowH
+		TextRowClipped(&col, &ctx.st, fmt.Sprintf("Formation: %s  spacing %.1f m",
+			formationLabel(fd.Type), fd.Spacing), ctx.st.Text)
 	}
 	if mp := ctx.MacroPathMap.Get(squad); mp != nil {
-		drawText(ctx.Font, macroPathLabel(mp),
-			x, y, inspectorFontSize, inspectorText)
-		y += inspectorRowH
+		TextRowClipped(&col, &ctx.st, macroPathLabel(mp), ctx.st.Text)
 		// Only show when active so the row stays quiet during normal movement.
 		if mp.WaitingForStragglers {
-			drawText(ctx.Font, fmt.Sprintf("Waiting for stragglers (%d/%d)",
+			TextRowClipped(&col, &ctx.st, fmt.Sprintf("Waiting for stragglers (%d/%d)",
 				mp.StragglerCaughtUp, mp.StragglerTotal),
-				x, y, inspectorFontSize, rl.Color{R: 230, G: 170, B: 90, A: 255})
-			y += inspectorRowH
+				rl.Color{R: 230, G: 170, B: 90, A: 255})
 		}
 	}
 	// Idle hides the row; Engaged / Scrambling get a coloured row so the
@@ -56,63 +52,60 @@ func drawInspectorSquad(ctx InspectorCtx, squad ecs.Entity, x, y, width int32) i
 	if ctx.SquadStateMap != nil {
 		if state := ctx.SquadStateMap.Get(squad); state != nil {
 			if label := squadStateLabel(state.Code); label != "" {
-				color := inspectorTextDim
+				color := ctx.st.TextDim
 				if state.Code == components.SquadStateScrambling {
 					color = rl.Color{R: 230, G: 110, B: 80, A: 255}
 				}
-				drawText(ctx.Font, "State:     "+label,
-					x, y, inspectorFontSize, color)
-				y += inspectorRowH
+				TextRowClipped(&col, &ctx.st, "State:     "+label, color)
 			}
 		}
 	}
-	y += inspectorRowH / 2
+	col.Skip(ctx.st.RowH * 0.5)
 
-	y = drawInspectorOrderSection(ctx, squad, x, y, width)
-	y += inspectorRowH / 2
+	col.Y = float32(drawQuickBadges(ctx, squad, int32(col.X), int32(col.Y), int32(col.W)))
+	col.Skip(ctx.st.RowH * 0.5)
 
-	drawText(ctx.Font, "Roster:", x, y, inspectorFontSize, inspectorTextDim)
-	y += inspectorRowH
+	col.Y = float32(drawInspectorOrderSection(ctx, squad, int32(col.X), int32(col.Y), int32(col.W)))
+	col.Skip(ctx.st.RowH * 0.5)
 
+	TextRow(&col, &ctx.st, "Roster:", ctx.st.TextDim)
 	for i := uint8(0); i < roster.Count; i++ {
 		mem := roster.Members[i]
 		if mem == (ecs.Entity{}) || !ctx.World.Alive(mem) {
 			continue
 		}
-		role := roleOf(ctx, mem)
-		// Selection / hover override the role tint so focus stays unambiguous.
-		bg := components.RoleColor(role)
-		bg.A = 90
-		if isSelected(ctx.Selected, mem) {
-			bg = inspectorRowSelectBG
-		}
-		if ctx.Hovered == mem {
-			bg = inspectorRowHoverBG
-		}
-		rl.DrawRectangle(x-2, y-2, width, inspectorRowH, bg)
+		drawRosterRow(ctx, &col, mem, i)
+	}
+	return int32(col.Y)
+}
 
-		// ShortLabel chip stays readable when the row tint is dimmed by
-		// selection state.
-		chip := components.RoleColor(role)
-		rl.DrawRectangle(x, y+2, 22, inspectorRowH-4, chip)
-		rl.DrawRectangleLines(x, y+2, 22, inspectorRowH-4, rl.Color{R: 20, G: 20, B: 20, A: 200})
-		short := role.ShortLabel()
-		sizeShort := rl.MeasureTextEx(ctx.Font, short, float32(inspectorFontSize), 1)
-		rl.DrawTextEx(ctx.Font, short, rl.Vector2{
-			X: float32(x) + 11 - sizeShort.X*0.5,
-			Y: float32(y) + 2 + (float32(inspectorRowH-4)-sizeShort.Y)*0.5,
-		}, float32(inspectorFontSize), 1, contrastTextColor(chip))
+// drawRosterRow doubles as a picker: clicking narrows the selection to this
+// member, which is the way to reach a man who isn't visible in the 3D view.
+func drawRosterRow(ctx InspectorCtx, col *Column, mem ecs.Entity, slot uint8) {
+	row := col.Band(ctx.st.RowH)
+	role := roleOf(ctx, mem)
 
-		stance := "-"
-		if st := ctx.StanceMap.Get(mem); st != nil {
-			stance = stanceLabel(st.Code)
-		}
-		drawText(ctx.Font, fmt.Sprintf("%d  #%-6X %s", i, mem.ID()&0xFFFFFF, stance),
-			x+28, y, inspectorFontSize, inspectorText)
-		y += inspectorRowH
+	// Selection / hover override the role tint so focus stays unambiguous.
+	bg := components.RoleColor(role)
+	bg.A = 90
+	if isSelected(ctx.Selected, mem) {
+		bg = inspectorRowSelectBG
+	}
+	if ctx.Hovered == mem || ctx.in.Hover(row) {
+		bg = inspectorRowHoverBG
+	}
+	rl.DrawRectangleRec(row, bg)
+	if ctx.in.Clicked(row) {
+		SelectUnitRequest.Active = true
+		SelectUnitRequest.Unit = mem
 	}
 
-	return y
+	stance := "-"
+	if st := ctx.StanceMap.Get(mem); st != nil {
+		stance = stanceLabel(st.Code)
+	}
+	drawRoleChip(ctx, row, role,
+		fmt.Sprintf("%d  #%-6X %s", slot, mem.ID()&0xFFFFFF, stance))
 }
 
 func formationLabel(k components.FormationKind) string {
@@ -130,15 +123,51 @@ func formationLabel(k components.FormationKind) string {
 	}
 }
 
+// drawQuickBadges is the read-only echo of the Behavior panel: what the squad's
+// standing rules currently say, without the means to change them here. Clicking
+// the row opens the panel that does. Contextual visibility, not a control.
+func drawQuickBadges(ctx InspectorCtx, squad ecs.Entity, x, y, width int32) int32 {
+	mp := ctx.Behavior.MovementProfileMap
+	er := ctx.Behavior.EngagementRulesMap
+	if mp == nil || er == nil {
+		return y
+	}
+	profile := mp.Get(squad)
+	rules := er.Get(squad)
+	if profile == nil || rules == nil {
+		return y
+	}
+
+	col := Column{X: float32(x), Y: float32(y), W: float32(width)}
+	row := col.Band(srChipH)
+	labels := [4]string{
+		components.PaceName(profile.Pace),
+		components.StanceName(profile.Stance),
+		components.EngagementModeName(rules.Mode),
+		autonomyLabelFor(ctx.Behavior, squad),
+	}
+	hovered := ctx.in.Hover(row)
+	for i, label := range labels {
+		cell := SplitX(row, i, len(labels), srChipGap)
+		bg := srChipBG
+		if hovered {
+			bg = srChipHover
+		}
+		rl.DrawRectangleRec(cell, bg)
+		rl.DrawRectangleLinesEx(cell, 1, srChipBorder)
+		TextCentered(&ctx.st, cell, label, ctx.st.TextDim)
+	}
+	if ctx.in.Clicked(row) {
+		OpenWidgetRequest.Active = true
+		OpenWidgetRequest.Panel = PanelBehavior
+	}
+	return int32(col.Y)
+}
+
 func macroPathLabel(mp *components.MacroPath) string {
 	if !mp.HasGoal {
 		return "Macro:     Idle"
 	}
-	remaining := int(mp.Count) - int(mp.Head)
-	if remaining < 0 {
-		remaining = 0
-	}
-	_ = remaining
 	return fmt.Sprintf("Macro:     Moving (wp %d/%d)", mp.Head+1, mp.Count)
 }
 

@@ -92,6 +92,10 @@ func NewInspectorMaps(world *ecs.World) InspectorMaps {
 // gates chip clicks so they don't react to drags from other panels.
 type InspectorCtx struct {
 	InspectorMaps
+	// Behavior is the standing-rule bundle, borrowed READ-ONLY for the quick
+	// badges. Editing lives in the Behavior panel; sharing the bundle keeps
+	// the handles in one place instead of re-registering them here.
+	Behavior BehaviorMaps
 	World    *ecs.World
 	Selected []ecs.Entity
 	Hovered  ecs.Entity
@@ -168,9 +172,9 @@ func DrawInspector(panel Panel, ctx InspectorCtx) {
 	case selEmpty:
 		endY = drawInspectorEmpty(ctx, x, y, usableWidth)
 	case selSingleUnit:
-		endY = drawInspectorUnit(ctx, ctx.Selected[0], x, y)
+		endY = drawInspectorUnit(ctx, ctx.Selected[0], x, y, usableWidth)
 	case selSingleVehicle:
-		endY = drawInspectorVehicle(ctx, ctx.Selected[0], x, y)
+		endY = drawInspectorVehicle(ctx, ctx.Selected[0], x, y, usableWidth)
 	case selSingleSquad:
 		if sm := ctx.SquadMemberMap.Get(ctx.Selected[0]); sm != nil {
 			endY = drawInspectorSquad(ctx, sm.Squad, x, y, usableWidth)
@@ -178,9 +182,9 @@ func DrawInspector(panel Panel, ctx InspectorCtx) {
 			endY = y
 		}
 	case selSingleContact:
-		endY = drawInspectorContact(ctx, ctx.Selected[0], x, y)
+		endY = drawInspectorContact(ctx, ctx.Selected[0], x, y, usableWidth)
 	case selMulti:
-		endY = drawInspectorMulti(ctx, x, y)
+		endY = drawInspectorMulti(ctx, x, y, usableWidth)
 	default:
 		endY = y
 	}
@@ -257,6 +261,21 @@ var SelectSquadRequest struct {
 	Squad  ecs.Entity
 }
 
+// SelectUnitRequest is the same contract for a roster row: narrow the
+// selection to one member.
+var SelectUnitRequest struct {
+	Active bool
+	Unit   ecs.Entity
+}
+
+// OpenWidgetRequest asks the host to float a widget — raised by the quick
+// badges ("show me where these are edited"). The ui package can't spawn
+// floaters itself; the host owns the render closures.
+var OpenWidgetRequest struct {
+	Active bool
+	Panel  PanelID
+}
+
 func drawInspectorEmpty(ctx InspectorCtx, x, y, width int32) int32 {
 	col := Column{X: float32(x), Y: float32(y), W: float32(width)}
 	TextRow(&col, &ctx.st, "No selection", ctx.st.Text)
@@ -308,7 +327,7 @@ func drawInspectorEmpty(ctx InspectorCtx, x, y, width int32) int32 {
 	return int32(col.Y)
 }
 
-func drawInspectorMulti(ctx InspectorCtx, x, y int32) int32 {
+func drawInspectorMulti(ctx InspectorCtx, x, y, width int32) int32 {
 	units := 0
 	soloists := 0
 	squadSet := make(map[ecs.Entity]struct{})
@@ -320,22 +339,11 @@ func drawInspectorMulti(ctx InspectorCtx, x, y int32) int32 {
 			soloists++
 		}
 	}
-	drawText(ctx.Font, "Mixed selection", x, y, inspectorFontSize, inspectorText)
-	y += inspectorRowH * 2
-	drawText(ctx.Font, fmt.Sprintf("Units selected: %d", units),
-		x, y, inspectorFontSize, inspectorText)
-	y += inspectorRowH
-	drawText(ctx.Font, fmt.Sprintf("Squads touched: %d", len(squadSet)),
-		x, y, inspectorFontSize, inspectorText)
-	y += inspectorRowH
-	drawText(ctx.Font, fmt.Sprintf("Soloists:       %d", soloists),
-		x, y, inspectorFontSize, inspectorText)
-	return y + inspectorRowH
-}
-
-// drawText is the int32 shorthand the inspector rows are written in; it
-// funnels into the same Text primitive every other surface uses.
-func drawText(font rl.Font, s string, x, y, size int32, c rl.Color) {
-	st := Style{Font: font, FontSize: float32(size)}
-	Text(&st, rl.Rectangle{X: float32(x), Y: float32(y)}, s, c)
+	col := Column{X: float32(x), Y: float32(y), W: float32(width)}
+	TextRow(&col, &ctx.st, "Mixed selection", ctx.st.Text)
+	col.Skip(ctx.st.RowH)
+	TextRow(&col, &ctx.st, fmt.Sprintf("Units selected: %d", units), ctx.st.Text)
+	TextRow(&col, &ctx.st, fmt.Sprintf("Squads touched: %d", len(squadSet)), ctx.st.Text)
+	TextRow(&col, &ctx.st, fmt.Sprintf("Soloists:       %d", soloists), ctx.st.Text)
+	return int32(col.Y)
 }

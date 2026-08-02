@@ -65,6 +65,7 @@ func (g *Game) drawUI() {
 	inspectorScroll := g.UI.PanelMgr.ScrollByID(ui.PanelInspect)
 	ui.DrawInspector(inspectorPanel, ui.InspectorCtx{
 		InspectorMaps: g.Ctx.Inspector,
+		Behavior:      g.Ctx.Behavior,
 		World:         g.App.World,
 		Selected:      g.Sel.Units,
 		Hovered:       g.Sel.Hovered,
@@ -109,6 +110,24 @@ func (g *Game) drawUI() {
 		g.selectSquad(ui.SelectSquadRequest.Squad)
 		ui.SelectSquadRequest.Active = false
 		ui.SelectSquadRequest.Squad = ecs.Entity{}
+	}
+	if ui.SelectUnitRequest.Active {
+		unit := ui.SelectUnitRequest.Unit
+		if g.App.World.Alive(unit) && g.isControllable(unit) {
+			g.Sel.Units = append(g.Sel.Units[:0], unit)
+		}
+		ui.SelectUnitRequest.Active = false
+		ui.SelectUnitRequest.Unit = ecs.Entity{}
+	}
+	if ui.OpenWidgetRequest.Active {
+		id := ui.OpenWidgetRequest.Panel
+		// Already on screen as a workspace leaf? Then the click has nothing
+		// to open — floating a second copy would just duplicate it.
+		if g.UI.PanelMgr.LeafFor(id) == nil && g.UI.Floating.Get("float:"+string(id)) == nil {
+			g.floatSpawn(id, ui.WidgetTitle(id),
+				rl.Rectangle{X: g.Frame.Cursor.X, Y: g.Frame.Cursor.Y, Width: 380, Height: 440})
+		}
+		ui.OpenWidgetRequest.Active = false
 	}
 	if ui.SymbolApplyRequest.Active {
 		if tgt := g.symbolApplyTarget(); tgt != (ecs.Entity{}) {

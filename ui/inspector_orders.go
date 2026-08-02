@@ -12,18 +12,17 @@ import (
 // drawInspectorOrderSection renders the head order + up to 2 queued
 // orders as an inline timeline.
 func drawInspectorOrderSection(ctx InspectorCtx, squad ecs.Entity, x, y, width int32) int32 {
-	drawText(ctx.Font, "Orders:", x, y, inspectorFontSize, inspectorTextDim)
-	y += inspectorRowH
+	col := Column{X: float32(x), Y: float32(y), W: float32(width)}
+	TextRow(&col, &ctx.st, "Orders:", ctx.st.TextDim)
 
 	if ctx.OrderQueueMap == nil {
-		drawText(ctx.Font, "  (orders unavailable)",
-			x, y, inspectorFontSize, inspectorTextDim)
-		return y + inspectorRowH
+		TextRow(&col, &ctx.st, "  (orders unavailable)", ctx.st.TextDim)
+		return int32(col.Y)
 	}
 	head := ctx.OrderQueueMap.Get(squad)
 	if head == nil || head.First == (ecs.Entity{}) {
-		drawText(ctx.Font, "  No order", x, y, inspectorFontSize, inspectorTextDim)
-		return y + inspectorRowH
+		TextRow(&col, &ctx.st, "  No order", ctx.st.TextDim)
+		return int32(col.Y)
 	}
 
 	// HoldFire silently blocks AttackMove; the per-row pill flags it.
@@ -35,44 +34,42 @@ func drawInspectorOrderSection(ctx InspectorCtx, squad ecs.Entity, x, y, width i
 	}
 
 	cur := head.First
-	y = drawOrderRow(ctx, cur, true, x, y, width, eMode)
+	drawOrderRow(ctx, &col, cur, true, eMode)
 	const maxQueued = 2
-	queued := 0
-	for queued < maxQueued {
+	for queued := 0; queued < maxQueued; queued++ {
 		ch := ctx.OrderChainMap.Get(cur)
 		if ch == nil || ch.Next == (ecs.Entity{}) || !ctx.World.Alive(ch.Next) {
 			break
 		}
 		cur = ch.Next
-		queued++
-		y = drawOrderRow(ctx, cur, false, x, y, width, eMode)
+		drawOrderRow(ctx, &col, cur, false, eMode)
 	}
-	return y
+	return int32(col.Y)
 }
 
 // drawOrderRow appends an "AT" pill when the order carries
 // OrderParamAttackMove. HoldFire RoE strikes the pill through and adds
 // a warning sub-row.
-func drawOrderRow(ctx InspectorCtx, ord ecs.Entity, active bool, x, y, width int32, eMode components.EngagementMode) int32 {
+func drawOrderRow(ctx InspectorCtx, col *Column, ord ecs.Entity, active bool,
+	eMode components.EngagementMode) {
 	kind := ctx.OrderKindMap.Get(ord)
 	target := ctx.OrderTargetMap.Get(ord)
 	state := ctx.OrderStateMap.Get(ord)
 	if kind == nil || target == nil || state == nil {
-		drawText(ctx.Font, "  (?)", x, y, inspectorFontSize, inspectorTextDim)
-		return y + inspectorRowH
+		TextRow(col, &ctx.st, "  (?)", ctx.st.TextDim)
+		return
 	}
 	progress := float32(0)
 	if pr := ctx.OrderProgressMap.Get(ord); pr != nil {
 		progress = pr.Value
 	}
-	drawOrderProgressBar(x, y, width, active, state.Code, progress)
 
-	label := orderKindLabel(kind.Code)
-	stateLbl := orderStateLabel(state.Code)
-	targetLbl := orderTargetLabel(ctx, kind.Code, target)
-	color := inspectorText
+	row := col.Band(ctx.st.RowH)
+	drawOrderProgressBar(row, active, state.Code, progress)
+
+	color := ctx.st.Text
 	if !active {
-		color = inspectorTextDim
+		color = ctx.st.TextDim
 	}
 	if state.Code == components.OrderStateBlocked || state.Code == components.OrderStateFailed {
 		color = rl.Color{R: 230, G: 110, B: 80, A: 255}
@@ -81,51 +78,62 @@ func drawOrderRow(ctx InspectorCtx, ord ecs.Entity, active bool, x, y, width int
 	if progress > 0 {
 		progressTxt = fmt.Sprintf(" %d%%", int(progress*100))
 	}
-	drawText(ctx.Font, fmt.Sprintf("  %-12s %-10s%s %s",
-		label, stateLbl, progressTxt, targetLbl),
-		x, y, inspectorFontSize, color)
-
 	hasAttackMove := ctx.OrderAttackMoveMap != nil && ctx.OrderAttackMoveMap.Get(ord) != nil
-	if hasAttackMove {
-		blocked := eMode == components.HoldFire
-		drawAttackMovePill(ctx.Font, x, y, width, blocked)
-		if blocked {
-			y += inspectorRowH
-			drawText(ctx.Font, "   AttackMove ignored - RoE is HoldFire",
-				x, y, inspectorFontSize, rl.Color{R: 230, G: 170, B: 90, A: 255})
+	hasRoEOverride := ctx.OrderEngagementMap != nil && ctx.OrderEngagementMap.Get(ord) != nil
+
+	// Reserve the pill strip so a long target label can't run under it.
+	textRect := row
+	for _, present := range [2]bool{hasAttackMove, hasRoEOverride} {
+		if present {
+			textRect.Width -= orderPillW + 4
 		}
+	}
+	TextClipped(&ctx.st, textRect, fmt.Sprintf("  %-12s %-10s%s %s",
+		orderKindLabel(kind.Code), orderStateLabel(state.Code), progressTxt,
+		orderTargetLabel(ctx, kind.Code, target)), color)
+
+	if hasAttackMove {
+		drawAttackMovePill(ctx, orderPillRect(row, 0), eMode == components.HoldFire)
 	}
 	// "Hidden position" carries a HoldFire RoE override — surface it, the
 	// player otherwise cannot tell it apart from a plain Occupy.
-	if ctx.OrderEngagementMap != nil && ctx.OrderEngagementMap.Get(ord) != nil {
-		drawRoEOverridePill(ctx.Font, x, y, width, hasAttackMove)
+	if hasRoEOverride {
+		slot := 0
+		if hasAttackMove {
+			slot = 1
+		}
+		drawRoEOverridePill(ctx, orderPillRect(row, slot))
 	}
-	return y + inspectorRowH
+	if hasAttackMove && eMode == components.HoldFire {
+		TextRowClipped(col, &ctx.st, "   AttackMove ignored - RoE is HoldFire",
+			rl.Color{R: 230, G: 170, B: 90, A: 255})
+	}
 }
 
-// drawRoEOverridePill marks an order-scoped RoE override ("HF"). Shifts left
-// when the AT pill occupies the right edge.
-func drawRoEOverridePill(font rl.Font, rowX, rowY, width int32, atPillPresent bool) {
-	const pillW int32 = 24
-	const pillPadY int32 = 2
-	pillX := rowX + width - pillW
-	if atPillPresent {
-		pillX -= pillW + 4
+const orderPillW float32 = 24
+
+// orderPillRect places pill `slot` from the row's right edge outwards.
+func orderPillRect(row rl.Rectangle, slot int) rl.Rectangle {
+	const padY float32 = 2
+	return rl.Rectangle{
+		X:      row.X + row.Width - orderPillW - float32(slot)*(orderPillW+4),
+		Y:      row.Y + padY,
+		Width:  orderPillW,
+		Height: row.Height - 2*padY,
 	}
-	pillY := rowY + pillPadY
-	pillH := inspectorRowH - 2*pillPadY
-	bg := rl.Color{R: 55, G: 65, B: 60, A: 255}
-	fg := rl.Color{R: 150, G: 210, B: 160, A: 255}
-	rl.DrawRectangle(pillX, pillY, pillW, pillH, bg)
-	rl.DrawRectangleLines(pillX, pillY, pillW, pillH, srChipBorder)
-	size := rl.MeasureTextEx(font, "HF", float32(inspectorFontSize), 1)
-	rl.DrawTextEx(font, "HF", rl.Vector2{
-		X: float32(pillX) + (float32(pillW)-size.X)*0.5,
-		Y: float32(pillY) + (float32(pillH)-size.Y)*0.5,
-	}, float32(inspectorFontSize), 1, fg)
 }
 
-func drawOrderProgressBar(rowX, rowY, width int32, active bool,
+// drawRoEOverridePill marks an order-scoped RoE override ("HF").
+func drawRoEOverridePill(ctx InspectorCtx, r rl.Rectangle) {
+	st := ctx.st
+	st.Fill = rl.Color{R: 55, G: 65, B: 60, A: 255}
+	st.Text = rl.Color{R: 150, G: 210, B: 160, A: 255}
+	rl.DrawRectangleRec(r, st.Fill)
+	rl.DrawRectangleLinesEx(r, 1, srChipBorder)
+	TextCentered(&st, r, "HF", st.Text)
+}
+
+func drawOrderProgressBar(r rl.Rectangle, active bool,
 	stateCode components.OrderStateCode, progress float32) {
 	const padY float32 = 1
 	fill := rl.Color{R: 80, G: 130, B: 200, A: 200}
@@ -135,42 +143,31 @@ func drawOrderProgressBar(rowX, rowY, width int32, active bool,
 	if stateCode == components.OrderStateBlocked || stateCode == components.OrderStateFailed {
 		fill = rl.Color{R: 230, G: 110, B: 80, A: 200}
 	}
-	r := rl.Rectangle{
-		X: float32(rowX), Y: float32(rowY) + padY,
-		Width: float32(width), Height: float32(inspectorRowH) - 2*padY,
-	}
-	Bar(r, progress, rl.Color{R: 30, G: 35, B: 44, A: 255}, fill, 0)
+	track := rl.Rectangle{X: r.X, Y: r.Y + padY, Width: r.Width, Height: r.Height - 2*padY}
+	Bar(track, progress, rl.Color{R: 30, G: 35, B: 44, A: 255}, fill, 0)
 	if active {
 		// Bright outline for the head order so the eye locks on it.
-		rl.DrawRectangleLinesEx(r, 1, rl.Color{R: 110, G: 160, B: 220, A: 220})
+		rl.DrawRectangleLinesEx(track, 1, rl.Color{R: 110, G: 160, B: 220, A: 220})
 	}
 }
 
 // drawAttackMovePill: when blocked, dims background and strikes through.
-func drawAttackMovePill(font rl.Font, rowX, rowY, width int32, blocked bool) {
-	const pillW int32 = 24
-	const pillPadY int32 = 2
-	pillX := rowX + width - pillW
-	pillY := rowY + pillPadY
-	pillH := inspectorRowH - 2*pillPadY
-	bg := srChipActive
-	fg := contrastTextColor(bg)
+func drawAttackMovePill(ctx InspectorCtx, r rl.Rectangle, blocked bool) {
+	st := ctx.st
+	st.Fill = srChipActive
+	fg := contrastTextColor(st.Fill)
 	if blocked {
-		bg = rl.Color{R: 60, G: 50, B: 50, A: 255}
+		st.Fill = rl.Color{R: 60, G: 50, B: 50, A: 255}
 		fg = rl.Color{R: 200, G: 130, B: 110, A: 255}
 	}
-	rl.DrawRectangle(pillX, pillY, pillW, pillH, bg)
-	rl.DrawRectangleLines(pillX, pillY, pillW, pillH, srChipBorder)
-	size := rl.MeasureTextEx(font, "AT", float32(inspectorFontSize), 1)
-	rl.DrawTextEx(font, "AT", rl.Vector2{
-		X: float32(pillX) + (float32(pillW)-size.X)*0.5,
-		Y: float32(pillY) + (float32(pillH)-size.Y)*0.5,
-	}, float32(inspectorFontSize), 1, fg)
+	rl.DrawRectangleRec(r, st.Fill)
+	rl.DrawRectangleLinesEx(r, 1, srChipBorder)
+	TextCentered(&st, r, "AT", fg)
 	if blocked {
-		midY := float32(pillY) + float32(pillH)*0.5
+		midY := r.Y + r.Height*0.5
 		rl.DrawLineEx(
-			rl.Vector2{X: float32(pillX) + 3, Y: midY},
-			rl.Vector2{X: float32(pillX+pillW) - 3, Y: midY},
+			rl.Vector2{X: r.X + 3, Y: midY},
+			rl.Vector2{X: r.X + r.Width - 3, Y: midY},
 			2, rl.Color{R: 230, G: 110, B: 80, A: 255})
 	}
 }

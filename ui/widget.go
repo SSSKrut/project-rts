@@ -192,6 +192,41 @@ func TextRow(c *Column, st *Style, s string, col rl.Color) {
 	Text(st, c.Band(st.RowH), s, col)
 }
 
+// TextClipped is Text that respects the rect's width, cutting the tail off
+// with ".." when the string doesn't fit. ASCII only — the bundled font has no
+// ellipsis glyph. Without it a long row just runs on under the scrollbar and
+// off the panel, which reads as a rendering bug rather than as truncation.
+func TextClipped(st *Style, r rl.Rectangle, s string, c rl.Color) {
+	if s == "" || r.Width <= 0 {
+		return
+	}
+	full := rl.MeasureTextEx(st.Font, s, st.FontSize, 1).X
+	if full <= r.Width {
+		Text(st, r, s, c)
+		return
+	}
+	const tail = ".."
+	// Proportional first guess: the bundled font is near-monospace, so this
+	// lands within a character or two instead of walking the whole string.
+	n := int(float32(len(s)) * r.Width / full)
+	if n > len(s) {
+		n = len(s)
+	}
+	for ; n > 0; n-- {
+		cand := s[:n] + tail
+		if rl.MeasureTextEx(st.Font, cand, st.FontSize, 1).X <= r.Width {
+			Text(st, r, cand, c)
+			return
+		}
+	}
+	Text(st, r, tail, c)
+}
+
+// TextRowClipped is the Column flavour of TextClipped.
+func TextRowClipped(c *Column, st *Style, s string, col rl.Color) {
+	TextClipped(st, c.Band(st.RowH), s, col)
+}
+
 // Header is a section title in the style's header colour.
 func Header(c *Column, st *Style, s string) { TextRow(c, st, s, st.Header) }
 

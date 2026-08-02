@@ -428,6 +428,7 @@ func (g *Game) renderFloatingWidget(id ui.PanelID, content rl.Rectangle,
 	case ui.PanelInspect:
 		ui.DrawInspector(syn("Inspector"), ui.InspectorCtx{
 			InspectorMaps: g.Ctx.Inspector,
+			Behavior:      g.Ctx.Behavior,
 			World:         g.App.World,
 			Selected:      g.Sel.Units,
 			Hovered:       g.Sel.Hovered,

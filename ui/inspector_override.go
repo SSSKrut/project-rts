@@ -9,27 +9,20 @@ import (
 	"rts-go/components"
 )
 
-func drawOverrideBlock(ctx InspectorCtx, ent ecs.Entity, ov *components.TacticalOverride, x, y int32) int32 {
+func drawOverrideBlock(ctx InspectorCtx, col *Column, ent ecs.Entity, ov *components.TacticalOverride) {
 	label := components.ReasonLabel(ov.Reason)
 	if label == "" {
-		return y
+		return
 	}
-	drawText(ctx.Font, "Override:  "+label,
-		x, y, inspectorFontSize, rl.Color{R: 230, G: 170, B: 90, A: 255})
-	y += inspectorRowH
+	TextRowClipped(col, &ctx.st, "Override:  "+label,
+		rl.Color{R: 230, G: 170, B: 90, A: 255})
 
-	reasonDetail := overrideReasonDetail(ctx, ent, ov)
-	if reasonDetail != "" {
-		drawText(ctx.Font, "Reason:    "+reasonDetail,
-			x, y, inspectorFontSize, inspectorTextDim)
-		y += inspectorRowH
+	if detail := overrideReasonDetail(ctx, ent, ov); detail != "" {
+		TextRowClipped(col, &ctx.st, "Reason:    "+detail, ctx.st.TextDim)
 	}
 	if resume := components.ReasonResume(ov.Reason); resume != "" {
-		drawText(ctx.Font, "Resume:    "+resume,
-			x, y, inspectorFontSize, inspectorTextDim)
-		y += inspectorRowH
+		TextRowClipped(col, &ctx.st, "Resume:    "+resume, ctx.st.TextDim)
 	}
-	return y
 }
 
 // overrideReasonDetail expands ReasonLabel with live numbers, e.g.
@@ -43,8 +36,7 @@ func overrideReasonDetail(ctx InspectorCtx, ent ecs.Entity, ov *components.Tacti
 				total = s.Total
 			}
 		}
-		threshold := overrideThreshold(ctx, ent)
-		return fmt.Sprintf("Threat %.2f > threshold %.2f", total, threshold)
+		return fmt.Sprintf("Threat %.2f > threshold %.2f", total, overrideThreshold(ctx, ent))
 	}
 	return ""
 }

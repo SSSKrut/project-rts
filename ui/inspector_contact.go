@@ -24,20 +24,19 @@ var DeleteContactRequest struct {
 	Entity ecs.Entity
 }
 
-func drawInspectorContact(ctx InspectorCtx, ent ecs.Entity, x, y int32) int32 {
+func drawInspectorContact(ctx InspectorCtx, ent ecs.Entity, x, y, width int32) int32 {
+	col := Column{X: float32(x), Y: float32(y), W: float32(width)}
 	if !ctx.World.Alive(ent) {
-		drawText(ctx.Font, "(contact no longer alive)", x, y, inspectorFontSize, inspectorTextDim)
-		return y + inspectorRowH
+		TextRow(&col, &ctx.st, "(contact no longer alive)", ctx.st.TextDim)
+		return int32(col.Y)
 	}
 	c := ctx.ContactMap.Get(ent)
 	if c == nil {
-		drawText(ctx.Font, "(missing contact data)", x, y, inspectorFontSize, inspectorTextDim)
-		return y + inspectorRowH
+		TextRow(&col, &ctx.st, "(missing contact data)", ctx.st.TextDim)
+		return int32(col.Y)
 	}
 
-	drawText(ctx.Font, fmt.Sprintf("Contact #%X", ent.ID()&0xFFFF),
-		x, y, inspectorFontSize, inspectorText)
-	y += inspectorRowH
+	TextRow(&col, &ctx.st, fmt.Sprintf("Contact #%X", ent.ID()&0xFFFF), ctx.st.Text)
 
 	// APP-6 symbol chip (Phase 18.5.C). Player override wins.
 	spec := DefaultSpecForDimension(c.PerceivedAffil, c.PerceivedDim)
@@ -46,61 +45,40 @@ func drawInspectorContact(ctx InspectorCtx, ent ecs.Entity, x, y int32) int32 {
 			spec = ov.Spec
 		}
 	}
-	center := rl.Vector2{X: float32(x) + 14, Y: float32(y+inspectorRowH/2)}
-	DrawSymbol(spec, center, 12, 1.0)
-	drawText(ctx.Font, affilLabel(c.PerceivedAffil)+" "+dimLabel(c.PerceivedDim),
-		x+36, y, inspectorFontSize, inspectorText)
-	y += inspectorRowH * 2
+	symRow := col.Band(ctx.st.RowH)
+	DrawSymbol(spec, rl.Vector2{X: symRow.X + 14, Y: symRow.Y + symRow.Height*0.5}, 12, 1.0)
+	TextClipped(&ctx.st, rl.Rectangle{X: symRow.X + 36, Y: symRow.Y,
+		Width: symRow.Width - 36, Height: symRow.Height},
+		affilLabel(c.PerceivedAffil)+" "+dimLabel(c.PerceivedDim), ctx.st.Text)
+	col.Skip(ctx.st.RowH)
 
-	drawText(ctx.Font, "Source:    "+sourceLabel(c.Source),
-		x, y, inspectorFontSize, inspectorText)
-	y += inspectorRowH
-
+	TextRowClipped(&col, &ctx.st, "Source:    "+sourceLabel(c.Source), ctx.st.Text)
 	if c.LastSeenTime > 0 {
-		ageS := ctx.Now - c.LastSeenTime
-		drawText(ctx.Font, fmt.Sprintf("Last seen: %.1fs ago", ageS),
-			x, y, inspectorFontSize, inspectorTextDim)
-		y += inspectorRowH
+		TextRowClipped(&col, &ctx.st,
+			fmt.Sprintf("Last seen: %.1fs ago", ctx.Now-c.LastSeenTime), ctx.st.TextDim)
 	}
-	drawText(ctx.Font, fmt.Sprintf("Position:  chunk (%d, %d) local (%.1f, %.1f)",
+	TextRowClipped(&col, &ctx.st, fmt.Sprintf("Position:  chunk (%d, %d) local (%.1f, %.1f)",
 		c.EstimatedPos.Chunk.X, c.EstimatedPos.Chunk.Z,
-		c.EstimatedPos.Local.X, c.EstimatedPos.Local.Z),
-		x, y, inspectorFontSize, inspectorTextDim)
-	y += inspectorRowH * 2
+		c.EstimatedPos.Local.X, c.EstimatedPos.Local.Z), ctx.st.TextDim)
+	col.Skip(ctx.st.RowH)
 
-	// [Focus camera] click region.
-	btnW := int32(120)
-	btnH := inspectorRowH
-	focusRect := rl.Rectangle{X: float32(x), Y: float32(y), Width: float32(btnW), Height: float32(btnH)}
-	focusHover := ctx.PanelFocused && rl.CheckCollisionPointRec(ctx.Cursor, focusRect)
-	bg := rl.Color{R: 50, G: 70, B: 100, A: 220}
-	if focusHover {
-		bg = rl.Color{R: 80, G: 110, B: 150, A: 230}
-	}
-	rl.DrawRectangleRec(focusRect, bg)
-	rl.DrawRectangleLinesEx(focusRect, 1, rl.Color{R: 20, G: 20, B: 20, A: 200})
-	drawText(ctx.Font, "Focus camera", x+8, y+3, inspectorFontSize, inspectorText)
-	if focusHover && ctx.LMBPressed {
+	// Delete is destructive, so it gets its own palette rather than the
+	// surface default — same widget, different weight.
+	danger := ctx.st
+	danger.Fill = rl.Color{R: 110, G: 60, B: 60, A: 220}
+	danger.FillHover = rl.Color{R: 150, G: 80, B: 80, A: 230}
+
+	row := col.Band(ctx.st.RowH)
+	if Chip(ctx.in, &ctx.st, SplitX(row, 0, 2, srChipGap), "Focus camera", false) {
 		CameraFocusRequest.Active = true
 		CameraFocusRequest.Pos = c.EstimatedPos
 	}
-
-	delRect := rl.Rectangle{X: float32(x + btnW + 8), Y: float32(y), Width: float32(btnW), Height: float32(btnH)}
-	delHover := ctx.PanelFocused && rl.CheckCollisionPointRec(ctx.Cursor, delRect)
-	delBg := rl.Color{R: 110, G: 60, B: 60, A: 220}
-	if delHover {
-		delBg = rl.Color{R: 150, G: 80, B: 80, A: 230}
-	}
-	rl.DrawRectangleRec(delRect, delBg)
-	rl.DrawRectangleLinesEx(delRect, 1, rl.Color{R: 20, G: 20, B: 20, A: 200})
-	drawText(ctx.Font, "Delete", x+btnW+8+8, y+3, inspectorFontSize, inspectorText)
-	if delHover && ctx.LMBPressed {
+	if Chip(ctx.in, &danger, SplitX(row, 1, 2, srChipGap), "Delete", false) {
 		DeleteContactRequest.Active = true
 		DeleteContactRequest.Entity = ent
 	}
-
-	y += inspectorRowH * 2
-	return y
+	col.Skip(ctx.st.RowH)
+	return int32(col.Y)
 }
 
 func affilLabel(a components.Affiliation) string {

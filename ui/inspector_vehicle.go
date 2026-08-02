@@ -11,24 +11,24 @@ import (
 
 // drawInspectorVehicle: class / HP / motion+gear / road status / faction /
 // squad rows.
-func drawInspectorVehicle(ctx InspectorCtx, ent ecs.Entity, x, y int32) int32 {
+func drawInspectorVehicle(ctx InspectorCtx, ent ecs.Entity, x, y, width int32) int32 {
+	col := Column{X: float32(x), Y: float32(y), W: float32(width)}
 	if !ctx.World.Alive(ent) {
-		drawText(ctx.Font, "(vehicle no longer alive)", x, y, inspectorFontSize, inspectorTextDim)
-		return y + inspectorRowH
+		TextRow(&col, &ctx.st, "(vehicle no longer alive)", ctx.st.TextDim)
+		return int32(col.Y)
 	}
 	veh := ctx.VehicleMap.Get(ent)
 	if veh == nil {
-		return y
+		return int32(col.Y)
 	}
 	spec := components.SpecForVehicle(veh.Kind)
-	drawText(ctx.Font, fmt.Sprintf("Vehicle #%X  %s", ent.ID()&0xFFFF, spec.Name),
-		x, y, inspectorFontSize, inspectorText)
-	y += inspectorRowH * 2
+	TextRowClipped(&col, &ctx.st,
+		fmt.Sprintf("Vehicle #%X  %s", ent.ID()&0xFFFF, spec.Name), ctx.st.Text)
+	col.Skip(ctx.st.RowH)
 
 	if hp := ctx.HPMap.Get(ent); hp != nil && hp.Max > 0 {
-		drawText(ctx.Font, fmt.Sprintf("HP:        %.0f / %.0f", hp.Current, hp.Max),
-			x, y, inspectorFontSize, inspectorText)
-		y += inspectorRowH
+		TextRowClipped(&col, &ctx.st,
+			fmt.Sprintf("HP:        %.0f / %.0f", hp.Current, hp.Max), ctx.st.Text)
 	}
 	if mo := ctx.MotionMap.Get(ent); mo != nil {
 		gear := "D"
@@ -37,20 +37,14 @@ func drawInspectorVehicle(ctx InspectorCtx, ent ecs.Entity, x, y int32) int32 {
 		} else if mo.Speed < 0.01 {
 			gear = "-"
 		}
-		yawDeg := mo.Yaw * 180.0 / math.Pi
-		drawText(ctx.Font, fmt.Sprintf("Motion:    %.1f m/s [%s]  yaw %.0f°",
-			float32(math.Abs(float64(mo.Speed))), gear, yawDeg),
-			x, y, inspectorFontSize, inspectorText)
-		y += inspectorRowH
+		TextRowClipped(&col, &ctx.st, fmt.Sprintf("Motion:    %.1f m/s [%s]  yaw %.0f deg",
+			float32(math.Abs(float64(mo.Speed))), gear, mo.Yaw*180.0/math.Pi), ctx.st.Text)
 	}
-	drawText(ctx.Font, "Road:      "+roadStatusLabel(ctx, ent),
-		x, y, inspectorFontSize, inspectorText)
-	y += inspectorRowH
+	TextRowClipped(&col, &ctx.st, "Road:      "+roadStatusLabel(ctx, ent), ctx.st.Text)
 	if ctx.VehicleOverrideMap != nil {
 		if ov := ctx.VehicleOverrideMap.Get(ent); ov != nil && ov.Kind != components.VehicleReflexNone {
-			drawText(ctx.Font, "Reflex:    "+components.VehicleReflexLabel(ov.Kind),
-				x, y, inspectorFontSize, inspectorHighlight)
-			y += inspectorRowH
+			TextRowClipped(&col, &ctx.st,
+				"Reflex:    "+components.VehicleReflexLabel(ov.Kind), inspectorHighlight)
 		}
 	}
 	if eq := ctx.EquipmentMap.Get(ent); eq != nil {
@@ -59,28 +53,23 @@ func drawInspectorVehicle(ctx InspectorCtx, ent ecs.Entity, x, y int32) int32 {
 				continue
 			}
 			if wc := ctx.WeaponMap.Get(w); wc != nil {
-				drawText(ctx.Font, fmt.Sprintf("Weapon:    %-8s ammo %d",
-					components.SpecForWeapon(wc.Kind).Name, wc.Ammo),
-					x, y, inspectorFontSize, inspectorText)
-				y += inspectorRowH
+				TextRowClipped(&col, &ctx.st, fmt.Sprintf("Weapon:    %-8s ammo %d",
+					components.SpecForWeapon(wc.Kind).Name, wc.Ammo), ctx.st.Text)
 			}
 		}
 	}
 	if ctx.FactionMap != nil {
 		if f := ctx.FactionMap.Get(ent); f != nil {
-			drawText(ctx.Font, "Faction:   "+factionLabel(f.ID),
-				x, y, inspectorFontSize, inspectorText)
-			y += inspectorRowH
+			TextRowClipped(&col, &ctx.st, "Faction:   "+factionLabel(f.ID), ctx.st.Text)
 		}
 	}
 	if sm := ctx.SquadMemberMap.Get(ent); sm != nil && sm.Squad != (ecs.Entity{}) {
-		drawText(ctx.Font, fmt.Sprintf("Squad:     #%X slot %d", sm.Squad.ID()&0xFFF, sm.SlotIndex),
-			x, y, inspectorFontSize, inspectorText)
+		TextRowClipped(&col, &ctx.st, fmt.Sprintf("Squad:     #%X slot %d",
+			sm.Squad.ID()&0xFFF, sm.SlotIndex), ctx.st.Text)
 	} else {
-		drawText(ctx.Font, "Squad:     - (soloist)",
-			x, y, inspectorFontSize, inspectorTextDim)
+		TextRowClipped(&col, &ctx.st, "Squad:     - (soloist)", ctx.st.TextDim)
 	}
-	return y + inspectorRowH
+	return int32(col.Y)
 }
 
 func roadStatusLabel(ctx InspectorCtx, ent ecs.Entity) string {

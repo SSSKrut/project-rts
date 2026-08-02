@@ -129,6 +129,35 @@ const (
 	srSectionGap float32 = 6
 )
 
+// autonomyLabelFor names the autonomy the squad's rules currently amount to,
+// which is not the same as the last one clicked: a hand-edited toggle drifts
+// off the preset, so the answer is derived with the chips' own predicate and
+// falls back to "Custom" rather than to a stale stamp.
+func autonomyLabelFor(m BehaviorMaps, squad ecs.Entity) string {
+	if m.BehaviorRulesMap == nil {
+		return "-"
+	}
+	br := m.BehaviorRulesMap.Get(squad)
+	if br == nil {
+		return "-"
+	}
+	dirty := components.BehaviorRulesField(0)
+	if m.BehaviorRulesEditMap != nil {
+		if ed := m.BehaviorRulesEditMap.Get(squad); ed != nil {
+			dirty = ed.DirtyMask
+		}
+	}
+	for _, a := range [4]components.AutonomyCode{
+		components.AutonomyStrict, components.AutonomyCautious,
+		components.AutonomyAdaptive, components.AutonomySurvival,
+	} {
+		if components.AutonomyMatches(a, *br, dirty) {
+			return components.AutonomyName(a)
+		}
+	}
+	return "Custom"
+}
+
 // drawStandingRulesSections returns the next free Y. Defensive nil checks
 // keep callers safe across hot-reloads.
 func drawStandingRulesSections(ctx BehaviorCtx, squad ecs.Entity, x, y, width int32) int32 {
