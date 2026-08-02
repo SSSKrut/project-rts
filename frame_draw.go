@@ -114,10 +114,15 @@ func (g *Game) drawUI() {
 	if ui.SelectUnitRequest.Active {
 		unit := ui.SelectUnitRequest.Unit
 		if g.App.World.Alive(unit) && g.isControllable(unit) {
-			g.Sel.Units = append(g.Sel.Units[:0], unit)
+			if ui.SelectUnitRequest.Additive {
+				g.toggleSelected(unit)
+			} else {
+				g.Sel.Units = append(g.Sel.Units[:0], unit)
+			}
 		}
 		ui.SelectUnitRequest.Active = false
 		ui.SelectUnitRequest.Unit = ecs.Entity{}
+		ui.SelectUnitRequest.Additive = false
 	}
 	if ui.OpenWidgetRequest.Active {
 		id := ui.OpenWidgetRequest.Panel
@@ -236,6 +241,7 @@ func (g *Game) drawUI() {
 
 	g.UI.Scene3DRT.Composite(g.Frame.Panel3D)
 
+
 	// Role labels are 2D screen-projected after RT composite; scissored
 	// to Panel3D so they don't bleed onto neighbouring panels.
 	rl.BeginScissorMode(int32(g.Frame.Panel3DContent.X), int32(g.Frame.Panel3DContent.Y),
@@ -263,6 +269,17 @@ func (g *Game) drawUI() {
 		}
 	}
 	rl.EndScissorMode()
+
+	// Squad bar over the composited scene: the layout was frozen before the
+	// tick, values are re-read now (a card's owner may have died meanwhile —
+	// drawBarCard checks Alive).
+	if len(g.Frame.SquadBar.Cards) > 0 {
+		barCtx := g.squadBarCtx()
+		barCtx.LMBPressed = !g.chromeBusy() && !g.scrollDragging() &&
+			rl.IsMouseButtonPressed(rl.MouseButtonLeft)
+		ui.DrawSquadBar(g.Frame.SquadBar, barCtx)
+	}
+
 
 	if g.UI.BuildingWidget != nil {
 		rl.BeginScissorMode(int32(g.Frame.Panel3DContent.X), int32(g.Frame.Panel3DContent.Y),

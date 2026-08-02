@@ -293,6 +293,11 @@ func (g *Game) handleInput() {
 			}
 		}
 	}
+	// The squad bar overlays the 3D view; its cards claim the press before
+	// the world sees it (no marquee start under the cards).
+	if g.squadBarOwnsCursor() {
+		widgetClickConsumed = true
+	}
 	if !g.chromeBusy() && !widgetClickConsumed && rl.IsMouseButtonPressed(rl.MouseButtonLeft) {
 		switch g.Frame.Focused {
 		case ui.Panel3D:

@@ -261,11 +261,13 @@ var SelectSquadRequest struct {
 	Squad  ecs.Entity
 }
 
-// SelectUnitRequest is the same contract for a roster row: narrow the
-// selection to one member.
+// SelectUnitRequest is the same contract for a roster row or a squad-bar
+// card: narrow the selection to one member. Additive mirrors Shift+LMB in the
+// 3D view — toggle instead of replace.
 var SelectUnitRequest struct {
-	Active bool
-	Unit   ecs.Entity
+	Active   bool
+	Unit     ecs.Entity
+	Additive bool
 }
 
 // OpenWidgetRequest asks the host to float a widget — raised by the quick

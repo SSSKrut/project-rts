@@ -232,6 +232,8 @@ type uiState struct {
 	ScrollDragKey    string
 	ScrollDragStartY float32
 	ScrollDragStartO float32
+	// SquadBar remembers card order + tombstones across frames.
+	SquadBar *ui.SquadBarState
 	// ScrollSurf is the per-frame surface list, retained to avoid a
 	// per-frame allocation.
 	ScrollSurf []scrollSurface
@@ -338,6 +340,10 @@ type frameState struct {
 
 	GhostTarget   components.WorldPos
 	GhostTargetOK bool
+
+	// SquadBar is laid out before input so world clicks can be vetoed over
+	// it in the same frame, then drawn from this frozen list after the tick.
+	SquadBar ui.BarLayout
 
 	// Contact formations for the map, rebuilt once per frame after the tick.
 	// Input runs before the next Advance, so the set the pick path reads is

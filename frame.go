@@ -63,6 +63,8 @@ func (g *Game) RunFrame() bool {
 
 	g.handleChrome()
 	g.updateTestScenes()
+	// Before input: the bar must own its rect while clicks are being routed.
+	g.layoutSquadBar()
 	g.handleInput()
 	g.handleOrders()
 	g.updateHover()

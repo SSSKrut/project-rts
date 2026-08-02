@@ -36,6 +36,7 @@ func (g *Game) initUI() {
 	g.UI.MapCam = ui.NewMapCamera()
 	g.UI.TimelineView = ui.NewTimelineView()
 	g.UI.Floating = ui.NewFloatingState()
+	g.UI.SquadBar = ui.NewSquadBarState()
 	g.UI.SmoothedSquadPos = make(map[ecs.Entity]components.WorldPos, 8)
 
 	// Floating and workspace forms share this pointer so zoom / kind / custom
@@ -246,6 +247,49 @@ func (g *Game) handlePanelScroll() {
 			ui.ClampScrollOffset(sf.panel, sf.state)
 		}
 	}
+}
+
+// squadBarCtx bundles what the bar reads; the Inspector's handles cover it.
+func (g *Game) squadBarCtx() ui.SquadBarCtx {
+	return ui.SquadBarCtx{
+		InspectorMaps: g.Ctx.Inspector,
+		World:         g.App.World,
+		Selected:      g.Sel.Units,
+		Hovered:       g.Sel.Hovered,
+		Font:          g.hudFont,
+		Cursor:        g.Frame.Cursor,
+		Shift:         g.Frame.Shift,
+		Now:           g.simNow(),
+		SquadColor:    g.squadColor,
+	}
+}
+
+// layoutSquadBar runs before input: the strip has to exist as a rect while
+// handleInput decides whether a click belongs to the world or to the bar.
+// Hidden entirely when nothing is selected — an empty strip would just eat
+// terrain clicks along the bottom edge of the view.
+func (g *Game) layoutSquadBar() {
+	g.Frame.SquadBar = ui.BarLayout{}
+	if g.headless || len(g.Sel.Units) == 0 {
+		return
+	}
+	content := ui.ContentRect(g.UI.PanelMgr.Get(ui.Panel3D))
+	if content.Width <= 0 || content.Height <= ui.BarHeight {
+		return
+	}
+	area := rl.Rectangle{
+		X: content.X, Y: content.Y + content.Height - ui.BarHeight,
+		Width: content.Width, Height: ui.BarHeight,
+	}
+	g.Frame.SquadBar = ui.ComputeSquadBarLayout(g.UI.SquadBar.Sync(g.squadBarCtx()), area)
+}
+
+// squadBarOwnsCursor vetoes world input over the placed cards only — the
+// empty tail of the strip still belongs to the terrain.
+func (g *Game) squadBarOwnsCursor() bool {
+	used := g.Frame.SquadBar.Used
+	return len(g.Frame.SquadBar.Cards) > 0 &&
+		rl.CheckCollisionPointRec(g.Frame.Cursor, used)
 }
 
 // behaviorCtx builds the per-frame context both flavours of the Behavior

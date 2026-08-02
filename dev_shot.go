@@ -61,6 +61,14 @@ func (g *Game) maybeScreenshot() {
 	if *shotPathFlag == "" || int(g.App.FrameIndex()) < *shotAtFlag {
 		return
 	}
+	// TakeScreenshot reads the framebuffer, but raylib batches draw calls:
+	// anything issued since the last flush is still in the batch and would be
+	// missing from the capture, while the stale pixels underneath (identical
+	// for static chrome) make the shot look complete. A scissor pair is the
+	// cheapest flush raylib-go exposes — without it, whatever the last widget
+	// drew is invisible to every capture. Cost a squad-bar debugging session.
+	rl.BeginScissorMode(0, 0, int32(rl.GetScreenWidth()), int32(rl.GetScreenHeight()))
+	rl.EndScissorMode()
 	rl.TakeScreenshot(*shotPathFlag)
 	g.shotDone = true
 }
