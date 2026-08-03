@@ -70,9 +70,17 @@ func ReasonResume(r TacticalOverrideReason) string {
 //
 // AssignedSlot is the cover slot the unit moves toward. Stored so the next
 // pass can recognise the unit's claim (occupancy penalty).
+//
+// SavedKind/SavedTarget stash the queue head the instinct displaced (P1: the
+// player's order is never cancelled — the clear path restores it). CoverPos
+// is the instinct's own MoveTo target: restore only fires while the head
+// still equals it, so a fresher external write is never clobbered.
 type TacticalOverride struct {
 	Reason       TacticalOverrideReason
 	Until        float32
 	LowSuppSince float32
 	AssignedSlot ecs.Entity
+	SavedKind    ActionKind
+	SavedTarget  WorldPos
+	CoverPos     WorldPos
 }

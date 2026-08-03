@@ -22,6 +22,7 @@ type DamageService struct {
 	factionMap     *ecs.Map[components.Faction]
 	squadMemberMap *ecs.Map[components.SquadMember]
 	posMap         *ecs.Map[components.WorldPos]
+	dangerMap      *ecs.Map[components.DangerBuffer]
 	// Awareness sweep on death wipes LastSeen entries pointing at the just-
 	// killed unit, so readers can't dereference a recycled slot through stale
 	// Awareness data.
@@ -42,6 +43,7 @@ func NewDamageService(w *ecs.World, squads *SquadService) *DamageService {
 		factionMap:      ecs.NewMap[components.Faction](w),
 		squadMemberMap:  ecs.NewMap[components.SquadMember](w),
 		posMap:          ecs.NewMap[components.WorldPos](w),
+		dangerMap:       ecs.NewMap[components.DangerBuffer](w),
 		awarenessFilter: ecs.NewFilter1[components.Awareness](w),
 		squadService:    squads,
 		eventLogRes:     ecs.NewResource[components.EventLog](w),
@@ -72,6 +74,30 @@ func (d *DamageService) Apply(target ecs.Entity, dmg float32) bool {
 	}
 	hp.Current -= dmg
 	if hp.Current > 0 {
+		// Pos = the victim's own position: the source is unknown at this
+		// layer, so the event feeds the Injury channel without a ThreatDir
+		// vote (drain skips deltas under 1e-3). Directional damage intel is
+		// Threat 2.0 (P3).
+		if buf := d.dangerMap.Get(target); buf != nil {
+			var pos components.WorldPos
+			if p := d.posMap.Get(target); p != nil {
+				pos = *p
+			}
+			now := float32(0)
+			if d.clock != nil {
+				now = d.clock()
+			}
+			strength := dmg * 0.01
+			if strength > 1 {
+				strength = 1
+			}
+			components.PushDanger(buf, components.DangerEvent{
+				Kind:     components.DangerDamageTaken,
+				Pos:      pos,
+				Strength: strength,
+				Time:     now,
+			})
+		}
 		return false
 	}
 	hp.Current = 0

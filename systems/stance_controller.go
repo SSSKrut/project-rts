@@ -1,8 +1,6 @@
 package systems
 
 import (
-	"time"
-
 	"github.com/mlange-42/ark/ecs"
 
 	"rts-go/components"
@@ -53,9 +51,10 @@ func (sys *StanceControllerSystem) InitUI(w *ecs.World) {
 func (StanceControllerSystem) Name() string { return "stance_controller" }
 
 func (StanceControllerSystem) LODPolicy() core.LODPolicy {
+	// Active-only: filter is not tier-scoped (see ContactSystem note).
 	return core.LODPolicy{
 		ActiveEvery:   0,
-		RelevantEvery: 250 * time.Millisecond,
+		RelevantEvery: core.LODDisabled,
 		DormantEvery:  core.LODDisabled,
 	}
 }

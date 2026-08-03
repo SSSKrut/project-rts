@@ -12,6 +12,10 @@ import (
 // flags toggle on the same boundary.
 const weaponMovingSpeedThreshold float32 = 1.0
 
+// Own Suppression+Injury above this counts as "being shot at" for the
+// BehaviorRules.AllowReturnFire escape from a HoldFire doctrine.
+const weaponReturnFireThreshold float32 = 0.05
+
 // shouldFire is the RoE + AttackMove + Sector gate. HoldFire wins over
 // AttackMove, but an active order whose spec sets OverridesHoldFire bypasses
 // the HoldFire silence (AttackTarget / SuppressFire carry this flag;
@@ -32,10 +36,20 @@ func (sys *WeaponSystem) shouldFire(shooter ecs.Entity, motionSpeed float32,
 	}
 	attackMoveOn := false
 	overridesHoldFire := false
+	returnFireOK := false
 
 	if sm := sys.squadMemberMap.Get(shooter); sm != nil && sm.Squad != (ecs.Entity{}) {
 		if r := sys.engagementRulesMap.Get(sm.Squad); r != nil {
 			rules = *r
+		}
+		// BehaviorRules.AllowReturnFire: under a HoldFire doctrine the unit
+		// may still answer fire it is actually taking (suppression / injury
+		// live on its own Threat).
+		if br := sys.behaviorRulesMap.Get(sm.Squad); br != nil && br.AllowReturnFire {
+			if t := sys.threatMap.Get(shooter); t != nil &&
+				t.Suppression+t.Injury >= weaponReturnFireThreshold {
+				returnFireOK = true
+			}
 		}
 		if head := sys.orderQueueMap.Get(sm.Squad); head != nil && head.First != (ecs.Entity{}) {
 			if sys.orderAttackMoveMap.Has(head.First) {
@@ -56,7 +70,7 @@ func (sys *WeaponSystem) shouldFire(shooter ecs.Entity, motionSpeed float32,
 
 	switch rules.Mode {
 	case components.HoldFire:
-		if !overridesHoldFire {
+		if !overridesHoldFire && !returnFireOK {
 			return false
 		}
 	case components.ReturnFire, components.FreeFire:

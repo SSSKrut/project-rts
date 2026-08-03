@@ -49,7 +49,7 @@ func (sys *SurvivalInstinctSystem) runScatterProtocol(now float32) {
 				state.Code = components.SquadStateEngaged
 			}
 		case components.SquadStateEngaged:
-			if delta >= scrambleDeltaTrigger {
+			if delta >= scrambleDeltaTrigger && sys.squadMayScramble(squad) {
 				state.Code = components.SquadStateScrambling
 				state.ScramblingSince = now
 				state.LowDeltaSince = 0
@@ -85,6 +85,16 @@ func (sys *SurvivalInstinctSystem) runScatterProtocol(now float32) {
 			sys.squadStateMap.Add(add.squad, &cpy)
 		}
 	}
+}
+
+// squadMayScramble: standing rules that pin members in place (P2) also pin
+// the squad out of the Scrambling protocol.
+func (sys *SurvivalInstinctSystem) squadMayScramble(squad ecs.Entity) bool {
+	br := sys.behaviorMap.Get(squad)
+	if br == nil {
+		return true
+	}
+	return br.AllowAutoReposition && !br.HoldUntilOrdered
 }
 
 // aggregateSquadThreat returns the mean Threat.Total across live members +

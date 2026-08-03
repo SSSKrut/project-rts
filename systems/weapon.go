@@ -48,6 +48,7 @@ type WeaponSystem struct {
 	// shouldFire walks SquadMember → Squad → EngagementRules / order flags.
 	squadMemberMap             *ecs.Map[components.SquadMember]
 	engagementRulesMap         *ecs.Map[components.EngagementRules]
+	behaviorRulesMap           *ecs.Map[components.BehaviorRules]
 	orderQueueMap              *ecs.Map[components.OrderQueueHead]
 	orderAttackMoveMap         *ecs.Map[components.OrderParamAttackMove]
 	orderKindMap               *ecs.Map[components.OrderKind]
@@ -256,6 +257,7 @@ func (sys *WeaponSystem) InitUI(w *ecs.World) {
 	sys.turretMap = ecs.NewMap[components.Turret](w)
 	sys.squadMemberMap = ecs.NewMap[components.SquadMember](w)
 	sys.engagementRulesMap = ecs.NewMap[components.EngagementRules](w)
+	sys.behaviorRulesMap = ecs.NewMap[components.BehaviorRules](w)
 	sys.orderQueueMap = ecs.NewMap[components.OrderQueueHead](w)
 	sys.orderAttackMoveMap = ecs.NewMap[components.OrderParamAttackMove](w)
 	sys.orderKindMap = ecs.NewMap[components.OrderKind](w)

@@ -43,6 +43,9 @@ type SurvivalInstinctSystem struct {
 	rosterMap     *ecs.Map[components.CommandRoster]
 	microPathMap  *ecs.Map[components.MicroPath]
 	posMap        *ecs.Map[components.WorldPos]
+	blackboardMap *ecs.Map[components.LocalBlackboard]
+	orderQueueMap *ecs.Map[components.OrderQueueHead]
+	issuedAtMap   *ecs.Map[components.OrderIssuedAt]
 	eventLogRes   ecs.Resource[components.EventLog]
 
 	world *ecs.World
@@ -117,6 +120,10 @@ const siSafetyUntil float32 = 30.0
 // Max distance (m) from the unit to a candidate slot.
 const siCoverSearchRadius float32 = 30.0
 
+// A freshly issued player order owns the unit for this long — no NEW
+// override may be placed inside the window (squad Scrambling excepted).
+const siOrderGraceWindow float32 = 4.0
+
 // Squad-average suppression rise that flips a squad into Scrambling.
 const scrambleDeltaTrigger float32 = 0.4
 
@@ -152,6 +159,9 @@ func (sys *SurvivalInstinctSystem) InitUI(w *ecs.World) {
 	sys.rosterMap = ecs.NewMap[components.CommandRoster](w)
 	sys.microPathMap = ecs.NewMap[components.MicroPath](w)
 	sys.posMap = ecs.NewMap[components.WorldPos](w)
+	sys.blackboardMap = ecs.NewMap[components.LocalBlackboard](w)
+	sys.orderQueueMap = ecs.NewMap[components.OrderQueueHead](w)
+	sys.issuedAtMap = ecs.NewMap[components.OrderIssuedAt](w)
 	sys.eventLogRes = ecs.NewResource[components.EventLog](w)
 }
 
@@ -226,7 +236,23 @@ func (sys *SurvivalInstinctSystem) Update(ctx core.UpdateContext) {
 
 		existing := sys.overrideMap.Get(ent)
 		if existing == nil {
+			// Self-heal external clears (SquadService removes overrides on a
+			// player order): the blackboard link and the occupancy ledger
+			// must not outlive the override.
+			if bb := sys.blackboardMap.Get(ent); bb != nil && bb.AssignedCover != (ecs.Entity{}) {
+				if sys.occupancyClaim[bb.AssignedCover] > 0 {
+					sys.occupancyClaim[bb.AssignedCover]--
+				}
+				bb.AssignedCover = ecs.Entity{}
+			}
+			if rules := sys.behaviorFor(ent); rules != nil &&
+				(rules.HoldUntilOrdered || !rules.AllowAutoReposition) {
+				continue
+			}
 			if threat.Total <= effectiveThreshold && !scrambling {
+				continue
+			}
+			if !scrambling && sys.orderGraceActive(ent, now) {
 				continue
 			}
 			slot, slotPos, found := sys.pickCover(ent, pos, threatDir, claimed)
@@ -257,10 +283,16 @@ func (sys *SurvivalInstinctSystem) Update(ctx core.UpdateContext) {
 	// Pass 3 — apply ECS mutations. Clears first so a cleared unit can be
 	// re-acquired on the same tick if still suppressed.
 	for _, e := range sys.clears {
-		if ov := sys.overrideMap.Get(e); ov != nil && ov.AssignedSlot != (ecs.Entity{}) {
-			if sys.occupancyClaim[ov.AssignedSlot] > 0 {
-				sys.occupancyClaim[ov.AssignedSlot]--
+		if ov := sys.overrideMap.Get(e); ov != nil {
+			if ov.AssignedSlot != (ecs.Entity{}) {
+				if sys.occupancyClaim[ov.AssignedSlot] > 0 {
+					sys.occupancyClaim[ov.AssignedSlot]--
+				}
 			}
+			sys.restoreSavedOrder(e, ov)
+		}
+		if bb := sys.blackboardMap.Get(e); bb != nil {
+			bb.AssignedCover = ecs.Entity{}
 		}
 		if sys.overrideMap.Has(e) {
 			sys.overrideMap.Remove(e)
@@ -273,6 +305,18 @@ func (sys *SurvivalInstinctSystem) Update(ctx core.UpdateContext) {
 		aq := sys.queueMap.Get(op.unit)
 		if aq == nil {
 			continue
+		}
+		existing := sys.overrideMap.Get(op.unit)
+		// P1: stash the displaced head ONCE — the original order rides
+		// through slot re-acquires and is restored when the last override
+		// clears. A re-acquire carries the earlier stash forward.
+		var savedKind components.ActionKind
+		var savedTarget components.WorldPos
+		if existing != nil {
+			savedKind, savedTarget = existing.SavedKind, existing.SavedTarget
+		} else if aq.Count > 0 {
+			savedKind = aq.Actions[aq.Head].Kind
+			savedTarget = aq.Actions[aq.Head].Target
 		}
 		// Retarget in place + MicroPath.Dirty instead of
 		// ClearActions+PushAction so cover behind a corner routes via A*
@@ -287,7 +331,7 @@ func (sys *SurvivalInstinctSystem) Update(ctx core.UpdateContext) {
 			mp.Dirty = true
 		}
 		// Release old claim if the unit held a different slot.
-		if existing := sys.overrideMap.Get(op.unit); existing != nil &&
+		if existing != nil &&
 			existing.AssignedSlot != (ecs.Entity{}) && existing.AssignedSlot != op.slot {
 			if sys.occupancyClaim[existing.AssignedSlot] > 0 {
 				sys.occupancyClaim[existing.AssignedSlot]--
@@ -301,8 +345,46 @@ func (sys *SurvivalInstinctSystem) Update(ctx core.UpdateContext) {
 			Until:        now + siSafetyUntil,
 			LowSuppSince: 0,
 			AssignedSlot: op.slot,
+			SavedKind:    savedKind,
+			SavedTarget:  savedTarget,
+			CoverPos:     op.pos,
 		})
+		if bb := sys.blackboardMap.Get(op.unit); bb != nil {
+			bb.AssignedCover = op.slot
+		}
 		sys.occupancyClaim[op.slot]++
+	}
+}
+
+// restoreSavedOrder puts the action the instinct displaced back at the head
+// of the queue. It only fires while the queue still belongs to the instinct:
+// head == its own cover MoveTo (bit-exact — nothing mutates action targets),
+// or the queue is empty (the cover MoveTo popped on arrival). A head written
+// by anyone else since is left untouched.
+func (sys *SurvivalInstinctSystem) restoreSavedOrder(e ecs.Entity, ov *components.TacticalOverride) {
+	aq := sys.queueMap.Get(e)
+	if aq == nil {
+		return
+	}
+	if aq.Count > 0 {
+		head := &aq.Actions[aq.Head]
+		if head.Kind != components.ActionMoveTo || head.Target != ov.CoverPos {
+			return
+		}
+		if ov.SavedKind == components.ActionNone {
+			ClearActions(aq)
+		} else {
+			head.Kind = ov.SavedKind
+			head.Target = ov.SavedTarget
+		}
+	} else {
+		if ov.SavedKind == components.ActionNone {
+			return
+		}
+		PushAction(aq, components.Action{Kind: ov.SavedKind, Target: ov.SavedTarget})
+	}
+	if mp := sys.microPathMap.Get(e); mp != nil {
+		mp.Dirty = true
 	}
 }
 
@@ -353,14 +435,34 @@ func (sys *SurvivalInstinctSystem) rosterMember(squad ecs.Entity) ecs.Entity {
 // thresholdFor returns the squad's BehaviorRules.SuppressionThreshold or
 // the system default.
 func (sys *SurvivalInstinctSystem) thresholdFor(unit ecs.Entity) float32 {
-	mem := sys.memberMap.Get(unit)
-	if mem == nil || mem.Squad == (ecs.Entity{}) {
-		return siSuppressionDefault
-	}
-	if br := sys.behaviorMap.Get(mem.Squad); br != nil && br.SuppressionThreshold > 0 {
+	if br := sys.behaviorFor(unit); br != nil && br.SuppressionThreshold > 0 {
 		return br.SuppressionThreshold
 	}
 	return siSuppressionDefault
+}
+
+// behaviorFor resolves the unit's squad BehaviorRules; nil for soloists.
+func (sys *SurvivalInstinctSystem) behaviorFor(unit ecs.Entity) *components.BehaviorRules {
+	mem := sys.memberMap.Get(unit)
+	if mem == nil || mem.Squad == (ecs.Entity{}) {
+		return nil
+	}
+	return sys.behaviorMap.Get(mem.Squad)
+}
+
+// orderGraceActive reports whether the unit's squad head order was issued
+// inside the grace window — the player just spoke, the instinct stays quiet.
+func (sys *SurvivalInstinctSystem) orderGraceActive(unit ecs.Entity, now float32) bool {
+	mem := sys.memberMap.Get(unit)
+	if mem == nil || mem.Squad == (ecs.Entity{}) {
+		return false
+	}
+	head := sys.orderQueueMap.Get(mem.Squad)
+	if head == nil || head.First == (ecs.Entity{}) || !sys.world.Alive(head.First) {
+		return false
+	}
+	iss := sys.issuedAtMap.Get(head.First)
+	return iss != nil && now-iss.Time < siOrderGraceWindow
 }
 
 // squadScrambleContext returns (scrambling, threatDir). Soloists get

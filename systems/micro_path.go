@@ -2,7 +2,6 @@ package systems
 
 import (
 	"math"
-	"time"
 
 	"github.com/mlange-42/ark/ecs"
 
@@ -52,9 +51,11 @@ func (sys *MicroPathSystem) InitUI(w *ecs.World) {
 func (MicroPathSystem) Name() string { return "micro_path" }
 
 func (MicroPathSystem) LODPolicy() core.LODPolicy {
+	// Active-only: the filter is not tier-scoped, so one pass covers every
+	// unit — a Relevant call would re-run the full pass in the same tick.
 	return core.LODPolicy{
 		ActiveEvery:   0,
-		RelevantEvery: 250 * time.Millisecond,
+		RelevantEvery: core.LODDisabled,
 		DormantEvery:  core.LODDisabled,
 	}
 }

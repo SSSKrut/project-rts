@@ -2,7 +2,6 @@ package systems
 
 import (
 	"math"
-	"time"
 
 	rl "github.com/gen2brain/raylib-go/raylib"
 	"github.com/mlange-42/ark/ecs"
@@ -32,9 +31,10 @@ func (sys *ThreatSystem) InitUI(w *ecs.World) {
 func (ThreatSystem) Name() string { return "threat" }
 
 func (ThreatSystem) LODPolicy() core.LODPolicy {
+	// Active-only: filters are not tier-scoped (see ContactSystem note).
 	return core.LODPolicy{
 		ActiveEvery:   0,
-		RelevantEvery: 250 * time.Millisecond,
+		RelevantEvery: core.LODDisabled,
 		DormantEvery:  core.LODDisabled,
 	}
 }
@@ -131,6 +131,11 @@ func tickThreat(threat *components.Threat, buf *components.DangerBuffer, pos *co
 	}
 	threat.Total = total
 	threat.State = components.ClassifyThreat(total)
+	// Every channel decayed to zero → the direction is stale intel; readers
+	// (reflex orientation, cover pick) must not act on it.
+	if total == 0 {
+		threat.ThreatDir = rl.Vector3{}
+	}
 }
 
 // decayValue applies a per-second linear drop clamped at 0.

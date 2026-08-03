@@ -138,7 +138,9 @@ func (sys *VehicleReflexSystem) tryTrigger(ent ecs.Entity, veh *components.Vehic
 	if ov.LastAt != 0 && now-ov.LastAt < reflexCooldown {
 		return
 	}
-	if sys.engaging(ent, now) {
+	// "Return fire beats flinch" only holds for a vehicle that CAN return
+	// fire — an unarmed truck flees even from a visible shooter.
+	if spec.WeaponCount > 0 && sys.engaging(ent, now) {
 		return
 	}
 	// Direction to the dominant threat: ThreatDir points from the source
