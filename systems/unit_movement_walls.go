@@ -60,6 +60,48 @@ func unitMatchesWallStorey(unitY, wallYBase, wallYTop float32) bool {
 	return unitY >= wallYBase-yMargin && unitY <= wallYTop+yMargin
 }
 
+// wallBlocksApproach reports whether a blocking wall crosses the straight
+// segment from the unit to its target. Guards the exhausted-path XZ arrival
+// pop: "0.5 m away through an interior wall" is not arrival. Same storey
+// filter and open-door pass-through as reflectAgainstWalls.
+func wallBlocksApproach(pos *components.WorldPos, target components.WorldPos,
+	walls map[components.ChunkCoord][]colWall) bool {
+	if walls == nil {
+		return false
+	}
+	curX := float32(pos.Chunk.X)*components.ChunkSize + pos.Local.X
+	curZ := float32(pos.Chunk.Z)*components.ChunkSize + pos.Local.Z
+	tgtX := float32(target.Chunk.X)*components.ChunkSize + target.Local.X
+	tgtZ := float32(target.Chunk.Z)*components.ChunkSize + target.Local.Z
+	for dcZ := int32(-1); dcZ <= 1; dcZ++ {
+		for dcX := int32(-1); dcX <= 1; dcX++ {
+			cc := components.ChunkCoord{X: pos.Chunk.X + dcX, Z: pos.Chunk.Z + dcZ}
+			bucket := walls[cc]
+			for i := range bucket {
+				w := &bucket[i]
+				if !unitMatchesWallStorey(pos.Local.Y, w.yBase, w.yTop) {
+					continue
+				}
+				toX := w.fromX + w.sa*w.length
+				toZ := w.fromZ + w.ca*w.length
+				t1, t2, ok := segmentSegmentIntersect2D(curX, curZ, tgtX, tgtZ,
+					w.fromX, w.fromZ, toX, toZ)
+				if !ok || t1 < 0 || t1 > 1 || t2 < 0 || t2 > 1 {
+					continue
+				}
+				if w.hasOpening && w.openPassable {
+					wallT := t2 * w.length
+					if wallT >= w.openStart && wallT <= w.openEnd {
+						continue
+					}
+				}
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // reflectAgainstWalls projects velocity along walls in the 3×3 chunk window
 // the predicted XZ step would cross. Sliding (v - (v·n)n) instead of full
 // reflection — units brush past corners and glide along corridor walls.
@@ -166,34 +208,49 @@ func reflectAgainstWalls(curX, curZ, curY, velX, velZ, dt float32,
 						if wallT >= w.openStart && wallT <= w.openEnd {
 							continue
 						}
-						// Door funnel: the walker wants through THIS wall
-						// and an open door exists — head for the opening
-						// at full speed instead of sliding. The plain
-						// slide's tangential remainder is a few percent of
-						// speed when the goal sits nearly perpendicular
-						// behind the wall; a misaligned unit then takes
-						// tens of seconds to creep to the doorway.
-						openT := (w.openStart + w.openEnd) * 0.5
-						ox := w.fromX + w.sa*openT
-						oz := w.fromZ + w.ca*openT
-						nx, nz := w.ca, -w.sa
-						if (curX-ox)*nx+(curZ-oz)*nz < 0 {
-							nx, nz = -nx, -nz
+						endDist := wallT
+						if w.length-wallT < endDist {
+							endDist = w.length - wallT
 						}
-						// Aim slightly before the opening on the unit's
-						// side so the approach stays wall-parallel.
-						tx := ox + nx*0.45
-						tz := oz + nz*0.45
-						fdx := tx - curX
-						fdz := tz - curZ
-						fd := float32(math.Sqrt(float64(fdx*fdx + fdz*fdz)))
-						if fd > 1e-4 {
-							spd := float32(math.Sqrt(float64(rvx*rvx + rvz*rvz)))
-							rvx = fdx / fd * spd
-							rvz = fdz / fd * spd
+						openDist := w.openStart - wallT
+						if wallT > w.openEnd {
+							openDist = wallT - w.openEnd
 						}
-						hit = true
-						break
+						if openDist <= endDist {
+							// Door funnel: the walker wants through THIS wall
+							// and an open door exists — head for the opening
+							// at full speed instead of sliding. The plain
+							// slide's tangential remainder is a few percent of
+							// speed when the goal sits nearly perpendicular
+							// behind the wall; a misaligned unit then takes
+							// tens of seconds to creep to the doorway.
+							// Funnel only when the opening is nearer than the
+							// wall's end: a crossing near an endpoint is a
+							// corner-rounding path, and dragging it to the
+							// door tug-of-wars against the waypoint forever
+							// (compound SW-corner trap).
+							openT := (w.openStart + w.openEnd) * 0.5
+							ox := w.fromX + w.sa*openT
+							oz := w.fromZ + w.ca*openT
+							nx, nz := w.ca, -w.sa
+							if (curX-ox)*nx+(curZ-oz)*nz < 0 {
+								nx, nz = -nx, -nz
+							}
+							// Aim slightly before the opening on the unit's
+							// side so the approach stays wall-parallel.
+							tx := ox + nx*0.45
+							tz := oz + nz*0.45
+							fdx := tx - curX
+							fdz := tz - curZ
+							fd := float32(math.Sqrt(float64(fdx*fdx + fdz*fdz)))
+							if fd > 1e-4 {
+								spd := float32(math.Sqrt(float64(rvx*rvx + rvz*rvz)))
+								rvx = fdx / fd * spd
+								rvz = fdz / fd * spd
+							}
+							hit = true
+							break
+						}
 					}
 					// Wall direction (sa, ca); normal (ca, -sa) flipped to
 					// point toward the moving unit.

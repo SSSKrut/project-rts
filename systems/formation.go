@@ -613,20 +613,25 @@ func (sys *FormationSystem) processSquad(world *ecs.World, w formationWork, dt f
 				continue
 			}
 		}
-		// Parked on an empty queue is a valid state: re-push only when the
-		// unit actually drifted off its slot — otherwise arrival pops the
-		// MoveTo and this pass re-pushes it forever (idle 10 Hz churn).
+		// IDLE squad only: parked on an empty queue is a valid state —
+		// re-push only when the unit actually drifted off its slot, else
+		// arrival pops the MoveTo and this pass re-pushes it forever (idle
+		// 10 Hz churn). Marching squads keep the unconditional push: early
+		// leader-wake targets sit within park tolerance of the followers and
+		// the gate would hold them at the start line until catch-up sprints.
 		// Y-band keeps the recovery path for storey slots: a walker stranded
 		// a floor below its slot must be re-pushed so MicroPath replans the
 		// stairs.
-		dPark := mPos.Sub(target)
-		parkTol := SlotParkRadius
-		if veh := sys.vehicleMap.Get(mem); veh != nil {
-			parkTol = rampPopRadius(vehArrivalRadius, components.SpecForVehicle(veh.Kind)) + 0.5
-		}
-		if dPark.X*dPark.X+dPark.Z*dPark.Z <= parkTol*parkTol &&
-			dPark.Y > -arrivalYBand && dPark.Y < arrivalYBand {
-			continue
+		if !mp.HasGoal {
+			dPark := mPos.Sub(target)
+			parkTol := SlotParkRadius
+			if veh := sys.vehicleMap.Get(mem); veh != nil {
+				parkTol = rampPopRadius(vehArrivalRadius, components.SpecForVehicle(veh.Kind)) + 0.5
+			}
+			if dPark.X*dPark.X+dPark.Z*dPark.Z <= parkTol*parkTol &&
+				dPark.Y > -arrivalYBand && dPark.Y < arrivalYBand {
+				continue
+			}
 		}
 		ClearActions(aq)
 		PushAction(aq, components.Action{Kind: components.ActionMoveTo, Target: target})

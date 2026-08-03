@@ -26,6 +26,7 @@ import "github.com/mlange-42/ark/ecs"
 type SpatialEntry struct {
 	Ent        ecs.Entity
 	X, Z       float32
+	Y          float32 // foot height — storey filters (ORCA / yield) read it
 	VelX, VelZ float32 // world-space XZ velocity (m/s) at snapshot time
 	Radius     float32 // collider radius (default pre-applied by rebuild)
 }

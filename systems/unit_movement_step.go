@@ -40,6 +40,11 @@ func (sys *UnitMovementSystem) step(
 	// frozen vehicle snapshot, writes only own pos.
 	if vehHash != nil {
 		vehHash.ForEachEntryInRadius(selfX, selfZ, vehYieldQueryR, func(e *core.SpatialEntry, dSq float32) {
+			// Storey filter: the hash is XZ-only — a hull under a bridge
+			// deck must not shove the walker crossing above it.
+			if dy := e.Y - w.pos.Local.Y; dy > neighbourStoreyBand || dy < -neighbourStoreyBand {
+				return
+			}
 			minD := e.Radius + selfRadius
 			if dSq < minD*minD {
 				d := float32(math.Sqrt(float64(dSq)))
@@ -172,11 +177,16 @@ func (sys *UnitMovementSystem) step(
 			// mid-ramp and would freeze a floor below. While the planner
 			// still has waypoints, require the Y to be within a storey's
 			// reach too; with the path exhausted, pop on XZ as before
-			// (ground orders may carry Y=0 vs. terrain at ±2 m).
+			// (ground orders may carry Y=0 vs. terrain at ±2 m) — but never
+			// through a wall: a target 0.5 m away in the NEXT room must not
+			// count as reached (the walker parks in the wrong room), it
+			// must replan through the door.
 			dy := finalDiff.Y
 			if !morePath || (dy > -arrivalYBand && dy < arrivalYBand) {
-				popAction(w.queue)
-				return markerOp
+				if !wallBlocksApproach(w.pos, action.Target, walls) {
+					popAction(w.queue)
+					return markerOp
+				}
 			}
 		}
 		diff := shortTerm.Sub(*w.pos)
@@ -207,6 +217,12 @@ func (sys *UnitMovementSystem) step(
 				if e.Ent == w.ent {
 					return
 				}
+				// Storey filter: XZ-only hash — a mate parked one floor up
+				// (stair exit, balcony) is not an obstacle down here; without
+				// this the climber decelerates into a phantom and stalls.
+				if dy := e.Y - w.pos.Local.Y; dy > neighbourStoreyBand || dy < -neighbourStoreyBand {
+					return
+				}
 				neighbours = append(neighbours, orcaAgent{
 					Pos:    orcaVec2{X: e.X, Z: e.Z},
 					Vel:    orcaVec2{X: e.VelX, Z: e.VelZ},
@@ -219,6 +235,9 @@ func (sys *UnitMovementSystem) step(
 			// Hull neighbours enter with full responsibility on the unit —
 			// the vehicle never reciprocates (P5).
 			vehHash.ForEachEntryInRadius(selfX, selfZ, orcaVehNeighbourRadius, func(e *core.SpatialEntry, _ float32) {
+				if dy := e.Y - w.pos.Local.Y; dy > neighbourStoreyBand || dy < -neighbourStoreyBand {
+					return
+				}
 				neighbours = append(neighbours, orcaAgent{
 					Pos:    orcaVec2{X: e.X, Z: e.Z},
 					Vel:    orcaVec2{X: e.VelX, Z: e.VelZ},

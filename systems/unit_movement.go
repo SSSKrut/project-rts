@@ -12,6 +12,11 @@ import (
 const (
 	separationRadius float32 = 1.5
 	separationWeight float32 = 4.0
+
+	// Spatial hashes are XZ-only; neighbours further than this in Y stand on
+	// another storey / the bridge deck and are ignored by ORCA and the
+	// vehicle-yield pass. Below storey height (3 m), above ground-snap noise.
+	neighbourStoreyBand float32 = 2.0
 )
 
 // Vehicle-yield tuning (Phase 19 M6): hulls shove overlapped units aside,

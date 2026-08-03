@@ -29,7 +29,15 @@ func bootGame() *Game {
 		worldMap = loadMapDefByName(meta.MapName)
 	}
 	systems.SetTerrainParams(worldMap.Terrain)
-	if (*mapFlag != "" || *loadFlag != "") && !isAIScene() && !isDoorScene() {
+	if isAIScene() || isDoorScene() {
+		// Scene worlds must be pristine and reproducible: a stale Modified
+		// chunk from the player's world save injects alien heights AND
+		// suppresses the procedural cuts (Without[Modified]) — a crater file
+		// from 2026-08-01 put a 2.4 m cliff across the hills-map road.
+		if dir, err := os.MkdirTemp("", "rts-scene-save-"); err == nil {
+			systems.SaveDir = dir
+		}
+	} else if *mapFlag != "" || *loadFlag != "" {
 		systems.SaveDir = "./save/" + worldMap.Name
 	}
 

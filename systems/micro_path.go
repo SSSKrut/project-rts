@@ -1,6 +1,7 @@
 package systems
 
 import (
+	"fmt"
 	"math"
 
 	"github.com/mlange-42/ark/ecs"
@@ -24,6 +25,14 @@ const (
 	// stuckTime → force replan.
 	microPathProgressFrac float32 = 0.9
 	microPathStuckTime    float32 = 1.0
+	// Stuck within this of the waypoint = the spot is blocked by a body or
+	// pressed against wall clearance, not unreachable: pop and steer for
+	// the next waypoint — a replan returns the identical path forever (nav
+	// is blind to units and to the collider-vs-clearance gap) and the
+	// walker pins at ~0 m/s or saws between replanned heads. Sub-cell-
+	// diagonal (1.41) so a pop never skips an entire nav cell; a parked-
+	// body standoff is ~0.7 m, a wall-corner standoff ~1.2-1.3 m.
+	microPathBlockedPopRadius float32 = 1.35
 	// Per-unit minimum gap between replans.
 	microPathReplanCooldown float32 = 0.5
 )
@@ -143,7 +152,16 @@ func (sys *MicroPathSystem) tickUnit(pos *components.WorldPos, mp *components.Mi
 			mp.BestDistSq = cur
 			mp.LastProgressAt = now
 		} else if now-mp.LastProgressAt > microPathStuckTime {
-			mp.Dirty = true
+			if cur < microPathBlockedPopRadius*microPathBlockedPopRadius &&
+				d.Y > -arrivalYBand && d.Y < arrivalYBand &&
+				mp.GateMask&(1<<mp.Head) == 0 &&
+				(mp.Head+1 >= mp.Count || mp.GateMask&(1<<(mp.Head+1)) == 0) {
+				// Blocked-pop: gates and gate mouths are excluded — they
+				// need the precise approach the pops above enforce.
+				mp.Head++
+			} else {
+				mp.Dirty = true
+			}
 			mp.LastProgressAt = now
 			mp.BestDistSq = float32(math.MaxFloat32)
 		}
@@ -168,6 +186,13 @@ func (sys *MicroPathSystem) tickUnit(pos *components.WorldPos, mp *components.Mi
 		return
 	}
 	waypoints, gates := sys.nav.FindPathGates(*pos, goal, NavOpts{})
+	if debugLog && len(waypoints) == 0 {
+		fmt.Printf("[mp-empty] from=(%.1f,%.1f,Y%.1f) to=(%.1f,%.1f,Y%.1f)\n",
+			float32(pos.Chunk.X)*components.ChunkSize+pos.Local.X,
+			float32(pos.Chunk.Z)*components.ChunkSize+pos.Local.Z, pos.Local.Y,
+			float32(goal.Chunk.X)*components.ChunkSize+goal.Local.X,
+			float32(goal.Chunk.Z)*components.ChunkSize+goal.Local.Z, goal.Local.Y)
+	}
 	mp.Head = 0
 	mp.Count = 0
 	mp.GateMask = 0

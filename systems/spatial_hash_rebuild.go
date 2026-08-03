@@ -85,6 +85,7 @@ func collectSpatial[T any](sys *SpatialHashRebuildSystem, q ecs.Query2[T, compon
 			Ent:    ent,
 			X:      float32(pos.Chunk.X)*components.ChunkSize + pos.Local.X,
 			Z:      float32(pos.Chunk.Z)*components.ChunkSize + pos.Local.Z,
+			Y:      pos.Local.Y,
 			VelX:   velX,
 			VelZ:   velZ,
 			Radius: radius,
