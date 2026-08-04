@@ -195,6 +195,7 @@ func (sys *VehicleDriverSystem) avoidProps(px, pz, dx, dz, aimLen, look, selfR f
 // course, parked → steer around like a wall.
 func (sys *VehicleDriverSystem) avoid(ent ecs.Entity, pos *components.WorldPos,
 	mot *components.Motion, spec *components.VehicleSpec,
+	follower *components.RoadFollower,
 	dx, dz, dist, cruise float32) (float32, float32, float32) {
 	aimLen := float32(math.Sqrt(float64(dx*dx + dz*dz)))
 	if aimLen < 1e-4 {
@@ -215,7 +216,7 @@ func (sys *VehicleDriverSystem) avoid(ent ecs.Entity, pos *components.WorldPos,
 		look = dist
 	}
 
-	dx, dz = sys.avoidBuildings(px, pz, dx, dz, aimLen, look, spec.ColliderR)
+	dx, dz = sys.avoidBuildings(follower, px, pz, dx, dz, aimLen, look, spec.ColliderR)
 
 	aimLen = float32(math.Sqrt(float64(dx*dx + dz*dz)))
 	if aimLen < 1e-4 {
@@ -320,7 +321,13 @@ func (sys *VehicleDriverSystem) avoid(ent ecs.Entity, pos *components.WorldPos,
 // avoidBuildings redirects the aim to a visible corner of the first
 // footprint blocking the probe segment. Corner-aiming along successive ticks
 // degenerates into wall-following, which is exactly the wanted behaviour.
-func (sys *VehicleDriverSystem) avoidBuildings(px, pz, dx, dz, aimLen, look, selfR float32) (float32, float32) {
+// The chosen side is committed in RoadFollower.AvoidSide and held ACROSS
+// blocker changes (P8-c): two adjacent footprints otherwise trade the
+// "nearest blocker" role tick to tick and the corner pick flickers between
+// their mouths — sign-of-cross commitment turns that into a consistent
+// wall-follow around the whole cluster.
+func (sys *VehicleDriverSystem) avoidBuildings(follower *components.RoadFollower,
+	px, pz, dx, dz, aimLen, look, selfR float32) (float32, float32) {
 	if len(sys.obstacles) == 0 {
 		return dx, dz
 	}
@@ -344,6 +351,9 @@ func (sys *VehicleDriverSystem) avoidBuildings(px, pz, dx, dz, aimLen, look, sel
 		}
 	}
 	if blockIdx < 0 {
+		if follower != nil {
+			follower.AvoidSide = 0
+		}
 		return dx, dz
 	}
 	raw := sys.obstacles[blockIdx]
@@ -356,30 +366,84 @@ func (sys *VehicleDriverSystem) avoidBuildings(px, pz, dx, dz, aimLen, look, sel
 		{o.minX - pad, o.maxZ + pad},
 	}
 	aimX, aimZ := dx/aimLen, dz/aimLen
-	bestScore := float32(math.MaxFloat32)
-	bestX, bestZ := dx, dz
+	// Reachability is judged against the blocker's RAW footprint (the resolve
+	// band can transiently hold the hull centre inside the INFLATED box, and
+	// testing against that would reject all four corners and leave the aim
+	// pointed straight into the wall) — but against every OTHER footprint's
+	// INFLATED box (raw when the hull centre sits inside its band): a corner
+	// "reachable" through the raw gap between two sealed buildings funnels
+	// the hull into the seam and wedges it there (MB2 two-blocker blind
+	// spot).
+	reachable := func(cx, cz float32) bool {
+		if raw.segmentHits(px, pz, cx, cz) {
+			return false
+		}
+		for i := range sys.obstacles {
+			if i == blockIdx {
+				continue
+			}
+			o := sys.obstacles[i].inflated(infl)
+			if o.contains(px, pz) {
+				o = sys.obstacles[i]
+			}
+			if o.segmentHits(px, pz, cx, cz) {
+				return false
+			}
+		}
+		return true
+	}
+	type corner struct {
+		vx, vz, score float32
+		side          int8
+	}
+	var cands [4]corner
+	n := 0
 	for _, c := range corners {
-		// Reachability is judged against the RAW footprint: the resolve band
-		// often parks the hull centre inside the INFLATED box, and testing
-		// against that would reject all four corners and leave the aim
-		// pointed straight into the wall (deadlock at the face midpoint).
-		if raw.segmentHits(px, pz, c[0], c[1]) {
-			continue // corner across the building, not reachable directly
+		if !reachable(c[0], c[1]) {
+			continue
 		}
 		vx, vz := c[0]-px, c[1]-pz
 		vLen := float32(math.Sqrt(float64(vx*vx + vz*vz)))
 		if vLen < 1e-4 {
 			continue
 		}
+		side := int8(1)
+		if vx*aimZ-vz*aimX < 0 {
+			side = -1
+		}
 		// Deviation from the wanted direction, with a mild detour-length tax.
 		dev := 1 - (vx*aimX+vz*aimZ)/vLen
-		score := dev + 0.01*vLen
-		if score < bestScore {
-			bestScore = score
-			bestX, bestZ = vx/vLen*aimLen, vz/vLen*aimLen
+		cands[n] = corner{vx / vLen * aimLen, vz / vLen * aimLen, dev + 0.01*vLen, side}
+		n++
+	}
+	committed := int8(0)
+	if follower != nil {
+		committed = follower.AvoidSide
+	}
+	pick := -1
+	best := float32(math.MaxFloat32)
+	for i := 0; i < n; i++ {
+		if committed != 0 && cands[i].side != committed {
+			continue
+		}
+		if cands[i].score < best {
+			best, pick = cands[i].score, i
 		}
 	}
-	return bestX, bestZ
+	if pick < 0 { // committed side unreachable — flip allowed
+		for i := 0; i < n; i++ {
+			if cands[i].score < best {
+				best, pick = cands[i].score, i
+			}
+		}
+	}
+	if pick < 0 {
+		return dx, dz
+	}
+	if follower != nil {
+		follower.AvoidSide = cands[pick].side
+	}
+	return cands[pick].vx, cands[pick].vz
 }
 
 // goalCrowded reports a stopped hull already parked over the goal point —
@@ -480,7 +544,10 @@ func (sys *VehicleDriverSystem) resolveOverlaps(ent ecs.Entity, pos *components.
 	// per-tick intrusion is bounded by speed·dt, so an uncapped push cannot
 	// teleport, while a capped one loses the shoving match against a 6 m/s
 	// drive and lets the hull grind through the band.
-	infl := spec.ColliderR * 0.7 // hull centre must stay this far off a wall
+	// Band = the steering inflate (P8-d): the old 0.7·R band sat ~1.5 m
+	// inside what avoidBuildings treats as the wall, so a hull could park
+	// with its nose in the masonry while steering saw it as already clear.
+	infl := spec.ColliderR + avoidMargin
 	for i := range sys.obstacles {
 		o := sys.obstacles[i].inflated(infl)
 		if !o.contains(px, pz) {

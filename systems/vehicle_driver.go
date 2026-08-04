@@ -39,6 +39,7 @@ type VehicleDriverSystem struct {
 	chunkIndex   ecs.Resource[TerrainChunkIndex]
 	navBakedMap  *ecs.Map[components.NavBaked]
 	riversRes    ecs.Resource[components.Rivers]
+	eventLogRes  ecs.Resource[components.EventLog]
 	propObs      []vehPropObstacle
 	crushed      []vehPropObstacle
 	// Convoy pacing (M7): squad members read roster mates to derive the
@@ -69,6 +70,16 @@ const (
 	vehSlopeBlock float32 = 0.6
 	// Extra keep-out beyond a river's half-width for the water probe.
 	vehWaterMargin float32 = 1.0
+	// Progress watchdog (P8-e). Wedge: no vehStuckEps displacement for
+	// vehStuckWindow → replan, second window → Failed (a wedged hull jitters
+	// ~0.3 m; a legitimate detour moves ≥ 3 m/s). Orbit: distance-to-goal not
+	// improved by vehStuckDistEps for vehOrbitWindow → Failed directly — the
+	// steering has been retrying that whole time, and the longest legitimate
+	// stall in the suite (lateral ridge flank, ~8 s) stays under the window.
+	vehStuckWindow  float32 = 3.0
+	vehStuckEps     float32 = 1.5
+	vehOrbitWindow  float32 = 10.0
+	vehStuckDistEps float32 = 0.5
 )
 
 func (sys *VehicleDriverSystem) InitUI(w *ecs.World) {
@@ -84,6 +95,7 @@ func (sys *VehicleDriverSystem) InitUI(w *ecs.World) {
 	sys.chunkIndex = ecs.NewResource[TerrainChunkIndex](w)
 	sys.navBakedMap = ecs.NewMap[components.NavBaked](w)
 	sys.riversRes = ecs.NewResource[components.Rivers](w)
+	sys.eventLogRes = ecs.NewResource[components.EventLog](w)
 	sys.vehHash = ecs.NewResource[core.VehicleSpatialHash](w)
 	sys.sampler = NewHeightSampler(w)
 	sys.router = NewRoadRouter(w)
@@ -120,7 +132,8 @@ func (sys *VehicleDriverSystem) Update(ctx core.UpdateContext) {
 		ent := q.Entity()
 		if aq := sys.queueMap.Get(ent); aq != nil {
 			sys.step(ent, veh, pos, mot, aq, sys.routeMap.Get(ent),
-				sys.followerMap.Get(ent), sys.overrideMap.Get(ent), dt)
+				sys.followerMap.Get(ent), sys.overrideMap.Get(ent),
+				float32(ctx.SimNow), dt)
 		}
 		sys.resolveOverlaps(ent, pos, components.SpecForVehicle(veh.Kind), dt)
 	}
@@ -193,7 +206,7 @@ func (sys *VehicleDriverSystem) crushPass(pos *components.WorldPos,
 func (sys *VehicleDriverSystem) step(ent ecs.Entity, veh *components.Vehicle,
 	pos *components.WorldPos, mot *components.Motion, aq *components.ActionQueue,
 	route *components.RoadRoute, follower *components.RoadFollower,
-	ov *components.VehicleOverride, dt float32) {
+	ov *components.VehicleOverride, now, dt float32) {
 	spec := components.SpecForVehicle(veh.Kind)
 
 	// Reflexes that own locomotion (FaceThreat / SmokeAndReverse) run before
@@ -201,12 +214,14 @@ func (sys *VehicleDriverSystem) step(ent ecs.Entity, veh *components.Vehicle,
 	if ov != nil && ov.Kind != components.VehicleReflexNone &&
 		ov.Kind != components.VehicleReflexFlee {
 		clearRoute(route, follower)
+		resetWatchdog(follower)
 		sys.stepReflex(pos, mot, spec, ov, dt)
 		return
 	}
 
 	if aq.Count == 0 {
 		clearRoute(route, follower)
+		resetWatchdog(follower)
 		sys.brake(mot, dt)
 		sys.advance(pos, mot, dt)
 		return
@@ -263,15 +278,83 @@ func (sys *VehicleDriverSystem) step(ent ecs.Entity, veh *components.Vehicle,
 	}
 	if arrived {
 		clearRoute(route, follower)
+		resetWatchdog(follower)
 		popAction(aq)
 		return
 	}
 	dist := float32(math.Sqrt(float64(distSq)))
+	if !inSquad && sys.progressWatchdog(pos, aq, route, follower, dist, now) {
+		sys.brake(mot, dt)
+		sys.advance(pos, mot, dt)
+		return
+	}
 	cruise := spec.MaxSpeedOffroad * sys.slopeMul(pos, mot.Yaw)
 	cruise = sys.crushPass(pos, spec, cruise)
 	dx, dz := diff.X, diff.Z
 	dx, dz, cruise = sys.terrainSteer(pos, mot, follower, spec, dx, dz, cruise)
 	sys.drive(ent, follower, pos, mot, spec, dx, dz, dist, cruise, true, true, dt)
+}
+
+func resetWatchdog(follower *components.RoadFollower) {
+	if follower != nil {
+		follower.StuckSince = 0
+		follower.BestSince = 0
+		follower.StuckTries = 0
+	}
+}
+
+// progressWatchdog (P8-e): honest refusal for soloists. The wedge timer
+// rearms on displacement and replans once before the verdict; the orbit
+// timer rearms on distance-to-goal improvement and goes straight to the
+// verdict — lapping a sealed cluster IS the steering retrying. The verdict
+// clears the action and files the reason instead of executing forever.
+func (sys *VehicleDriverSystem) progressWatchdog(pos *components.WorldPos,
+	aq *components.ActionQueue, route *components.RoadRoute,
+	follower *components.RoadFollower, dist, now float32) bool {
+	if follower == nil {
+		return false
+	}
+	px, pz := worldXZ(*pos)
+	ax, az := px-follower.StuckX, pz-follower.StuckZ
+	if follower.StuckSince == 0 || ax*ax+az*az >= vehStuckEps*vehStuckEps {
+		follower.StuckX, follower.StuckZ = px, pz
+		follower.StuckSince = now
+		follower.StuckTries = 0
+	}
+	if follower.BestSince == 0 || dist < follower.BestDist-vehStuckDistEps {
+		follower.BestDist = dist
+		follower.BestSince = now
+	}
+	verdict := now-follower.BestSince >= vehOrbitWindow
+	if !verdict && now-follower.StuckSince >= vehStuckWindow {
+		follower.StuckSince = now
+		if follower.StuckTries == 0 {
+			follower.StuckTries = 1
+			clearRoute(route, follower)
+			follower.DetourSide = 0
+			follower.AvoidSide = 0
+			return false
+		}
+		verdict = true
+	}
+	if !verdict {
+		return false
+	}
+	ClearActions(aq)
+	clearRoute(route, follower)
+	resetWatchdog(follower)
+	if debugLog {
+		fmt.Printf("[stuck] FAILED no path at (%.1f,%.1f) dist=%.1f\n", px, pz, dist)
+	}
+	if log := sys.eventLogRes.Get(); log != nil {
+		log.Push(components.EventEntry{
+			Kind: components.EventOrderFailed,
+			At:   now,
+			Pos:  *pos,
+			Text: "Vehicle stuck: no path",
+		})
+	}
+	return true
 }
 
 // terrainSteer (P8-b): refuse a bearing whose ray probes hit impassable
@@ -397,7 +480,7 @@ func (sys *VehicleDriverSystem) drive(ent ecs.Entity, follower *components.RoadF
 		cruise = pace
 	}
 	if mot.Speed >= -0.01 {
-		dx, dz, cruise = sys.avoid(ent, pos, mot, spec, dx, dz, dist, cruise)
+		dx, dz, cruise = sys.avoid(ent, pos, mot, spec, follower, dx, dz, dist, cruise)
 	}
 	desiredYaw := float32(math.Atan2(float64(dx), float64(dz)))
 	yawErr := wrapAngle(desiredYaw - mot.Yaw)

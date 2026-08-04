@@ -40,6 +40,23 @@ type RoadFollower struct {
 	// bearing scan every tick and the hull ping-pongs in front of the wall.
 	// Reset when the goal-ward bearing is passable again.
 	DetourSide int8
+	// AvoidSide (MB2, P8-c): committed side of a building corner detour.
+	// Held ACROSS blocker changes — two adjacent footprints otherwise trade
+	// the "nearest blocker" role and the corner pick flickers between their
+	// mouths. Reset when the probe to the goal is clear.
+	AvoidSide int8
+	// Progress watchdog (MB2, P8-e), soloist MoveTo only; both timers unarmed
+	// at Since = 0. Wedge timer: Stuck* anchor the last position that counted
+	// as displacement — a wedged hull jitters in place. Orbit timer:
+	// Best* track the best distance-to-goal seen — a hull lapping a sealed
+	// cluster moves plenty without ever getting closer. Either verdict ends
+	// the action honestly instead of forever.
+	StuckX     float32
+	StuckZ     float32
+	StuckSince float32
+	BestDist   float32
+	BestSince  float32
+	StuckTries uint8
 }
 
 // RoadRoute is the planned road itinerary for the head MoveTo action.

@@ -149,9 +149,16 @@ const (
 	// _avoid: two BTRs swap positions head-on — min pairwise distance must
 	// stay above the collider sum (ID priority + tangent steer).
 	aiSceneVehAvoid = "ai_vehicle_avoid"
-	// _building: a truck ordered straight through a house must loop around —
-	// zero ticks with the hull centre inside the footprint.
+	// _building: a truck ordered to a point 5 m BEHIND a house must loop
+	// around — the detour must arm even with the goal right past the far wall
+	// (MB2 P8-c) — with zero ticks inside the footprint.
 	aiSceneVehBuilding = "ai_vehicle_building"
+	// _stuck (MB2): two houses whose inflated bands seal a 6 m slit. Truck A
+	// is ordered INTO the slit centre — unreachable, the progress watchdog
+	// must fail it honestly (reason in the EventLog) within 20 s. Truck B is
+	// ordered past the pair — the committed-side detour frees it around, with
+	// the corner pick not flickering (AvoidSide sign alternations bounded).
+	aiSceneVehStuck = "ai_vehicle_stuck"
 	// _yield: a BTR drives through a standing rifle line — corridor sidestep
 	// + shove keep every unit outside the hull radius (P5: infantry yields).
 	aiSceneVehYield = "ai_vehicle_yield"
@@ -277,6 +284,8 @@ func aiSceneAnchorPos() components.WorldPos {
 		return components.WorldPos{}.Add(rl.Vector3{X: 40, Z: -20})
 	case aiSceneVehBuilding:
 		return components.WorldPos{}.Add(rl.Vector3{X: 32, Z: 10})
+	case aiSceneVehStuck:
+		return components.WorldPos{}.Add(rl.Vector3{X: 30, Z: 0})
 	case aiSceneVehYield:
 		return components.WorldPos{}.Add(rl.Vector3{X: 35, Z: 5})
 	case aiSceneVehGroup:
@@ -376,6 +385,20 @@ func aiSceneBuildings() []components.BuildingPlan {
 			DoorSide: 0,
 		}, pos, components.BuildingHouse)
 		return []components.BuildingPlan{*plan}
+	case aiSceneVehStuck:
+		// Footprints X[27..37], Z[-13..-3] and Z[3..13]: the 6 m slit between
+		// them is narrower than a truck's doubled steering inflate — sealed.
+		mk := func(seed uint64, cz float32, doorSide uint8) components.BuildingPlan {
+			pos := components.WorldPos{}.Add(rl.Vector3{X: 32, Z: cz})
+			pos.Local.Y = systems.GroundHeight(32, cz)
+			return *buildings.GenerateHouse(seed, buildings.HouseParams{
+				Stories:  1,
+				SizeX:    10,
+				SizeZ:    10,
+				DoorSide: doorSide,
+			}, pos, components.BuildingHouse)
+		}
+		return []components.BuildingPlan{mk(0xE1, -8, 0), mk(0xE2, 8, 2)}
 	case aiSceneWallGlide:
 		// Two flush houses form one continuous 40 m south facade; the west
 		// house's door faces north so the facade has exactly one opening.
@@ -970,8 +993,9 @@ func aiVehicleAvoidSpawn(world *ecs.World, vehicleFactory *entities.VehicleFacto
 		spawn(10, -20, components.VehicleBTR, 70, -20)
 		spawn(70, -20, components.VehicleBTR, 10, -20)
 	case aiSceneVehBuilding:
-		// The 10×10 house at (32, 0) sits dead centre on the straight line.
-		spawn(4, 0, components.VehicleTruck, 60, 0)
+		// The 10×10 house at (32, 0) sits dead centre on the straight line;
+		// the goal is 5 m past the far wall (MB2) — the detour must still arm.
+		spawn(4, 0, components.VehicleTruck, 42, 0)
 		s.avoidFoots = append(s.avoidFoots,
 			components.AABB2D{MinX: 27, MinZ: -5, MaxX: 37, MaxZ: 5})
 	case aiSceneVehYield:
@@ -990,6 +1014,46 @@ func aiVehicleAvoidSpawn(world *ecs.World, vehicleFactory *entities.VehicleFacto
 		s.avoidRevFree = aiOrderAt + 2
 	}
 	return s
+}
+
+// aiVehicleStuckSpawn (MB2): two houses seal a 6 m slit between their
+// inflated bands. Truck A's goal sits inside the seal (unreachable — the
+// watchdog must fail it), truck B's beyond the pair (detour must free it).
+func aiVehicleStuckSpawn(world *ecs.World, vehicleFactory *entities.VehicleFactory,
+	posMap *ecs.Map[components.WorldPos]) *aiTestState {
+	if vehicleFactory == nil {
+		fmt.Printf("[ai-test %s] NO VEHICLE FACTORY — aborting\n", aiSceneID())
+		return nil
+	}
+	wp := func(x, z float32) components.WorldPos {
+		p := components.WorldPos{}.Add(rl.Vector3{X: x, Z: z})
+		p.Local.Y = systems.GroundHeight(x, z)
+		return p
+	}
+	a := vehicleFactory.Spawn(wp(8, 0), components.VehicleTruck,
+		components.FactionPlayer, components.ControllerLocal)
+	b := vehicleFactory.Spawn(wp(5, -14), components.VehicleTruck,
+		components.FactionPlayer, components.ControllerLocal)
+	return &aiTestState{
+		sceneID:       aiSceneID(),
+		stuckActive:   true,
+		stuckFailT:    a,
+		stuckFreeT:    b,
+		stuckGoalFail: wp(32, 0),
+		stuckGoalFree: wp(58, 8),
+		stuckFoots: []components.AABB2D{
+			{MinX: 27, MinZ: -13, MaxX: 37, MaxZ: -3},
+			{MinX: 27, MinZ: 3, MaxX: 37, MaxZ: 13},
+		},
+		World:          world,
+		PosMap:         posMap,
+		VehQueueMap:    ecs.NewMap[components.ActionQueue](world),
+		VehFollowerMap: ecs.NewMap[components.RoadFollower](world),
+		stuckEvRes:     ecs.NewResource[components.EventLog](world),
+		orderAt:        aiOrderAt,
+		verdictAt:      45,
+		nextSampleAt:   aiOrderAt + 5,
+	}
 }
 
 // aiVehicleConvoySpawn (M7): fast leader + slow followers in one squad.
@@ -1258,6 +1322,9 @@ func aiSceneSpawn(
 	if id := aiSceneID(); id == aiSceneVehAvoid || id == aiSceneVehBuilding ||
 		id == aiSceneVehYield || id == aiSceneVehGroup {
 		return aiVehicleAvoidSpawn(world, vehicleFactory, unitFactory, posMap)
+	}
+	if aiSceneID() == aiSceneVehStuck {
+		return aiVehicleStuckSpawn(world, vehicleFactory, posMap)
 	}
 	if aiSceneID() == aiSceneVehConvoy {
 		return aiVehicleConvoySpawn(world, squadService, vehicleFactory, posMap, rosterMap)
@@ -1552,6 +1619,22 @@ type aiTestState struct {
 	avoidRevTicks int                   // reverse ticks past avoidRevFree
 	avoidRevFree  float32               // >0: count reversals after this elapsed
 
+	// Set for ai_vehicle_stuck (MB2): watchdog Failed arm (truck A, sealed
+	// slit goal) + committed-detour escape arm (truck B) + AvoidSide flip
+	// metric on B.
+	stuckActive   bool
+	stuckFailT    ecs.Entity
+	stuckFreeT    ecs.Entity
+	stuckGoalFail components.WorldPos
+	stuckGoalFree components.WorldPos
+	stuckFoots    []components.AABB2D
+	stuckFootBad  int
+	stuckFlips    int
+	stuckLastSide int8
+	stuckFailedAt float32
+	stuckFreedAt  float32
+	stuckEvRes    ecs.Resource[components.EventLog]
+
 	// Set for ai_vehicle_convoy (M7): squad march cohesion metric, then an
 	// in-place reform via CustomSlots+ReformPending (owner 2026-07-31).
 	convoyActive    bool
@@ -1754,6 +1837,10 @@ func (s *aiTestState) Update(elapsed float32) {
 	}
 	if s.slopeActive {
 		s.updateVehSlope(elapsed)
+		return
+	}
+	if s.stuckActive {
+		s.updateVehStuck(elapsed)
 		return
 	}
 	if s.avoidActive {
@@ -3105,6 +3192,110 @@ func (s *aiTestState) updateVehicles(elapsed float32) {
 // updateVehAvoid drives the M6 collision scenes: per-vehicle goals, per-tick
 // metrics (pairwise clearance / footprint intrusion / infantry inside a hull
 // / reverse ticks), verdict on all-arrived or timeout.
+// updateVehStuck (MB2): truck A must be FAILED by the driver watchdog (queue
+// cleared + reason in the EventLog) within 20 s of the order; truck B must
+// arrive past the pair with a committed (non-flickering) detour side and
+// neither hull may enter a footprint.
+func (s *aiTestState) updateVehStuck(elapsed float32) {
+	if s.verdictDone {
+		return
+	}
+	if !s.orderFired {
+		if elapsed < s.orderAt {
+			return
+		}
+		fmt.Println("============================================================")
+		fmt.Printf("== AI VEHICLE STUCK: failT=%v (goal in sealed slit) freeT=%v\n",
+			s.stuckFailT, s.stuckFreeT)
+		fmt.Println("============================================================")
+		for _, v := range [2]struct {
+			e ecs.Entity
+			g components.WorldPos
+		}{{s.stuckFailT, s.stuckGoalFail}, {s.stuckFreeT, s.stuckGoalFree}} {
+			if aq := s.VehQueueMap.Get(v.e); aq != nil {
+				systems.ClearActions(aq)
+				systems.PushAction(aq, components.Action{
+					Kind: components.ActionMoveTo, Target: v.g})
+			}
+		}
+		s.orderFired = true
+		return
+	}
+	hull := func(e ecs.Entity) (float32, float32, bool) {
+		if e == (ecs.Entity{}) || !s.World.Alive(e) {
+			return 0, 0, false
+		}
+		p := s.PosMap.Get(e)
+		if p == nil {
+			return 0, 0, false
+		}
+		return float32(p.Chunk.X)*components.ChunkSize + p.Local.X,
+			float32(p.Chunk.Z)*components.ChunkSize + p.Local.Z, true
+	}
+	for _, e := range [2]ecs.Entity{s.stuckFailT, s.stuckFreeT} {
+		if x, z, ok := hull(e); ok {
+			for _, fp := range s.stuckFoots {
+				if x >= fp.MinX && x <= fp.MaxX && z >= fp.MinZ && z <= fp.MaxZ {
+					s.stuckFootBad++
+				}
+			}
+		}
+	}
+	if f := s.VehFollowerMap.Get(s.stuckFreeT); f != nil && f.AvoidSide != 0 {
+		if s.stuckLastSide != 0 && f.AvoidSide != s.stuckLastSide {
+			s.stuckFlips++
+		}
+		s.stuckLastSide = f.AvoidSide
+	}
+	if s.stuckFailedAt == 0 {
+		if aq := s.VehQueueMap.Get(s.stuckFailT); aq != nil && aq.Count == 0 {
+			s.stuckFailedAt = elapsed
+		}
+	}
+	if s.stuckFreedAt == 0 {
+		if aq := s.VehQueueMap.Get(s.stuckFreeT); aq != nil && aq.Count == 0 {
+			if x, z, ok := hull(s.stuckFreeT); ok {
+				gx := float32(s.stuckGoalFree.Chunk.X)*components.ChunkSize + s.stuckGoalFree.Local.X
+				gz := float32(s.stuckGoalFree.Chunk.Z)*components.ChunkSize + s.stuckGoalFree.Local.Z
+				if dx, dz := x-gx, z-gz; dx*dx+dz*dz < 225 {
+					s.stuckFreedAt = elapsed
+				}
+			}
+		}
+	}
+	if elapsed >= s.nextSampleAt && elapsed < s.verdictAt {
+		s.nextSampleAt = elapsed + aiSampleEvery
+		ax, az, _ := hull(s.stuckFailT)
+		bx, bz, _ := hull(s.stuckFreeT)
+		fmt.Printf("[ai-test %s] t=%.1fs A=(%.1f,%.1f) B=(%.1f,%.1f) failedAt=%.1f freedAt=%.1f foot=%d flips=%d\n",
+			s.sceneID, elapsed, ax, az, bx, bz,
+			s.stuckFailedAt, s.stuckFreedAt, s.stuckFootBad, s.stuckFlips)
+	}
+	if (s.stuckFailedAt > 0 && s.stuckFreedAt > 0) || elapsed >= s.verdictAt {
+		reason := false
+		if log := s.stuckEvRes.Get(); log != nil {
+			for _, e := range log.Latest(10) {
+				if e.Kind == components.EventOrderFailed && e.Text == "Vehicle stuck: no path" {
+					reason = true
+				}
+			}
+		}
+		pass := s.stuckFailedAt > 0 && s.stuckFailedAt <= s.orderAt+20 &&
+			s.stuckFreedAt > 0 && reason &&
+			s.stuckFootBad == 0 && s.stuckFlips <= 3
+		verdict := "FAIL"
+		if pass {
+			verdict = "PASS"
+		}
+		fmt.Println("============================================================")
+		fmt.Printf("== VERDICT [%s]: %s  (failedAt=%.1f freedAt=%.1f reason=%v foot=%d flips=%d t=%.1fs)\n",
+			s.sceneID, verdict, s.stuckFailedAt, s.stuckFreedAt, reason,
+			s.stuckFootBad, s.stuckFlips, elapsed)
+		fmt.Println("============================================================")
+		s.verdictDone = true
+	}
+}
+
 func (s *aiTestState) updateVehAvoid(elapsed float32) {
 	if s.verdictDone {
 		return
