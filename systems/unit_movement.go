@@ -108,6 +108,7 @@ type UnitMovementSystem struct {
 	orderMovementOverrideMap *ecs.Map[components.OrderParamMovementProfile]
 	movementProfileMap       *ecs.Map[components.MovementProfile]
 	threatMap                *ecs.Map[components.Threat]
+	overrideMap              *ecs.Map[components.TacticalOverride]
 	// step() reads the unit's OWN collider for the ORCA self radius.
 	colliderMap *ecs.Map[components.Collider]
 	// Replan-trigger counters: step() accumulates Overcrowded / Stuck dt and
@@ -152,6 +153,7 @@ func (sys *UnitMovementSystem) InitUI(w *ecs.World) {
 	sys.orderMovementOverrideMap = ecs.NewMap[components.OrderParamMovementProfile](w)
 	sys.movementProfileMap = ecs.NewMap[components.MovementProfile](w)
 	sys.threatMap = ecs.NewMap[components.Threat](w)
+	sys.overrideMap = ecs.NewMap[components.TacticalOverride](w)
 	sys.colliderMap = ecs.NewMap[components.Collider](w)
 	sys.blackboardMap = ecs.NewMap[components.LocalBlackboard](w)
 	sys.spatialHash = ecs.NewResource[core.SpatialHash](w)
@@ -183,6 +185,10 @@ type unitWork struct {
 	profile   components.MovementProfile
 	stamina   *components.Stamina
 	exhausted bool
+	// Evacuating a shelled area: the combat-move throttle is for advancing
+	// under direct fire, not for clearing a beaten zone — the whole point is
+	// to be somewhere else fast.
+	evacuating bool
 }
 
 func (sys *UnitMovementSystem) Update(ctx core.UpdateContext) {
@@ -228,6 +234,11 @@ func (sys *UnitMovementSystem) Update(ctx core.UpdateContext) {
 		stamina := sys.staminaMap.Get(ent)
 		exhausted := sys.staminaExhaustedMap.Has(ent)
 		threat := sys.threatMap.Get(ent)
+		evacuating := false
+		if ov := sys.overrideMap.Get(ent); ov != nil &&
+			ov.Reason == components.TacticalOverrideShellfire {
+			evacuating = true
+		}
 		sys.workBuf = append(sys.workBuf, unitWork{
 			ent:       ent,
 			pos:       pos,
@@ -238,7 +249,8 @@ func (sys *UnitMovementSystem) Update(ctx core.UpdateContext) {
 			threat:    threat,
 			profile:   profile,
 			stamina:   stamina,
-			exhausted: exhausted,
+			exhausted:  exhausted,
+			evacuating: evacuating,
 		})
 	}
 	work := sys.workBuf

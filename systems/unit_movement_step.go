@@ -497,7 +497,7 @@ func (sys *UnitMovementSystem) step(
 		}
 		desiredFacingYaw := velocityYaw
 		threatFacing := false
-		if w.threat != nil && w.threat.State >= components.ThreatAlerted &&
+		if !w.evacuating && w.threat != nil && w.threat.State >= components.ThreatAlerted &&
 			(w.threat.ThreatDir.X != 0 || w.threat.ThreatDir.Z != 0) {
 			desiredFacingYaw = float32(math.Atan2(
 				float64(-w.threat.ThreatDir.X),

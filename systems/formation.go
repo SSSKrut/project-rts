@@ -288,19 +288,18 @@ func (sys *FormationSystem) processSquad(world *ecs.World, w formationWork, dt f
 	}
 
 	// Player layout edit (editor drag / kind / preset): a marching squad
-	// picks the new slots up through the normal pass — just drop the flag.
-	// An IDLE squad re-forms in place: hold slot targets until every driven
-	// member parks, then release.
+	// picks the new slots up through the normal pass, so the flag only has to
+	// survive until everyone is actually back in place — dropping it on sight
+	// of a macro goal strands whoever is still out of position when the order
+	// completes a moment later (a hull released from a Flee reflex). An IDLE
+	// squad re-forms in place: hold slot targets until every driven member
+	// parks, then release.
 	reformHold := false
 	reformDone := true
-	if fd.ReformPending {
-		if haveTarget {
-			fd.ReformPending = false
-		} else {
-			centerTarget = center
-			haveTarget = true
-			reformHold = true
-		}
+	if fd.ReformPending && !haveTarget {
+		centerTarget = center
+		haveTarget = true
+		reformHold = true
 	}
 
 	// Interior intent: when the squad's head order is Garrison /
@@ -591,7 +590,7 @@ func (sys *FormationSystem) processSquad(world *ecs.World, w formationWork, dt f
 			target.Local.Y = sys.sampler.Sample(wx, wz)
 		}
 
-		if reformHold && ip == nil {
+		if fd.ReformPending && ip == nil {
 			d := mPos.Sub(target)
 			tol := float32(1.5)
 			if veh := sys.vehicleMap.Get(mem); veh != nil {
@@ -673,7 +672,7 @@ func (sys *FormationSystem) processSquad(world *ecs.World, w formationWork, dt f
 		}
 	}
 
-	if reformHold && reformDone {
+	if fd.ReformPending && reformDone {
 		fd.ReformPending = false
 	}
 }

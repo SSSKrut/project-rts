@@ -17,6 +17,7 @@ const (
 	TacticalOverrideReloading
 	TacticalOverrideOutOfAmmo
 	TacticalOverrideBlockedByContact
+	TacticalOverrideShellfire
 )
 
 func ReasonLabel(r TacticalOverrideReason) string {
@@ -33,6 +34,8 @@ func ReasonLabel(r TacticalOverrideReason) string {
 		return "Out of ammo"
 	case TacticalOverrideBlockedByContact:
 		return "Blocked by contact"
+	case TacticalOverrideShellfire:
+		return "Leaving the shelled area"
 	}
 	return ""
 }

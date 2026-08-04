@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/mlange-42/ark/ecs"
@@ -13,6 +14,12 @@ import (
 
 // ReplayHasher folds sim-visible state into one FNV-1a value; two runs of
 // the same scene must produce identical hash sequences (WS-B replay gate).
+//
+// Entities are folded in ENTITY-ID order, not query order: Ark's table layout
+// is a function of archetype history (an archetype absent at save time and
+// re-created after a load lands in a different iteration slot), so a
+// layout-ordered hash reports a mismatch for two worlds holding identical
+// state. IDs survive save/load, so ID order is the stable canonical one.
 type ReplayHasher struct {
 	unitFilter    *ecs.Filter4[components.Unit, components.WorldPos, components.Motion, components.ActionQueue]
 	vehFilter     *ecs.Filter4[components.Vehicle, components.WorldPos, components.Motion, components.ActionQueue]
@@ -26,6 +33,14 @@ type ReplayHasher struct {
 	followerMap   *ecs.Map[components.RoadFollower]
 	overrideMap   *ecs.Map[components.VehicleOverride]
 	world         *ecs.World
+
+	scratch []entHash
+}
+
+// entHash is one entity's folded state, keyed for the ID sort.
+type entHash struct {
+	id uint32
+	h  uint64
 }
 
 func NewReplayHasher(w *ecs.World) *ReplayHasher {
@@ -52,8 +67,22 @@ const (
 
 func (r *ReplayHasher) Hash() uint64 {
 	h := fnvOffset64
-	u32 := func(v uint32) { h = (h ^ uint64(v)) * fnvPrime64 }
-	u8 := func(v uint8) { h = (h ^ uint64(v)) * fnvPrime64 }
+	// Per-entity accumulator; sections flush it through fold() in ID order.
+	eh := fnvOffset64
+	r.scratch = r.scratch[:0]
+	u32 := func(v uint32) { eh = (eh ^ uint64(v)) * fnvPrime64 }
+	u8 := func(v uint8) { eh = (eh ^ uint64(v)) * fnvPrime64 }
+	take := func(ent ecs.Entity) {
+		r.scratch = append(r.scratch, entHash{id: ent.ID(), h: eh})
+		eh = fnvOffset64
+	}
+	fold := func() {
+		sort.Slice(r.scratch, func(i, j int) bool { return r.scratch[i].id < r.scratch[j].id })
+		for _, e := range r.scratch {
+			h = (h ^ e.h) * fnvPrime64
+		}
+		r.scratch = r.scratch[:0]
+	}
 	f32 := func(v float32) { u32(math.Float32bits(v)) }
 	pos := func(p components.WorldPos) {
 		u32(uint32(p.Chunk.X))
@@ -82,6 +111,13 @@ func (r *ReplayHasher) Hash() uint64 {
 			f32(th.Total)
 			f32(th.Suppression)
 			u8(uint8(th.State))
+			for i := range th.Clusters {
+				c := &th.Clusters[i]
+				f32(c.Dir.X)
+				f32(c.Dir.Z)
+				f32(c.Dist)
+				f32(c.Weight)
+			}
 		}
 		u8(aq.Head)
 		u8(aq.Count)
@@ -91,7 +127,9 @@ func (r *ReplayHasher) Hash() uint64 {
 			u8(uint8(a.Kind))
 			pos(a.Target)
 		}
+		take(ent)
 	}
+	fold()
 
 	qv := r.vehFilter.Query()
 	for qv.Next() {
@@ -138,7 +176,9 @@ func (r *ReplayHasher) Hash() uint64 {
 			f32(ov.LastAt)
 			pos(ov.Retreat)
 		}
+		take(ent)
 	}
+	fold()
 
 	qo := r.orderFilter.Query()
 	for qo.Next() {
@@ -147,7 +187,9 @@ func (r *ReplayHasher) Hash() uint64 {
 		if pr := r.progressMap.Get(qo.Entity()); pr != nil {
 			f32(pr.Value)
 		}
+		take(qo.Entity())
 	}
+	fold()
 
 	qc := r.contactFilter.Query()
 	for qc.Next() {
@@ -157,7 +199,9 @@ func (r *ReplayHasher) Hash() uint64 {
 		u8(uint8(c.PerceivedAffil))
 		u8(uint8(c.PerceivedDim))
 		u8(uint8(c.Source))
+		take(qc.Entity())
 	}
+	fold()
 
 	return h
 }
@@ -220,5 +264,9 @@ func (r *ReplayHasher) DumpState(path string) error {
 		}
 		fmt.Fprintf(&b, "H %d,%d %016x\n", cc.X, cc.Z, h)
 	}
-	return os.WriteFile(path, []byte(b.String()), 0o644)
+	// Same reason the hash folds in ID order: table layout is not state, and
+	// an unsorted dump makes two identical worlds look different.
+	lines := strings.Split(strings.TrimRight(b.String(), "\n"), "\n")
+	sort.Strings(lines)
+	return os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644)
 }

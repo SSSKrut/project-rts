@@ -8,11 +8,14 @@ import (
 )
 
 // ThreatDecaySystem despawns short-lived field entities past their lifetime:
-// ThreatSource (age > TTL) and SmokeField (now >= ExpiresAt). Kept separate so
-// readers get the contract "live within its window".
+// ThreatSource (age > TTL), SmokeField, BlastMark and UnsafeArea (now >=
+// ExpiresAt). Kept separate so readers get the contract "live within its
+// window".
 type ThreatDecaySystem struct {
 	filter    *ecs.Filter1[components.ThreatSource]
 	smoke     *ecs.Filter1[components.SmokeField]
+	blast     *ecs.Filter1[components.BlastMark]
+	unsafe    *ecs.Filter1[components.UnsafeArea]
 	despawned []ecs.Entity
 }
 
@@ -25,6 +28,8 @@ func NewThreatDecaySystem() *ThreatDecaySystem {
 func (sys *ThreatDecaySystem) InitUI(w *ecs.World) {
 	sys.filter = ecs.NewFilter1[components.ThreatSource](w)
 	sys.smoke = ecs.NewFilter1[components.SmokeField](w)
+	sys.blast = ecs.NewFilter1[components.BlastMark](w)
+	sys.unsafe = ecs.NewFilter1[components.UnsafeArea](w)
 }
 
 func (ThreatDecaySystem) Name() string { return "threat_decay" }
@@ -55,6 +60,22 @@ func (sys *ThreatDecaySystem) Update(ctx core.UpdateContext) {
 	for qs.Next() {
 		if float64(now) >= qs.Get().ExpiresAt {
 			sys.despawned = append(sys.despawned, qs.Entity())
+		}
+	}
+	qs.Close()
+
+	qb := sys.blast.Query()
+	for qb.Next() {
+		if float64(now) >= qb.Get().ExpiresAt {
+			sys.despawned = append(sys.despawned, qb.Entity())
+		}
+	}
+	qb.Close()
+
+	qu := sys.unsafe.Query()
+	for qu.Next() {
+		if float64(now) >= qu.Get().ExpiresAt {
+			sys.despawned = append(sys.despawned, qu.Entity())
 		}
 	}
 

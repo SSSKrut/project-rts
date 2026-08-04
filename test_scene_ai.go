@@ -130,6 +130,14 @@ const (
 	// tree AND both units parked on them.
 	aiSceneCoverSide = "ai_cover_side"
 
+	// ai_shellfire (MC1): a squad holds DefendPosition on open ground while
+	// synthetic shells walk across it (BlastMark entities + DangerExplosion
+	// pulses, no weapon involved). The barrage must raise an UnsafeArea, the
+	// roster must vacate it, the ORDER must stay InProgress throughout (P1 —
+	// autonomy changes "how", never "what"), and once the shelling stops the
+	// squad must return to the position it was told to hold.
+	aiSceneShellfire = "ai_shellfire"
+
 	// ai_vehicle_combat: tank+BTR (player) vs BMP+ATCarrier (enemy AI) at
 	// ~50 m. Gunners detect, slew and fire on their own; the cannon's
 	// weapon-vs-class preference must delete both light hulls while the
@@ -289,6 +297,8 @@ func aiSceneAnchorPos() components.WorldPos {
 		return components.WorldPos{}.Add(rl.Vector3{X: 45, Z: 0})
 	case aiSceneCoverSide:
 		return components.WorldPos{}.Add(rl.Vector3{X: 40, Z: -30})
+	case aiSceneShellfire:
+		return components.WorldPos{}.Add(rl.Vector3{X: 40, Z: 40})
 	case aiSceneVehCombat:
 		return components.WorldPos{}.Add(rl.Vector3{X: 40, Z: -30})
 	case aiSceneVehAvoid:
@@ -338,7 +348,7 @@ func aiSceneBuildings() []components.BuildingPlan {
 	switch aiSceneID() {
 	case aiSceneLosOpen, aiSceneLosDefilade, aiSceneLosCreep,
 		aiSceneMarchLine, aiSceneMarchSlope, aiSceneMarchColumn,
-		aiSceneCrowdCross, aiSceneVehForest, aiSceneVehSlope:
+		aiSceneCrowdCross, aiSceneVehForest, aiSceneVehSlope, aiSceneShellfire:
 		return nil
 	case aiSceneDoorSouth:
 		return aiBuildingsSingleHouse(0)
@@ -1031,6 +1041,60 @@ func aiVehicleAvoidSpawn(world *ecs.World, vehicleFactory *entities.VehicleFacto
 	return s
 }
 
+// aiShellfireSpawn (MC1): a MotorRifle squad holds a position on open ground;
+// updateShellfire walks synthetic shells across it.
+func aiShellfireSpawn(
+	world *ecs.World,
+	squadService *systems.SquadService,
+	roleService *systems.RoleService,
+	unitFactory aiUnitSpawn,
+	playerFaction components.Faction,
+	posMap *ecs.Map[components.WorldPos],
+	rosterMap *ecs.Map[components.CommandRoster],
+) *aiTestState {
+	wp := func(x, z float32) components.WorldPos {
+		p := components.WorldPos{}.Add(rl.Vector3{X: x, Z: z})
+		p.Local.Y = systems.GroundHeight(x, z)
+		return p
+	}
+	squad := squadService.CreateFromTemplate(
+		systems.TmplMotorRifle, wp(40, 40),
+		components.FormationLine, playerFaction,
+		components.Controller{Owner: components.ControllerLocal},
+		roleService, unitFactory,
+	)
+	if squad == (ecs.Entity{}) {
+		fmt.Printf("[ai-test %s] FAILED TO SPAWN SQUAD — aborting\n", aiSceneID())
+		return nil
+	}
+	return &aiTestState{
+		sceneID:     aiSceneID(),
+		shellActive: true,
+		shellSquad:  squad,
+		squad:       squad,
+		shellHold:   wp(40, 40),
+		shellCentre: wp(40, 40),
+		// Every scene-driven mutation must land BEFORE the saveload gate's
+		// save tick (1000 = 16.7 s): the loaded run has no harness, so a shell
+		// after that point can never replay (SAVELOAD MISMATCH).
+		shellStopAt:  aiOrderAt + 12,
+		World:        world,
+		SquadService: squadService,
+		PosMap:       posMap,
+		RosterMap:    rosterMap,
+		OQMap:        ecs.NewMap[components.OrderQueueHead](world),
+		StateMap:     ecs.NewMap[components.OrderState](world),
+		OverrideMap:  ecs.NewMap[components.TacticalOverride](world),
+		DangerMap:    ecs.NewMap[components.DangerBuffer](world),
+		BlastMap:     ecs.NewMap[components.BlastMark](world),
+		UnsafeFilter: ecs.NewFilter2[components.UnsafeArea, components.WorldPos](world),
+		AQMap:        ecs.NewMap[components.ActionQueue](world),
+		orderAt:      aiOrderAt,
+		verdictAt:    90,
+		nextSampleAt: aiOrderAt + 3,
+	}
+}
+
 // aiVehicleFleeSpawn (MB3): two trucks in one squad marching east; the rear
 // one takes synthetic fire from the south it cannot answer.
 func aiVehicleFleeSpawn(world *ecs.World, squadService *systems.SquadService,
@@ -1073,6 +1137,7 @@ func aiVehicleFleeSpawn(world *ecs.World, squadService *systems.SquadService,
 		DangerMap:    ecs.NewMap[components.DangerBuffer](world),
 		OverrideVMap: ecs.NewMap[components.VehicleOverride](world),
 		OQMap:        ecs.NewMap[components.OrderQueueHead](world),
+		FdMap:        ecs.NewMap[components.FormationData](world),
 		orderAt:      aiOrderAt,
 		verdictAt:    60,
 		nextSampleAt: aiOrderAt + 3,
@@ -1439,6 +1504,10 @@ func aiSceneSpawn(
 	if aiSceneID() == aiSceneVehStuck {
 		return aiVehicleStuckSpawn(world, vehicleFactory, posMap)
 	}
+	if aiSceneID() == aiSceneShellfire {
+		return aiShellfireSpawn(world, squadService, roleService, unitFactory,
+			playerFaction, posMap, rosterMap)
+	}
 	if aiSceneID() == aiSceneVehFlee {
 		return aiVehicleFleeSpawn(world, squadService, vehicleFactory, posMap, rosterMap)
 	}
@@ -1738,6 +1807,23 @@ type aiTestState struct {
 	avoidRevTicks int                   // reverse ticks past avoidRevFree
 	avoidRevFree  float32               // >0: count reversals after this elapsed
 
+	// Set for ai_shellfire (MC1): DefendPosition under a walking barrage.
+	shellActive     bool
+	shellSquad      ecs.Entity
+	shellHold       components.WorldPos
+	shellCentre     components.WorldPos
+	shellNextAt     float32
+	shellShots      int
+	shellStopAt     float32
+	shellZoneR      float32
+	shellVacatedAt  float32
+	shellReturnedAt float32
+	shellOrderBroke bool
+	shellSawZone    bool
+	BlastMap        *ecs.Map[components.BlastMark]
+	UnsafeFilter    *ecs.Filter2[components.UnsafeArea, components.WorldPos]
+	StateMap        *ecs.Map[components.OrderState]
+
 	// Set for ai_vehicle_flee (MB3): squadded truck under unanswerable fire —
 	// retreat distance, order survival across the reflex, resumption after.
 	fleeActive    bool
@@ -1980,6 +2066,10 @@ func (s *aiTestState) Update(elapsed float32) {
 	}
 	if s.stuckActive {
 		s.updateVehStuck(elapsed)
+		return
+	}
+	if s.shellActive {
+		s.updateShellfire(elapsed)
 		return
 	}
 	if s.fleeActive {
@@ -3433,6 +3523,163 @@ func (s *aiTestState) updateConvoyRoad(elapsed float32) {
 		fmt.Printf("== VERDICT [%s]: %s  (done=%v maxDist=%.1f t=%.1fs roadTicks=%d bridge=%d)\n",
 			s.sceneID, verdict, s.convoyRoadArrive > 0, maxDist, elapsed,
 			s.convoyRoadTicks, s.vehBridgeTicks)
+		fmt.Println("============================================================")
+		s.verdictDone = true
+	}
+}
+
+// updateShellfire (MC1): DefendPosition + a walking barrage. PASS = a zone
+// was raised, ≥80% of the roster left it within 10 s of the first shell, the
+// order never left InProgress, and ≥80% are back on the held position within
+// 30 s of the last shell.
+func (s *aiTestState) updateShellfire(elapsed float32) {
+	if s.verdictDone {
+		return
+	}
+	if !s.orderFired {
+		if elapsed < s.orderAt {
+			return
+		}
+		fmt.Println("============================================================")
+		fmt.Printf("== AI SHELLFIRE: squad=%v holds (40,40), barrage %.0f..%.0fs\n",
+			s.shellSquad, s.orderAt+2, s.shellStopAt)
+		fmt.Println("============================================================")
+		s.SquadService.IssueOrder(s.shellSquad, components.OrderKindDefendPosition,
+			s.shellHold, ecs.Entity{}, false, systems.OrderParams{})
+		s.orderFired = true
+		s.shellNextAt = s.orderAt + 2
+		return
+	}
+	// Walk shells across the held position: alternating offsets so the
+	// aggregator sees a barrage, not one crater.
+	if elapsed >= s.shellNextAt && elapsed < s.shellStopAt {
+		s.shellNextAt = elapsed + 1.0
+		off := float32(s.shellShots%3)*4 - 4
+		centre := s.shellCentre.Add(rl.Vector3{X: off, Z: -off})
+		systems.SpawnBlastMark(s.World, s.PosMap, s.BlastMap, centre, 8, 0.8, elapsed)
+		if roster := s.RosterMap.Get(s.shellSquad); roster != nil {
+			for i := uint8(0); i < roster.Count; i++ {
+				mem := roster.Members[i]
+				if mem == (ecs.Entity{}) || !s.World.Alive(mem) {
+					continue
+				}
+				if buf := s.DangerMap.Get(mem); buf != nil {
+					components.PushDanger(buf, components.DangerEvent{
+						Kind:     components.DangerExplosion,
+						Pos:      centre,
+						Strength: 0.5,
+						Time:     elapsed,
+					})
+				}
+			}
+		}
+		s.shellShots++
+	}
+
+	// Live zone (radius drives the vacate metric).
+	zoneR := float32(0)
+	var zoneX, zoneZ float32
+	qz := s.UnsafeFilter.Query()
+	for qz.Next() {
+		area, pos := qz.Get()
+		if area.Radius > zoneR {
+			zoneR = area.Radius
+			zoneX = float32(pos.Chunk.X)*components.ChunkSize + pos.Local.X
+			zoneZ = float32(pos.Chunk.Z)*components.ChunkSize + pos.Local.Z
+		}
+	}
+	qz.Close()
+	if zoneR > 0 {
+		s.shellSawZone = true
+		s.shellZoneR = zoneR
+	} else {
+		zoneX = float32(s.shellCentre.Chunk.X)*components.ChunkSize + s.shellCentre.Local.X
+		zoneZ = float32(s.shellCentre.Chunk.Z)*components.ChunkSize + s.shellCentre.Local.Z
+		zoneR = s.shellZoneR
+	}
+
+	// The player's order must survive the whole barrage.
+	live := false
+	if h := s.OQMap.Get(s.shellSquad); h != nil && h.First != (ecs.Entity{}) &&
+		s.World.Alive(h.First) {
+		if st := s.StateMap.Get(h.First); st != nil &&
+			st.Code == components.OrderStateInProgress {
+			live = true
+		}
+	}
+	if !live && elapsed > s.orderAt+1 {
+		s.shellOrderBroke = true
+	}
+
+	roster := s.RosterMap.Get(s.shellSquad)
+	if roster == nil {
+		return
+	}
+	var total, outside, home float32
+	hx := float32(s.shellHold.Chunk.X)*components.ChunkSize + s.shellHold.Local.X
+	hz := float32(s.shellHold.Chunk.Z)*components.ChunkSize + s.shellHold.Local.Z
+	for i := uint8(0); i < roster.Count; i++ {
+		mem := roster.Members[i]
+		if mem == (ecs.Entity{}) || !s.World.Alive(mem) {
+			continue
+		}
+		p := s.PosMap.Get(mem)
+		if p == nil {
+			continue
+		}
+		total++
+		mx := float32(p.Chunk.X)*components.ChunkSize + p.Local.X
+		mz := float32(p.Chunk.Z)*components.ChunkSize + p.Local.Z
+		if dx, dz := mx-zoneX, mz-zoneZ; zoneR <= 0 || dx*dx+dz*dz > zoneR*zoneR {
+			outside++
+		}
+		// "Home" = inside the formation footprint around the held point.
+		if dx, dz := mx-hx, mz-hz; dx*dx+dz*dz < 20*20 {
+			home++
+		}
+	}
+	if total > 0 {
+		if s.shellVacatedAt == 0 && s.shellSawZone && outside/total >= 0.8 {
+			s.shellVacatedAt = elapsed
+		}
+		if s.shellVacatedAt > 0 && s.shellReturnedAt == 0 &&
+			elapsed > s.shellStopAt && home/total >= 0.8 {
+			s.shellReturnedAt = elapsed
+		}
+	}
+
+	if elapsed >= s.nextSampleAt && elapsed < s.verdictAt {
+		s.nextSampleAt = elapsed + aiSampleEvery
+		ovN, ovShell := 0, 0
+		for i := uint8(0); i < roster.Count; i++ {
+			mem := roster.Members[i]
+			if mem == (ecs.Entity{}) || !s.World.Alive(mem) {
+				continue
+			}
+			if ov := s.OverrideMap.Get(mem); ov != nil {
+				ovN++
+				if ov.Reason == components.TacticalOverrideShellfire {
+					ovShell++
+				}
+			}
+		}
+		fmt.Printf("[ai-test %s] t=%.1fs shells=%d zoneR=%.1f outside=%.0f/%.0f home=%.0f ov=%d(shell=%d) vacated=%.1f returned=%.1f order=%v\n",
+			s.sceneID, elapsed, s.shellShots, zoneR, outside, total, home,
+			ovN, ovShell, s.shellVacatedAt, s.shellReturnedAt, live)
+	}
+
+	if s.shellReturnedAt > 0 || elapsed >= s.verdictAt {
+		vacateOK := s.shellVacatedAt > 0 && s.shellVacatedAt <= s.orderAt+2+10
+		returnOK := s.shellReturnedAt > 0 && s.shellReturnedAt <= s.shellStopAt+30
+		pass := s.shellSawZone && vacateOK && returnOK && !s.shellOrderBroke
+		verdict := "FAIL"
+		if pass {
+			verdict = "PASS"
+		}
+		fmt.Println("============================================================")
+		fmt.Printf("== VERDICT [%s]: %s  (zone=%v vacatedAt=%.1f returnedAt=%.1f orderHeld=%v shells=%d t=%.1fs)\n",
+			s.sceneID, verdict, s.shellSawZone, s.shellVacatedAt, s.shellReturnedAt,
+			!s.shellOrderBroke, s.shellShots, elapsed)
 		fmt.Println("============================================================")
 		s.verdictDone = true
 	}

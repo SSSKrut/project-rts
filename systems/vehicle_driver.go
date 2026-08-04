@@ -276,7 +276,11 @@ func (sys *VehicleDriverSystem) step(ent ecs.Entity, veh *components.Vehicle,
 	// arrival — stopping short beats orbiting the occupied spot.
 	arrive := rampPopRadius(vehArrivalRadius, spec)
 	arrived := distSq < arrive*arrive
-	if !arrived && distSq < (arrive+2*spec.ColliderR)*(arrive+2*spec.ColliderR) {
+	// "Someone already parked here, stop short" is for a SHARED goal (a group
+	// sent to one point). A formation slot is reserved for this hull alone —
+	// counting a mate parked near it as arrival strands the member a slot
+	// away and the squad never finishes re-forming.
+	if !arrived && !inSquad && distSq < (arrive+2*spec.ColliderR)*(arrive+2*spec.ColliderR) {
 		gx, gz := worldXZ(action.Target)
 		arrived = sys.goalCrowded(ent, gx, gz, arrive+spec.ColliderR)
 	}

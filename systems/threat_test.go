@@ -202,3 +202,86 @@ func TestChannelDecayRatesDistinct(t *testing.T) {
 			components.ChannelDecayRates[components.ThreatChannelInjury])
 	}
 }
+
+// TestCrossfireSplitsIntoTwoClusters: shooters from opposite bearings must
+// stay two distinct clusters — an averaged direction points between them,
+// i.e. at cover that stops neither.
+func TestCrossfireSplitsIntoTwoClusters(t *testing.T) {
+	threat := &components.Threat{}
+	buf := &components.DangerBuffer{}
+	pos := &components.WorldPos{}
+	components.PushDanger(buf, components.DangerEvent{
+		Kind: components.DangerBulletImpact, Strength: 0.4,
+		Pos: components.WorldPos{Local: rl.Vector3{X: 20}},
+	})
+	components.PushDanger(buf, components.DangerEvent{
+		Kind: components.DangerBulletImpact, Strength: 0.3,
+		Pos: components.WorldPos{Local: rl.Vector3{Z: 20}},
+	})
+	tickThreat(threat, buf, pos, 0)
+
+	if threat.Clusters[0].Weight <= 0 || threat.Clusters[1].Weight <= 0 {
+		t.Fatalf("want two live clusters, got %+v", threat.Clusters)
+	}
+	if threat.Clusters[0].Weight < threat.Clusters[1].Weight {
+		t.Errorf("clusters not sorted by weight: %+v", threat.Clusters)
+	}
+	// Dominant = the stronger west-pointing bearing (unit is west of it).
+	if threat.Clusters[0].Dir.X >= 0 {
+		t.Errorf("dominant Dir.X = %f, want negative", threat.Clusters[0].Dir.X)
+	}
+	if !nearlyEqual(threat.ThreatDir.X, threat.Clusters[0].Dir.X) {
+		t.Errorf("ThreatDir must mirror the dominant cluster: %v vs %v",
+			threat.ThreatDir, threat.Clusters[0].Dir)
+	}
+	if !nearlyEqual(threat.Clusters[0].Dist, 20) {
+		t.Errorf("Dist = %f, want 20", threat.Clusters[0].Dist)
+	}
+}
+
+// TestNearbyBearingsMerge: two events inside the merge cone are one cluster.
+func TestNearbyBearingsMerge(t *testing.T) {
+	threat := &components.Threat{}
+	buf := &components.DangerBuffer{}
+	pos := &components.WorldPos{}
+	components.PushDanger(buf, components.DangerEvent{
+		Kind: components.DangerBulletImpact, Strength: 0.2,
+		Pos: components.WorldPos{Local: rl.Vector3{X: 20}},
+	})
+	components.PushDanger(buf, components.DangerEvent{
+		Kind: components.DangerBulletImpact, Strength: 0.2,
+		Pos: components.WorldPos{Local: rl.Vector3{X: 20, Z: 4}},
+	})
+	tickThreat(threat, buf, pos, 0)
+
+	if threat.Clusters[1].Weight != 0 {
+		t.Errorf("want one merged cluster, got %+v", threat.Clusters)
+	}
+	if !nearlyEqual(threat.Clusters[0].Weight, 0.4) {
+		t.Errorf("merged Weight = %f, want 0.4", threat.Clusters[0].Weight)
+	}
+}
+
+// TestClusterDecayDropsStaleBearing: with no fresh events the bearing bleeds
+// out and the slot frees.
+func TestClusterDecayDropsStaleBearing(t *testing.T) {
+	threat := &components.Threat{}
+	buf := &components.DangerBuffer{}
+	pos := &components.WorldPos{}
+	components.PushDanger(buf, components.DangerEvent{
+		Kind: components.DangerBulletImpact, Strength: 0.5,
+		Pos: components.WorldPos{Local: rl.Vector3{X: 20}},
+	})
+	tickThreat(threat, buf, pos, 0)
+	if threat.Clusters[0].Weight <= 0 {
+		t.Fatal("cluster not seeded")
+	}
+	// Long enough for both the channel and the cluster to bleed out.
+	tickThreat(threat, buf, pos, 30)
+	if threat.Clusters[0].Weight != 0 {
+		t.Errorf("stale cluster survived: %+v", threat.Clusters[0])
+	}
+	if threat.ThreatDir.X != 0 || threat.ThreatDir.Z != 0 {
+		t.Errorf("ThreatDir must clear with the last cluster: %v", threat.ThreatDir)
+	}
+}

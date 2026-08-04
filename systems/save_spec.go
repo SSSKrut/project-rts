@@ -65,6 +65,8 @@ var saveComponents = map[string]saveEntry{
 
 	"components.Weapon":       saveReg[components.Weapon](SaveMemcpy),
 	"components.ThreatSource": saveReg[components.ThreatSource](SaveMemcpy),
+	"components.BlastMark":    saveReg[components.BlastMark](SaveMemcpy),
+	"components.UnsafeArea":   saveReg[components.UnsafeArea](SaveMemcpy),
 	"components.Radio":        saveReg[components.Radio](SaveMemcpy),
 	"components.Medkit":       saveReg[components.Medkit](SaveMemcpy),
 	"components.Spade":        saveReg[components.Spade](SaveMemcpy),

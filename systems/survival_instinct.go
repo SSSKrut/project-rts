@@ -33,6 +33,7 @@ import (
 type SurvivalInstinctSystem struct {
 	unitFilter    *ecs.Filter3[components.Unit, components.WorldPos, components.Threat]
 	slotFilter    *ecs.Filter2[components.WorldPos, components.CoverSlot]
+	unsafeFilter  *ecs.Filter2[components.UnsafeArea, components.WorldPos]
 	squadFilter   *ecs.Filter2[components.Squad, components.CommandRoster]
 	queueMap      *ecs.Map[components.ActionQueue]
 	overrideMap   *ecs.Map[components.TacticalOverride]
@@ -51,6 +52,7 @@ type SurvivalInstinctSystem struct {
 	world *ecs.World
 
 	slots     []siCoverSlot
+	unsafe    []siUnsafeZone
 	acquires  []siAcquireOp
 	clears    []ecs.Entity
 	stateAdds []siStateAdd
@@ -87,6 +89,11 @@ type siCoverSlot struct {
 	quality  float32
 }
 
+// siUnsafeZone is the per-tick snapshot of one live UnsafeArea (P3).
+type siUnsafeZone struct {
+	x, z, radius float32
+}
+
 // siAcquireOp is a queued "give this unit cover" decision. Batched because
 // Add[TacticalOverride] can't run inside the live unit filter.
 type siAcquireOp struct {
@@ -120,6 +127,10 @@ const siSafetyUntil float32 = 30.0
 // Max distance (m) from the unit to a candidate slot.
 const siCoverSearchRadius float32 = 30.0
 
+// How far past a zone's edge an evacuation aims — stopping exactly on the
+// boundary re-triggers the moment the zone breathes.
+const siEvacMargin float32 = 6.0
+
 // A freshly issued player order owns the unit for this long — no NEW
 // override may be placed inside the window (squad Scrambling excepted).
 const siOrderGraceWindow float32 = 4.0
@@ -149,6 +160,7 @@ func (sys *SurvivalInstinctSystem) InitUI(w *ecs.World) {
 	sys.world = w
 	sys.unitFilter = ecs.NewFilter3[components.Unit, components.WorldPos, components.Threat](w)
 	sys.slotFilter = ecs.NewFilter2[components.WorldPos, components.CoverSlot](w)
+	sys.unsafeFilter = ecs.NewFilter2[components.UnsafeArea, components.WorldPos](w)
 	sys.squadFilter = ecs.NewFilter2[components.Squad, components.CommandRoster](w)
 	sys.queueMap = ecs.NewMap[components.ActionQueue](w)
 	sys.overrideMap = ecs.NewMap[components.TacticalOverride](w)
@@ -196,6 +208,16 @@ func (sys *SurvivalInstinctSystem) Update(ctx core.UpdateContext) {
 		})
 	}
 
+	// Pass 1b — snapshot live unsafe areas (P3). Standing in one is its own
+	// reason to move, and cover inside one is not cover.
+	sys.unsafe = sys.unsafe[:0]
+	qZ := sys.unsafeFilter.Query()
+	for qZ.Next() {
+		area, pos := qZ.Get()
+		x, z := worldXZ(*pos)
+		sys.unsafe = append(sys.unsafe, siUnsafeZone{x: x, z: z, radius: area.Radius})
+	}
+
 	// Pass 1.5 — ScatterProtocol: per squad, decide Idle / Engaged /
 	// Scrambling; squadInfo is read by Pass 2.
 	sys.runScatterProtocol(now)
@@ -234,6 +256,16 @@ func (sys *SurvivalInstinctSystem) Update(ctx core.UpdateContext) {
 			threatDir = squadThreat
 		}
 
+		// Standing in a shelled area is its own trigger: the threshold drops
+		// like Scrambling, and the bearing points out of the zone even when
+		// the channels have not caught up yet.
+		if zone := sys.zoneUnder(pos); zone >= 0 {
+			effectiveThreshold = 0
+			if dir, ok := sys.evacDir(pos, zone); ok {
+				threatDir = dir
+			}
+		}
+
 		existing := sys.overrideMap.Get(ent)
 		if existing == nil {
 			// Self-heal external clears (SquadService removes overrides on a
@@ -249,14 +281,27 @@ func (sys *SurvivalInstinctSystem) Update(ctx core.UpdateContext) {
 				(rules.HoldUntilOrdered || !rules.AllowAutoReposition) {
 				continue
 			}
-			if threat.Total <= effectiveThreshold && !scrambling {
+			inZone := sys.zoneUnder(pos) >= 0
+			if threat.Total <= effectiveThreshold && !scrambling && !inZone {
 				continue
 			}
-			if !scrambling && sys.orderGraceActive(ent, now) {
+			if !scrambling && !inZone && sys.orderGraceActive(ent, now) {
 				continue
 			}
 			slot, slotPos, found := sys.pickCover(ent, pos, threatDir, claimed)
 			if !found {
+				// No cover to run to. Standing in a beaten zone that is still
+				// a decision: walk out of it. Anywhere else, hold — moving to
+				// nowhere in particular is the "болванчик" behaviour.
+				if !inZone {
+					continue
+				}
+				evacPos, ok := sys.evacTarget(pos)
+				if !ok {
+					continue
+				}
+				sys.acquires = append(sys.acquires,
+					siAcquireOp{unit: ent, pos: evacPos})
 				continue
 			}
 			claimed[slot] = ent
@@ -340,8 +385,12 @@ func (sys *SurvivalInstinctSystem) Update(ctx core.UpdateContext) {
 		if sys.overrideMap.Has(op.unit) {
 			sys.overrideMap.Remove(op.unit)
 		}
+		reason := components.TacticalOverrideUnderFire
+		if op.slot == (ecs.Entity{}) {
+			reason = components.TacticalOverrideShellfire
+		}
 		sys.overrideMap.Add(op.unit, &components.TacticalOverride{
-			Reason:       components.TacticalOverrideUnderFire,
+			Reason:       reason,
 			Until:        now + siSafetyUntil,
 			LowSuppSince: 0,
 			AssignedSlot: op.slot,
@@ -352,7 +401,10 @@ func (sys *SurvivalInstinctSystem) Update(ctx core.UpdateContext) {
 		if bb := sys.blackboardMap.Get(op.unit); bb != nil {
 			bb.AssignedCover = op.slot
 		}
-		sys.occupancyClaim[op.slot]++
+		// An evacuation holds no slot — the ledger counts cover claims only.
+		if op.slot != (ecs.Entity{}) {
+			sys.occupancyClaim[op.slot]++
+		}
 	}
 }
 

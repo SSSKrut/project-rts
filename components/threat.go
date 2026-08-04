@@ -54,11 +54,40 @@ type Threat struct {
 	Injury float32
 
 	// ThreatDir - unit-length world XZ vector from the dominant threat
-	// source toward the unit.
+	// source toward the unit. DERIVED from Clusters[0] since P3: readers that
+	// only need "where is the main threat" keep working unchanged.
 	ThreatDir rl.Vector3
+
+	// Clusters holds the distinct threat bearings this unit is under, sorted
+	// by Weight (dominant first). One averaged direction is a lie in a
+	// crossfire — it points between two shooters, i.e. at cover that stops
+	// neither. Empty slots have Weight == 0.
+	Clusters [ThreatClusterCount]ThreatCluster
 
 	State ThreatState
 }
+
+// ThreatCluster is one direction danger arrives from. Dir points FROM the
+// source TOWARD the unit (same convention as ThreatDir), Dist is the metric
+// distance to the source, Weight the decayed accumulated strength, LastAt the
+// sim time of the last contribution.
+type ThreatCluster struct {
+	Dir    rl.Vector3
+	Dist   float32
+	Weight float32
+	LastAt float32
+}
+
+const (
+	// How many distinct bearings a unit tracks. Three covers "front + flank +
+	// the one behind me"; a fourth adds noise, not decisions.
+	ThreatClusterCount = 3
+	// Merge threshold: events within ~60° of a cluster join it.
+	ThreatClusterMergeCos float32 = 0.5
+	// Per-second weight decay. Slower than any channel: a bearing stays
+	// actionable a little past the pressure that established it.
+	ThreatClusterDecay float32 = 0.08
+)
 
 // ClassifyThreat maps a Total in [0,1] to a ThreatState band.
 func ClassifyThreat(total float32) ThreatState {
@@ -187,3 +216,34 @@ type ThreatSource struct {
 	SpawnTime float32
 	TTL       float32
 }
+
+// BlastMark is one recent explosion, spawned with a WorldPos and reaped by
+// ThreatDecaySystem. It exists as an ENTITY rather than a ring on some system
+// so the "was there shelling here recently" memory rides save/load like
+// everything else — private cross-tick state would re-arm zones at different
+// ticks after a load and break replay continuity.
+type BlastMark struct {
+	Radius    float32
+	Severity  float32
+	ExpiresAt float64
+}
+
+// UnsafeArea is a volume the AI must vacate — spawned when several blasts
+// land close together in time and space (artillery walking over a position),
+// reaped on TTL. Entity layout mirrors SmokeField: UnsafeArea + WorldPos.
+type UnsafeArea struct {
+	Radius    float32
+	Severity  float32
+	ExpiresAt float64
+}
+
+const (
+	// Blast memory window (seconds) and the radius within which separate
+	// blasts count as the same barrage.
+	BlastMarkTTL       float32 = 6.0
+	UnsafeClusterR     float32 = 18.0
+	UnsafeMinBlasts            = 2
+	UnsafeAreaTTL      float32 = 8.0
+	UnsafeAreaMinR     float32 = 12.0
+	UnsafeDangerPerSec float32 = 0.55
+)

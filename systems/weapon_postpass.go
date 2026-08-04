@@ -104,6 +104,60 @@ func (sys *WeaponSystem) applySplashToVehicles(ev splashEvent, hash *core.Spatia
 	})
 }
 
+// propagateBlast pushes DangerExplosion to everyone inside the blast's felt
+// radius and drops a BlastMark for the unsafe-area aggregator. Felt radius is
+// wider than the lethal one — being missed by a shell is still a reason to
+// leave.
+func (sys *WeaponSystem) propagateBlast(ev splashEvent, now float32) {
+	feltR := ev.radius * blastFeltMul
+	severity := ev.damage * 0.01
+	if severity > 1 {
+		severity = 1
+	}
+	centre := components.WorldPos{}.Add(rl.Vector3{X: ev.pos.X, Z: ev.pos.Z})
+	push := func(ent ecs.Entity, dSq float32) {
+		if !sys.worldRef.Alive(ent) {
+			return
+		}
+		buf := sys.dangerBufMap.Get(ent)
+		if buf == nil {
+			return
+		}
+		falloff := 1 - float32(math.Sqrt(float64(dSq)))/feltR
+		if falloff <= 0 {
+			return
+		}
+		components.PushDanger(buf, components.DangerEvent{
+			Kind:     components.DangerExplosion,
+			Pos:      centre,
+			Strength: severity * falloff,
+			Time:     now,
+		})
+	}
+	if hash := sys.spatialHash.Get(); hash != nil {
+		hash.ForEachInRadius(ev.pos.X, ev.pos.Z, feltR, push)
+	}
+	if vh := sys.vehHash.Get(); vh != nil {
+		vh.SpatialHash.ForEachInRadius(ev.pos.X, ev.pos.Z, feltR, push)
+	}
+	SpawnBlastMark(sys.worldRef, sys.posMap, sys.blastMap, centre, ev.radius, severity, now)
+}
+
+// SpawnBlastMark records one explosion for the unsafe-area aggregator. Shared
+// with test harnesses that stage synthetic shelling.
+func SpawnBlastMark(world *ecs.World, posMap *ecs.Map[components.WorldPos],
+	blastMap *ecs.Map[components.BlastMark], pos components.WorldPos,
+	radius, severity, now float32) {
+	e := world.NewEntity()
+	p := pos
+	posMap.Add(e, &p)
+	blastMap.Add(e, &components.BlastMark{
+		Radius:    radius,
+		Severity:  severity,
+		ExpiresAt: float64(now) + float64(components.BlastMarkTTL),
+	})
+}
+
 // Pushes DangerBulletImpact into each nearby unit's DangerBuffer with
 // Strength = hitMul * (1 - d/radius). ThreatSystem drains the buffer next
 // tick to update Threat.Suppression / ThreatDir. Event Pos = the MUZZLE:

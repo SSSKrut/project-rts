@@ -71,6 +71,7 @@ type WeaponSystem struct {
 
 	threatSourceMap *ecs.Map[components.ThreatSource]
 	dangerBufMap    *ecs.Map[components.DangerBuffer]
+	blastMap        *ecs.Map[components.BlastMark]
 	worldRef        *ecs.World
 
 	spatialHash ecs.Resource[core.SpatialHash]
@@ -207,6 +208,9 @@ const (
 	weaponDefaultRadius float32 = 0.4
 	// Suppression propagation radius.
 	suppressionRadius float32 = 5.0
+	// A blast is felt well past its lethal radius — being missed by a shell
+	// is still a reason to leave (P3).
+	blastFeltMul float32 = 3.0
 	// Direct hit / miss weights.
 	suppressionHitMul  float32 = 0.5
 	suppressionMissMul float32 = 0.2
@@ -265,6 +269,7 @@ func (sys *WeaponSystem) InitUI(w *ecs.World) {
 	sys.blackboardMap = ecs.NewMap[components.LocalBlackboard](w)
 	sys.threatSourceMap = ecs.NewMap[components.ThreatSource](w)
 	sys.dangerBufMap = ecs.NewMap[components.DangerBuffer](w)
+	sys.blastMap = ecs.NewMap[components.BlastMark](w)
 	sys.worldRef = w
 
 	sys.spatialHash = ecs.NewResource[core.SpatialHash](w)
@@ -540,6 +545,14 @@ func (sys *WeaponSystem) applyPostPass(now float32) {
 			for _, ev := range sys.workerSplash[w] {
 				sys.applySplashToVehicles(ev, &vh.SpatialHash)
 			}
+		}
+	}
+	// P3: every blast is danger in its own right (Pos = the crater — unlike a
+	// bullet, that IS where it came from) and leaves a BlastMark so
+	// ThreatSystem can recognise a barrage and raise an unsafe area.
+	for w := range sys.workerSplash {
+		for _, ev := range sys.workerSplash[w] {
+			sys.propagateBlast(ev, now)
 		}
 	}
 	for w := range sys.workerDamage {

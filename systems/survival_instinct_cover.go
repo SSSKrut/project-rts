@@ -49,6 +49,10 @@ func (sys *SurvivalInstinctSystem) pickCover(
 		if distSq > siCoverSearchRadius*siCoverSearchRadius {
 			continue
 		}
+		// A wall inside the beaten zone stops bullets, not shells.
+		if sys.zoneAt(s.worldX, s.worldZ) >= 0 {
+			continue
+		}
 		facing := s.originX*tx + s.originZ*tz
 		if facing < -0.3 {
 			continue
@@ -85,4 +89,69 @@ func (sys *SurvivalInstinctSystem) pickCover(
 		return ecs.Entity{}, components.WorldPos{}, false
 	}
 	return bestEnt, bestPos, true
+}
+
+// zoneAt returns the index of the live unsafe area covering (x, z), or -1.
+func (sys *SurvivalInstinctSystem) zoneAt(x, z float32) int {
+	for i := range sys.unsafe {
+		zn := &sys.unsafe[i]
+		dx, dz := x-zn.x, z-zn.z
+		if dx*dx+dz*dz <= zn.radius*zn.radius {
+			return i
+		}
+	}
+	return -1
+}
+
+func (sys *SurvivalInstinctSystem) zoneUnder(pos *components.WorldPos) int {
+	x, z := worldXZ(*pos)
+	return sys.zoneAt(x, z)
+}
+
+// evacDir is the threat bearing for a unit standing in a zone: from the zone
+// centre toward the unit, i.e. cover picks face the shelling.
+func (sys *SurvivalInstinctSystem) evacDir(pos *components.WorldPos, zone int) (rl.Vector3, bool) {
+	if zone < 0 || zone >= len(sys.unsafe) {
+		return rl.Vector3{}, false
+	}
+	zn := &sys.unsafe[zone]
+	x, z := worldXZ(*pos)
+	dx, dz := x-zn.x, z-zn.z
+	l := float32(math.Sqrt(float64(dx*dx + dz*dz)))
+	if l < 1e-3 {
+		return rl.Vector3{}, false
+	}
+	return rl.Vector3{X: dx / l, Z: dz / l}, true
+}
+
+// evacTarget is the nearest point clear of EVERY live zone the unit stands
+// in, radially out from the deepest one. Straight out is the shortest way
+// through a beaten zone; MicroPath still routes around whatever is in the way.
+func (sys *SurvivalInstinctSystem) evacTarget(pos *components.WorldPos) (components.WorldPos, bool) {
+	x, z := worldXZ(*pos)
+	var bestOut float32
+	var bx, bz float32
+	found := false
+	for i := range sys.unsafe {
+		zn := &sys.unsafe[i]
+		dx, dz := x-zn.x, z-zn.z
+		d := float32(math.Sqrt(float64(dx*dx + dz*dz)))
+		if d > zn.radius {
+			continue
+		}
+		out := zn.radius - d + siEvacMargin
+		if out <= bestOut {
+			continue
+		}
+		if d < 1e-3 {
+			// Dead centre: deterministic bearing, else the unit dithers.
+			dx, dz, d = 1, 0, 1
+		}
+		bestOut, bx, bz = out, dx/d, dz/d
+		found = true
+	}
+	if !found {
+		return components.WorldPos{}, false
+	}
+	return pos.Add(rl.Vector3{X: bx * bestOut, Z: bz * bestOut}), true
 }

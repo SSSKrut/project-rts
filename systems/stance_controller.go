@@ -31,6 +31,10 @@ type StanceControllerSystem struct {
 	orderQueueMap *ecs.Map[components.OrderQueueHead]
 	// ModeSuppressed forces Prone regardless of band / lock / doctrine.
 	blackboardMap *ecs.Map[components.LocalBlackboard]
+	// Evacuating a shelled area overrides the band: prone caps speed at
+	// 1.5 m/s, which keeps the unit inside the beaten zone — and since prone
+	// never trips the moving-too-fast gate, the stance cannot lift itself.
+	tacticalMap *ecs.Map[components.TacticalOverride]
 }
 
 func NewStanceControllerSystem() *StanceControllerSystem {
@@ -46,6 +50,7 @@ func (sys *StanceControllerSystem) InitUI(w *ecs.World) {
 	sys.orderMoveOverr = ecs.NewMap[components.OrderParamMovementProfile](w)
 	sys.orderQueueMap = ecs.NewMap[components.OrderQueueHead](w)
 	sys.blackboardMap = ecs.NewMap[components.LocalBlackboard](w)
+	sys.tacticalMap = ecs.NewMap[components.TacticalOverride](w)
 }
 
 func (StanceControllerSystem) Name() string { return "stance_controller" }
@@ -67,6 +72,14 @@ func (sys *StanceControllerSystem) Update(ctx core.UpdateContext) {
 		ent := q.Entity()
 		_, stance, threat, mot := q.Get()
 
+		if tv := sys.tacticalMap.Get(ent); tv != nil &&
+			tv.Reason == components.TacticalOverrideShellfire {
+			if stance.Code != components.StanceStand {
+				stance.Code = components.StanceStand
+				stance.LockUntil = now + stanceAnimLock
+			}
+			continue
+		}
 		if ov := sys.overrideMap.Get(ent); ov != nil && ov.Until > now {
 			continue
 		}
