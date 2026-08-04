@@ -27,6 +27,11 @@ type MicroPath struct {
 	// displacement lets a wall-pinned walker oscillate (±0.3 m along the
 	// wall) hard enough to keep resetting the stuck timer forever.
 	BestDistSq float32
+	// ReplanCount: lifetime CHURN replans — replans that discarded a still-
+	// alive path (retarget / goal drift / stuck). Exhaustion replans (the
+	// 16-wp cap ran out) are legitimate extension and are not counted. The
+	// march-scene replan-rate metric budgets these per unit per minute.
+	ReplanCount uint16
 	// GateMask: bit k set ⇒ Waypoints[k] is a transition endpoint (door /
 	// stairs / wing junction). Gate waypoints advance only once the walker
 	// has crossed the opening plane — popping one by radius alone from the

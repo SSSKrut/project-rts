@@ -186,6 +186,13 @@ func (sys *OrderResolverSystem) evaluateCompletion(
 			if vr := reach + depth; vr > r {
 				r = vr
 			}
+		} else if fd := sys.formationDataMap.Get(squad); fd != nil &&
+			fd.Type == components.FormationColumn {
+			// An infantry column trails the goal the same way a vehicle
+			// column does (slots run backward from the leader): the member
+			// centroid parks half the column depth short and the 2.5 m ring
+			// never closes (found by ai_march_column — leg 1 froze forever).
+			r += fd.Spacing * float32(roster.Count) * 0.5
 		}
 		if centerXZDistSq(center, target.Pos) < r*r {
 			// Storey-target MoveTo ("Occupy L<n>"): the squad centre passes

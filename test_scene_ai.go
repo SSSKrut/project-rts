@@ -92,6 +92,12 @@ const (
 	aiSceneMarchLine  = "ai_march_line"
 	aiSceneMarchSlope = "ai_march_slope"
 
+	// ai_march_column (MA1): a Column squad of 8 marches three chained legs
+	// with two 90° turns. Verdict = arrival + churn-replan budget + no
+	// follower collapse onto one waypoint (never 3+ men bunched in a 1.2 m
+	// circle past the alignment window).
+	aiSceneMarchColumn = "ai_march_column"
+
 	// ai_cover_side (ISSUES #18): a 2-man squad stands BETWEEN a lone oak
 	// and a synthetic threat pulsing from the north (DangerBuffer injection,
 	// no bullets). The scramble must relocate both men to slots on the far
@@ -228,6 +234,8 @@ func aiSceneAnchorPos() components.WorldPos {
 		return components.WorldPos{}.Add(rl.Vector3{X: 75, Z: 10})
 	case aiSceneMarchSlope:
 		return components.WorldPos{}.Add(rl.Vector3{X: 20, Z: -10})
+	case aiSceneMarchColumn:
+		return components.WorldPos{}.Add(rl.Vector3{X: 40, Z: -5})
 	case aiSceneCoverSide:
 		return components.WorldPos{}.Add(rl.Vector3{X: 40, Z: -30})
 	case aiSceneVehCombat:
@@ -272,7 +280,7 @@ func aiSceneBuildings() []components.BuildingPlan {
 	}
 	switch aiSceneID() {
 	case aiSceneLosOpen, aiSceneLosDefilade, aiSceneLosCreep,
-		aiSceneMarchLine, aiSceneMarchSlope:
+		aiSceneMarchLine, aiSceneMarchSlope, aiSceneMarchColumn:
 		return nil
 	case aiSceneDoorSouth:
 		return aiBuildingsSingleHouse(0)
@@ -437,8 +445,56 @@ func aiSpawnPos() components.WorldPos {
 		return components.WorldPos{}.Add(rl.Vector3{X: 30, Z: 10})
 	case aiSceneMarchSlope:
 		return components.WorldPos{}.Add(rl.Vector3{X: -20, Z: -40})
+	case aiSceneMarchColumn:
+		return components.WorldPos{}.Add(rl.Vector3{X: 20, Z: -25})
 	}
 	return components.WorldPos{}
+}
+
+// aiMarchColumnSpawn (MA1): one MotorRifle squad in Column, three chained
+// legs with two 90° turns on open default-map terrain.
+func aiMarchColumnSpawn(
+	world *ecs.World,
+	squadService *systems.SquadService,
+	roleService *systems.RoleService,
+	unitFactory aiUnitSpawn,
+	playerFaction components.Faction,
+	posMap *ecs.Map[components.WorldPos],
+	rosterMap *ecs.Map[components.CommandRoster],
+) *aiTestState {
+	squad := squadService.CreateFromTemplate(
+		systems.TmplMotorRifle, aiSpawnPos(),
+		components.FormationColumn, playerFaction,
+		components.Controller{Owner: components.ControllerLocal},
+		roleService, unitFactory,
+	)
+	if squad == (ecs.Entity{}) {
+		fmt.Printf("[ai-test %s] FAILED TO SPAWN SQUAD — aborting\n", aiSceneID())
+		return nil
+	}
+	goal := func(wx, wz float32) components.WorldPos {
+		p := components.WorldPos{}.Add(rl.Vector3{X: wx, Z: wz})
+		p.Local.Y = systems.GroundHeight(wx, wz)
+		return p
+	}
+	return &aiTestState{
+		sceneID:      aiSceneID(),
+		squad:        squad,
+		columnActive: true,
+		columnGoals: []components.WorldPos{
+			goal(60, -25), goal(60, 15), goal(20, 15),
+		},
+		// Turn responses legitimately churn (target sweeps with the Forward
+		// slew); the budget catches the storm class (43+/u/min pre-P7a).
+		marchReplanMax: 15,
+		World:          world,
+		SquadService:   squadService,
+		PosMap:         posMap,
+		RosterMap:      rosterMap,
+		MicroPathMap:   ecs.NewMap[components.MicroPath](world),
+		orderAt:        aiOrderAt,
+		verdictAt:      90,
+	}
 }
 
 // aiMarchSceneSpawn (#12/#13): one MotorRifle squad in Line, straight MoveTo.
@@ -478,27 +534,38 @@ func aiMarchSceneSpawn(
 	spawn := aiSpawnPos()
 	solo1 := unitFactory(spawn.Add(rl.Vector3{X: -5, Z: -4}))
 	solo2 := unitFactory(spawn.Add(rl.Vector3{X: 5, Z: -4}))
+	replanMax := float32(2)
+	clearFloor := float32(-0.3)
+	if aiSceneID() == aiSceneMarchSlope {
+		// Threshold applies to the straight march only (plan MA1); the
+		// hills route legitimately churns on terrain detours — report, no gate.
+		replanMax = 0
+		clearFloor = -0.35
+	}
 	return &aiTestState{
-		sceneID:       aiSceneID(),
-		squad:         squad,
-		marchActive:   true,
-		marchGoal:     goal,
-		marchChurnMax: churnMax,
-		soloEnts:      []ecs.Entity{solo1, solo2},
-		AQMap:         ecs.NewMap[components.ActionQueue](world),
-		World:         world,
-		SquadService:  squadService,
-		PosMap:        posMap,
-		RosterMap:     rosterMap,
-		MotionMap:     ecs.NewMap[components.Motion](world),
-		FdMap:         ecs.NewMap[components.FormationData](world),
-		sampler:       systems.NewHeightSampler(world),
-		roadSurface:   ecs.NewResource[components.RoadSurface](world),
-		marchMinClear: 1e9,
-		marchMaxClear: -1e9,
-		orderAt:       aiOrderAt,
-		verdictAt:     120,
-		nextSampleAt:  aiOrderAt + 5,
+		sceneID:         aiSceneID(),
+		squad:           squad,
+		marchActive:     true,
+		marchGoal:       goal,
+		marchChurnMax:   churnMax,
+		marchReplanMax:  replanMax,
+		marchClearFloor: clearFloor,
+		soloEnts:        []ecs.Entity{solo1, solo2},
+		AQMap:           ecs.NewMap[components.ActionQueue](world),
+		World:           world,
+		SquadService:    squadService,
+		PosMap:          posMap,
+		RosterMap:       rosterMap,
+		MotionMap:       ecs.NewMap[components.Motion](world),
+		FdMap:           ecs.NewMap[components.FormationData](world),
+		MicroPathMap:    ecs.NewMap[components.MicroPath](world),
+		sampler:         systems.NewHeightSampler(world),
+		roadSurface:     ecs.NewResource[components.RoadSurface](world),
+		marchMinClear:   1e9,
+		marchMaxClear:   -1e9,
+		orderAt:         aiOrderAt,
+		verdictAt:       120,
+		nextSampleAt:    aiOrderAt + 5,
 	}
 }
 
@@ -880,6 +947,10 @@ func aiSceneSpawn(
 		return aiMarchSceneSpawn(world, squadService, roleService, unitFactory,
 			playerFaction, posMap, rosterMap)
 	}
+	if aiSceneID() == aiSceneMarchColumn {
+		return aiMarchColumnSpawn(world, squadService, roleService, unitFactory,
+			playerFaction, posMap, rosterMap)
+	}
 	if aiSceneID() == aiSceneCoverSide {
 		return aiCoverSceneSpawn(world, squadService, unitFactory, posMap, rosterMap)
 	}
@@ -1213,18 +1284,40 @@ type aiTestState struct {
 	marchActive   bool
 	marchGoal     components.WorldPos
 	marchChurnMax float32
-	soloEnts      []ecs.Entity
-	AQMap         *ecs.Map[components.ActionQueue]
-	FdMap         *ecs.Map[components.FormationData]
-	sampler       *systems.HeightSampler
-	roadSurface   ecs.Resource[components.RoadSurface]
-	marchMoveN    int
-	marchSideN    int
-	marchChurnDeg float32
-	marchLastFYaw float32
-	marchHaveFYaw bool
-	marchMinClear float32
-	marchMaxClear float32
+	// Churn-replan budget (replans/unit/min over roster+soloists); 0 = report only.
+	// Measured from orderAt+5 s — the same alignment window the churn-deg
+	// metric uses (the initial turn/shake-out is legitimate work, not storm).
+	marchReplanMax  float32
+	marchReplanBase float32
+	replanBaseSet   bool
+
+	// Set for ai_march_column (MA1): chained legs + follower-collapse metric.
+	// Collapse = 3+ men inside a 1.2 m circle SUSTAINED (transient corner
+	// proximity is normal — ORCA keeps bodies apart; parking on one shared
+	// waypoint is not). columnClusterWorst = longest sustained violation.
+	columnActive       bool
+	columnGoals        []components.WorldPos
+	columnClusterMax   int
+	columnClusterSince float32
+	columnClusterWorst float32
+	columnLastT        float32
+	// Min-clearance floor. The metric samples post-movement Y at the NEW xz
+	// before the next GroundStick clamp: on a steep carve-skirt cell
+	// (gradient ≥ 2 m/m) the one-frame reading is ±(gradient·step + yLerp)
+	// ≈ 0.33 m, so hills routes crossing the road cut get a looser floor.
+	marchClearFloor float32
+	soloEnts        []ecs.Entity
+	AQMap           *ecs.Map[components.ActionQueue]
+	FdMap           *ecs.Map[components.FormationData]
+	sampler         *systems.HeightSampler
+	roadSurface     ecs.Resource[components.RoadSurface]
+	marchMoveN      int
+	marchSideN      int
+	marchChurnDeg   float32
+	marchLastFYaw   float32
+	marchHaveFYaw   bool
+	marchMinClear   float32
+	marchMaxClear   float32
 
 	elapsed      float32
 	orderAt      float32
@@ -1293,6 +1386,10 @@ func (s *aiTestState) Update(elapsed float32) {
 	}
 	if s.marchActive {
 		s.updateMarch(elapsed)
+		return
+	}
+	if s.columnActive {
+		s.updateMarchColumn(elapsed)
 		return
 	}
 	if s.avoidActive {
@@ -1512,6 +1609,120 @@ func angDiffAbs(a, b float32) float32 {
 	return d
 }
 
+// updateMarchColumn (MA1): chained-leg column march. Verdict = arrival at
+// the final leg + churn-replan budget + no follower collapse (never 3+ men
+// inside a 1.2 m circle past the alignment window — the discrete leader-wake
+// used to converge every follower onto one waypoint at the leg's end).
+func (s *aiTestState) updateMarchColumn(elapsed float32) {
+	if s.verdictDone {
+		return
+	}
+	if !s.orderFired {
+		if elapsed < s.orderAt {
+			return
+		}
+		fmt.Println("============================================================")
+		fmt.Printf("== AI MARCH COLUMN: %s  squad=%v legs=%d\n",
+			s.sceneID, s.squad, len(s.columnGoals))
+		fmt.Println("============================================================")
+		for li, g := range s.columnGoals {
+			s.SquadService.IssueOrder(s.squad, components.OrderKindMoveTo,
+				g, ecs.Entity{}, li > 0, systems.OrderParams{})
+		}
+		s.orderFired = true
+		return
+	}
+
+	roster := s.RosterMap.Get(s.squad)
+	if roster == nil {
+		return
+	}
+
+	// Follower-collapse metric: for every live member, count live members
+	// (itself included) inside 1.2 m; track the run maximum.
+	if elapsed > s.orderAt+5 {
+		var xs, zs [16]float32
+		n := 0
+		for i := uint8(0); i < roster.Count && n < 16; i++ {
+			mem := roster.Members[i]
+			if mem == (ecs.Entity{}) || !s.World.Alive(mem) {
+				continue
+			}
+			if p := s.PosMap.Get(mem); p != nil {
+				xs[n] = float32(p.Chunk.X)*components.ChunkSize + p.Local.X
+				zs[n] = float32(p.Chunk.Z)*components.ChunkSize + p.Local.Z
+				n++
+			}
+		}
+		const clusterR = 1.2
+		cur := 0
+		for a := 0; a < n; a++ {
+			c := 0
+			for b := 0; b < n; b++ {
+				dx, dz := xs[a]-xs[b], zs[a]-zs[b]
+				if dx*dx+dz*dz <= clusterR*clusterR {
+					c++
+				}
+			}
+			if c > cur {
+				cur = c
+			}
+		}
+		if cur > s.columnClusterMax {
+			s.columnClusterMax = cur
+		}
+		if cur >= 3 {
+			if s.columnClusterSince == 0 {
+				s.columnClusterSince = elapsed
+			}
+			if d := elapsed - s.columnClusterSince; d > s.columnClusterWorst {
+				s.columnClusterWorst = d
+			}
+		} else {
+			s.columnClusterSince = 0
+		}
+	}
+
+	// Arrival keys on the LEADER: a column's member centroid legitimately
+	// trails the goal by half the column depth.
+	final := s.columnGoals[len(s.columnGoals)-1]
+	arrived := false
+	if leader := roster.Members[0]; leader != (ecs.Entity{}) && s.World.Alive(leader) {
+		if p := s.PosMap.Get(leader); p != nil {
+			d := p.Sub(final)
+			arrived = d.X*d.X+d.Z*d.Z < 4*4 && elapsed > s.orderAt+10
+		}
+	}
+
+	if elapsed >= s.nextSampleAt && elapsed < s.verdictAt && !arrived {
+		s.nextSampleAt = elapsed + aiSampleEvery
+		distToFinal := float32(-1)
+		if center, ok := systems.SquadCenter(s.World, roster, s.PosMap); ok {
+			d := center.Sub(final)
+			distToFinal = float32(math.Sqrt(float64(d.X*d.X + d.Z*d.Z)))
+		}
+		fmt.Printf("[ai-test %s] t=%.1fs cluster=%d replan=%.1f/u/min distFinal=%.1f\n",
+			s.sceneID, elapsed, s.columnClusterMax, s.replanRate(roster, elapsed), distToFinal)
+	}
+
+	if arrived || elapsed >= s.verdictAt {
+		replanRate := s.replanRate(roster, elapsed)
+		pass := arrived &&
+			s.columnClusterWorst < 1.0 &&
+			(s.marchReplanMax == 0 || replanRate <= s.marchReplanMax)
+		verdict := "FAIL"
+		if pass {
+			verdict = "PASS"
+		}
+		fmt.Println("============================================================")
+		fmt.Printf("== VERDICT [%s]: %s  (arrived=%v t=%.1fs cluster=%d clusterHold=%.2fs replan=%.1f/u/min)\n",
+			s.sceneID, verdict, arrived, elapsed, s.columnClusterMax,
+			s.columnClusterWorst, replanRate)
+		fmt.Println("============================================================")
+		s.verdictDone = true
+	}
+}
+
 func (s *aiTestState) updateMarch(elapsed float32) {
 	if s.verdictDone {
 		return
@@ -1613,8 +1824,9 @@ func (s *aiTestState) updateMarch(elapsed float32) {
 		if s.marchMoveN > 0 {
 			sideFrac = float32(s.marchSideN) / float32(s.marchMoveN)
 		}
-		fmt.Printf("[ai-test %s] t=%.1fs side=%.3f churn=%.0fdeg clear=[%.2f..%.2f]\n",
-			s.sceneID, elapsed, sideFrac, s.marchChurnDeg, s.marchMinClear, s.marchMaxClear)
+		fmt.Printf("[ai-test %s] t=%.1fs side=%.3f churn=%.0fdeg clear=[%.2f..%.2f] replan=%.1f/u/min\n",
+			s.sceneID, elapsed, sideFrac, s.marchChurnDeg, s.marchMinClear, s.marchMaxClear,
+			s.replanRate(roster, elapsed))
 	}
 
 	if arrived || elapsed >= s.verdictAt {
@@ -1622,25 +1834,65 @@ func (s *aiTestState) updateMarch(elapsed float32) {
 		if s.marchMoveN > 0 {
 			sideFrac = float32(s.marchSideN) / float32(s.marchMoveN)
 		}
+		replanRate := s.replanRate(roster, elapsed)
 		// Post-fix baseline: line 0deg side 0.01-0.03 clear ±0.14; slope
 		// 88deg side 0.02-0.05 clear -0.22..0.18. Pre-fix: churn 410deg,
 		// side-storms, clear -0.32 (and unbounded on far solo orders).
 		pass := arrived &&
 			sideFrac <= 0.08 &&
 			s.marchChurnDeg <= s.marchChurnMax &&
-			s.marchMinClear >= -0.3 &&
-			s.marchMaxClear <= 0.5
+			s.marchMinClear >= s.marchClearFloor &&
+			s.marchMaxClear <= 0.5 &&
+			(s.marchReplanMax == 0 || replanRate <= s.marchReplanMax)
 		verdict := "FAIL"
 		if pass {
 			verdict = "PASS"
 		}
 		fmt.Println("============================================================")
-		fmt.Printf("== VERDICT [%s]: %s  (arrived=%v t=%.1fs side=%.3f churn=%.0fdeg clear=[%.2f..%.2f])\n",
+		fmt.Printf("== VERDICT [%s]: %s  (arrived=%v t=%.1fs side=%.3f churn=%.0fdeg clear=[%.2f..%.2f] replan=%.1f/u/min)\n",
 			s.sceneID, verdict, arrived, elapsed, sideFrac, s.marchChurnDeg,
-			s.marchMinClear, s.marchMaxClear)
+			s.marchMinClear, s.marchMaxClear, replanRate)
 		fmt.Println("============================================================")
 		s.verdictDone = true
 	}
+}
+
+// replanRate returns churn replans per unit per minute past the 5 s
+// alignment window, over live roster members + soloists.
+func (s *aiTestState) replanRate(roster *components.CommandRoster, elapsed float32) float32 {
+	var total, units float32
+	count := func(e ecs.Entity) {
+		if e == (ecs.Entity{}) || !s.World.Alive(e) {
+			return
+		}
+		if mp := s.MicroPathMap.Get(e); mp != nil {
+			total += float32(mp.ReplanCount)
+			units++
+		}
+	}
+	if roster != nil {
+		for i := uint8(0); i < roster.Count; i++ {
+			count(roster.Members[i])
+		}
+	}
+	for _, e := range s.soloEnts {
+		count(e)
+	}
+	if units == 0 {
+		return 0
+	}
+	if elapsed < s.orderAt+5 {
+		return 0
+	}
+	if !s.replanBaseSet {
+		s.replanBaseSet = true
+		s.marchReplanBase = total
+	}
+	minutes := (elapsed - s.orderAt - 5) / 60
+	if minutes <= 0.01 {
+		return 0
+	}
+	return (total - s.marchReplanBase) / units / minutes
 }
 
 // updateCoverSide (#18): pulse suppression events from the north shooter

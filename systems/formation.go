@@ -148,6 +148,11 @@ const cohesionEjectionEnabled = false
 // Slightly larger than UnitMovementSystem.arrivalRadius (0.6).
 const formationPushTolerance float32 = 0.7
 
+// Retarget tolerance for leader-wake targets: at or above the 1 m nav
+// quantization step, so a re-quantized leader path can't thrash the head
+// target (MA1 P7-a).
+const wakeRetargetTolerance float32 = 1.1
+
 // formationForwardLockDist — once the center is within this many metres of
 // the macro target, freeze Forward instead of recomputing it from
 // (target - center). Avoids unit-vector swing near arrival twisting offsets
@@ -475,6 +480,7 @@ func (sys *FormationSystem) processSquad(world *ecs.World, w formationWork, dt f
 		}
 
 		var target components.WorldPos
+		wakeTarget := false
 		if ip != nil {
 			switch ip.Mode {
 			case components.IndividualPosAbsolute:
@@ -526,23 +532,24 @@ func (sys *FormationSystem) processSquad(world *ecs.World, w formationWork, dt f
 			} else {
 				offX, offZ = FormationOffset(fd.Type, i, fd.Spacing, forward)
 			}
-			// Leader-wake bias: when the leader has a MicroPath in flight, slot
-			// i>0 anchors its target on waypoint k = min(i, remaining-1) from
-			// the leader's queue. Pulls trailing members into a column-like
-			// file through corridors; lateral offset still spreads them out
-			// in the open.
+			// Leader-wake bias: when the leader has a MicroPath in flight,
+			// slot i>0 anchors its target i metres along the leader's path
+			// polyline FROM THE LEADER'S LIVE POSITION (arc-length lerp).
+			// Pulls trailing members into a column-like file through
+			// corridors; lateral offset still spreads them out in the open.
+			// The anchor advances CONTINUOUSLY with the leader — the old
+			// discrete waypoint pick jumped ~1 m on every leader pop and the
+			// retarget+replan storm was the march jitter source (MA1 P7-a).
 			target = centerTarget.Add(rl.Vector3{X: offX, Y: 0, Z: offZ})
 			if i > 0 {
 				leader := roster.Members[0]
 				if leader != (ecs.Entity{}) && world.Alive(leader) {
 					if leaderMP := sys.microPathMap.Get(leader); leaderMP != nil && leaderMP.Count > leaderMP.Head {
-						remaining := int(leaderMP.Count - leaderMP.Head)
-						k := int(i)
-						if k > remaining-1 {
-							k = remaining - 1
+						if lp := sys.posMap.Get(leader); lp != nil {
+							anchor := wakeAnchor(*lp, leaderMP, float32(i))
+							target = anchor.Add(rl.Vector3{X: offX, Y: 0, Z: offZ})
+							wakeTarget = true
 						}
-						wp := leaderMP.Waypoints[int(leaderMP.Head)+k]
-						target = wp.Add(rl.Vector3{X: offX, Y: 0, Z: offZ})
 					}
 				}
 			}
@@ -597,19 +604,25 @@ func (sys *FormationSystem) processSquad(world *ecs.World, w formationWork, dt f
 		}
 
 		// Retarget the existing MoveTo head in place instead of
-		// ClearActions+PushAction; flip MicroPath.Dirty on goal shift so
-		// MicroPathSystem replans.
+		// ClearActions+PushAction. No forced MicroPath.Dirty here:
+		// MicroPathSystem's own goal-drift check decides whether the path
+		// is actually invalidated — a wake target advancing along the march
+		// is an extension, not a new route, and forcing a replan on every
+		// retarget was the storm (43.7 churn replans/unit/min on a straight
+		// march). Wake targets also take a coarser retarget tolerance ≥ the
+		// nav quantization step so leader wiggle can't thrash the head.
 		if aq.Count > 0 {
 			head := &aq.Actions[aq.Head]
 			if head.Kind == components.ActionMoveTo {
+				tol := formationPushTolerance
+				if wakeTarget {
+					tol = wakeRetargetTolerance
+				}
 				d := head.Target.Sub(target)
-				if d.X*d.X+d.Z*d.Z < formationPushTolerance*formationPushTolerance {
+				if d.X*d.X+d.Z*d.Z < tol*tol {
 					continue
 				}
 				head.Target = target
-				if mp := sys.microPathMap.Get(mem); mp != nil {
-					mp.Dirty = true
-				}
 				continue
 			}
 		}
@@ -643,6 +656,29 @@ func (sys *FormationSystem) processSquad(world *ecs.World, w formationWork, dt f
 	if reformHold && reformDone {
 		fd.ReformPending = false
 	}
+}
+
+// wakeAnchor returns the point `dist` metres along the leader's remaining
+// path polyline, measured from the leader's LIVE position (arc-length lerp).
+// Clamps to the last waypoint when the path is shorter. Continuous in the
+// leader's motion — no ±1 m jump when the leader pops a waypoint.
+func wakeAnchor(leaderPos components.WorldPos, mp *components.MicroPath, dist float32) components.WorldPos {
+	prev := leaderPos
+	for k := mp.Head; k < mp.Count; k++ {
+		wp := mp.Waypoints[k]
+		d := wp.Sub(prev)
+		segLen := float32(math.Sqrt(float64(d.X*d.X + d.Z*d.Z)))
+		if dist <= segLen {
+			if segLen < 1e-4 {
+				return prev
+			}
+			t := dist / segLen
+			return prev.Add(rl.Vector3{X: d.X * t, Y: d.Y * t, Z: d.Z * t})
+		}
+		dist -= segLen
+		prev = wp
+	}
+	return prev
 }
 
 // customSlotWorld projects a squad-local slot offset (X=right of forward,

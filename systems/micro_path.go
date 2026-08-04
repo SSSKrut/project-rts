@@ -136,8 +136,34 @@ func (sys *MicroPathSystem) tickUnit(pos *components.WorldPos, mp *components.Mi
 
 	if !mp.Dirty {
 		d := goal.Sub(mp.GoalSnap)
-		if d.X*d.X+d.Z*d.Z > microPathGoalShift*microPathGoalShift {
+		driftSq := d.X*d.X + d.Z*d.Z
+		if driftSq > microPathGoalShift*microPathGoalShift {
 			mp.Dirty = true
+			// Direction-aware (MA1): a goal that slid FORWARD along the
+			// remaining path is an extension — the walked path stays valid
+			// and the exhaustion check re-roots at its end; only lateral
+			// drift (heading change) or a backward goal invalidates the
+			// route. Two regimes: a near-exhausted stub (< 3 m) is never
+			// worth an early replan — finishing it and re-rooting at
+			// exhaustion is at most half a second later and direction is
+			// angularly meaningless at that range; a longer remainder is
+			// judged against the pos→path-end chord (long baseline — single
+			// grid segments quantize to 45° and misread a straight-march
+			// drift as lateral, the invariant-6 lesson).
+			if mp.Head < mp.Count {
+				rem := mp.Waypoints[mp.Count-1].Sub(*pos)
+				remLen := float32(math.Sqrt(float64(rem.X*rem.X + rem.Z*rem.Z)))
+				if remLen < 3.0 {
+					mp.Dirty = false
+				} else {
+					long := (d.X*rem.X + d.Z*rem.Z) / remLen
+					latSq := driftSq - long*long
+					if long > 0 && latSq <= microPathGoalShift*microPathGoalShift {
+						mp.Dirty = false
+					}
+				}
+			}
+
 		}
 	}
 
@@ -185,6 +211,7 @@ func (sys *MicroPathSystem) tickUnit(pos *components.WorldPos, mp *components.Mi
 	if !mp.Dirty || now < mp.ReplanAt || *budget <= 0 {
 		return
 	}
+	churn := mp.Count > 0 && mp.Head < mp.Count
 	waypoints, gates := sys.nav.FindPathGates(*pos, goal, NavOpts{})
 	if debugLog && len(waypoints) == 0 {
 		fmt.Printf("[mp-empty] from=(%.1f,%.1f,Y%.1f) to=(%.1f,%.1f,Y%.1f)\n",
@@ -211,6 +238,9 @@ func (sys *MicroPathSystem) tickUnit(pos *components.WorldPos, mp *components.Mi
 	mp.ReplanAt = now + microPathReplanCooldown
 	mp.LastProgressAt = now
 	mp.BestDistSq = float32(math.MaxFloat32)
+	if churn {
+		mp.ReplanCount++
+	}
 	*budget--
 }
 
