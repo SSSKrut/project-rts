@@ -74,6 +74,7 @@ var saveComponents = map[string]saveEntry{
 	"components.Squad":                saveReg[components.Squad](SaveMemcpy),
 	"components.SquadMember":          saveReg[components.SquadMember](SaveMemcpy),
 	"components.SquadState":           saveReg[components.SquadState](SaveMemcpy),
+	"components.SquadPlan":            saveReg[components.SquadPlan](SaveMemcpy),
 	"components.CommandRoster":        saveReg[components.CommandRoster](SaveMemcpy),
 	"components.FormationData":        saveReg[components.FormationData](SaveMemcpy),
 	"components.FormationOrientation": saveReg[components.FormationOrientation](SaveMemcpy),

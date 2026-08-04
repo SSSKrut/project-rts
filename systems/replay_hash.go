@@ -24,6 +24,7 @@ type ReplayHasher struct {
 	unitFilter    *ecs.Filter4[components.Unit, components.WorldPos, components.Motion, components.ActionQueue]
 	vehFilter     *ecs.Filter4[components.Vehicle, components.WorldPos, components.Motion, components.ActionQueue]
 	orderFilter   *ecs.Filter1[components.OrderState]
+	planFilter    *ecs.Filter2[components.Squad, components.SquadPlan]
 	contactFilter *ecs.Filter1[components.Contact]
 	stanceMap     *ecs.Map[components.Stance]
 	hpMap         *ecs.Map[components.HP]
@@ -49,6 +50,7 @@ func NewReplayHasher(w *ecs.World) *ReplayHasher {
 		unitFilter:    ecs.NewFilter4[components.Unit, components.WorldPos, components.Motion, components.ActionQueue](w),
 		vehFilter:     ecs.NewFilter4[components.Vehicle, components.WorldPos, components.Motion, components.ActionQueue](w),
 		orderFilter:   ecs.NewFilter1[components.OrderState](w),
+		planFilter:    ecs.NewFilter2[components.Squad, components.SquadPlan](w),
 		contactFilter: ecs.NewFilter1[components.Contact](w),
 		stanceMap:     ecs.NewMap[components.Stance](w),
 		hpMap:         ecs.NewMap[components.HP](w),
@@ -188,6 +190,22 @@ func (r *ReplayHasher) Hash() uint64 {
 			f32(pr.Value)
 		}
 		take(qo.Entity())
+	}
+	fold()
+
+	// The brain's plan steers execution: two runs that diverge only in Mode /
+	// wave / bound would drift a second later, so hash it at the source.
+	qp := r.planFilter.Query()
+	for qp.Next() {
+		_, plan := qp.Get()
+		u8(uint8(plan.Mode))
+		u8(plan.Phase)
+		u8(plan.Floor)
+		u8(plan.WaveMask)
+		f32(plan.Timer)
+		f32(plan.CalmSince)
+		pos(plan.Anchor)
+		take(qp.Entity())
 	}
 	fold()
 

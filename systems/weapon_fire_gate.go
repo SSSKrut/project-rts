@@ -117,6 +117,7 @@ func (sys *WeaponSystem) pickTarget(
 	aware *components.Awareness, weapon *components.Weapon,
 	wspec *components.WeaponSpec, now float32,
 ) (ecs.Entity, components.WorldPos, bool) {
+	focus := sys.focusTarget(self)
 	var bestEnt ecs.Entity
 	var bestPos components.WorldPos
 	bestTime := float32(0)
@@ -164,6 +165,12 @@ func (sys *WeaponSystem) pickTarget(
 		if e.Flags&components.AwareDirect == 0 && sys.sharedLosBlocked(selfPos, e.Target, pos) {
 			continue
 		}
+		// P9: the squad's AttackTarget order names ONE enemy — while he is
+		// visible and this barrel can hurt him, he is the target. Everything
+		// below is the free-choice fallback.
+		if focus != (ecs.Entity{}) && e.Target == focus {
+			return e.Target, pos, true
+		}
 		if mul > bestMul || (mul == bestMul && e.Time > bestTime) {
 			bestMul = mul
 			bestTime = e.Time
@@ -175,6 +182,28 @@ func (sys *WeaponSystem) pickTarget(
 		return ecs.Entity{}, components.WorldPos{}, false
 	}
 	return bestEnt, bestPos, true
+}
+
+// focusTarget is the enemy the squad's head AttackTarget order names. Zero
+// when there is no such order — the shooter then picks freely.
+func (sys *WeaponSystem) focusTarget(shooter ecs.Entity) ecs.Entity {
+	sm := sys.squadMemberMap.Get(shooter)
+	if sm == nil || sm.Squad == (ecs.Entity{}) {
+		return ecs.Entity{}
+	}
+	head := sys.orderQueueMap.Get(sm.Squad)
+	if head == nil || head.First == (ecs.Entity{}) || !sys.worldRef.Alive(head.First) {
+		return ecs.Entity{}
+	}
+	if kind := sys.orderKindMap.Get(head.First); kind == nil ||
+		kind.Code != components.OrderKindAttackTarget {
+		return ecs.Entity{}
+	}
+	tgt := sys.orderTargetMap.Get(head.First)
+	if tgt == nil {
+		return ecs.Entity{}
+	}
+	return tgt.Entity
 }
 
 // sharedLosBlocked checks walls + terrain from the shooter to a shared

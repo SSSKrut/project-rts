@@ -13,13 +13,13 @@ import (
 // allowed by design.
 //
 // Pipeline:
-//   1. Serial snapshot — walk seer filter, resolve targets via Awareness +
-//      Faction gate, pre-commit Ammo / LastFiredAt.
-//   2. Parallel raycast — per shot apply dispersion, test wall LOS + unit-
-//      vs-ray in the 3×3 chunk window. Workers write only to per-worker
-//      scratch buffers.
-//   3. Serial post-pass — merge buffers; DamageService.Apply, ThreatSource
-//      spawn, propagateSuppression, particle entities.
+//  1. Serial snapshot — walk seer filter, resolve targets via Awareness +
+//     Faction gate, pre-commit Ammo / LastFiredAt.
+//  2. Parallel raycast — per shot apply dispersion, test wall LOS + unit-
+//     vs-ray in the 3×3 chunk window. Workers write only to per-worker
+//     scratch buffers.
+//  3. Serial post-pass — merge buffers; DamageService.Apply, ThreatSource
+//     spawn, propagateSuppression, particle entities.
 //
 // Bodies split: weapon_fire_gate.go (shouldFire / pickTarget),
 // weapon_resolve.go (resolveShot + ray math), weapon_postpass.go (splash /
@@ -52,6 +52,7 @@ type WeaponSystem struct {
 	orderQueueMap              *ecs.Map[components.OrderQueueHead]
 	orderAttackMoveMap         *ecs.Map[components.OrderParamAttackMove]
 	orderKindMap               *ecs.Map[components.OrderKind]
+	orderTargetMap             *ecs.Map[components.OrderTarget]
 	orderEngagementOverrideMap *ecs.Map[components.OrderParamEngagementOverride]
 	// Utility Mode gate: Reloading and Suppressed silence the unit.
 	blackboardMap *ecs.Map[components.LocalBlackboard]
@@ -265,6 +266,7 @@ func (sys *WeaponSystem) InitUI(w *ecs.World) {
 	sys.orderQueueMap = ecs.NewMap[components.OrderQueueHead](w)
 	sys.orderAttackMoveMap = ecs.NewMap[components.OrderParamAttackMove](w)
 	sys.orderKindMap = ecs.NewMap[components.OrderKind](w)
+	sys.orderTargetMap = ecs.NewMap[components.OrderTarget](w)
 	sys.orderEngagementOverrideMap = ecs.NewMap[components.OrderParamEngagementOverride](w)
 	sys.blackboardMap = ecs.NewMap[components.LocalBlackboard](w)
 	sys.threatSourceMap = ecs.NewMap[components.ThreatSource](w)

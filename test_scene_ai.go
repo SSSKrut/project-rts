@@ -138,6 +138,12 @@ const (
 	// squad must return to the position it was told to hold.
 	aiSceneShellfire = "ai_shellfire"
 
+	// MC3 — squad brain: bounding overwatch, ClearBuilding sequencing, focus
+	// fire on the named enemy.
+	aiSceneBounding  = "ai_bounding"
+	aiSceneClearBld  = "ai_clear_building"
+	aiSceneFocusFire = "ai_focus_fire"
+
 	// MC2 position-scoring family (P4). One scorer ranks slots, trench cells,
 	// terrain defilade and hull shadow against every live threat bearing;
 	// each scene isolates one candidate kind, and _none proves the mandatory
@@ -315,6 +321,12 @@ func aiSceneAnchorPos() components.WorldPos {
 		return components.WorldPos{}.Add(rl.Vector3{X: 40, Z: -30})
 	case aiSceneShellfire:
 		return components.WorldPos{}.Add(rl.Vector3{X: 40, Z: 40})
+	case aiSceneBounding:
+		return components.WorldPos{}.Add(rl.Vector3{X: 60, Z: 20})
+	case aiSceneClearBld:
+		return components.WorldPos{}.Add(rl.Vector3{X: 32, Z: 22})
+	case aiSceneFocusFire:
+		return components.WorldPos{}.Add(rl.Vector3{X: 30, Z: 16})
 	case aiSceneCoverTrench:
 		return components.WorldPos{}.Add(rl.Vector3{X: 40, Z: 38})
 	case aiSceneCoverHull:
@@ -380,8 +392,20 @@ func aiSceneBuildings() []components.BuildingPlan {
 	case aiSceneLosOpen, aiSceneLosDefilade, aiSceneLosCreep,
 		aiSceneMarchLine, aiSceneMarchSlope, aiSceneMarchColumn,
 		aiSceneCrowdCross, aiSceneVehForest, aiSceneVehSlope, aiSceneShellfire,
-		aiSceneCoverTrench, aiSceneCoverHull, aiSceneCoverDefilade, aiSceneCoverNone:
+		aiSceneCoverTrench, aiSceneCoverHull, aiSceneCoverDefilade, aiSceneCoverNone,
+		aiSceneBounding, aiSceneFocusFire:
 		return nil
+	case aiSceneClearBld:
+		pos := components.WorldPos{}.Add(rl.Vector3{X: 32, Z: 32})
+		pos.Local.Y = systems.GroundHeight(32, 32)
+		plan := buildings.GenerateHouse(0xC3, buildings.HouseParams{
+			Stories:   2,
+			SizeX:     14,
+			SizeZ:     10,
+			DoorSides: []uint8{0},
+			Interior:  true,
+		}, pos, components.BuildingHouse)
+		return []components.BuildingPlan{*plan}
 	case aiSceneDoorSouth:
 		return aiBuildingsSingleHouse(0)
 	case aiSceneDoorNorth:
@@ -1626,6 +1650,18 @@ func aiSceneSpawn(
 		return aiShellfireSpawn(world, squadService, roleService, unitFactory,
 			playerFaction, posMap, rosterMap)
 	}
+	if aiSceneID() == aiSceneBounding {
+		return aiBoundingSpawn(world, squadService, roleService, unitFactory,
+			playerFaction, posMap, rosterMap)
+	}
+	if aiSceneID() == aiSceneClearBld {
+		return aiClearBuildingSpawn(world, squadService, roleService, unitFactory,
+			playerFaction, posMap, rosterMap)
+	}
+	if aiSceneID() == aiSceneFocusFire {
+		return aiFocusFireSpawn(world, squadService, roleService, unitFactory,
+			playerFaction, posMap, rosterMap)
+	}
 	if aiSceneID() == aiSceneVehFlee {
 		return aiVehicleFleeSpawn(world, squadService, vehicleFactory, posMap, rosterMap)
 	}
@@ -1960,6 +1996,47 @@ type aiTestState struct {
 	UnsafeFilter    *ecs.Filter2[components.UnsafeArea, components.WorldPos]
 	StateMap        *ecs.Map[components.OrderState]
 
+	// Set for ai_bounding (MC3): a 120 m march under sustained flank fire.
+	boundActive  bool
+	boundGoal    components.WorldPos
+	boundFoes    []ecs.Entity
+	boundMaxX    float32
+	boundBackMax float32
+	boundSawMode bool
+	boundMinHold float32
+	boundHoldN   int
+	boundArrived float32
+	PlanMap      *ecs.Map[components.SquadPlan]
+
+	// Set for ai_clear_building (MC3): storey-by-storey sweep of a 2-floor
+	// office; the gate is that nobody goes upstairs while the ground floor
+	// still holds a hostile.
+	clearActive   bool
+	clearBuilding ecs.Entity
+	clearFoes     []ecs.Entity
+	clearUpY      float32
+	clearEarlyUp  int
+	clearClearedT float32
+	clearChained  bool
+	clearPhases   [4]bool
+	clearFP       components.AABB2D
+	clearUpPlaced bool
+	clearUpSeen   int
+	clearRole     *systems.RoleService
+	clearSpawner  aiUnitSpawn
+	clearChildRes ecs.Resource[systems.BuildingChildIndex]
+	KindMap       *ecs.Map[components.OrderKind]
+	FloorMap      *ecs.Map[components.Floor]
+
+	// Set for ai_focus_fire (MC3): share of the squad's damage that lands on
+	// the enemy the AttackTarget order names.
+	focusActive bool
+	focusEnemy  ecs.Entity
+	focusFoes   []ecs.Entity
+	focusMaxHP  []float32
+	focusShare  float32
+	focusKilled bool
+
 	// Set for ai_vehicle_flee (MB3): squadded truck under unanswerable fire —
 	// retreat distance, order survival across the reflex, resumption after.
 	fleeActive    bool
@@ -2210,6 +2287,18 @@ func (s *aiTestState) Update(elapsed float32) {
 	}
 	if s.shellActive {
 		s.updateShellfire(elapsed)
+		return
+	}
+	if s.boundActive {
+		s.updateBounding(elapsed)
+		return
+	}
+	if s.clearActive {
+		s.updateClearBuilding(elapsed)
+		return
+	}
+	if s.focusActive {
+		s.updateFocusFire(elapsed)
 		return
 	}
 	if s.fleeActive {

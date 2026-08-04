@@ -40,6 +40,7 @@ type InspectorMaps struct {
 	FactionMap            *ecs.Map[components.Faction]
 	TacticalOverrideMap   *ecs.Map[components.TacticalOverride]
 	SquadStateMap         *ecs.Map[components.SquadState]
+	SquadPlanMap          *ecs.Map[components.SquadPlan]
 	IndividualPositionMap *ecs.Map[components.IndividualPosition]
 	ContactMap            *ecs.Map[components.Contact]
 	ContactOverrideMap    *ecs.Map[components.ContactSymbolOverride]
@@ -78,6 +79,7 @@ func NewInspectorMaps(world *ecs.World) InspectorMaps {
 		FactionMap:            ecs.NewMap[components.Faction](world),
 		TacticalOverrideMap:   ecs.NewMap[components.TacticalOverride](world),
 		SquadStateMap:         ecs.NewMap[components.SquadState](world),
+		SquadPlanMap:          ecs.NewMap[components.SquadPlan](world),
 		IndividualPositionMap: ecs.NewMap[components.IndividualPosition](world),
 		ContactMap:            ecs.NewMap[components.Contact](world),
 		ContactOverrideMap:    ecs.NewMap[components.ContactSymbolOverride](world),

@@ -34,6 +34,7 @@ type SurvivalInstinctSystem struct {
 	unitFilter   *ecs.Filter3[components.Unit, components.WorldPos, components.Threat]
 	slotFilter   *ecs.Filter2[components.WorldPos, components.CoverSlot]
 	unsafeFilter *ecs.Filter2[components.UnsafeArea, components.WorldPos]
+	buildFilter  *ecs.Filter1[components.Building]
 	// Position scoring (P4): trench / defilade cells come from the chunk
 	// bakes, hull shadow from parked friendly vehicles.
 	vehicleFilter *ecs.Filter3[components.Vehicle, components.WorldPos, components.Motion]
@@ -48,6 +49,7 @@ type SurvivalInstinctSystem struct {
 	behaviorMap   *ecs.Map[components.BehaviorRules]
 	threatMap     *ecs.Map[components.Threat]
 	squadStateMap *ecs.Map[components.SquadState]
+	planMap       *ecs.Map[components.SquadPlan]
 	rosterMap     *ecs.Map[components.CommandRoster]
 	microPathMap  *ecs.Map[components.MicroPath]
 	posMap        *ecs.Map[components.WorldPos]
@@ -61,6 +63,7 @@ type SurvivalInstinctSystem struct {
 	slots     []siCoverSlot
 	cands     []siCandidate
 	unsafe    []siUnsafeZone
+	foots     []components.AABB2D
 	acquires  []siAcquireOp
 	clears    []ecs.Entity
 	stateAdds []siStateAdd
@@ -184,6 +187,7 @@ func (sys *SurvivalInstinctSystem) InitUI(w *ecs.World) {
 	sys.unitFilter = ecs.NewFilter3[components.Unit, components.WorldPos, components.Threat](w)
 	sys.slotFilter = ecs.NewFilter2[components.WorldPos, components.CoverSlot](w)
 	sys.unsafeFilter = ecs.NewFilter2[components.UnsafeArea, components.WorldPos](w)
+	sys.buildFilter = ecs.NewFilter1[components.Building](w)
 	sys.vehicleFilter = ecs.NewFilter3[components.Vehicle, components.WorldPos, components.Motion](w)
 	sys.navGridMap = ecs.NewMap[components.NavGrid](w)
 	sys.coverMapMap = ecs.NewMap[components.CoverMap](w)
@@ -196,6 +200,7 @@ func (sys *SurvivalInstinctSystem) InitUI(w *ecs.World) {
 	sys.behaviorMap = ecs.NewMap[components.BehaviorRules](w)
 	sys.threatMap = ecs.NewMap[components.Threat](w)
 	sys.squadStateMap = ecs.NewMap[components.SquadState](w)
+	sys.planMap = ecs.NewMap[components.SquadPlan](w)
 	sys.rosterMap = ecs.NewMap[components.CommandRoster](w)
 	sys.microPathMap = ecs.NewMap[components.MicroPath](w)
 	sys.posMap = ecs.NewMap[components.WorldPos](w)
@@ -246,6 +251,16 @@ func (sys *SurvivalInstinctSystem) Update(ctx core.UpdateContext) {
 		sys.unsafe = append(sys.unsafe, siUnsafeZone{x: x, z: z, radius: area.Radius})
 	}
 
+	// Pass 1c — building footprints. Every candidate the scorer knows is
+	// terrain-derived, so a man indoors could only "take cover" by leaving the
+	// building — off an upper storey, or out of the room his order put him in.
+	// Until interior positions exist (P4 tail) the instinct leaves him be.
+	sys.foots = sys.foots[:0]
+	qB := sys.buildFilter.Query()
+	for qB.Next() {
+		sys.foots = append(sys.foots, qB.Get().Footprint)
+	}
+
 	// Pass 1.5 — ScatterProtocol: per squad, decide Idle / Engaged /
 	// Scrambling; squadInfo is read by Pass 2.
 	sys.runScatterProtocol(now)
@@ -284,6 +299,26 @@ func (sys *SurvivalInstinctSystem) Update(ctx core.UpdateContext) {
 			threatDir = squadThreat
 		}
 
+		// Bounding (P6): the wave on the move is not looking for cover — it
+		// IS moving to the next position, and an override halfway there is the
+		// old cover-freeze that made squads under fire stop advancing. The
+		// covering wave takes cover whether or not it is personally suppressed.
+		plan, slot := sys.squadPlanFor(ent)
+		if plan != nil && plan.Mode == components.SquadPlanBounding {
+			if plan.InMovingWave(slot) {
+				if sys.overrideMap.Has(ent) {
+					sys.clears = append(sys.clears, ent)
+				}
+				continue
+			}
+			// The covering wave holds and SHOOTS: it only leaves its ground
+			// when personally pinned (its own threshold), so the usual
+			// scramble-to-cover does not turn overwatch into a foot race.
+			if threatDir.X == 0 && threatDir.Z == 0 {
+				threatDir = squadThreat
+			}
+		}
+
 		// Standing in a shelled area is its own trigger: the threshold drops
 		// like Scrambling, and the bearing points out of the zone even when
 		// the channels have not caught up yet.
@@ -292,6 +327,13 @@ func (sys *SurvivalInstinctSystem) Update(ctx core.UpdateContext) {
 			if dir, ok := sys.evacDir(pos, zone); ok {
 				threatDir = dir
 			}
+		}
+
+		if sys.insideFootprint(pos) {
+			if sys.overrideMap.Has(ent) {
+				sys.clears = append(sys.clears, ent)
+			}
+			continue
 		}
 
 		existing := sys.overrideMap.Get(ent)
@@ -548,6 +590,28 @@ func (sys *SurvivalInstinctSystem) orderGraceActive(unit ecs.Entity, now float32
 	}
 	iss := sys.issuedAtMap.Get(head.First)
 	return iss != nil && now-iss.Time < siOrderGraceWindow
+}
+
+// insideFootprint reports whether the unit stands within any building.
+func (sys *SurvivalInstinctSystem) insideFootprint(pos *components.WorldPos) bool {
+	x, z := worldXZ(*pos)
+	for i := range sys.foots {
+		f := &sys.foots[i]
+		if x >= f.MinX && x <= f.MaxX && z >= f.MinZ && z <= f.MaxZ {
+			return true
+		}
+	}
+	return false
+}
+
+// squadPlanFor returns the unit's squad plan and its roster slot; (nil, 0)
+// for soloists.
+func (sys *SurvivalInstinctSystem) squadPlanFor(unit ecs.Entity) (*components.SquadPlan, uint8) {
+	mem := sys.memberMap.Get(unit)
+	if mem == nil || mem.Squad == (ecs.Entity{}) {
+		return nil, 0
+	}
+	return sys.planMap.Get(mem.Squad), mem.SlotIndex
 }
 
 // squadScrambleContext returns (scrambling, threatDir). Soloists get

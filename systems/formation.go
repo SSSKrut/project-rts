@@ -70,6 +70,9 @@ type FormationSystem struct {
 
 	orientMap      *ecs.Map[components.FormationOrientation]
 	customSlotsMap *ecs.Map[components.FormationCustomSlots]
+	// SquadBrain's plan changes HOW the slots are driven: bounding waves,
+	// a paused march during a relocation, the ClearSeq phase targets.
+	planMap *ecs.Map[components.SquadPlan]
 
 	workBuf []formationWork
 
@@ -122,6 +125,7 @@ func (sys *FormationSystem) InitUI(w *ecs.World) {
 	sys.motionMap = ecs.NewMap[components.Motion](w)
 	sys.vehicleMap = ecs.NewMap[components.Vehicle](w)
 	sys.colliderMap = ecs.NewMap[components.Collider](w)
+	sys.planMap = ecs.NewMap[components.SquadPlan](w)
 	sys.sampler = NewHeightSampler(w)
 }
 
@@ -183,6 +187,7 @@ type formationWork struct {
 	roster *components.CommandRoster
 	mp     *components.MacroPath
 	fd     *components.FormationData
+	plan   *components.SquadPlan
 }
 
 func (sys *FormationSystem) Update(ctx core.UpdateContext) {
@@ -197,6 +202,7 @@ func (sys *FormationSystem) Update(ctx core.UpdateContext) {
 			roster: roster,
 			mp:     mp,
 			fd:     fd,
+			plan:   sys.planMap.Get(q.Entity()),
 		})
 	}
 	work := sys.workBuf
@@ -287,6 +293,14 @@ func (sys *FormationSystem) processSquad(world *ecs.World, w formationWork, dt f
 		haveTarget = true
 	}
 
+	// Bounding: the moving wave runs to the brain's bound instead of the macro
+	// waypoint; the holding wave stays put and covers it.
+	plan := w.plan
+	if plan != nil && plan.Mode == components.SquadPlanBounding && mp.HasGoal {
+		centerTarget = plan.Anchor
+		haveTarget = true
+	}
+
 	// Player layout edit (editor drag / kind / preset): a marching squad
 	// picks the new slots up through the normal pass, so the flag only has to
 	// survive until everyone is actually back in place — dropping it on sight
@@ -373,8 +387,12 @@ func (sys *FormationSystem) processSquad(world *ecs.World, w formationWork, dt f
 	// (Occupy L<n> targets a Level) or its chunk isn't streamed in yet.
 	var interiorSlots []BuildingSlot
 	if interiorBuilding != (ecs.Entity{}) {
-		interiorSlots = sys.slotPlanner.PlanSlots(interiorBuilding,
-			interiorPolicy, int(roster.Count), interiorHasFacing, interiorFacingYaw)
+		if plan != nil && plan.Mode == components.SquadPlanClearSeq {
+			interiorSlots = sys.clearSeqSlots(interiorBuilding, plan, center, int(roster.Count))
+		} else {
+			interiorSlots = sys.slotPlanner.PlanSlots(interiorBuilding,
+				interiorPolicy, int(roster.Count), interiorHasFacing, interiorFacingYaw)
+		}
 	}
 
 	// Desired march direction: the current macro SEGMENT when one exists
@@ -461,6 +479,22 @@ func (sys *FormationSystem) processSquad(world *ecs.World, w formationWork, dt f
 		if ov := sys.vehicleOverrideMap.Get(mem); ov != nil &&
 			ov.Kind != components.VehicleReflexNone {
 			continue
+		}
+		// The brain owns who moves: a relocating squad is clearing a beaten
+		// zone under its own overrides, and the covering wave of a bound holds
+		// its ground until the phase flips.
+		if plan != nil && sys.individualPosMap.Get(mem) == nil {
+			switch plan.Mode {
+			case components.SquadPlanRelocate:
+				continue
+			case components.SquadPlanBounding:
+				if !plan.InMovingWave(i) {
+					if aq := sys.actionQueueMap.Get(mem); aq != nil && aq.Count > 0 {
+						ClearActions(aq)
+					}
+					continue
+				}
+			}
 		}
 		mPos := sys.posMap.Get(mem)
 		if mPos == nil {
@@ -885,3 +919,28 @@ func slotHash32(x uint32) uint32 {
 	x ^= x >> 16
 	return x
 }
+
+// clearSeqSlots maps a ClearSeq phase onto per-member goals: the stack file
+// outside the door, the point pair through it, then the storey under sweep.
+func (sys *FormationSystem) clearSeqSlots(building ecs.Entity, plan *components.SquadPlan,
+	center components.WorldPos, count int) []BuildingSlot {
+
+	switch plan.Phase {
+	case components.ClearPhaseStackUp:
+		return sys.slotPlanner.PlanStackUp(building, center, count)
+	case components.ClearPhaseEnter:
+		stack := sys.slotPlanner.PlanStackUp(building, center, count)
+		entry := sys.slotPlanner.PlanFloorSlots(building, 0, count)
+		if len(stack) == 0 {
+			return entry
+		}
+		for i := 0; i < clearEntryPair && i < len(stack) && i < len(entry); i++ {
+			stack[i] = entry[i]
+		}
+		return stack
+	}
+	return sys.slotPlanner.PlanFloorSlots(building, plan.Floor, count)
+}
+
+// How many men go through the door first.
+const clearEntryPair = 2

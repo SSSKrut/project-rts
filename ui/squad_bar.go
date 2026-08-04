@@ -43,6 +43,7 @@ var (
 	barSelEdge    = rl.Color{R: 120, G: 200, B: 235, A: 255}
 	barThreat     = rl.Color{R: 235, G: 110, B: 80, A: 255}
 	barReflexEdge = rl.Color{R: 240, G: 190, B: 90, A: 255}
+	barPlanEdge   = rl.Color{R: 150, G: 205, B: 235, A: 255}
 	barHPFill     = rl.Color{R: 90, G: 190, B: 90, A: 255}
 	barHPLow      = rl.Color{R: 220, G: 70, B: 60, A: 255}
 	barStamFill   = rl.Color{R: 210, G: 190, B: 70, A: 255}
@@ -203,6 +204,15 @@ func DrawSquadBar(layout BarLayout, ctx SquadBarCtx) {
 			SelectSquadRequest.Active = true
 			SelectSquadRequest.Squad = g.Squad
 		}
+		// The brain's plan rides on the group box for the same reason a reflex
+		// rides on a hull card: how the squad executes the order stopped being
+		// the plain answer.
+		if label := barPlanLabel(ctx, g.Squad); label != "" {
+			lab := rl.Rectangle{X: g.Rect.X, Y: g.Rect.Y, Width: g.Rect.Width, Height: 13}
+			rl.DrawRectangleRec(lab, rl.Color{R: 22, G: 19, B: 14, A: 235})
+			TextClipped(&ctx.st, rl.Rectangle{X: lab.X + barChipW + 2, Y: lab.Y,
+				Width: lab.Width - barChipW - 4, Height: lab.Height}, label, barPlanEdge)
+		}
 	}
 	for _, c := range layout.Cards {
 		drawBarCard(ctx, c)
@@ -295,6 +305,26 @@ func drawBarCard(ctx SquadBarCtx, c BarCard) {
 		SelectUnitRequest.Unit = c.Unit
 		SelectUnitRequest.Additive = ctx.Shift
 	}
+}
+
+// barPlanLabel names the squad brain's current mode, phase included for a
+// ClearSeq so "Clearing" doesn't hide which step is running.
+func barPlanLabel(ctx SquadBarCtx, squad ecs.Entity) string {
+	if squad == (ecs.Entity{}) || ctx.SquadPlanMap == nil || !ctx.World.Alive(squad) {
+		return ""
+	}
+	plan := ctx.SquadPlanMap.Get(squad)
+	if plan == nil {
+		return ""
+	}
+	label := components.SquadPlanLabel(plan.Mode)
+	if label == "" {
+		return ""
+	}
+	if plan.Mode == components.SquadPlanClearSeq {
+		label += ": " + components.ClearPhaseLabel(plan.Phase)
+	}
+	return label
 }
 
 // drawBarMeter stacks the two thin bars at the card's foot; row 0 is HP.

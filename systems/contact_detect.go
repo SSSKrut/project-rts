@@ -229,12 +229,14 @@ func (sys *ContactSystem) applyDetectMeters(dt float32) {
 					ev := &sys.meterEvents[sys.meterSrc[i][fac]]
 					g := &groups[ev.group]
 					sp := &seers[ev.spotter]
-					recordSighting(sp.aware, units[i].ent, units[i].pos, sys.elapsed, components.AwareDirect)
-					for _, mi := range g.members {
-						if mi == ev.spotter || seers[mi].ent == units[i].ent {
-							continue
+					if units[i].faction != sp.faction {
+						recordSighting(sp.aware, units[i].ent, units[i].pos, sys.elapsed, components.AwareDirect)
+						for _, mi := range g.members {
+							if mi == ev.spotter || seers[mi].ent == units[i].ent {
+								continue
+							}
+							recordSighting(seers[mi].aware, units[i].ent, units[i].pos, sys.elapsed, 0)
 						}
-						recordSighting(seers[mi].aware, units[i].ent, units[i].pos, sys.elapsed, 0)
 					}
 					sys.contactsBuf = appendContactIfHostile(sys.contactsBuf, *sp, units[i], ev.closeLOS)
 				}
@@ -355,7 +357,9 @@ func processDetectGroup(
 				if dSq < 1e-4 || dSq > audSq {
 					continue
 				}
-				recordSighting(s.aware, cand.ent, cand.pos, elapsed, components.AwareDirect)
+				if cand.faction != s.faction {
+					recordSighting(s.aware, cand.ent, cand.pos, elapsed, components.AwareDirect)
+				}
 				out = appendContactIfHostile(out, *s, *cand, false)
 			}
 		}
@@ -409,16 +413,18 @@ func processDetectGroup(
 		dz := cand.z - sp.z
 		closeLOS := dx*dx+dz*dz <= contactCloseRangeM*contactCloseRangeM
 		if cand.meter[sp.faction] >= 1 {
-			recordSighting(sp.aware, cand.ent, cand.pos, elapsed, components.AwareDirect)
-			for _, mi := range g.members {
-				if mi == spotter {
-					continue
+			if cand.faction != sp.faction {
+				recordSighting(sp.aware, cand.ent, cand.pos, elapsed, components.AwareDirect)
+				for _, mi := range g.members {
+					if mi == spotter {
+						continue
+					}
+					s := &seers[mi]
+					if s.ent == cand.ent {
+						continue
+					}
+					recordSighting(s.aware, cand.ent, cand.pos, elapsed, 0)
 				}
-				s := &seers[mi]
-				if s.ent == cand.ent {
-					continue
-				}
-				recordSighting(s.aware, cand.ent, cand.pos, elapsed, 0)
 			}
 			out = appendContactIfHostile(out, *sp, *cand, closeLOS)
 		}

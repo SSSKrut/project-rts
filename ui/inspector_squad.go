@@ -60,6 +60,22 @@ func drawInspectorSquad(ctx InspectorCtx, squad ecs.Entity, x, y, width int32) i
 			}
 		}
 	}
+	// The brain's plan: what it is doing WITH the order, in the same shape as
+	// the per-unit override row — every interception is visible.
+	if ctx.SquadPlanMap != nil {
+		if plan := ctx.SquadPlanMap.Get(squad); plan != nil {
+			if label := components.SquadPlanLabel(plan.Mode); label != "" {
+				if plan.Mode == components.SquadPlanClearSeq {
+					label += " - " + components.ClearPhaseLabel(plan.Phase)
+					if plan.Phase == components.ClearPhaseSweep {
+						label += fmt.Sprintf(" L%d", plan.Floor)
+					}
+				}
+				TextRowClipped(&col, &ctx.st, "Plan:      "+label,
+					rl.Color{R: 235, G: 195, B: 105, A: 255})
+			}
+		}
+	}
 	col.Skip(ctx.st.RowH * 0.5)
 
 	col.Y = float32(drawQuickBadges(ctx, squad, int32(col.X), int32(col.Y), int32(col.W)))

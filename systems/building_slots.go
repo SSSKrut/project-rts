@@ -49,6 +49,7 @@ type BuildingSlotPlanner struct {
 	coverDirMap    *ecs.Map[components.CoverDirection]
 	levelMemberMap *ecs.Map[components.LevelMember]
 	levelMap       *ecs.Map[components.Level]
+	doorMap        *ecs.Map[components.Door]
 }
 
 func NewBuildingSlotPlanner(w *ecs.World) *BuildingSlotPlanner {
@@ -62,6 +63,7 @@ func NewBuildingSlotPlanner(w *ecs.World) *BuildingSlotPlanner {
 		coverDirMap:    ecs.NewMap[components.CoverDirection](w),
 		levelMemberMap: ecs.NewMap[components.LevelMember](w),
 		levelMap:       ecs.NewMap[components.Level](w),
+		doorMap:        ecs.NewMap[components.Door](w),
 	}
 }
 
@@ -73,6 +75,10 @@ const (
 	SlotParkRadius    float32 = 0.8
 	slotRoomSpacing   float32 = 1.2
 	slotHiddenSpacing float32 = 0.8
+	// Pre-entry stack beside a door (ClearSeq stack-up).
+	stackStandoff   float32 = 1.1
+	stackSpacing    float32 = 1.1
+	stackSideOffset float32 = 1.2
 )
 
 type slotFloor struct {
@@ -103,6 +109,138 @@ func (p *BuildingSlotPlanner) PlanSlots(
 		return nil
 	}
 
+	floors := p.collectFloors(children)
+	if len(floors) == 0 {
+		return nil
+	}
+	if policy == SlotGroundFloor {
+		floors = floors[:1]
+	}
+
+	out := make([]BuildingSlot, count)
+	windowsN := 0
+	if policy == SlotWindows {
+		windows := p.collectWindowSlots(children, hasFacing, facingYaw)
+		for i := 0; i < count && i < len(windows); i++ {
+			out[i] = windows[i]
+			windowsN++
+		}
+	}
+
+	spacing := slotRoomSpacing
+	if policy == SlotHidden {
+		spacing = slotHiddenSpacing
+	}
+	fillRoomSlots(out, windowsN, floors, spacing)
+	return out
+}
+
+// PlanFloorSlots spreads `count` slots across the rooms of ONE storey. The
+// ClearSeq sweep drives every man from this list, which is what keeps the
+// roster off storey k+1 until storey k is clean.
+func (p *BuildingSlotPlanner) PlanFloorSlots(building ecs.Entity, level uint8, count int) []BuildingSlot {
+	if building == (ecs.Entity{}) || count <= 0 || !p.world.Alive(building) {
+		return nil
+	}
+	idx := p.childIndex.Get()
+	if idx == nil {
+		return nil
+	}
+	floors := p.collectFloors(idx.Loaded[building])
+	if len(floors) == 0 {
+		return nil
+	}
+	pick := 0
+	for i := range floors {
+		if floors[i].level == level {
+			pick = i
+			break
+		}
+	}
+	out := make([]BuildingSlot, count)
+	fillRoomSlots(out, 0, floors[pick:pick+1], slotRoomSpacing)
+	return out
+}
+
+// PlanStackUp returns the pre-entry stack at the door nearest `from`: the men
+// press against the facade to either side of the opening, facing it.
+func (p *BuildingSlotPlanner) PlanStackUp(building ecs.Entity, from components.WorldPos, count int) []BuildingSlot {
+	if building == (ecs.Entity{}) || count <= 0 || !p.world.Alive(building) {
+		return nil
+	}
+	idx := p.childIndex.Get()
+	if idx == nil {
+		return nil
+	}
+	doorPos, outward, ok := p.nearestDoor(idx.Loaded[building], from)
+	if !ok {
+		return nil
+	}
+	tanX, tanZ := outward.Z, -outward.X
+	yaw := float32(math.Atan2(float64(-outward.X), float64(-outward.Z)))
+	out := make([]BuildingSlot, count)
+	for i := 0; i < count; i++ {
+		// Beside the opening, hugging the facade — a file straight out from the
+		// door is the fatal funnel, and the defenders inside shoot down it.
+		side := stackSideOffset + stackSpacing*float32(i/2)
+		if i%2 == 1 {
+			side = -side
+		}
+		out[i] = BuildingSlot{
+			Pos: doorPos.Add(rl.Vector3{
+				X: outward.X*stackStandoff + tanX*side,
+				Z: outward.Z*stackStandoff + tanZ*side,
+			}),
+			Yaw:    yaw,
+			HasYaw: true,
+		}
+	}
+	return out
+}
+
+// nearestDoor returns the opening centre and outward normal of the door
+// closest to `from`.
+func (p *BuildingSlotPlanner) nearestDoor(children []ecs.Entity,
+	from components.WorldPos) (components.WorldPos, rl.Vector3, bool) {
+
+	fx, fz := worldXZ(from)
+	best := float32(math.MaxFloat32)
+	var bestPos components.WorldPos
+	var bestOut rl.Vector3
+	found := false
+	for _, ch := range children {
+		if !p.world.Alive(ch) || p.doorMap.Get(ch) == nil {
+			continue
+		}
+		wall := p.wallMap.Get(ch)
+		wp := p.posMap.Get(ch)
+		if wall == nil || wp == nil {
+			continue
+		}
+		var outward rl.Vector3
+		if cd := p.coverDirMap.Get(ch); cd != nil {
+			outward = cd.Dir
+		}
+		if outward.X == 0 && outward.Z == 0 {
+			continue
+		}
+		t := wall.OpeningCenterT * wall.Length
+		pos := wp.Add(rl.Vector3{
+			X: float32(math.Sin(float64(wall.Yaw))) * t,
+			Z: float32(math.Cos(float64(wall.Yaw))) * t,
+		})
+		x, z := worldXZ(pos)
+		d := (x-fx)*(x-fx) + (z-fz)*(z-fz)
+		if d < best {
+			best, bestPos, bestOut, found = d, pos, outward, true
+		}
+	}
+	return bestPos, bestOut, found
+}
+
+// collectFloors gathers the building's storeys with their room rects, sorted
+// by level.
+func (p *BuildingSlotPlanner) collectFloors(children []ecs.Entity) []slotFloor {
 	var floors []slotFloor
 	for _, ch := range children {
 		if !p.world.Alive(ch) {
@@ -126,62 +264,46 @@ func (p *BuildingSlotPlanner) PlanSlots(
 		}
 		floors = append(floors, sf)
 	}
-	if len(floors) == 0 {
-		return nil
-	}
 	for i := 1; i < len(floors); i++ {
 		for j := i; j > 0 && floors[j-1].level > floors[j].level; j-- {
 			floors[j-1], floors[j] = floors[j], floors[j-1]
 		}
 	}
-	if policy == SlotGroundFloor {
-		floors = floors[:1]
-	}
+	return floors
+}
 
-	out := make([]BuildingSlot, count)
-	windowsN := 0
-	if policy == SlotWindows {
-		windows := p.collectWindowSlots(children, hasFacing, facingYaw)
-		for i := 0; i < count && i < len(windows); i++ {
-			out[i] = windows[i]
-			windowsN++
+// fillRoomSlots writes out[from:] as room-spread positions across `floors`.
+func fillRoomSlots(out []BuildingSlot, from int, floors []slotFloor, spacing float32) {
+	rest := len(out) - from
+	if rest <= 0 || len(floors) == 0 {
+		return
+	}
+	floorN := len(floors)
+	perFloor := (rest + floorN - 1) / floorN
+	for k := 0; k < rest; k++ {
+		fi := k / perFloor
+		if fi >= floorN {
+			fi = floorN - 1
 		}
-	}
-
-	spacing := slotRoomSpacing
-	if policy == SlotHidden {
-		spacing = slotHiddenSpacing
-	}
-	rest := count - windowsN
-	if rest > 0 {
-		floorN := len(floors)
-		perFloor := (rest + floorN - 1) / floorN
-		for k := 0; k < rest; k++ {
-			fi := k / perFloor
-			if fi >= floorN {
-				fi = floorN - 1
-			}
-			wi := k % perFloor
-			fl := &floors[fi]
-			var target components.WorldPos
-			if rc := int(fl.roomsN); rc > 1 {
-				room := fl.rooms[wi%rc]
-				offX, offZ := FormationOffset(components.FormationLoose,
-					uint8(wi/rc), spacing, rl.Vector3{X: 0, Y: 0, Z: 1})
-				target = components.WorldPos{}.Add(rl.Vector3{
-					X: room.CenterX() + offX,
-					Y: fl.pos.Local.Y,
-					Z: room.CenterZ() + offZ,
-				})
-			} else {
-				offX, offZ := FormationOffset(components.FormationLoose,
-					uint8(wi), spacing, rl.Vector3{X: 0, Y: 0, Z: 1})
-				target = fl.pos.Add(rl.Vector3{X: offX, Y: 0, Z: offZ})
-			}
-			out[windowsN+k] = BuildingSlot{Pos: target}
+		wi := k % perFloor
+		fl := &floors[fi]
+		var target components.WorldPos
+		if rc := int(fl.roomsN); rc > 1 {
+			room := fl.rooms[wi%rc]
+			offX, offZ := FormationOffset(components.FormationLoose,
+				uint8(wi/rc), spacing, rl.Vector3{X: 0, Y: 0, Z: 1})
+			target = components.WorldPos{}.Add(rl.Vector3{
+				X: room.CenterX() + offX,
+				Y: fl.pos.Local.Y,
+				Z: room.CenterZ() + offZ,
+			})
+		} else {
+			offX, offZ := FormationOffset(components.FormationLoose,
+				uint8(wi), spacing, rl.Vector3{X: 0, Y: 0, Z: 1})
+			target = fl.pos.Add(rl.Vector3{X: offX, Y: 0, Z: offZ})
 		}
+		out[from+k] = BuildingSlot{Pos: target}
 	}
-	return out
 }
 
 // collectWindowSlots emits one fire slot per window opening: opening centre

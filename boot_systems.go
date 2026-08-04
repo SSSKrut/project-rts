@@ -105,6 +105,11 @@ func (g *Game) registerSystems() {
 	orderResolverSys := systems.NewOrderResolverSystem(squadService)
 	orderResolverSys.InitUI(app.World)
 
+	// The brain reads the head order the resolver just advanced and writes the
+	// SquadPlan that SurvivalInstinct and FormationSystem execute this tick.
+	squadBrainSys := systems.NewSquadBrainSystem()
+	squadBrainSys.InitUI(app.World)
+
 	squadMacroPathSys := systems.NewSquadMacroPathSystem(navService, workerPool)
 	squadMacroPathSys.InitUI(app.World)
 
@@ -165,6 +170,7 @@ func (g *Game) registerSystems() {
 	app.AddSystem(levelVisSys)
 	app.AddSystem(mapPingDecaySys)
 	app.AddSystem(orderResolverSys)
+	app.AddSystem(squadBrainSys)
 	app.AddSystem(survivalSys)
 	app.AddSystem(squadMacroPathSys)
 	app.AddSystem(formationSys)
