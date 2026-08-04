@@ -661,3 +661,131 @@ func (s *aiTestState) updateFocusFire(elapsed float32) {
 		s.verdictDone = true
 	}
 }
+
+// aiMassSpawn (MZ): twelve rifle squads march across open ground while four
+// gunners work them over — 100 combatants, the only scene that crosses
+// core.SerialThresholdHint and therefore exercises the parallel paths of
+// movement / contact / weapon / formation at scale. Doubles as the perf
+// measurement for the phase closure criterion (RTS_PROF=1 prints the medians).
+func aiMassSpawn(
+	world *ecs.World,
+	squadService *systems.SquadService,
+	roleService *systems.RoleService,
+	unitFactory aiUnitSpawn,
+	playerFaction components.Faction,
+	posMap *ecs.Map[components.WorldPos],
+	rosterMap *ecs.Map[components.CommandRoster],
+) *aiTestState {
+	var squads []ecs.Entity
+	for i := 0; i < 12; i++ {
+		x := float32(20 + (i%4)*14)
+		z := float32(-30 + (i/4)*12)
+		sq := squadService.CreateFromTemplate(
+			systems.TmplMotorRifle, aiSceneWP(x, z),
+			components.FormationLine, playerFaction,
+			components.Controller{Owner: components.ControllerLocal},
+			roleService, unitFactory,
+		)
+		if sq == (ecs.Entity{}) {
+			fmt.Printf("[ai-test %s] FAILED TO SPAWN SQUAD %d — aborting\n", aiSceneID(), i)
+			return nil
+		}
+		aiRefillSquad(world, squadService, sq, 400)
+		squads = append(squads, sq)
+	}
+	var foes []ecs.Entity
+	for _, x := range []float32{26, 58} {
+		// Far enough that contact is a running firefight at the edge of
+		// detection, not a massacre at the goal line.
+		if e := aiSpawnGunner(world, roleService, unitFactory,
+			aiSceneWP(x, 64), 600, 20000); e != (ecs.Entity{}) {
+			foes = append(foes, e)
+		}
+	}
+	return &aiTestState{
+		sceneID:      aiSceneID(),
+		squad:        squads[0],
+		massActive:   true,
+		massSquads:   squads,
+		massGoalZ:    34,
+		boundFoes:    foes,
+		World:        world,
+		SquadService: squadService,
+		PosMap:       posMap,
+		RosterMap:    rosterMap,
+		PlanMap:      ecs.NewMap[components.SquadPlan](world),
+		HPMap:        ecs.NewMap[components.HP](world),
+		OQMap:        ecs.NewMap[components.OrderQueueHead](world),
+		StateMap:     ecs.NewMap[components.OrderState](world),
+		orderAt:      aiOrderAt,
+		verdictAt:    60,
+		nextSampleAt: aiOrderAt + 10,
+	}
+}
+
+// updateMass (MZ): every squad marches north into the gunners. PASS = the field
+// stays coherent — no squad loses its order, most of the force is still alive,
+// and the brain engages where the fire is.
+func (s *aiTestState) updateMass(elapsed float32) {
+	if s.verdictDone {
+		return
+	}
+	if !s.orderFired {
+		if elapsed < s.orderAt {
+			return
+		}
+		fmt.Println("============================================================")
+		fmt.Printf("== AI MASS: %d squads (100 combatants) advance into %d gunners\n",
+			len(s.massSquads), len(s.boundFoes))
+		fmt.Println("============================================================")
+		for i, sq := range s.massSquads {
+			goal := aiSceneWP(float32(20+(i%4)*14), s.massGoalZ)
+			s.SquadService.IssueOrder(sq, components.OrderKindMoveTo,
+				goal, ecs.Entity{}, false, systems.OrderParams{})
+		}
+		s.orderFired = true
+		return
+	}
+
+	live, planning := 0, 0
+	for _, sq := range s.massSquads {
+		if !s.World.Alive(sq) {
+			continue
+		}
+		if roster := s.RosterMap.Get(sq); roster != nil {
+			for i := uint8(0); i < roster.Count; i++ {
+				if mem := roster.Members[i]; mem != (ecs.Entity{}) && s.World.Alive(mem) {
+					live++
+				}
+			}
+		}
+		if plan := s.PlanMap.Get(sq); plan != nil && plan.Mode != components.SquadPlanNone {
+			planning++
+		}
+	}
+	if planning > s.massPlanMax {
+		s.massPlanMax = planning
+	}
+	if live > s.massLiveMax {
+		s.massLiveMax = live
+	}
+
+	if elapsed >= s.nextSampleAt && elapsed < s.verdictAt {
+		s.nextSampleAt = elapsed + aiSampleEvery*2
+		fmt.Printf("[ai-test %s] t=%.1fs live=%d planning=%d\n",
+			s.sceneID, elapsed, live, planning)
+	}
+
+	if elapsed >= s.verdictAt {
+		pass := live*10 >= s.massLiveMax*6 && s.massPlanMax > 0
+		verdict := "FAIL"
+		if pass {
+			verdict = "PASS"
+		}
+		fmt.Println("============================================================")
+		fmt.Printf("== VERDICT [%s]: %s  (live=%d/%d planning=%d t=%.1fs)\n",
+			s.sceneID, verdict, live, s.massLiveMax, s.massPlanMax, elapsed)
+		fmt.Println("============================================================")
+		s.verdictDone = true
+	}
+}

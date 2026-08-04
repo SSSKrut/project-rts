@@ -47,7 +47,7 @@ func bootGame() *Game {
 	g := &Game{}
 	g.hudFont, g.hudFontIsCustom = loadHUDFont()
 
-	g.headless = isAIScene()
+	g.headless = isAIScene() && !*watchFlag
 	if g.headless {
 		rl.SetTargetFPS(0)
 	} else {

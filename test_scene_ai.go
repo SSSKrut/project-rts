@@ -143,6 +143,8 @@ const (
 	aiSceneBounding  = "ai_bounding"
 	aiSceneClearBld  = "ai_clear_building"
 	aiSceneFocusFire = "ai_focus_fire"
+	// Mass scene: 100 combatants, the only one past core.SerialThresholdHint.
+	aiSceneMass = "ai_mass"
 
 	// MC2 position-scoring family (P4). One scorer ranks slots, trench cells,
 	// terrain defilade and hull shadow against every live threat bearing;
@@ -327,6 +329,8 @@ func aiSceneAnchorPos() components.WorldPos {
 		return components.WorldPos{}.Add(rl.Vector3{X: 32, Z: 22})
 	case aiSceneFocusFire:
 		return components.WorldPos{}.Add(rl.Vector3{X: 30, Z: 16})
+	case aiSceneMass:
+		return components.WorldPos{}.Add(rl.Vector3{X: 45, Z: 10})
 	case aiSceneCoverTrench:
 		return components.WorldPos{}.Add(rl.Vector3{X: 40, Z: 38})
 	case aiSceneCoverHull:
@@ -393,7 +397,7 @@ func aiSceneBuildings() []components.BuildingPlan {
 		aiSceneMarchLine, aiSceneMarchSlope, aiSceneMarchColumn,
 		aiSceneCrowdCross, aiSceneVehForest, aiSceneVehSlope, aiSceneShellfire,
 		aiSceneCoverTrench, aiSceneCoverHull, aiSceneCoverDefilade, aiSceneCoverNone,
-		aiSceneBounding, aiSceneFocusFire:
+		aiSceneBounding, aiSceneFocusFire, aiSceneMass:
 		return nil
 	case aiSceneClearBld:
 		pos := components.WorldPos{}.Add(rl.Vector3{X: 32, Z: 32})
@@ -1662,6 +1666,10 @@ func aiSceneSpawn(
 		return aiFocusFireSpawn(world, squadService, roleService, unitFactory,
 			playerFaction, posMap, rosterMap)
 	}
+	if aiSceneID() == aiSceneMass {
+		return aiMassSpawn(world, squadService, roleService, unitFactory,
+			playerFaction, posMap, rosterMap)
+	}
 	if aiSceneID() == aiSceneVehFlee {
 		return aiVehicleFleeSpawn(world, squadService, vehicleFactory, posMap, rosterMap)
 	}
@@ -2037,6 +2045,14 @@ type aiTestState struct {
 	focusShare  float32
 	focusKilled bool
 
+	// Set for ai_mass (MZ): 12 squads under fire — parallel-path coverage and
+	// the phase's perf measurement.
+	massActive  bool
+	massSquads  []ecs.Entity
+	massGoalZ   float32
+	massLiveMax int
+	massPlanMax int
+
 	// Set for ai_vehicle_flee (MB3): squadded truck under unanswerable fire —
 	// retreat distance, order survival across the reflex, resumption after.
 	fleeActive    bool
@@ -2299,6 +2315,10 @@ func (s *aiTestState) Update(elapsed float32) {
 	}
 	if s.focusActive {
 		s.updateFocusFire(elapsed)
+		return
+	}
+	if s.massActive {
+		s.updateMass(elapsed)
 		return
 	}
 	if s.fleeActive {

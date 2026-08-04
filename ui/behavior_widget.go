@@ -333,13 +333,9 @@ func drawEngagementSection(ctx BehaviorCtx, col *Column, er *components.Engageme
 		}
 	}
 
-	// Standoff cycles Any -> Close -> Medium -> Long -> Any. SectorHalfDot
-	// is read-only here; the edit UI ships with DefendPosition.
-	if cycle(ctx, col.Band(srChipH), "Standoff: "+components.StandoffName(er.Standoff)) {
-		er.Standoff = (er.Standoff + 1) % 4
-	}
-	col.Skip(srRowGap)
-
+	// Standoff is NOT offered here: nothing reads EngagementRules.Standoff yet
+	// (19.5 P2), and a toggle that changes nothing teaches the player a lie.
+	// SectorHalfDot is read-only — its edit UI ships with DefendPosition.
 	sectorLabel := "Sector: free"
 	if er.SectorHalfDot > 0 {
 		halfDeg := math.Acos(float64(er.SectorHalfDot)) * 180.0 / math.Pi

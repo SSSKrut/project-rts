@@ -31,6 +31,12 @@ var savePathFlag = flag.String("save-path", "save/snapshot.rtss", "snapshot path
 var loadFlag = flag.String("load", "", "load world snapshot and continue")
 var runTicksFlag = flag.Uint64("run-ticks", 0, "headless: exit after tick N (overrides verdict exit)")
 var fpsFlag = flag.Int("fps", 60, "target FPS; 0 = uncapped (for render profiling)")
+
+// watchFlag renders an ai_* scene instead of running it headless. The scripted
+// scenes are the only way to stage a barrage or a sustained firefight — the
+// stimulus lives in the harness — so a playtest of reactive behaviour has to be
+// able to WATCH one. Gates never pass it.
+var watchFlag = flag.Bool("watch", false, "render an ai_* scene instead of running it headless")
 var memProfileFlag = flag.String("memprofile", "", "dev: write a heap profile at exit")
 
 var saveAtDone bool

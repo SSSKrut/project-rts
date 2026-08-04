@@ -150,6 +150,7 @@ func (p *Profiler) EntityCountStale(now, interval time.Duration) bool {
 type SystemMedian struct {
 	Name   string
 	Median time.Duration
+	Max    time.Duration
 }
 
 // LastFrameSystems returns the top-n systems of the most recent completed
@@ -186,12 +187,40 @@ func (p *Profiler) LastFrameTick() time.Duration {
 	return time.Duration(p.samples[idx].tickTotalNs)
 }
 
+// MaxSystem returns the system's worst tick in the window. A throttled system
+// (250 ms instinct, 1.5 s brain bucket) has a median of zero — it does not run
+// most ticks — so the median alone says nothing about what the pass costs when
+// it DOES run.
+func (p *Profiler) MaxSystem(sysIdx int) time.Duration {
+	if sysIdx < 0 || sysIdx >= p.systemCount {
+		return 0
+	}
+	var worst int64
+	for i := 0; i < p.sampleCount(); i++ {
+		if v := p.samples[i].perSystemNs[sysIdx]; v > worst {
+			worst = v
+		}
+	}
+	return time.Duration(worst)
+}
+
+// MaxTick returns the worst tick total in the window.
+func (p *Profiler) MaxTick() time.Duration {
+	var worst int64
+	for i := 0; i < p.sampleCount(); i++ {
+		if v := p.samples[i].tickTotalNs; v > worst {
+			worst = v
+		}
+	}
+	return time.Duration(worst)
+}
+
 // SystemMediansSorted returns every registered system's median, sorted
 // descending by Median.
 func (p *Profiler) SystemMediansSorted() []SystemMedian {
 	out := make([]SystemMedian, p.systemCount)
 	for i := 0; i < p.systemCount; i++ {
-		out[i] = SystemMedian{Name: p.systemNames[i], Median: p.MedianSystem(i)}
+		out[i] = SystemMedian{Name: p.systemNames[i], Median: p.MedianSystem(i), Max: p.MaxSystem(i)}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Median > out[j].Median })
 	return out
@@ -200,10 +229,12 @@ func (p *Profiler) SystemMediansSorted() []SystemMedian {
 func (p *Profiler) PrintSnapshot() {
 	var sb strings.Builder
 	sb.WriteString("\n─── Profiler snapshot ───\n")
-	fmt.Fprintf(&sb, "  %-24s %8.3f ms\n", "tick total", float64(p.MedianTick().Nanoseconds())/1e6)
-	sb.WriteString("\n  systems (median ms over window)\n")
+	fmt.Fprintf(&sb, "  %-24s %8.3f ms   max %8.3f ms\n", "tick total",
+		float64(p.MedianTick().Nanoseconds())/1e6, float64(p.MaxTick().Nanoseconds())/1e6)
+	sb.WriteString("\n  systems (median / max ms over window)\n")
 	for _, sm := range p.SystemMediansSorted() {
-		fmt.Fprintf(&sb, "  %-24s %8.3f ms\n", sm.Name, float64(sm.Median.Nanoseconds())/1e6)
+		fmt.Fprintf(&sb, "  %-24s %8.3f ms   max %8.3f ms\n", sm.Name,
+			float64(sm.Median.Nanoseconds())/1e6, float64(sm.Max.Nanoseconds())/1e6)
 	}
 	fmt.Fprintf(&sb, "\n  heap            %8.2f MB\n", float64(p.HeapBytes())/(1024*1024))
 	fmt.Fprintf(&sb, "  entities        %8d\n", p.EntityCount())
