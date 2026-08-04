@@ -185,9 +185,10 @@ type unitWork struct {
 	profile   components.MovementProfile
 	stamina   *components.Stamina
 	exhausted bool
-	// Evacuating a shelled area: the combat-move throttle is for advancing
-	// under direct fire, not for clearing a beaten zone — the whole point is
-	// to be somewhere else fast.
+	// Relocating under a tactical override (running to a chosen position or
+	// out of a beaten zone): the body faces where the legs go. The
+	// combat-move throttle is for advancing on an enemy with weapons up, and
+	// applying it to a man RUNNING FOR COVER turned a 5 m dash into 20 s.
 	evacuating bool
 }
 
@@ -235,20 +236,20 @@ func (sys *UnitMovementSystem) Update(ctx core.UpdateContext) {
 		exhausted := sys.staminaExhaustedMap.Has(ent)
 		threat := sys.threatMap.Get(ent)
 		evacuating := false
-		if ov := sys.overrideMap.Get(ent); ov != nil &&
-			ov.Reason == components.TacticalOverrideShellfire {
-			evacuating = true
+		if ov := sys.overrideMap.Get(ent); ov != nil {
+			d := pos.Sub(ov.CoverPos)
+			evacuating = d.X*d.X+d.Z*d.Z > siReachedRadius*siReachedRadius
 		}
 		sys.workBuf = append(sys.workBuf, unitWork{
-			ent:       ent,
-			pos:       pos,
-			mot:       mot,
-			queue:     queue,
-			stance:    stance,
-			microPath: mp,
-			threat:    threat,
-			profile:   profile,
-			stamina:   stamina,
+			ent:        ent,
+			pos:        pos,
+			mot:        mot,
+			queue:      queue,
+			stance:     stance,
+			microPath:  mp,
+			threat:     threat,
+			profile:    profile,
+			stamina:    stamina,
 			exhausted:  exhausted,
 			evacuating: evacuating,
 		})

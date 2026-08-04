@@ -28,13 +28,14 @@ type StanceControllerSystem struct {
 	overrideMap    *ecs.Map[components.StanceOverride]
 	movementMap    *ecs.Map[components.MovementProfile]
 	orderMoveOverr *ecs.Map[components.OrderParamMovementProfile]
-	orderQueueMap *ecs.Map[components.OrderQueueHead]
+	orderQueueMap  *ecs.Map[components.OrderQueueHead]
 	// ModeSuppressed forces Prone regardless of band / lock / doctrine.
 	blackboardMap *ecs.Map[components.LocalBlackboard]
 	// Evacuating a shelled area overrides the band: prone caps speed at
 	// 1.5 m/s, which keeps the unit inside the beaten zone — and since prone
 	// never trips the moving-too-fast gate, the stance cannot lift itself.
 	tacticalMap *ecs.Map[components.TacticalOverride]
+	posMap      *ecs.Map[components.WorldPos]
 }
 
 func NewStanceControllerSystem() *StanceControllerSystem {
@@ -51,6 +52,7 @@ func (sys *StanceControllerSystem) InitUI(w *ecs.World) {
 	sys.orderQueueMap = ecs.NewMap[components.OrderQueueHead](w)
 	sys.blackboardMap = ecs.NewMap[components.LocalBlackboard](w)
 	sys.tacticalMap = ecs.NewMap[components.TacticalOverride](w)
+	sys.posMap = ecs.NewMap[components.WorldPos](w)
 }
 
 func (StanceControllerSystem) Name() string { return "stance_controller" }
@@ -72,13 +74,25 @@ func (sys *StanceControllerSystem) Update(ctx core.UpdateContext) {
 		ent := q.Entity()
 		_, stance, threat, mot := q.Get()
 
-		if tv := sys.tacticalMap.Get(ent); tv != nil &&
-			tv.Reason == components.TacticalOverrideShellfire {
-			if stance.Code != components.StanceStand {
-				stance.Code = components.StanceStand
-				stance.LockUntil = now + stanceAnimLock
+		// A man still running to his position is not lying down: prone caps
+		// speed at 1.5 m/s and never trips the moving-too-fast gate that
+		// would lift it, so the dash to cover became a crawl. Standing while
+		// clearing a beaten zone, crouching while closing on cover.
+		if tv := sys.tacticalMap.Get(ent); tv != nil {
+			if p := sys.posMap.Get(ent); p != nil {
+				d := p.Sub(tv.CoverPos)
+				if d.X*d.X+d.Z*d.Z > siReachedRadius*siReachedRadius {
+					want := components.StanceCrouch
+					if tv.Reason == components.TacticalOverrideShellfire {
+						want = components.StanceStand
+					}
+					if stance.Code != want {
+						stance.Code = want
+						stance.LockUntil = now + stanceAnimLock
+					}
+					continue
+				}
 			}
-			continue
 		}
 		if ov := sys.overrideMap.Get(ent); ov != nil && ov.Until > now {
 			continue

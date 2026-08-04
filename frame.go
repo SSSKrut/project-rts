@@ -94,9 +94,15 @@ func (g *Game) RunFrame() bool {
 		writeReplayHash(g.App)
 		if *runTicksFlag > 0 {
 			if g.App.TickIndex() >= *runTicksFlag {
+				if os.Getenv("RTS_PROF") != "" {
+					g.App.Prof.PrintSnapshot()
+				}
 				return false
 			}
 		} else if g.Scene.AI != nil && g.Scene.AI.verdictDone {
+			if os.Getenv("RTS_PROF") != "" {
+				g.App.Prof.PrintSnapshot()
+			}
 			return false
 		}
 		return true

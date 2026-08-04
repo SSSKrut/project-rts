@@ -138,6 +138,15 @@ const (
 	// squad must return to the position it was told to hold.
 	aiSceneShellfire = "ai_shellfire"
 
+	// MC2 position-scoring family (P4). One scorer ranks slots, trench cells,
+	// terrain defilade and hull shadow against every live threat bearing;
+	// each scene isolates one candidate kind, and _none proves the mandatory
+	// fallback (nothing worth taking → get out of the fire lane).
+	aiSceneCoverTrench   = "ai_cover_trench"
+	aiSceneCoverHull     = "ai_cover_hull"
+	aiSceneCoverDefilade = "ai_cover_defilade"
+	aiSceneCoverNone     = "ai_cover_none"
+
 	// ai_vehicle_combat: tank+BTR (player) vs BMP+ATCarrier (enemy AI) at
 	// ~50 m. Gunners detect, slew and fire on their own; the cannon's
 	// weapon-vs-class preference must delete both light hulls while the
@@ -199,6 +208,13 @@ func aiSceneMapName() string {
 		return "hills"
 	case aiSceneVehRoad, aiSceneVehConvoyRoad:
 		return "valley"
+	case aiSceneCoverNone:
+		return "flat"
+	case aiSceneCoverDefilade:
+		// Natural relief: a player-stamped ridge would never reach the cover
+		// bake (CoverBaked is one-shot per chunk), so the scene must test the
+		// DirMask consumer on terrain the bake actually saw.
+		return "hills"
 	}
 	return ""
 }
@@ -299,6 +315,14 @@ func aiSceneAnchorPos() components.WorldPos {
 		return components.WorldPos{}.Add(rl.Vector3{X: 40, Z: -30})
 	case aiSceneShellfire:
 		return components.WorldPos{}.Add(rl.Vector3{X: 40, Z: 40})
+	case aiSceneCoverTrench:
+		return components.WorldPos{}.Add(rl.Vector3{X: 40, Z: 38})
+	case aiSceneCoverHull:
+		return components.WorldPos{}.Add(rl.Vector3{X: 40, Z: -4})
+	case aiSceneCoverDefilade:
+		return components.WorldPos{}.Add(rl.Vector3{X: 56, Z: 0})
+	case aiSceneCoverNone:
+		return components.WorldPos{}.Add(rl.Vector3{X: 0, Z: 6})
 	case aiSceneVehCombat:
 		return components.WorldPos{}.Add(rl.Vector3{X: 40, Z: -30})
 	case aiSceneVehAvoid:
@@ -327,6 +351,13 @@ func aiSceneTrenches() []components.Trench {
 	wp := func(wx, wz float32) components.WorldPos {
 		return components.WorldPos{}.Add(rl.Vector3{X: wx, Y: 0, Z: wz})
 	}
+	if aiSceneID() == aiSceneCoverTrench {
+		return []components.Trench{{
+			Points: []components.WorldPos{wp(20, 44), wp(60, 44)},
+			Width:  2.0,
+			Depth:  1.5,
+		}}
+	}
 	if aiSceneID() == aiSceneLosDefilade {
 		return []components.Trench{{
 			Points: []components.WorldPos{wp(20, 25), wp(40, 25)},
@@ -348,7 +379,8 @@ func aiSceneBuildings() []components.BuildingPlan {
 	switch aiSceneID() {
 	case aiSceneLosOpen, aiSceneLosDefilade, aiSceneLosCreep,
 		aiSceneMarchLine, aiSceneMarchSlope, aiSceneMarchColumn,
-		aiSceneCrowdCross, aiSceneVehForest, aiSceneVehSlope, aiSceneShellfire:
+		aiSceneCrowdCross, aiSceneVehForest, aiSceneVehSlope, aiSceneShellfire,
+		aiSceneCoverTrench, aiSceneCoverHull, aiSceneCoverDefilade, aiSceneCoverNone:
 		return nil
 	case aiSceneDoorSouth:
 		return aiBuildingsSingleHouse(0)
@@ -1041,6 +1073,87 @@ func aiVehicleAvoidSpawn(world *ecs.World, vehicleFactory *entities.VehicleFacto
 	return s
 }
 
+// aiCoverPosSpawn (MC2): the four position-scoring scenes. Each drops a small
+// squad under synthetic fire from one bearing with exactly one good answer
+// nearby — a trench, a parked hull, a ridge, or nothing at all.
+func aiCoverPosSpawn(
+	world *ecs.World,
+	squadService *systems.SquadService,
+	vehicleFactory *entities.VehicleFactory,
+	unitFactory aiUnitSpawn,
+	posMap *ecs.Map[components.WorldPos],
+	rosterMap *ecs.Map[components.CommandRoster],
+) *aiTestState {
+	wp := func(x, z float32) components.WorldPos {
+		p := components.WorldPos{}.Add(rl.Vector3{X: x, Z: z})
+		p.Local.Y = systems.GroundHeight(x, z)
+		return p
+	}
+	st := &aiTestState{
+		sceneID:      aiSceneID(),
+		covActive:    true,
+		World:        world,
+		SquadService: squadService,
+		PosMap:       posMap,
+		RosterMap:    rosterMap,
+		MotionMap:    ecs.NewMap[components.Motion](world),
+		OverrideMap:  ecs.NewMap[components.TacticalOverride](world),
+		DangerMap:    ecs.NewMap[components.DangerBuffer](world),
+		StanceMap:    ecs.NewMap[components.Stance](world),
+		SlotFilter:   ecs.NewFilter2[components.WorldPos, components.CoverSlot](world),
+		sampler:      systems.NewHeightSampler(world),
+		orderAt:      aiOrderAt,
+		verdictAt:    60,
+		nextSampleAt: aiOrderAt + 3,
+	}
+	var spawnPts [2]components.WorldPos
+	switch aiSceneID() {
+	case aiSceneCoverTrench:
+		// Trench 10 m north, a lone oak 24 m south, fire from the east: both
+		// answers are lateral, so only quality decides.
+		spawnPts = [2]components.WorldPos{wp(38, 34), wp(42, 34)}
+		st.covShooter = wp(80, 34)
+		st.covRefZ = 44
+		propMap := ecs.NewMap[components.Prop](world)
+		lodMap := ecs.NewMap[components.LODRelevant](world)
+		propIdxRes := ecs.NewResource[systems.PropChunkIndex](world)
+		registryRes := ecs.NewResource[components.PropTypeRegistry](world)
+		aiPlantProp(world, posMap, propMap, lodMap, propIdxRes.Get(),
+			registryRes.Get(), components.PropOak, 40, 10)
+	case aiSceneCoverHull:
+		// A parked friendly BTR between the men and the shooter.
+		spawnPts = [2]components.WorldPos{wp(38, 2), wp(42, 2)}
+		st.covShooter = wp(40, 22)
+		st.covRefX, st.covRefZ = 40, -6
+		if vehicleFactory != nil {
+			vehicleFactory.Spawn(wp(40, -6), components.VehicleBTR,
+				components.FactionPlayer, components.ControllerLocal)
+		}
+	case aiSceneCoverDefilade:
+		// Open ground on `hills` with a shooter across the valley: the answer
+		// is the reverse slope, and the verdict tests the sightline itself
+		// rather than a hard-coded crest.
+		spawnPts = [2]components.WorldPos{wp(38, -2), wp(42, 2)}
+		st.covShooter = wp(40, 60)
+	case aiSceneCoverNone:
+		// Flat map, no cover of any kind: the fallback must fire.
+		spawnPts = [2]components.WorldPos{wp(-2, 0), wp(2, 0)}
+		st.covShooter = wp(0, 40)
+	}
+	u1 := unitFactory(spawnPts[0])
+	u2 := unitFactory(spawnPts[1])
+	st.covUnits = []ecs.Entity{u1, u2}
+	st.covStart = spawnPts[0]
+	squad := squadService.CreateFromUnits([]ecs.Entity{u1, u2}, components.FormationLine)
+	if squad == (ecs.Entity{}) {
+		fmt.Printf("[ai-test %s] FAILED TO FORM SQUAD — aborting\n", aiSceneID())
+		return nil
+	}
+	st.squad = squad
+	st.covStopAt = aiOrderAt + 20
+	return st
+}
+
 // aiShellfireSpawn (MC1): a MotorRifle squad holds a position on open ground;
 // updateShellfire walks synthetic shells across it.
 func aiShellfireSpawn(
@@ -1504,6 +1617,11 @@ func aiSceneSpawn(
 	if aiSceneID() == aiSceneVehStuck {
 		return aiVehicleStuckSpawn(world, vehicleFactory, posMap)
 	}
+	if id := aiSceneID(); id == aiSceneCoverTrench || id == aiSceneCoverHull ||
+		id == aiSceneCoverDefilade || id == aiSceneCoverNone {
+		return aiCoverPosSpawn(world, squadService, vehicleFactory, unitFactory,
+			posMap, rosterMap)
+	}
 	if aiSceneID() == aiSceneShellfire {
 		return aiShellfireSpawn(world, squadService, roleService, unitFactory,
 			playerFaction, posMap, rosterMap)
@@ -1807,6 +1925,24 @@ type aiTestState struct {
 	avoidRevTicks int                   // reverse ticks past avoidRevFree
 	avoidRevFree  float32               // >0: count reversals after this elapsed
 
+	// Set for the MC2 cover-position family: synthetic fire from one point,
+	// one candidate kind per scene, latched success + a scene-specific number.
+	covActive  bool
+	covUnits   []ecs.Entity
+	covShooter components.WorldPos
+	covNextInj float32
+	covStopAt  float32
+	covRefX    float32
+	covRefZ    float32
+	covOK      bool
+	covNote    float32
+	covStamped bool
+	covProne   bool
+	covLateral float32
+	covStart   components.WorldPos
+	SlotFilter *ecs.Filter2[components.WorldPos, components.CoverSlot]
+	StanceMap  *ecs.Map[components.Stance]
+
 	// Set for ai_shellfire (MC1): DefendPosition under a walking barrage.
 	shellActive     bool
 	shellSquad      ecs.Entity
@@ -2066,6 +2202,10 @@ func (s *aiTestState) Update(elapsed float32) {
 	}
 	if s.stuckActive {
 		s.updateVehStuck(elapsed)
+		return
+	}
+	if s.covActive {
+		s.updateCoverPos(elapsed)
 		return
 	}
 	if s.shellActive {
@@ -3523,6 +3663,211 @@ func (s *aiTestState) updateConvoyRoad(elapsed float32) {
 		fmt.Printf("== VERDICT [%s]: %s  (done=%v maxDist=%.1f t=%.1fs roadTicks=%d bridge=%d)\n",
 			s.sceneID, verdict, s.convoyRoadArrive > 0, maxDist, elapsed,
 			s.convoyRoadTicks, s.vehBridgeTicks)
+		fmt.Println("============================================================")
+		s.verdictDone = true
+	}
+}
+
+// aiSightBlocked reports the terrain between (ax,az) and (bx,bz) rising above
+// the eye line — the cover bake's own test, so the defilade verdict does not
+// depend on where the bake happened to store its mask.
+func aiSightBlocked(sampler *systems.HeightSampler, ax, az, bx, bz float32) bool {
+	if sampler == nil {
+		return false
+	}
+	const eye = 1.7
+	dx, dz := bx-ax, bz-az
+	dist := float32(math.Sqrt(float64(dx*dx + dz*dz)))
+	if dist < 1 {
+		return false
+	}
+	ay := sampler.Sample(ax, az) + eye
+	by := sampler.Sample(bx, bz) + eye
+	for t := float32(2); t < dist; t += 2 {
+		f := t / dist
+		gx, gz := ax+dx*f, az+dz*f
+		if sampler.Sample(gx, gz) > ay+(by-ay)*f+0.3 {
+			return true
+		}
+	}
+	return false
+}
+
+// updateCoverPos (MC2): pulse synthetic fire from one bearing and check that
+// the scorer took the one good answer the scene planted — or, in _none, that
+// the fallback got the men out of the fire lane instead of freezing them.
+func (s *aiTestState) updateCoverPos(elapsed float32) {
+	if s.verdictDone {
+		return
+	}
+	if !s.orderFired {
+		if elapsed < s.orderAt {
+			return
+		}
+		fmt.Println("============================================================")
+		fmt.Printf("== AI COVER POSITION: %s  units=%d shooter=(%.0f,%.0f)\n",
+			s.sceneID, len(s.covUnits),
+			float32(s.covShooter.Chunk.X)*components.ChunkSize+s.covShooter.Local.X,
+			float32(s.covShooter.Chunk.Z)*components.ChunkSize+s.covShooter.Local.Z)
+		fmt.Println("============================================================")
+		s.orderFired = true
+		s.covNextInj = elapsed
+		if s.sceneID == aiSceneCoverDefilade {
+			// The scene is only a test if the men START in the open: a spawn
+			// already in defilade would pass without anyone deciding anything.
+			for _, u := range s.covUnits {
+				p := s.PosMap.Get(u)
+				if p == nil {
+					continue
+				}
+				ux := float32(p.Chunk.X)*components.ChunkSize + p.Local.X
+				uz := float32(p.Chunk.Z)*components.ChunkSize + p.Local.Z
+				if aiSightBlocked(s.sampler, ux, uz,
+					float32(s.covShooter.Chunk.X)*components.ChunkSize+s.covShooter.Local.X,
+					float32(s.covShooter.Chunk.Z)*components.ChunkSize+s.covShooter.Local.Z) {
+					fmt.Printf("[ai-test %s] SPAWN ALREADY IN DEFILADE at (%.1f,%.1f) — aborting\n",
+						s.sceneID, ux, uz)
+					s.verdictDone = true
+					return
+				}
+			}
+		}
+	}
+	if elapsed >= s.covNextInj && elapsed <= s.covStopAt {
+		s.covNextInj = elapsed + 0.5
+		for _, u := range s.covUnits {
+			if u == (ecs.Entity{}) || !s.World.Alive(u) {
+				continue
+			}
+			if buf := s.DangerMap.Get(u); buf != nil {
+				components.PushDanger(buf, components.DangerEvent{
+					Kind:     components.DangerBulletImpact,
+					Pos:      s.covShooter,
+					Strength: 0.35,
+					Time:     elapsed,
+				})
+			}
+		}
+	}
+
+	// Per-scene success test, latched: reaching the answer once is the
+	// behaviour under test; drifting later is a different milestone.
+	good := 0
+	proneNow := false
+	var lateralMax float32
+	sx := float32(s.covShooter.Chunk.X)*components.ChunkSize + s.covShooter.Local.X
+	sz := float32(s.covShooter.Chunk.Z)*components.ChunkSize + s.covShooter.Local.Z
+	for _, u := range s.covUnits {
+		if u == (ecs.Entity{}) || !s.World.Alive(u) {
+			continue
+		}
+		p := s.PosMap.Get(u)
+		if p == nil {
+			continue
+		}
+		ux := float32(p.Chunk.X)*components.ChunkSize + p.Local.X
+		uz := float32(p.Chunk.Z)*components.ChunkSize + p.Local.Z
+		switch s.sceneID {
+		case aiSceneCoverTrench:
+			if dz := uz - s.covRefZ; dz > -3 && dz < 3 {
+				good++
+			}
+			// Report how deep the ditch actually holds a man (the
+			// GroundStick-on-Modified tail the plan asks to verify).
+			if s.sampler != nil {
+				if sink := s.sampler.Sample(ux, uz+8) - p.Local.Y; sink > s.covNote {
+					s.covNote = sink
+				}
+			}
+		case aiSceneCoverHull:
+			dx, dz := ux-s.covRefX, uz-s.covRefZ
+			if uz < s.covRefZ && dx*dx+dz*dz < 36 {
+				good++
+			}
+		case aiSceneCoverDefilade:
+			// In defilade = the ground breaks the line from the shooter to
+			// this man's head — the same predicate the cover bake uses.
+			if aiSightBlocked(s.sampler, ux, uz, sx, sz) {
+				good++
+			}
+			startX := float32(s.covStart.Chunk.X)*components.ChunkSize + s.covStart.Local.X
+			startZ := float32(s.covStart.Chunk.Z)*components.ChunkSize + s.covStart.Local.Z
+			if d := float32(math.Sqrt(float64((ux-startX)*(ux-startX) +
+				(uz-startZ)*(uz-startZ)))); d > s.covNote {
+				s.covNote = d
+			}
+		case aiSceneCoverNone:
+			if st := s.StanceMap.Get(u); st != nil && st.Code == components.StanceProne {
+				proneNow = true
+			}
+			// Lateral = displacement perpendicular to the shooter bearing.
+			bx, bz := ux-sx, uz-sz
+			bl := float32(math.Sqrt(float64(bx*bx + bz*bz)))
+			if bl > 1e-3 {
+				startX := float32(s.covStart.Chunk.X)*components.ChunkSize + s.covStart.Local.X
+				startZ := float32(s.covStart.Chunk.Z)*components.ChunkSize + s.covStart.Local.Z
+				mx, mz := ux-startX, uz-startZ
+				lat := mx*(-bz/bl) + mz*(bx/bl)
+				if lat < 0 {
+					lat = -lat
+				}
+				if lat > lateralMax {
+					lateralMax = lat
+				}
+			}
+		}
+	}
+	if proneNow {
+		s.covProne = true
+	}
+	if lateralMax > s.covLateral {
+		s.covLateral = lateralMax
+	}
+	if s.sceneID == aiSceneCoverNone {
+		if s.covProne && s.covLateral >= 5 {
+			s.covOK = true
+		}
+	} else if good == len(s.covUnits) {
+		s.covOK = true
+	}
+
+	if elapsed >= s.nextSampleAt && elapsed < s.verdictAt {
+		s.nextSampleAt = elapsed + aiSampleEvery
+		fmt.Printf("[ai-test %s] t=%.1fs good=%d/%d ok=%v note=%.2f prone=%v lat=%.1f",
+			s.sceneID, elapsed, good, len(s.covUnits), s.covOK,
+			s.covNote, s.covProne, s.covLateral)
+		for _, u := range s.covUnits {
+			if p := s.PosMap.Get(u); p != nil {
+				ovr := -1
+				if ov := s.OverrideMap.Get(u); ov != nil {
+					ovr = int(ov.Reason)
+				}
+				fmt.Printf(" u=(%.1f,%.1f,r%d)",
+					float32(p.Chunk.X)*components.ChunkSize+p.Local.X,
+					float32(p.Chunk.Z)*components.ChunkSize+p.Local.Z, ovr)
+			}
+		}
+		fmt.Println()
+	}
+	if s.covOK || elapsed >= s.verdictAt {
+		slots := 0
+		q := s.SlotFilter.Query()
+		for q.Next() {
+			sp, _ := q.Get()
+			d := sp.Sub(s.covStart)
+			if d.X*d.X+d.Z*d.Z < 900 {
+				slots++
+			}
+		}
+		q.Close()
+		verdict := "FAIL"
+		if s.covOK {
+			verdict = "PASS"
+		}
+		fmt.Println("============================================================")
+		fmt.Printf("== VERDICT [%s]: %s  (ok=%v good=%d/%d slotsNear=%d note=%.2f prone=%v lat=%.1f t=%.1fs)\n",
+			s.sceneID, verdict, s.covOK, good, len(s.covUnits), slots,
+			s.covNote, s.covProne, s.covLateral, elapsed)
 		fmt.Println("============================================================")
 		s.verdictDone = true
 	}

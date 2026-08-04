@@ -18,6 +18,7 @@ const (
 	TacticalOverrideOutOfAmmo
 	TacticalOverrideBlockedByContact
 	TacticalOverrideShellfire
+	TacticalOverrideNoCover
 )
 
 func ReasonLabel(r TacticalOverrideReason) string {
@@ -36,6 +37,8 @@ func ReasonLabel(r TacticalOverrideReason) string {
 		return "Blocked by contact"
 	case TacticalOverrideShellfire:
 		return "Leaving the shelled area"
+	case TacticalOverrideNoCover:
+		return "No cover: moving out of the fire lane"
 	}
 	return ""
 }
@@ -86,4 +89,11 @@ type TacticalOverride struct {
 	SavedKind    ActionKind
 	SavedTarget  WorldPos
 	CoverPos     WorldPos
+	// Bearing the position was chosen against and when it was last judged
+	// (P4): a position picked for fire from the north is worthless once the
+	// shooting comes from the east, so a held place is re-scored when the
+	// threat swings past a right angle — throttled by LastEvalAt.
+	ChosenDirX float32
+	ChosenDirZ float32
+	LastEvalAt float32
 }

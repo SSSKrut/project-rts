@@ -31,9 +31,16 @@ import (
 // Helpers split across survival_instinct_scramble.go and
 // survival_instinct_cover.go.
 type SurvivalInstinctSystem struct {
-	unitFilter    *ecs.Filter3[components.Unit, components.WorldPos, components.Threat]
-	slotFilter    *ecs.Filter2[components.WorldPos, components.CoverSlot]
-	unsafeFilter  *ecs.Filter2[components.UnsafeArea, components.WorldPos]
+	unitFilter   *ecs.Filter3[components.Unit, components.WorldPos, components.Threat]
+	slotFilter   *ecs.Filter2[components.WorldPos, components.CoverSlot]
+	unsafeFilter *ecs.Filter2[components.UnsafeArea, components.WorldPos]
+	// Position scoring (P4): trench / defilade cells come from the chunk
+	// bakes, hull shadow from parked friendly vehicles.
+	vehicleFilter *ecs.Filter3[components.Vehicle, components.WorldPos, components.Motion]
+	navGridMap    *ecs.Map[components.NavGrid]
+	coverMapMap   *ecs.Map[components.CoverMap]
+	chunkIndexRes ecs.Resource[TerrainChunkIndex]
+	trenchRes     ecs.Resource[components.TrenchNetwork]
 	squadFilter   *ecs.Filter2[components.Squad, components.CommandRoster]
 	queueMap      *ecs.Map[components.ActionQueue]
 	overrideMap   *ecs.Map[components.TacticalOverride]
@@ -52,6 +59,7 @@ type SurvivalInstinctSystem struct {
 	world *ecs.World
 
 	slots     []siCoverSlot
+	cands     []siCandidate
 	unsafe    []siUnsafeZone
 	acquires  []siAcquireOp
 	clears    []ecs.Entity
@@ -97,9 +105,12 @@ type siUnsafeZone struct {
 // siAcquireOp is a queued "give this unit cover" decision. Batched because
 // Add[TacticalOverride] can't run inside the live unit filter.
 type siAcquireOp struct {
-	unit ecs.Entity
-	slot ecs.Entity
-	pos  components.WorldPos
+	unit   ecs.Entity
+	slot   ecs.Entity
+	pos    components.WorldPos
+	reason components.TacticalOverrideReason
+	dirX   float32
+	dirZ   float32
 }
 
 // siStateAdd queues attaching SquadState to a squad after the query closes.
@@ -131,6 +142,18 @@ const siCoverSearchRadius float32 = 30.0
 // boundary re-triggers the moment the zone breathes.
 const siEvacMargin float32 = 6.0
 
+// Fallback relocation distance when no position scores (P4).
+const siRelocateDist float32 = 12.0
+
+// A unit within this of its chosen position counts as being IN it — past it
+// the man is still moving and must not lie down (stance) nor face away from
+// his line of travel (combat-move throttle).
+const siReachedRadius float32 = 1.5
+
+// Re-scoring a held position: throttle, and the move it must be worth.
+const siReEvalInterval float32 = 0.5
+const siReEvalMinMove float32 = 3.0
+
 // A freshly issued player order owns the unit for this long — no NEW
 // override may be placed inside the window (squad Scrambling excepted).
 const siOrderGraceWindow float32 = 4.0
@@ -161,6 +184,11 @@ func (sys *SurvivalInstinctSystem) InitUI(w *ecs.World) {
 	sys.unitFilter = ecs.NewFilter3[components.Unit, components.WorldPos, components.Threat](w)
 	sys.slotFilter = ecs.NewFilter2[components.WorldPos, components.CoverSlot](w)
 	sys.unsafeFilter = ecs.NewFilter2[components.UnsafeArea, components.WorldPos](w)
+	sys.vehicleFilter = ecs.NewFilter3[components.Vehicle, components.WorldPos, components.Motion](w)
+	sys.navGridMap = ecs.NewMap[components.NavGrid](w)
+	sys.coverMapMap = ecs.NewMap[components.CoverMap](w)
+	sys.chunkIndexRes = ecs.NewResource[TerrainChunkIndex](w)
+	sys.trenchRes = ecs.NewResource[components.TrenchNetwork](w)
 	sys.squadFilter = ecs.NewFilter2[components.Squad, components.CommandRoster](w)
 	sys.queueMap = ecs.NewMap[components.ActionQueue](w)
 	sys.overrideMap = ecs.NewMap[components.TacticalOverride](w)
@@ -288,24 +316,14 @@ func (sys *SurvivalInstinctSystem) Update(ctx core.UpdateContext) {
 			if !scrambling && !inZone && sys.orderGraceActive(ent, now) {
 				continue
 			}
-			slot, slotPos, found := sys.pickCover(ent, pos, threatDir, claimed)
-			if !found {
-				// No cover to run to. Standing in a beaten zone that is still
-				// a decision: walk out of it. Anywhere else, hold — moving to
-				// nowhere in particular is the "болванчик" behaviour.
-				if !inZone {
-					continue
-				}
-				evacPos, ok := sys.evacTarget(pos)
-				if !ok {
-					continue
-				}
-				sys.acquires = append(sys.acquires,
-					siAcquireOp{unit: ent, pos: evacPos})
+			op, ok := sys.planPosition(ent, pos, threat, threatDir, inZone, claimed)
+			if !ok {
 				continue
 			}
-			claimed[slot] = ent
-			sys.acquires = append(sys.acquires, siAcquireOp{unit: ent, slot: slot, pos: slotPos})
+			if op.slot != (ecs.Entity{}) {
+				claimed[op.slot] = ent
+			}
+			sys.acquires = append(sys.acquires, op)
 			continue
 		}
 
@@ -313,6 +331,22 @@ func (sys *SurvivalInstinctSystem) Update(ctx core.UpdateContext) {
 		if now > existing.Until {
 			sys.clears = append(sys.clears, ent)
 			continue
+		}
+		// A held place is only as good as the bearing it was chosen against
+		// (P4): re-score when the fire swings past a right angle or the place
+		// itself has been swallowed by a beaten zone. Throttled — re-picking
+		// every tick would thrash the queue.
+		if now-existing.LastEvalAt >= siReEvalInterval && sys.positionStale(existing, threat) {
+			existing.LastEvalAt = now
+			if op, ok := sys.planPosition(ent, pos, threat, threatDir,
+				sys.zoneUnder(pos) >= 0, claimed); ok &&
+				centerXZDistSq(op.pos, existing.CoverPos) > siReEvalMinMove*siReEvalMinMove {
+				if op.slot != (ecs.Entity{}) {
+					claimed[op.slot] = ent
+				}
+				sys.acquires = append(sys.acquires, op)
+				continue
+			}
 		}
 		if threat.Total < clearThreshold && !scrambling {
 			if existing.LowSuppSince == 0 {
@@ -385,12 +419,11 @@ func (sys *SurvivalInstinctSystem) Update(ctx core.UpdateContext) {
 		if sys.overrideMap.Has(op.unit) {
 			sys.overrideMap.Remove(op.unit)
 		}
-		reason := components.TacticalOverrideUnderFire
-		if op.slot == (ecs.Entity{}) {
-			reason = components.TacticalOverrideShellfire
-		}
 		sys.overrideMap.Add(op.unit, &components.TacticalOverride{
-			Reason:       reason,
+			Reason:       op.reason,
+			ChosenDirX:   op.dirX,
+			ChosenDirZ:   op.dirZ,
+			LastEvalAt:   now,
 			Until:        now + siSafetyUntil,
 			LowSuppSince: 0,
 			AssignedSlot: op.slot,
