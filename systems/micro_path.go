@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 
+	rl "github.com/gen2brain/raylib-go/raylib"
 	"github.com/mlange-42/ark/ecs"
 
 	"rts-go/components"
@@ -35,6 +36,11 @@ const (
 	microPathBlockedPopRadius float32 = 1.35
 	// Per-unit minimum gap between replans.
 	microPathReplanCooldown float32 = 0.5
+	// Stuck-replan detour hint: bump A* costs within AvoidRadius of the
+	// point AvoidLead metres toward the stalled waypoint, for AvoidTTL s.
+	microPathAvoidLead   float32 = 0.9
+	microPathAvoidRadius float32 = 0.9
+	microPathAvoidTTL    float32 = 3.0
 )
 
 // MicroPathSystem walks Units with a MicroPath: pops reached waypoints,
@@ -215,6 +221,15 @@ func (sys *MicroPathSystem) tickUnit(pos *components.WorldPos, mp *components.Mi
 				mp.Head++
 			} else {
 				mp.Dirty = true
+				// Detour hint one body-length toward the stalled waypoint:
+				// whatever blocks there (a parked mate ORCA won't squeeze
+				// past) is invisible to nav, and the bump makes the replan
+				// arc around instead of re-issuing the identical path.
+				if l := float32(math.Sqrt(float64(cur))); l > 1e-3 {
+					f := microPathAvoidLead / l
+					mp.AvoidPos = pos.Add(rl.Vector3{X: d.X * f, Z: d.Z * f})
+					mp.AvoidUntil = now + microPathAvoidTTL
+				}
 			}
 			mp.LastProgressAt = now
 			mp.BestDistSq = float32(math.MaxFloat32)
@@ -240,8 +255,13 @@ func (sys *MicroPathSystem) tickUnit(pos *components.WorldPos, mp *components.Mi
 		return
 	}
 	churn := mp.Count > 0 && mp.Head < mp.Count
-	waypoints, gates := sys.nav.FindPathGates(*pos, goal, NavOpts{})
-	waypoints, gates = sys.nav.StringPull(*pos, waypoints, gates)
+	opts := NavOpts{}
+	if now < mp.AvoidUntil {
+		opts.Avoid = mp.AvoidPos
+		opts.AvoidR = microPathAvoidRadius
+	}
+	waypoints, gates := sys.nav.FindPathGates(*pos, goal, opts)
+	waypoints, gates = sys.nav.StringPull(*pos, waypoints, gates, opts)
 	if debugLog && len(waypoints) == 0 {
 		fmt.Printf("[mp-empty] from=(%.1f,%.1f,Y%.1f) to=(%.1f,%.1f,Y%.1f)\n",
 			float32(pos.Chunk.X)*components.ChunkSize+pos.Local.X,

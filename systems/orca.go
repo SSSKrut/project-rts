@@ -20,8 +20,9 @@ import (
 // Higher = earlier evasive action, more cautious flow. RVO2 default.
 const orcaTimeHorizon float32 = 2.0
 
-// Query at most this many nearest neighbours per solver call. Caps O(N²) to
-// O(N·K); 15 covers typical formation density.
+// Unit-neighbour cap per solver call; the caller keeps the K NEAREST (bounded
+// insertion in unit_movement_step) — vehicle hulls append past the cap and
+// always survive. Caps O(N²) to O(N·K); 15 covers typical formation density.
 const orcaMaxNeighbours int = 15
 
 // Spatial-hash query radius. Wider than the danger envelope so newly
@@ -269,9 +270,6 @@ func orcaAdjust(self orcaAgent, neighbours []orcaAgent, prefVel orcaVec2, maxSpe
 			return prefVel.scale(maxSpeed / prefVel.length()), true
 		}
 		return prefVel, true
-	}
-	if len(neighbours) > orcaMaxNeighbours {
-		neighbours = neighbours[:orcaMaxNeighbours]
 	}
 	lines := make([]orcaLine, 0, len(neighbours))
 	for _, n := range neighbours {

@@ -54,6 +54,12 @@ type NavOpts struct {
 	AvoidOpenedDoors bool // stealth stub; ignored
 	// PathStyle scales NavCell.Cost via styleCellCost. Direct = ×1.0.
 	PathStyle components.PathStyle
+	// Avoid/AvoidR (AvoidR > 0 arms it): cost-bump cells within AvoidR of
+	// Avoid ×4 — the stuck detector's detour hint around a nav-invisible
+	// blocker (parked body). Costs only rise, so A* admissibility holds and
+	// a corridor with no alternative still paths through.
+	Avoid  components.WorldPos
+	AvoidR float32
 }
 
 // navMaxIter caps the number of cells A* will expand per call.
@@ -197,13 +203,20 @@ func (s *NavService) findPath(from, to components.WorldPos, opts NavOpts, allowF
 			if n.diag {
 				step = sqrt2
 			}
-			tentativeG := curG + styleCellCost(cell, opts.PathStyle)*step
+			np := s.nodeWorldPos(n.node, floors)
+			stepCost := styleCellCost(cell, opts.PathStyle) * step
+			if opts.AvoidR > 0 {
+				if d := np.Sub(opts.Avoid); d.X*d.X+d.Z*d.Z < opts.AvoidR*opts.AvoidR {
+					stepCost *= 4
+				}
+			}
+			tentativeG := curG + stepCost
 			if existing, has := states[n.node]; has && tentativeG >= existing.g {
 				continue
 			}
 			states[n.node] = stateRec{g: tentativeG, parent: cur.node, hasParent: true}
 			open.push(nodeHeapEntry{
-				f:    tentativeG + nodeHeuristic(s.nodeWorldPos(n.node, floors), toWP),
+				f:    tentativeG + nodeHeuristic(np, toWP),
 				node: n.node,
 			})
 		}

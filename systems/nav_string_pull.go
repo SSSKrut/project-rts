@@ -23,7 +23,7 @@ const (
 // interior (Level) waypoints pass through untouched. The first chord is
 // anchored on the walker's live position, so a fresh plan never walks back
 // to the path's start cell.
-func (s *NavService) StringPull(start components.WorldPos, wps []components.WorldPos, gates []bool) ([]components.WorldPos, []bool) {
+func (s *NavService) StringPull(start components.WorldPos, wps []components.WorldPos, gates []bool, opts NavOpts) ([]components.WorldPos, []bool) {
 	n := len(wps)
 	if n < 2 {
 		return wps, gates
@@ -58,7 +58,7 @@ func (s *NavService) StringPull(start components.WorldPos, wps []components.Worl
 		// stretch costs O(log) chord tests, not O(n). k == i keeps the next
 		// waypoint unconditionally (today's unsmoothed behaviour).
 		k := m
-		for k > i && !s.surfaceSegClear(anchor, wps[k], idx, floors) {
+		for k > i && !s.surfaceSegClear(anchor, wps[k], idx, floors, opts) {
 			k = i + (k-i)/2
 		}
 		outW = append(outW, wps[k])
@@ -81,13 +81,13 @@ func (s *NavService) SegmentClear(a, b components.WorldPos) bool {
 	if idx == nil {
 		return false
 	}
-	return s.surfaceSegClear(a, b, idx, s.snapshotLevels())
+	return s.surfaceSegClear(a, b, idx, s.snapshotLevels(), NavOpts{})
 }
 
 // surfaceSegClear reports whether the straight XZ chord a→b runs entirely
 // over walkable surface cells. False when either endpoint resolves into a
 // building Level — interior stretches never pull.
-func (s *NavService) surfaceSegClear(a, b components.WorldPos, idx *TerrainChunkIndex, floors []levelRec) bool {
+func (s *NavService) surfaceSegClear(a, b components.WorldPos, idx *TerrainChunkIndex, floors []levelRec, opts NavOpts) bool {
 	an, okA := s.resolveNode(a, idx, floors)
 	if !okA || an.Kind != components.NodeSurface {
 		return false
@@ -112,20 +112,44 @@ func (s *NavService) surfaceSegClear(a, b components.WorldPos, idx *TerrainChunk
 	inv := 1 / float32(math.Sqrt(float64(lenSq)))
 	px := -dz * inv * stringPullSideOffset
 	pz := dx * inv * stringPullSideOffset
-	return s.ddaClear(ax, az, bx, bz, idx, floors) &&
-		s.ddaClear(ax+px, az+pz, bx+px, bz+pz, idx, floors) &&
-		s.ddaClear(ax-px, az-pz, bx-px, bz-pz, idx, floors)
+	av := avoidZone{}
+	if opts.AvoidR > 0 {
+		av = avoidZone{
+			x: float32(opts.Avoid.Chunk.X)*components.ChunkSize + opts.Avoid.Local.X,
+			z: float32(opts.Avoid.Chunk.Z)*components.ChunkSize + opts.Avoid.Local.Z,
+			r: opts.AvoidR,
+		}
+	}
+	return s.ddaClear(ax, az, bx, bz, idx, floors, av) &&
+		s.ddaClear(ax+px, az+pz, bx+px, bz+pz, idx, floors, av) &&
+		s.ddaClear(ax-px, az-pz, bx-px, bz-pz, idx, floors, av)
+}
+
+// avoidZone — the detour hint projected into the chord test: a chord that
+// crosses it is rejected so string-pulling can't cut back through the spot
+// the replanned path just detoured around. r == 0 disarms.
+type avoidZone struct {
+	x, z, r float32
+}
+
+func (a avoidZone) blocks(gi, gj int32) bool {
+	if a.r <= 0 {
+		return false
+	}
+	dx := float32(gi) + 0.5 - a.x
+	dz := float32(gj) + 0.5 - a.z
+	return dx*dx+dz*dz < a.r*a.r
 }
 
 // ddaClear walks every surface cell the segment crosses (Amanatides-Woo);
 // blocked or unloaded cell = false. An exact corner crossing checks both
 // corner-adjacent cells so a diagonal can't slip between two blocked cells.
-func (s *NavService) ddaClear(ax, az, bx, bz float32, idx *TerrainChunkIndex, floors []levelRec) bool {
+func (s *NavService) ddaClear(ax, az, bx, bz float32, idx *TerrainChunkIndex, floors []levelRec, av avoidZone) bool {
 	gi := int32(math.Floor(float64(ax)))
 	gj := int32(math.Floor(float64(az)))
 	ei := int32(math.Floor(float64(bx)))
 	ej := int32(math.Floor(float64(bz)))
-	if !s.surfaceCellWalkable(gi, gj, idx, floors) {
+	if !s.surfaceCellWalkable(gi, gj, idx, floors) || av.blocks(gi, gj) {
 		return false
 	}
 	dx := bx - ax
@@ -177,7 +201,7 @@ func (s *NavService) ddaClear(ax, az, bx, bz float32, idx *TerrainChunkIndex, fl
 			tMaxX += tDeltaX
 			tMaxZ += tDeltaZ
 		}
-		if !s.surfaceCellWalkable(gi, gj, idx, floors) {
+		if !s.surfaceCellWalkable(gi, gj, idx, floors) || av.blocks(gi, gj) {
 			return false
 		}
 	}

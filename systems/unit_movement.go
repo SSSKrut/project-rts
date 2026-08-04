@@ -32,6 +32,22 @@ const (
 	vehOrcaPad             float32 = 0.3
 )
 
+// Unit-unit overlap resolve (MA3): ORCA is velocity-space and its LP goes
+// infeasible in packs — intrusions must be undone positionally. Each party
+// pushes out half the intrusion, capped.
+const (
+	unitShoveQueryR float32 = 1.6
+	unitShoveCap    float32 = 6.0
+)
+
+// Steering-direction slew cap (rad/s): ORCA's optimal velocity can flip
+// between half-plane corners tick-to-tick; legs can't. ~720°/s bounds
+// |Δv|/tick at sprint to ~1.2 m/s while leaving doorway weaving untouched.
+const velTurnRate float32 = 12.6
+
+// Into-body velocity bleed rate (m/s²) while in contact — see body brake.
+const bodyBrakeRate float32 = 12.0
+
 // Per-stance acceleration cap (m/s²). Prone units take longer to spin up.
 var stanceAccel = [...]float32{
 	components.StanceStand:  4.0,

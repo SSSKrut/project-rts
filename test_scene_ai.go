@@ -99,6 +99,12 @@ const (
 	// circle past the alignment window).
 	aiSceneMarchColumn = "ai_march_column"
 
+	// ai_crowd_cross (MA3): a Line squad's straight MoveTo runs through a
+	// standing crowd of 12. Verdict = arrival + max pairwise penetration
+	// <= 0.05 m (movers fully avoid standing bodies, Resp=1) + bounded
+	// per-tick |dv| (no rescale jerks).
+	aiSceneCrowdCross = "ai_crowd_cross"
+
 	// ai_wall_glide (MA2): a Column squad's straight MoveTo crosses the union
 	// footprint of two flush 20×10 houses — the route must round the 40 m
 	// south facade — then a queued OccupyBuilding sends everyone through the
@@ -247,6 +253,8 @@ func aiSceneAnchorPos() components.WorldPos {
 		return components.WorldPos{}.Add(rl.Vector3{X: 40, Z: -5})
 	case aiSceneWallGlide:
 		return components.WorldPos{}.Add(rl.Vector3{X: 30, Z: 25})
+	case aiSceneCrowdCross:
+		return components.WorldPos{}.Add(rl.Vector3{X: 45, Z: 0})
 	case aiSceneCoverSide:
 		return components.WorldPos{}.Add(rl.Vector3{X: 40, Z: -30})
 	case aiSceneVehCombat:
@@ -291,7 +299,8 @@ func aiSceneBuildings() []components.BuildingPlan {
 	}
 	switch aiSceneID() {
 	case aiSceneLosOpen, aiSceneLosDefilade, aiSceneLosCreep,
-		aiSceneMarchLine, aiSceneMarchSlope, aiSceneMarchColumn:
+		aiSceneMarchLine, aiSceneMarchSlope, aiSceneMarchColumn,
+		aiSceneCrowdCross:
 		return nil
 	case aiSceneDoorSouth:
 		return aiBuildingsSingleHouse(0)
@@ -474,6 +483,8 @@ func aiSpawnPos() components.WorldPos {
 		return components.WorldPos{}.Add(rl.Vector3{X: 20, Z: -25})
 	case aiSceneWallGlide:
 		return components.WorldPos{}.Add(rl.Vector3{X: 8, Z: 30})
+	case aiSceneCrowdCross:
+		return components.WorldPos{}.Add(rl.Vector3{X: 28, Z: 0})
 	}
 	return components.WorldPos{}
 }
@@ -602,6 +613,58 @@ func aiWallGlideSpawn(
 		orderAt:         aiOrderAt,
 		verdictAt:       90,
 		nextSampleAt:    aiOrderAt + 5,
+	}
+}
+
+// aiCrowdCrossSpawn (MA3): Line squad marches straight through a standing
+// 4×3 crowd; the crowd never gets orders.
+func aiCrowdCrossSpawn(
+	world *ecs.World,
+	squadService *systems.SquadService,
+	roleService *systems.RoleService,
+	unitFactory aiUnitSpawn,
+	playerFaction components.Faction,
+	posMap *ecs.Map[components.WorldPos],
+	rosterMap *ecs.Map[components.CommandRoster],
+) *aiTestState {
+	squad := squadService.CreateFromTemplate(
+		systems.TmplMotorRifle, aiSpawnPos(),
+		components.FormationLine, playerFaction,
+		components.Controller{Owner: components.ControllerLocal},
+		roleService, unitFactory,
+	)
+	if squad == (ecs.Entity{}) {
+		fmt.Printf("[ai-test %s] FAILED TO SPAWN SQUAD — aborting\n", aiSceneID())
+		return nil
+	}
+	var crowd []ecs.Entity
+	for i := 0; i < 4; i++ {
+		for j := 0; j < 3; j++ {
+			wx := 42.8 + float32(i)*1.8
+			wz := -1.8 + float32(j)*1.8
+			p := components.WorldPos{}.Add(rl.Vector3{X: wx, Z: wz})
+			p.Local.Y = systems.GroundHeight(wx, wz)
+			crowd = append(crowd, unitFactory(p))
+		}
+	}
+	goal := components.WorldPos{}.Add(rl.Vector3{X: 62, Z: 0})
+	goal.Local.Y = systems.GroundHeight(62, 0)
+	return &aiTestState{
+		sceneID:      aiSceneID(),
+		squad:        squad,
+		crowdActive:  true,
+		crowdEnts:    crowd,
+		crowdGoal:    goal,
+		crowdPrev:    map[ecs.Entity][2]float32{},
+		World:        world,
+		SquadService: squadService,
+		PosMap:       posMap,
+		RosterMap:    rosterMap,
+		MotionMap:    ecs.NewMap[components.Motion](world),
+		MicroPathMap: ecs.NewMap[components.MicroPath](world),
+		orderAt:      aiOrderAt,
+		verdictAt:    60,
+		nextSampleAt: aiOrderAt + 5,
 	}
 }
 
@@ -1079,6 +1142,10 @@ func aiSceneSpawn(
 		return aiWallGlideSpawn(world, squadService, roleService, unitFactory,
 			playerFaction, posMap, rosterMap)
 	}
+	if aiSceneID() == aiSceneCrowdCross {
+		return aiCrowdCrossSpawn(world, squadService, roleService, unitFactory,
+			playerFaction, posMap, rosterMap)
+	}
 	squad := squadService.CreateFromTemplate(
 		systems.TmplMotorRifle, aiSpawnPos(),
 		components.FormationLine, playerFaction,
@@ -1403,6 +1470,15 @@ type aiTestState struct {
 	marchReplanBase float32
 	replanBaseSet   bool
 
+	// Set for ai_crowd_cross (MA3): pairwise penetration + per-tick |dv|
+	// over squad members and the standing crowd.
+	crowdActive bool
+	crowdEnts   []ecs.Entity
+	crowdGoal   components.WorldPos
+	crowdMaxPen float32
+	crowdMaxDv  float32
+	crowdPrev   map[ecs.Entity][2]float32
+
 	// Set for ai_wall_glide (MA2): facade-clearance (leg 1 only — the door
 	// approach afterwards legitimately touches the wall line), escape-spring
 	// ratio, and door-entry oscillation metrics.
@@ -1518,6 +1594,10 @@ func (s *aiTestState) Update(elapsed float32) {
 	}
 	if s.glideActive {
 		s.updateWallGlide(elapsed)
+		return
+	}
+	if s.crowdActive {
+		s.updateCrowdCross(elapsed)
 		return
 	}
 	if s.avoidActive {
@@ -1674,10 +1754,13 @@ func (s *aiTestState) Update(elapsed float32) {
 								wp.Local.Y)
 						}
 					}
-					diag = fmt.Sprintf(" m%d=(%.1f,%.1f) speed=%.2f mode=%s path=%d/%d%s",
-						watchIdx, mx, mz, mot.Speed, mode, mpHead, mpLen, wps)
+					diag = fmt.Sprintf(" m%d=(%.1f,%.1f,Y%.1f) speed=%.2f mode=%s path=%d/%d%s",
+						watchIdx, mx, mz, pos.Local.Y, mot.Speed, mode, mpHead, mpLen, wps)
 				}
 			}
+		}
+		if os.Getenv("RTS_WALL_DUMP") != "" && elapsed > 21 && elapsed < 25 {
+			tempDumpWalls(s.World, 26, 40, 30, 40, 1.6)
 		}
 		if os.Getenv("RTS_MACRO_DUMP") != "" {
 			if mpq := ecs.NewMap[components.MacroPath](s.World).Get(s.squad); mpq != nil {
@@ -1911,6 +1994,33 @@ func (s *aiTestState) updateMarchColumn(elapsed float32) {
 	}
 }
 
+// tempDumpWalls — one-shot forensics behind RTS_WALL_DUMP: prints wall
+// segments (with openings and door state) inside a world-XZ box at a storey Y.
+func tempDumpWalls(world *ecs.World, minX, maxX, minZ, maxZ, y float32) {
+	wf := ecs.NewFilter2[components.WallSegment, components.WorldPos](world)
+	doorMap := ecs.NewMap[components.Door](world)
+	q := wf.Query()
+	for q.Next() {
+		w, pos := q.Get()
+		wx := float32(pos.Chunk.X)*components.ChunkSize + pos.Local.X
+		wz := float32(pos.Chunk.Z)*components.ChunkSize + pos.Local.Z
+		if wx < minX || wx > maxX || wz < minZ || wz > maxZ {
+			continue
+		}
+		if pos.Local.Y < y-1 || pos.Local.Y > y+1 {
+			continue
+		}
+		ds := "-"
+		if d := doorMap.Get(q.Entity()); d != nil {
+			ds = fmt.Sprintf("door:%d", d.State)
+		}
+		fmt.Printf("[wall] (%.1f,%.1f Y%.1f) yaw=%.2f len=%.1f open=%d w=%.1f t=%.2f %s\n",
+			wx, wz, pos.Local.Y, w.Yaw, w.Length, w.OpeningKind,
+			w.OpeningWidth*w.Length*0+w.OpeningWidth, w.OpeningCenterT, ds)
+	}
+	q.Close()
+}
+
 // updateWallGlide (MA2): leg 1 MoveTo whose straight line crosses the union
 // footprint — the planner must round the 40 m facade at body clearance —
 // then a queued OccupyBuilding through the east house's south door.
@@ -2002,6 +2112,124 @@ func (s *aiTestState) updateWallGlide(elapsed float32) {
 		s.verdictDone = true
 	}
 }
+
+// updateCrowdCross (MA3): straight march through a standing crowd. Verdict =
+// arrival + max pairwise penetration ≤ 0.05 m + bounded per-tick |dv|.
+func (s *aiTestState) updateCrowdCross(elapsed float32) {
+	if s.verdictDone {
+		return
+	}
+	if !s.orderFired {
+		if elapsed < s.orderAt {
+			return
+		}
+		fmt.Println("============================================================")
+		fmt.Printf("== AI CROWD CROSS: %s  squad=%v crowd=%d\n",
+			s.sceneID, s.squad, len(s.crowdEnts))
+		fmt.Println("============================================================")
+		s.SquadService.IssueOrder(s.squad, components.OrderKindMoveTo,
+			s.crowdGoal, ecs.Entity{}, false, systems.OrderParams{})
+		s.orderFired = true
+		return
+	}
+	roster := s.RosterMap.Get(s.squad)
+	if roster == nil {
+		return
+	}
+	// Metrics accrue past the shake-out window (alignment precedent): the
+	// scene's subject is the crowd crossing, and the start-line lane sort has
+	// its own transient contacts before anyone reaches the crowd.
+	if elapsed < s.orderAt+4 {
+		return
+	}
+	var xs, zs [24]float32
+	ents := make([]ecs.Entity, 0, 20)
+	n := 0
+	collect := func(e ecs.Entity) {
+		if e == (ecs.Entity{}) || !s.World.Alive(e) || n >= len(xs) {
+			return
+		}
+		p := s.PosMap.Get(e)
+		if p == nil {
+			return
+		}
+		xs[n] = float32(p.Chunk.X)*components.ChunkSize + p.Local.X
+		zs[n] = float32(p.Chunk.Z)*components.ChunkSize + p.Local.Z
+		ents = append(ents, e)
+		n++
+	}
+	for i := uint8(0); i < roster.Count; i++ {
+		collect(roster.Members[i])
+	}
+	for _, e := range s.crowdEnts {
+		collect(e)
+	}
+	for a := 0; a < n; a++ {
+		for b := a + 1; b < n; b++ {
+			dx, dz := xs[a]-xs[b], zs[a]-zs[b]
+			// Collider radius is 0.35 (UnitFactory) — contact ring 0.7.
+			pen := 0.7 - float32(math.Sqrt(float64(dx*dx+dz*dz)))
+			if pen > s.crowdMaxPen {
+				s.crowdMaxPen = pen
+				if os.Getenv("RTS_CROWD_DUMP") != "" && pen > 0.05 {
+					fmt.Printf("[pen] t=%.2f %v-%v pen=%.3f at=(%.1f,%.1f)\n",
+						elapsed, ents[a], ents[b], pen, xs[a], zs[a])
+				}
+			}
+		}
+	}
+	for _, e := range ents {
+		mot := s.MotionMap.Get(e)
+		if mot == nil {
+			continue
+		}
+		vx := float32(math.Sin(float64(mot.VelocityYaw))) * mot.Speed
+		vz := float32(math.Cos(float64(mot.VelocityYaw))) * mot.Speed
+		if prev, ok := s.crowdPrev[e]; ok {
+			dx, dz := vx-prev[0], vz-prev[1]
+			if dv := float32(math.Sqrt(float64(dx*dx + dz*dz))); dv > s.crowdMaxDv {
+				s.crowdMaxDv = dv
+				if os.Getenv("RTS_CROWD_DUMP") != "" && dv > 1.8 {
+					p := s.PosMap.Get(e)
+					fmt.Printf("[dv] t=%.2f ent=%v dv=%.2f v=(%.1f,%.1f)->(%.1f,%.1f) at=(%.1f,%.1f)\n",
+						elapsed, e, dv, prev[0], prev[1], vx, vz,
+						float32(p.Chunk.X)*components.ChunkSize+p.Local.X,
+						float32(p.Chunk.Z)*components.ChunkSize+p.Local.Z)
+				}
+			}
+		}
+		s.crowdPrev[e] = [2]float32{vx, vz}
+	}
+
+	arrived := false
+	if leader := roster.Members[0]; leader != (ecs.Entity{}) && s.World.Alive(leader) {
+		if p := s.PosMap.Get(leader); p != nil {
+			d := p.Sub(s.crowdGoal)
+			arrived = d.X*d.X+d.Z*d.Z < 16 && elapsed > s.orderAt+5
+		}
+	}
+	if elapsed >= s.nextSampleAt && elapsed < s.verdictAt && !arrived {
+		s.nextSampleAt = elapsed + aiSampleEvery
+		fmt.Printf("[ai-test %s] t=%.1fs maxPen=%.3f maxDv=%.2f\n",
+			s.sceneID, elapsed, s.crowdMaxPen, s.crowdMaxDv)
+	}
+	if arrived || elapsed >= s.verdictAt {
+		pass := arrived && s.crowdMaxPen <= 0.05 && s.crowdMaxDv <= crowdDvMax
+		verdict := "FAIL"
+		if pass {
+			verdict = "PASS"
+		}
+		fmt.Println("============================================================")
+		fmt.Printf("== VERDICT [%s]: %s  (arrived=%v t=%.1fs maxPen=%.3f maxDv=%.2f replan=%.1f/u/min)\n",
+			s.sceneID, verdict, arrived, elapsed, s.crowdMaxPen, s.crowdMaxDv,
+			s.replanRate(roster, elapsed))
+		fmt.Println("============================================================")
+		s.verdictDone = true
+	}
+}
+
+// crowdDvMax — per-tick |dv| ceiling for ai_crowd_cross.
+const crowdDvMax float32 = 2.0
 
 // escapeFrac — squad-wide ratio of escape-spring ticks to MoveTo steering
 // ticks (MicroPath telemetry, MA2).

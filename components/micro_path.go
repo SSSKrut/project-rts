@@ -32,6 +32,13 @@ type MicroPath struct {
 	// 16-wp cap ran out) are legitimate extension and are not counted. The
 	// march-scene replan-rate metric budgets these per unit per minute.
 	ReplanCount uint16
+	// AvoidPos/AvoidUntil: transient detour hint set by the stuck detector
+	// when a replan (not a blocked-pop) fires. Nav is unit-blind — a parked
+	// body between the walker and its goal returns the identical path every
+	// replan and ORCA orbits the body forever (garrison window slot). The
+	// next replans cost-bump cells around the stall front so A* arcs around.
+	AvoidPos   WorldPos
+	AvoidUntil float32
 	// EscapeTicks / MoveTicks: wall-hygiene telemetry. MoveTicks counts sim
 	// ticks spent steering a MoveTo, EscapeTicks those where the wall escape
 	// spring fired (< 0.3 m from a wall face). Saturating counters — the

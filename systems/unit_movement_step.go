@@ -1,6 +1,7 @@
 package systems
 
 import (
+	"fmt"
 	"math"
 
 	rl "github.com/gen2brain/raylib-go/raylib"
@@ -29,10 +30,22 @@ func (sys *UnitMovementSystem) step(
 ) staminaMarkerOp {
 	selfX := float32(w.pos.Chunk.X)*components.ChunkSize + w.pos.Local.X
 	selfZ := float32(w.pos.Chunk.Z)*components.ChunkSize + w.pos.Local.Z
+	// A blown position otherwise turns into an unbounded spatial-hash query —
+	// an infinite HANG the panic guard can't catch (found via the throttle
+	// double-rescale runaway). Panic while the numbers still say who and why.
+	if selfX != selfX || selfZ != selfZ || selfX < -1e5 || selfX > 1e5 || selfZ < -1e5 || selfZ > 1e5 {
+		panic(fmt.Sprintf("unit pos blown ent=%v x=%v z=%v speed=%v vyaw=%v",
+			w.ent, selfX, selfZ, w.mot.Speed, w.mot.VelocityYaw))
+	}
 	selfRadius := float32(0.4)
 	if col := sys.colliderMap.Get(w.ent); col != nil && col.Radius > 0 {
 		selfRadius = col.Radius
 	}
+	// Single-accounting (MA3): a unit that will run ORCA this tick already
+	// carries the hull as a Resp=1 neighbour — the corridor sidestep on top
+	// double-counts the avoidance and jerks the walker sideways. Idle units
+	// never solve ORCA, so the corridor stays their only warning.
+	willOrca := w.queue.Count > 0 && w.queue.Actions[w.queue.Head].Kind == components.ActionMoveTo
 	// Hulls move infantry, not vice versa (P5) — and idle units too, so this
 	// runs before the empty-queue early-out. Two cases per neighbour hull:
 	// already overlapping → radial shove; inside the projected corridor of a
@@ -63,6 +76,9 @@ func (sys *UnitMovementSystem) step(
 				selfZ = float32(w.pos.Chunk.Z)*components.ChunkSize + w.pos.Local.Z
 				return
 			}
+			if willOrca {
+				return
+			}
 			vSq := e.VelX*e.VelX + e.VelZ*e.VelZ
 			if vSq < 1 {
 				return
@@ -91,6 +107,47 @@ func (sys *UnitMovementSystem) step(
 			}
 			push := vehShoveCap * dt
 			*w.pos = w.pos.Add(rl.Vector3{X: px * push, Z: pz * push})
+			selfX = float32(w.pos.Chunk.X)*components.ChunkSize + w.pos.Local.X
+			selfZ = float32(w.pos.Chunk.Z)*components.ChunkSize + w.pos.Local.Z
+		})
+	}
+	// Unit-unit overlap resolve — idle units included, so it precedes the
+	// empty-queue early-out. Symmetric halves: both parties compute their own
+	// push from the same frozen snapshot. The deepest overlap's normal is
+	// kept: the steering pass slides velocity along that body (bodies are
+	// hard — pressing INTO one holds a shove-vs-drive equilibrium forever).
+	var bodyNX, bodyNZ, bodyDepth float32
+	if hash != nil {
+		hash.ForEachEntryInRadius(selfX, selfZ, unitShoveQueryR, func(e *core.SpatialEntry, dSq float32) {
+			if e.Ent == w.ent {
+				return
+			}
+			if dy := e.Y - w.pos.Local.Y; dy > neighbourStoreyBand || dy < -neighbourStoreyBand {
+				return
+			}
+			minD := e.Radius + selfRadius
+			if dSq >= minD*minD {
+				return
+			}
+			d := float32(math.Sqrt(float64(dSq)))
+			var nx, nz float32
+			switch {
+			case d > 1e-4:
+				nx, nz = (selfX-e.X)/d, (selfZ-e.Z)/d
+			case w.ent.ID() < e.Ent.ID():
+				nx, nz = 1, 0
+			default:
+				nx, nz = -1, 0
+			}
+			if depth := minD - d; depth > bodyDepth {
+				bodyDepth = depth
+				bodyNX, bodyNZ = nx, nz
+			}
+			push := (minD - d) * 0.5
+			if lim := unitShoveCap * dt; push > lim {
+				push = lim
+			}
+			*w.pos = w.pos.Add(rl.Vector3{X: nx * push, Z: nz * push})
 			selfX = float32(w.pos.Chunk.X)*components.ChunkSize + w.pos.Local.X
 			selfZ = float32(w.pos.Chunk.Z)*components.ChunkSize + w.pos.Local.Z
 		})
@@ -211,9 +268,18 @@ func (sys *UnitMovementSystem) step(
 		// ORCA agent-agent avoidance via SpatialHash neighbours; walls go
 		// through reflectAgainstWalls.
 		var neighbours []orcaAgent
+		// Nearest-K bounded insertion: hash iteration is bucket order, and
+		// a blind cut under crowding can drop the closest bodies. The sorted
+		// prefix also feeds the predicted-step contact clamp below.
+		type nb struct {
+			a   orcaAgent
+			dSq float32
+		}
+		var near [orcaMaxNeighbours]nb
+		nearN := 0
 		if hash != nil {
 			// Snapshot-only: live neighbour map reads race with owner workers.
-			hash.ForEachEntryInRadius(selfX, selfZ, orcaNeighbourRadius, func(e *core.SpatialEntry, _ float32) {
+			hash.ForEachEntryInRadius(selfX, selfZ, orcaNeighbourRadius, func(e *core.SpatialEntry, dSq float32) {
 				if e.Ent == w.ent {
 					return
 				}
@@ -223,13 +289,35 @@ func (sys *UnitMovementSystem) step(
 				if dy := e.Y - w.pos.Local.Y; dy > neighbourStoreyBand || dy < -neighbourStoreyBand {
 					return
 				}
-				neighbours = append(neighbours, orcaAgent{
+				resp := float32(0.5)
+				if e.VelX*e.VelX+e.VelZ*e.VelZ < 0.01 {
+					// A standing body never reciprocates (no solver call while
+					// idle) — the mover shoulders the whole avoidance.
+					resp = 1
+				}
+				i := nearN
+				if i == orcaMaxNeighbours {
+					if dSq >= near[i-1].dSq {
+						return
+					}
+					i--
+				} else {
+					nearN++
+				}
+				for i > 0 && near[i-1].dSq > dSq {
+					near[i] = near[i-1]
+					i--
+				}
+				near[i] = nb{a: orcaAgent{
 					Pos:    orcaVec2{X: e.X, Z: e.Z},
 					Vel:    orcaVec2{X: e.VelX, Z: e.VelZ},
 					Radius: e.Radius,
-					Resp:   0.5,
-				})
+					Resp:   resp,
+				}, dSq: dSq}
 			})
+			for i := 0; i < nearN; i++ {
+				neighbours = append(neighbours, near[i].a)
+			}
 		}
 		if vehHash != nil {
 			// Hull neighbours enter with full responsibility on the unit —
@@ -262,6 +350,29 @@ func (sys *UnitMovementSystem) step(
 		vx := adjusted.X
 		vz := adjusted.Z
 		desiredSpeed := float32(math.Sqrt(float64(vx*vx + vz*vz)))
+		// Bounded steering rotation from the current velocity direction —
+		// see velTurnRate. Skipped from near-rest (a starting unit picks any
+		// direction freely) and on gate/mouth approaches: stairs demand a
+		// tight 180° at the flight base, and the slew's turn arc at sprint
+		// (~0.6 m) sweeps the walker off the ramp band forever (office
+		// cascade). Precision beats smoothness at openings.
+		gateApproach := morePath && (w.microPath.GateMask&(1<<w.microPath.Head) != 0 ||
+			(w.microPath.Head+1 < w.microPath.Count &&
+				w.microPath.GateMask&(1<<(w.microPath.Head+1)) != 0))
+		if !gateApproach && w.mot.Speed > 0.5 && desiredSpeed > 1e-3 {
+			wantYaw := float32(math.Atan2(float64(vx), float64(vz)))
+			delta := wrapAngle(wantYaw - w.mot.VelocityYaw)
+			if maxRot := velTurnRate * dt; delta > maxRot || delta < -maxRot {
+				if delta > 0 {
+					delta = maxRot
+				} else {
+					delta = -maxRot
+				}
+				newYaw := w.mot.VelocityYaw + delta
+				vx = float32(math.Sin(float64(newYaw))) * desiredSpeed
+				vz = float32(math.Cos(float64(newYaw))) * desiredSpeed
+			}
+		}
 
 		// Replan triggers: two blackboard counters accumulate dt under
 		// stalling conditions; crossing threshold flips MicroPath.Dirty.
@@ -294,6 +405,11 @@ func (sys *UnitMovementSystem) step(
 		// brake instead of snapping.
 		accel := stanceAccel[w.stance.Code]
 		maxDelta := accel * dt
+		if desiredSpeed < 0.5 {
+			// Emergency brake: ORCA wants a (near-)stop — 3× decel keeps the
+			// halt visibly abrupt without the one-tick velocity teleport.
+			maxDelta *= 3
+		}
 		speed := w.mot.Speed
 		switch {
 		case desiredSpeed > speed+maxDelta:
@@ -303,10 +419,16 @@ func (sys *UnitMovementSystem) step(
 		default:
 			speed = desiredSpeed
 		}
-		if desiredSpeed > 1e-3 {
+		switch {
+		case desiredSpeed > 1e-3:
 			vx *= speed / desiredSpeed
 			vz *= speed / desiredSpeed
-		} else {
+		case speed > 1e-3:
+			// Dead-stop request: coast down through the ramp along the
+			// current direction instead of zeroing v in one tick.
+			vx = float32(math.Sin(float64(w.mot.VelocityYaw))) * speed
+			vz = float32(math.Cos(float64(w.mot.VelocityYaw))) * speed
+		default:
 			vx, vz = 0, 0
 		}
 
@@ -315,6 +437,20 @@ func (sys *UnitMovementSystem) step(
 		escape := false
 		if walls != nil {
 			vx, vz, escape = reflectAgainstWalls(selfX, selfZ, w.pos.Local.Y, vx, vz, dt, walls, w.pos.Chunk)
+		}
+		// Body brake: bleed the into-body velocity component at a bounded
+		// rate — a one-tick projection is a |Δv| spike (crowd jerk metric),
+		// and the contact clamp already guarantees the position never enters
+		// the body while the approach decays.
+		if bodyDepth > 0 {
+			if dot := vx*bodyNX + vz*bodyNZ; dot < 0 {
+				c := -dot
+				if lim := bodyBrakeRate * dt; c > lim {
+					c = lim
+				}
+				vx += c * bodyNX
+				vz += c * bodyNZ
+			}
 		}
 		if w.microPath != nil {
 			if w.microPath.MoveTicks < math.MaxUint16 {
@@ -341,10 +477,11 @@ func (sys *UnitMovementSystem) step(
 			}
 		}
 		yStep := dy * progress
-		// 8 m/s: enough to hook onto a 45-deg stair ramp at sprint (the
-		// GroundStick closest-Y capture needs pos.Y raised to the ramp fast),
-		// while capping the #13 surface chord-dive at ~0.13 m per tick.
-		const yLerpMaxRate float32 = 8.0
+		// Must cover a 45-deg stair ramp at MAX sprint (8.4 m/s = pace mul
+		// 1.6 × jitter — a CatchUp sprinter under 8.0 failed to hook the
+		// cascade and orbited the office stairs forever), while capping the
+		// #13 surface chord-dive at ~0.17 m per tick.
+		const yLerpMaxRate float32 = 10.0
 		if maxY := yLerpMaxRate * dt; yStep > maxY {
 			yStep = maxY
 		} else if yStep < -maxY {
@@ -359,28 +496,73 @@ func (sys *UnitMovementSystem) step(
 			velocityYaw = float32(math.Atan2(float64(vx), float64(vz)))
 		}
 		desiredFacingYaw := velocityYaw
+		threatFacing := false
 		if w.threat != nil && w.threat.State >= components.ThreatAlerted &&
 			(w.threat.ThreatDir.X != 0 || w.threat.ThreatDir.Z != 0) {
 			desiredFacingYaw = float32(math.Atan2(
 				float64(-w.threat.ThreatDir.X),
 				float64(-w.threat.ThreatDir.Z),
 			))
+			threatFacing = true
 		}
-		if dist > 3.0 && speed > 0.5 {
+		// Threat-held bodies throttle only under REAL threat: an Alerted
+		// CatchUp runner otherwise crawls at 0.3× forever while its body
+		// tracks a stale contact (P7-f). Plain turn lag keeps the throttle —
+		// the turn should land before the sprint.
+		if dist > 3.0 && speed > 0.5 &&
+			(!threatFacing || w.threat.State >= components.ThreatThreatened) {
 			bodyDelta := wrapAngle(velocityYaw - w.mot.Yaw)
 			if bodyDelta > math.Pi/2 || bodyDelta < -math.Pi/2 {
+				// Direct ×0.3: (vx, vz) already carry the ramped magnitude —
+				// re-dividing by desiredSpeed double-scaled on transients and
+				// inflated |v| by speed/desired whenever ORCA wanted a
+				// near-stop (position jumps; with honest Speed it compounded
+				// to a runaway).
 				speed *= 0.3
-				if desiredSpeed > 1e-3 {
-					rescale := speed / desiredSpeed
-					vx *= rescale
-					vz *= rescale
-				}
+				vx *= 0.3
+				vz *= 0.3
 			}
 		}
 
 		move := rl.Vector3{X: vx * dt, Y: yStep, Z: vz * dt}
+		// Contact clamp: project the predicted step out of the nearest bodies'
+		// contact rings (snapshot positions). One tick of late ORCA at sprint
+		// is 0.12 m of intrusion otherwise — bodies are hard, steps stop at
+		// the ring.
+		if nearN > 0 {
+			predX := selfX + move.X
+			predZ := selfZ + move.Z
+			clamped := false
+			for i := 0; i < nearN && i < 3; i++ {
+				b := &near[i].a
+				minD := b.Radius + selfRadius
+				dx := predX - b.Pos.X
+				dz := predZ - b.Pos.Z
+				dSq := dx*dx + dz*dz
+				if dSq >= minD*minD || dSq < 1e-8 {
+					continue
+				}
+				d := float32(math.Sqrt(float64(dSq)))
+				predX = b.Pos.X + dx/d*minD
+				predZ = b.Pos.Z + dz/d*minD
+				clamped = true
+			}
+			if clamped {
+				move.X = predX - selfX
+				move.Z = predZ - selfZ
+			}
+		}
 		*w.pos = w.pos.Add(move)
-		w.mot.Speed = speed
+		// Honest speed: the wall slide reshaped (vx, vz) after the ramp —
+		// neighbours (hash snapshot) and the next tick's ramp read Motion,
+		// and an inflated value makes ORCA dodge phantom momentum. Capped at
+		// the ramp value so the escape-spring's additive boost doesn't bank
+		// into the next tick's ramp (+~1 m/s per wall-pinned tick = runaway).
+		if out := float32(math.Sqrt(float64(vx*vx + vz*vz))); out < speed {
+			w.mot.Speed = out
+		} else {
+			w.mot.Speed = speed
+		}
 		w.mot.VelocityYaw = velocityYaw
 
 		// Cap yaw rate so units don't snap-spin. wrapAngle folds 350° into
