@@ -80,6 +80,11 @@ const (
 	vehStuckEps     float32 = 1.5
 	vehOrbitWindow  float32 = 10.0
 	vehStuckDistEps float32 = 0.5
+	// Squad member riding the carriageway (P8-g): keep-out beyond the deck
+	// half-width, and |cos| between hull heading and the edge — below it the
+	// hull is crossing the road, not driving it.
+	roadRideMargin float32 = 1.5
+	roadRideAlign  float32 = 0.82
 )
 
 func (sys *VehicleDriverSystem) InitUI(w *ecs.World) {
@@ -209,13 +214,12 @@ func (sys *VehicleDriverSystem) step(ent ecs.Entity, veh *components.Vehicle,
 	ov *components.VehicleOverride, now, dt float32) {
 	spec := components.SpecForVehicle(veh.Kind)
 
-	// Reflexes that own locomotion (FaceThreat / SmokeAndReverse) run before
-	// the order queue. Flee drives through the queue, so it falls through.
-	if ov != nil && ov.Kind != components.VehicleReflexNone &&
-		ov.Kind != components.VehicleReflexFlee {
+	// Reflexes own locomotion outright (P8-f): the player's queue is left
+	// untouched and resumes when the override releases.
+	if ov != nil && ov.Kind != components.VehicleReflexNone {
 		clearRoute(route, follower)
 		resetWatchdog(follower)
-		sys.stepReflex(pos, mot, spec, ov, dt)
+		sys.stepReflex(ent, pos, mot, spec, follower, ov, dt)
 		return
 	}
 
@@ -289,10 +293,52 @@ func (sys *VehicleDriverSystem) step(ent ecs.Entity, veh *components.Vehicle,
 		return
 	}
 	cruise := spec.MaxSpeedOffroad * sys.slopeMul(pos, mot.Yaw)
+	if inSquad {
+		cruise = sys.roadRide(pos, mot, spec, follower, cruise)
+	}
 	cruise = sys.crushPass(pos, spec, cruise)
 	dx, dz := diff.X, diff.Z
 	dx, dz, cruise = sys.terrainSteer(pos, mot, follower, spec, dx, dz, cruise)
 	sys.drive(ent, follower, pos, mot, spec, dx, dz, dist, cruise, true, true, dt)
+}
+
+// roadRide (P8-g): a squad member never plans a RoadRoute — its goal is a
+// moving formation slot — so it crawled along a highway at offroad speed and
+// the convoy pace cap's road branch (which reads RoadFollower.Edge) was dead
+// code. A hull whose centre is on the carriageway AND whose heading runs
+// along it rides at road speed and publishes the edge; crossing the road
+// earns nothing.
+func (sys *VehicleDriverSystem) roadRide(pos *components.WorldPos, mot *components.Motion,
+	spec *components.VehicleSpec, follower *components.RoadFollower, cruise float32) float32 {
+	g := sys.router.Graph()
+	if g == nil {
+		return cruise
+	}
+	px, pz := worldXZ(*pos)
+	ei, t, d := sys.router.NearestEdge(px, pz)
+	if ei < 0 || int(ei) >= len(g.Edges) {
+		return cruise
+	}
+	e := &g.Edges[ei]
+	if d > e.Width*0.5+roadRideMargin {
+		return cruise
+	}
+	ex, ez := sys.router.EdgeDir(ei)
+	align := float32(math.Sin(float64(mot.Yaw)))*ex + float32(math.Cos(float64(mot.Yaw)))*ez
+	if align < 0 {
+		align = -align
+	}
+	if align < roadRideAlign {
+		return cruise
+	}
+	if follower != nil {
+		follower.Edge = ei
+		follower.T = t
+	}
+	if rs := roadSpeedForEdge(e.Kind, spec); rs > cruise {
+		cruise = rs
+	}
+	return cruise
 }
 
 func resetWatchdog(follower *components.RoadFollower) {
@@ -432,6 +478,13 @@ func (sys *VehicleDriverSystem) bearingPassable(px, pz, bearing float32,
 		for _, o := range [3]float32{-half, 0, half} {
 			x := cx + rx*o
 			z := cz + rz*o
+			// The built roadway is passable by definition — it is graded, and
+			// where it crosses water it IS the bridge. Without this a squad
+			// member (which drives the plain off-road branch, never the road
+			// phases) refuses its own bridge and hunts a ford forever.
+			if sys.onRoadway(x, z) {
+				continue
+			}
 			// Full gradient magnitude, not the along-ray component: an
 			// oblique ray projects a 2.2 slope down to "passable" and the
 			// hull legally traverses the cliff face sideways.
@@ -446,6 +499,20 @@ func (sys *VehicleDriverSystem) bearingPassable(px, pz, bearing float32,
 		}
 	}
 	return true
+}
+
+// onRoadway reports the point as lying on a built carriageway (deck or
+// embankment shoulder).
+func (sys *VehicleDriverSystem) onRoadway(x, z float32) bool {
+	g := sys.router.Graph()
+	if g == nil {
+		return false
+	}
+	ei, _, d := sys.router.NearestEdge(x, z)
+	if ei < 0 || int(ei) >= len(g.Edges) {
+		return false
+	}
+	return d <= g.Edges[ei].Width*0.5+roadRideMargin
 }
 
 func (sys *VehicleDriverSystem) nearWater(x, z float32) bool {

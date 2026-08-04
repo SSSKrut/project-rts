@@ -29,6 +29,11 @@ func (sys *VehicleDriverSystem) squadPaceCap(ent ecs.Entity, pos *components.Wor
 	if sm == nil || sm.Squad == (ecs.Entity{}) || !sys.worldRef.Alive(sm.Squad) {
 		return 0
 	}
+	// A reflexing hull has left the column for the duration — it runs at its
+	// own speed, and mates must not pace themselves off its retreat (P8-f).
+	if ov := sys.overrideMap.Get(ent); ov != nil && ov.Kind != components.VehicleReflexNone {
+		return 0
+	}
 	roster := sys.rosterMap.Get(sm.Squad)
 	if roster == nil || roster.Count < 2 {
 		return 0
@@ -50,6 +55,9 @@ func (sys *VehicleDriverSystem) squadPaceCap(ent ecs.Entity, pos *components.Wor
 		}
 		mp := sys.posMap.Get(mem)
 		if mp == nil {
+			continue
+		}
+		if ov := sys.overrideMap.Get(mem); ov != nil && ov.Kind != components.VehicleReflexNone {
 			continue
 		}
 		if leader == (ecs.Entity{}) {

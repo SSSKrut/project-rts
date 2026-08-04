@@ -61,6 +61,9 @@ type FormationSystem struct {
 	// moving them to cover). FormationSystem reads but does not write their
 	// ActionQueue while the marker is held.
 	tacticalOverrideMap *ecs.Map[components.TacticalOverride]
+	// A vehicle running a reflex (VehicleOverride.Kind != None) owns its own
+	// locomotion — the same contract TacticalOverride gives infantry.
+	vehicleOverrideMap *ecs.Map[components.VehicleOverride]
 	// Members with IndividualPosition override their slot goal with the
 	// player-placed target. TacticalOverride still wins over this.
 	individualPosMap *ecs.Map[components.IndividualPosition]
@@ -103,6 +106,7 @@ func (sys *FormationSystem) InitUI(w *ecs.World) {
 	sys.navGridMap = ecs.NewMap[components.NavGrid](w)
 	sys.chunkIndexRes = ecs.NewResource[TerrainChunkIndex](w)
 	sys.tacticalOverrideMap = ecs.NewMap[components.TacticalOverride](w)
+	sys.vehicleOverrideMap = ecs.NewMap[components.VehicleOverride](w)
 	sys.individualPosMap = ecs.NewMap[components.IndividualPosition](w)
 	sys.microPathMap = ecs.NewMap[components.MicroPath](w)
 	sys.orientMap = ecs.NewMap[components.FormationOrientation](w)
@@ -449,8 +453,14 @@ func (sys *FormationSystem) processSquad(world *ecs.World, w formationWork, dt f
 			continue
 		}
 		// SurvivalInstinct owns the unit's ActionQueue while the override
-		// marker is held.
+		// marker is held; a reflexing hull owns its own driver the same way
+		// (P8-f: a squadded truck's Flee used to be overwritten by the slot
+		// push within 100 ms, so it never actually left).
 		if sys.tacticalOverrideMap.Has(mem) {
+			continue
+		}
+		if ov := sys.vehicleOverrideMap.Get(mem); ov != nil &&
+			ov.Kind != components.VehicleReflexNone {
 			continue
 		}
 		mPos := sys.posMap.Get(mem)

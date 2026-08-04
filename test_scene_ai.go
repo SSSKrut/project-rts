@@ -171,6 +171,17 @@ const (
 	// (owner repro 2026-07-31: fast members «укатывают вперёд»). PASS = all
 	// parked at the goal AND max member spread over the run stays bounded.
 	aiSceneVehConvoy = "ai_vehicle_convoy"
+	// _flee (MB3): a squadded unarmed truck takes fire it cannot answer while
+	// the squad marches. FormationSystem must yield the hull to the reflex
+	// (before P8-f the slot push overwrote Flee within 100 ms and it never
+	// left), and the player's order must survive the retreat and resume.
+	aiSceneVehFlee = "ai_vehicle_flee"
+	// _convoy_road (MB3): the same three-hull column as _convoy, but on
+	// `valley` between two points a highway connects. The squad macro path
+	// must route over the RoadGraph and the members must actually ride at
+	// road speed — offroad the river cut is impassable, so the road is the
+	// only way east.
+	aiSceneVehConvoyRoad = "ai_vehicle_convoy_road"
 )
 
 // aiSceneMapName lets a scene demand a specific map manifest ("" = default).
@@ -178,7 +189,7 @@ func aiSceneMapName() string {
 	switch aiSceneID() {
 	case aiSceneMarchSlope:
 		return "hills"
-	case aiSceneVehRoad:
+	case aiSceneVehRoad, aiSceneVehConvoyRoad:
 		return "valley"
 	}
 	return ""
@@ -292,6 +303,10 @@ func aiSceneAnchorPos() components.WorldPos {
 		return components.WorldPos{}.Add(rl.Vector3{X: 50, Z: -18})
 	case aiSceneVehConvoy:
 		return components.WorldPos{}.Add(rl.Vector3{X: 70, Z: -24})
+	case aiSceneVehFlee:
+		return components.WorldPos{}.Add(rl.Vector3{X: 45, Z: -20})
+	case aiSceneVehConvoyRoad:
+		return components.WorldPos{}.Add(rl.Vector3{X: 10, Z: -12})
 	}
 	return components.WorldPos{}
 }
@@ -1016,6 +1031,54 @@ func aiVehicleAvoidSpawn(world *ecs.World, vehicleFactory *entities.VehicleFacto
 	return s
 }
 
+// aiVehicleFleeSpawn (MB3): two trucks in one squad marching east; the rear
+// one takes synthetic fire from the south it cannot answer.
+func aiVehicleFleeSpawn(world *ecs.World, squadService *systems.SquadService,
+	vehicleFactory *entities.VehicleFactory, posMap *ecs.Map[components.WorldPos],
+	rosterMap *ecs.Map[components.CommandRoster]) *aiTestState {
+	if vehicleFactory == nil || squadService == nil {
+		fmt.Printf("[ai-test %s] NO FACTORY/SERVICE — aborting\n", aiSceneID())
+		return nil
+	}
+	wp := func(x, z float32) components.WorldPos {
+		p := components.WorldPos{}.Add(rl.Vector3{X: x, Z: z})
+		p.Local.Y = systems.GroundHeight(x, z)
+		return p
+	}
+	lead := vehicleFactory.Spawn(wp(20, -20), components.VehicleTruck,
+		components.FactionPlayer, components.ControllerLocal)
+	truck := vehicleFactory.Spawn(wp(12, -20), components.VehicleTruck,
+		components.FactionPlayer, components.ControllerLocal)
+	squad := squadService.CreateFromUnits([]ecs.Entity{lead, truck},
+		components.FormationColumn)
+	if squad == (ecs.Entity{}) {
+		fmt.Printf("[ai-test %s] FAILED TO MERGE SQUAD — aborting\n", aiSceneID())
+		return nil
+	}
+	return &aiTestState{
+		sceneID:      aiSceneID(),
+		fleeActive:   true,
+		fleeSquad:    squad,
+		fleeTruck:    truck,
+		fleeGoal:     wp(95, -20),
+		fleeSource:   wp(12, 10),
+		fleeSpawn:    wp(12, -20),
+		vehEnts:      []ecs.Entity{lead, truck},
+		World:        world,
+		SquadService: squadService,
+		PosMap:       posMap,
+		RosterMap:    rosterMap,
+		MotionMap:    ecs.NewMap[components.Motion](world),
+		VehQueueMap:  ecs.NewMap[components.ActionQueue](world),
+		DangerMap:    ecs.NewMap[components.DangerBuffer](world),
+		OverrideVMap: ecs.NewMap[components.VehicleOverride](world),
+		OQMap:        ecs.NewMap[components.OrderQueueHead](world),
+		orderAt:      aiOrderAt,
+		verdictAt:    60,
+		nextSampleAt: aiOrderAt + 3,
+	}
+}
+
 // aiVehicleStuckSpawn (MB2): two houses seal a 6 m slit between their
 // inflated bands. Truck A's goal sits inside the seal (unreachable — the
 // watchdog must fail it), truck B's beyond the pair (detour must free it).
@@ -1117,6 +1180,56 @@ func aiVehicleConvoySpawn(world *ecs.World, squadService *systems.SquadService,
 		orderAt:       aiOrderAt,
 		verdictAt:     90,
 		nextSampleAt:  aiOrderAt + 3,
+	}
+}
+
+// aiVehicleConvoyRoadSpawn (MB3): the same BMP+2-truck column on `valley`,
+// west of the river; the goal sits east of it. Off-road the river cut is
+// impassable (P8-b water refusal), so the highway bridge is the only way —
+// the macro path has to route over the RoadGraph and the members have to
+// ride the carriageway at road speed.
+func aiVehicleConvoyRoadSpawn(world *ecs.World, squadService *systems.SquadService,
+	vehicleFactory *entities.VehicleFactory, posMap *ecs.Map[components.WorldPos],
+	rosterMap *ecs.Map[components.CommandRoster]) *aiTestState {
+	if vehicleFactory == nil || squadService == nil {
+		fmt.Printf("[ai-test %s] NO FACTORY/SERVICE — aborting\n", aiSceneID())
+		return nil
+	}
+	wp := func(x, z float32) components.WorldPos {
+		p := components.WorldPos{}.Add(rl.Vector3{X: x, Z: z})
+		p.Local.Y = systems.GroundHeight(x, z)
+		return p
+	}
+	bmp := vehicleFactory.Spawn(wp(-40, -30), components.VehicleBMP,
+		components.FactionPlayer, components.ControllerLocal)
+	t1 := vehicleFactory.Spawn(wp(-47, -36), components.VehicleTruck,
+		components.FactionPlayer, components.ControllerLocal)
+	t2 := vehicleFactory.Spawn(wp(-47, -24), components.VehicleTruck,
+		components.FactionPlayer, components.ControllerLocal)
+	squad := squadService.CreateFromUnits([]ecs.Entity{bmp, t1, t2},
+		components.FormationColumn)
+	if squad == (ecs.Entity{}) {
+		fmt.Printf("[ai-test %s] FAILED TO MERGE SQUAD — aborting\n", aiSceneID())
+		return nil
+	}
+	return &aiTestState{
+		sceneID:          aiSceneID(),
+		convoyRoadActive: true,
+		convoySquad:      squad,
+		convoyGoal:       wp(70, 8),
+		vehEnts:          []ecs.Entity{bmp, t1, t2},
+		World:            world,
+		SquadService:     squadService,
+		PosMap:           posMap,
+		RosterMap:        rosterMap,
+		MotionMap:        ecs.NewMap[components.Motion](world),
+		VehQueueMap:      ecs.NewMap[components.ActionQueue](world),
+		VehFollowerMap:   ecs.NewMap[components.RoadFollower](world),
+		vehGraphRes:      ecs.NewResource[components.RoadGraph](world),
+		OQMap:            ecs.NewMap[components.OrderQueueHead](world),
+		orderAt:          aiOrderAt,
+		verdictAt:        120,
+		nextSampleAt:     aiOrderAt + 5,
 	}
 }
 
@@ -1325,6 +1438,12 @@ func aiSceneSpawn(
 	}
 	if aiSceneID() == aiSceneVehStuck {
 		return aiVehicleStuckSpawn(world, vehicleFactory, posMap)
+	}
+	if aiSceneID() == aiSceneVehFlee {
+		return aiVehicleFleeSpawn(world, squadService, vehicleFactory, posMap, rosterMap)
+	}
+	if aiSceneID() == aiSceneVehConvoyRoad {
+		return aiVehicleConvoyRoadSpawn(world, squadService, vehicleFactory, posMap, rosterMap)
 	}
 	if aiSceneID() == aiSceneVehConvoy {
 		return aiVehicleConvoySpawn(world, squadService, vehicleFactory, posMap, rosterMap)
@@ -1619,6 +1738,26 @@ type aiTestState struct {
 	avoidRevTicks int                   // reverse ticks past avoidRevFree
 	avoidRevFree  float32               // >0: count reversals after this elapsed
 
+	// Set for ai_vehicle_flee (MB3): squadded truck under unanswerable fire —
+	// retreat distance, order survival across the reflex, resumption after.
+	fleeActive    bool
+	fleeSquad     ecs.Entity
+	fleeTruck     ecs.Entity
+	fleeGoal      components.WorldPos
+	fleeSource    components.WorldPos
+	fleeSpawn     components.WorldPos
+	fleeNextInj   float32
+	fleeMaxDist   float32
+	fleeSawReflex bool
+	fleeOrderKept bool
+	fleeResumed   bool
+	OverrideVMap  *ecs.Map[components.VehicleOverride]
+
+	// Set for ai_vehicle_convoy_road (MB3): road usage + column timing.
+	convoyRoadActive bool
+	convoyRoadTicks  int
+	convoyRoadArrive float32
+
 	// Set for ai_vehicle_stuck (MB2): watchdog Failed arm (truck A, sealed
 	// slit goal) + committed-detour escape arm (truck B) + AvoidSide flip
 	// metric on B.
@@ -1841,6 +1980,14 @@ func (s *aiTestState) Update(elapsed float32) {
 	}
 	if s.stuckActive {
 		s.updateVehStuck(elapsed)
+		return
+	}
+	if s.fleeActive {
+		s.updateVehFlee(elapsed)
+		return
+	}
+	if s.convoyRoadActive {
+		s.updateConvoyRoad(elapsed)
 		return
 	}
 	if s.avoidActive {
@@ -3192,6 +3339,182 @@ func (s *aiTestState) updateVehicles(elapsed float32) {
 // updateVehAvoid drives the M6 collision scenes: per-vehicle goals, per-tick
 // metrics (pairwise clearance / footprint intrusion / infantry inside a hull
 // / reverse ticks), verdict on all-arrived or timeout.
+// updateConvoyRoad (MB3): one squad MoveTo across the river. PASS = all three
+// hulls parked at the goal, the column actually rode the carriageway (deck
+// ticks) and crossed on the bridge — off-road the water refusal stops it, so
+// a swim is not an alternative route but a livelock.
+func (s *aiTestState) updateConvoyRoad(elapsed float32) {
+	if s.verdictDone {
+		return
+	}
+	if !s.orderFired {
+		if elapsed < s.orderAt {
+			return
+		}
+		fmt.Println("============================================================")
+		fmt.Printf("== AI VEHICLE CONVOY ROAD: squad=%v members=%d goal=east of river\n",
+			s.convoySquad, len(s.vehEnts))
+		fmt.Println("============================================================")
+		s.SquadService.IssueOrder(s.convoySquad, components.OrderKindMoveTo,
+			s.convoyGoal, ecs.Entity{}, false, systems.OrderParams{})
+		s.orderFired = true
+		return
+	}
+	g := s.vehGraphRes.Get()
+	onRoad := 0
+	for _, v := range s.vehEnts {
+		if v == (ecs.Entity{}) || !s.World.Alive(v) {
+			continue
+		}
+		f := s.VehFollowerMap.Get(v)
+		if f == nil || f.Edge < 0 || g == nil || int(f.Edge) >= len(g.Edges) {
+			continue
+		}
+		onRoad++
+		if g.Edges[f.Edge].Kind == components.RoadBridge {
+			s.vehBridgeTicks++
+		}
+	}
+	if onRoad >= 2 {
+		s.convoyRoadTicks++
+	}
+
+	// Arrival is the ORDER completing (anchor-based, invariant 58) — a Column
+	// legitimately parks its tail a column depth behind the goal, so a
+	// per-member radius would never close. The tail is checked separately:
+	// nobody may be left on the far bank.
+	maxDist := float32(0)
+	for _, v := range s.vehEnts {
+		if v == (ecs.Entity{}) || !s.World.Alive(v) {
+			continue
+		}
+		if p := s.PosMap.Get(v); p != nil {
+			d := p.Sub(s.convoyGoal)
+			if dist := d.X*d.X + d.Z*d.Z; dist > maxDist {
+				maxDist = dist
+			}
+		}
+	}
+	maxDist = float32(math.Sqrt(float64(maxDist)))
+	arrived := 0
+	if h := s.OQMap.Get(s.convoySquad); h != nil && h.First == (ecs.Entity{}) {
+		arrived = len(s.vehEnts)
+		if s.convoyRoadArrive == 0 && maxDist < 45 {
+			s.convoyRoadArrive = elapsed
+		}
+	}
+	if elapsed >= s.nextSampleAt && elapsed < s.verdictAt {
+		s.nextSampleAt = elapsed + aiSampleEvery
+		fmt.Printf("[ai-test %s] t=%.1fs done=%v maxDist=%.1f roadTicks=%d bridge=%d",
+			s.sceneID, elapsed, arrived == len(s.vehEnts), maxDist,
+			s.convoyRoadTicks, s.vehBridgeTicks)
+		for i, v := range s.vehEnts {
+			p := s.PosMap.Get(v)
+			if p == nil {
+				continue
+			}
+			edge := int32(-1)
+			if f := s.VehFollowerMap.Get(v); f != nil {
+				edge = f.Edge
+			}
+			fmt.Printf(" m%d=(%.1f,%.1f,e%d)", i,
+				float32(p.Chunk.X)*components.ChunkSize+p.Local.X,
+				float32(p.Chunk.Z)*components.ChunkSize+p.Local.Z, edge)
+		}
+		fmt.Println()
+	}
+	if s.convoyRoadArrive > 0 || elapsed >= s.verdictAt {
+		pass := s.convoyRoadArrive > 0 && s.convoyRoadTicks >= 300 && s.vehBridgeTicks > 0
+		verdict := "FAIL"
+		if pass {
+			verdict = "PASS"
+		}
+		fmt.Println("============================================================")
+		fmt.Printf("== VERDICT [%s]: %s  (done=%v maxDist=%.1f t=%.1fs roadTicks=%d bridge=%d)\n",
+			s.sceneID, verdict, s.convoyRoadArrive > 0, maxDist, elapsed,
+			s.convoyRoadTicks, s.vehBridgeTicks)
+		fmt.Println("============================================================")
+		s.verdictDone = true
+	}
+}
+
+// updateVehFlee (MB3): the rear truck of a marching squad takes fire from the
+// north it cannot answer. It must actually retreat southward (the march runs
+// east, so southward displacement is flee-only), the player's order must
+// survive the reflex, and the truck must rejoin and finish the march.
+func (s *aiTestState) updateVehFlee(elapsed float32) {
+	if s.verdictDone {
+		return
+	}
+	if !s.orderFired {
+		if elapsed < s.orderAt {
+			return
+		}
+		fmt.Println("============================================================")
+		fmt.Printf("== AI VEHICLE FLEE: squad=%v truck=%v (unarmed, fire from north)\n",
+			s.fleeSquad, s.fleeTruck)
+		fmt.Println("============================================================")
+		s.SquadService.IssueOrder(s.fleeSquad, components.OrderKindMoveTo,
+			s.fleeGoal, ecs.Entity{}, false, systems.OrderParams{})
+		s.orderFired = true
+		s.fleeNextInj = elapsed + 2
+		return
+	}
+	if elapsed >= s.fleeNextInj && elapsed <= s.orderAt+12 {
+		s.fleeNextInj = elapsed + 0.5
+		if buf := s.DangerMap.Get(s.fleeTruck); buf != nil {
+			components.PushDanger(buf, components.DangerEvent{
+				Kind:     components.DangerBulletImpact,
+				Pos:      s.fleeSource,
+				Strength: 0.35,
+				Time:     elapsed,
+			})
+		}
+	}
+
+	reflexing := false
+	if ov := s.OverrideVMap.Get(s.fleeTruck); ov != nil &&
+		ov.Kind != components.VehicleReflexNone {
+		reflexing = true
+		s.fleeSawReflex = true
+	}
+	if p := s.PosMap.Get(s.fleeTruck); p != nil {
+		if away := s.fleeSpawn.Sub(*p).Z; away > s.fleeMaxDist {
+			s.fleeMaxDist = away
+		}
+		if d := p.Sub(s.fleeGoal); d.X*d.X+d.Z*d.Z < 400 {
+			s.fleeResumed = true
+		}
+	}
+	// The order must outlive the retreat: sampled on the tick the override
+	// releases, when the pre-P8-f code would have left a wiped queue behind.
+	if s.fleeSawReflex && !reflexing && !s.fleeOrderKept {
+		if h := s.OQMap.Get(s.fleeSquad); h != nil && h.First != (ecs.Entity{}) &&
+			s.World.Alive(h.First) {
+			s.fleeOrderKept = true
+		}
+	}
+
+	if elapsed >= s.nextSampleAt && elapsed < s.verdictAt {
+		s.nextSampleAt = elapsed + aiSampleEvery
+		fmt.Printf("[ai-test %s] t=%.1fs reflex=%v away=%.1fm orderKept=%v resumed=%v\n",
+			s.sceneID, elapsed, reflexing, s.fleeMaxDist, s.fleeOrderKept, s.fleeResumed)
+	}
+	done := s.fleeSawReflex && s.fleeOrderKept && s.fleeResumed && s.fleeMaxDist >= 20
+	if done || elapsed >= s.verdictAt {
+		verdict := "FAIL"
+		if done {
+			verdict = "PASS"
+		}
+		fmt.Println("============================================================")
+		fmt.Printf("== VERDICT [%s]: %s  (reflex=%v away=%.1fm orderKept=%v resumed=%v t=%.1fs)\n",
+			s.sceneID, verdict, s.fleeSawReflex, s.fleeMaxDist,
+			s.fleeOrderKept, s.fleeResumed, elapsed)
+		fmt.Println("============================================================")
+		s.verdictDone = true
+	}
+}
+
 // updateVehStuck (MB2): truck A must be FAILED by the driver watchdog (queue
 // cleared + reason in the EventLog) within 20 s of the order; truck B must
 // arrive past the pair with a committed (non-flickering) detour side and

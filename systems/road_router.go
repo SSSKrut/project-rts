@@ -133,6 +133,34 @@ func (r *RoadRouter) EdgeLen(ei int32) float32 {
 	return r.edgeGeo[ei].len
 }
 
+// NearestEdge returns the edge closest to (px, pz) with its projection param
+// and perpendicular distance. Edge -1 when the graph is empty.
+func (r *RoadRouter) NearestEdge(px, pz float32) (int32, float32, float32) {
+	g := r.Graph()
+	if g == nil {
+		return -1, 0, 0
+	}
+	best := int32(-1)
+	bestD := float32(math.MaxFloat32)
+	var bestT float32
+	for i := range g.Edges {
+		t, d := r.projOnEdge(i, px, pz)
+		if d < bestD {
+			best, bestT, bestD = int32(i), t, d
+		}
+	}
+	return best, bestT, bestD
+}
+
+// EdgeDir returns the unit direction of edge ei.
+func (r *RoadRouter) EdgeDir(ei int32) (float32, float32) {
+	geo := &r.edgeGeo[ei]
+	if geo.len <= 0 {
+		return 0, 0
+	}
+	return (geo.bx - geo.ax) / geo.len, (geo.bz - geo.az) / geo.len
+}
+
 // projOnEdge projects (px,pz) onto edge ei; returns param t (clamped) and
 // perpendicular distance.
 func (r *RoadRouter) projOnEdge(ei int, px, pz float32) (float32, float32) {

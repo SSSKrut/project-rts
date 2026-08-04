@@ -37,9 +37,14 @@ type SquadMacroPathSystem struct {
 	motionMap  *ecs.Map[components.Motion]
 	vehicleMap *ecs.Map[components.Vehicle]
 	nav        *NavService
-	pool       *core.WorkerPool
+	// An all-vehicle squad plans its macro path over the RoadGraph (M7 tail):
+	// the column follows the road the way a soloist does. The router keeps
+	// scratch buffers, so those squads run serially — see Update.
+	router *RoadRouter
+	pool   *core.WorkerPool
 
 	workBuf []macroPathWork
+	vehBuf  []macroPathWork
 }
 
 // NewSquadMacroPathSystem. nil pool falls back to serial execution.
@@ -61,6 +66,7 @@ func (sys *SquadMacroPathSystem) InitUI(w *ecs.World) {
 	sys.orderMovementOverrideMap = ecs.NewMap[components.OrderParamMovementProfile](w)
 	sys.motionMap = ecs.NewMap[components.Motion](w)
 	sys.vehicleMap = ecs.NewMap[components.Vehicle](w)
+	sys.router = NewRoadRouter(w)
 }
 
 func (SquadMacroPathSystem) Name() string { return "squad_macro_path" }
@@ -92,10 +98,14 @@ type macroPathWork struct {
 	fd        *components.FormationData
 	head      *components.OrderQueueHead
 	pathStyle components.PathStyle
+	// Set when every live member is a vehicle: the squad routes over roads
+	// and is processed serially (the router is not concurrency-safe).
+	vehSpec *components.VehicleSpec
 }
 
 func (sys *SquadMacroPathSystem) Update(ctx core.UpdateContext) {
 	sys.workBuf = sys.workBuf[:0]
+	sys.vehBuf = sys.vehBuf[:0]
 	q := sys.filter.Query()
 	for q.Next() {
 		_, roster, mp, fd, head := q.Get()
@@ -111,9 +121,15 @@ func (sys *SquadMacroPathSystem) Update(ctx core.UpdateContext) {
 				pathStyle = override.Profile.PathStyle
 			}
 		}
-		sys.workBuf = append(sys.workBuf, macroPathWork{
+		w := macroPathWork{
 			roster: roster, mp: mp, fd: fd, head: head, pathStyle: pathStyle,
-		})
+			vehSpec: sys.mechanizedSpec(ctx.World, roster),
+		}
+		if w.vehSpec != nil {
+			sys.vehBuf = append(sys.vehBuf, w)
+		} else {
+			sys.workBuf = append(sys.workBuf, w)
+		}
 	}
 	work := sys.workBuf
 
@@ -124,6 +140,31 @@ func (sys *SquadMacroPathSystem) Update(ctx core.UpdateContext) {
 			sys.processSquad(world, work[i], elapsed)
 		}
 	})
+	for i := range sys.vehBuf {
+		sys.processSquad(world, sys.vehBuf[i], elapsed)
+	}
+}
+
+// mechanizedSpec returns the leader's vehicle spec when EVERY live member is
+// a vehicle, else nil. A mixed squad walks: routing the column over a highway
+// its infantry cannot use would just stretch it.
+func (sys *SquadMacroPathSystem) mechanizedSpec(world *ecs.World,
+	roster *components.CommandRoster) *components.VehicleSpec {
+	var lead *components.VehicleSpec
+	for i := uint8(0); i < roster.Count; i++ {
+		mem := roster.Members[i]
+		if mem == (ecs.Entity{}) || !world.Alive(mem) {
+			continue
+		}
+		veh := sys.vehicleMap.Get(mem)
+		if veh == nil {
+			return nil
+		}
+		if lead == nil {
+			lead = components.SpecForVehicle(veh.Kind)
+		}
+	}
+	return lead
 }
 
 func (sys *SquadMacroPathSystem) processSquad(world *ecs.World, w macroPathWork, elapsed float32) {
@@ -235,6 +276,13 @@ func (sys *SquadMacroPathSystem) processSquad(world *ecs.World, w macroPathWork,
 			center.Local.Z+float32(center.Chunk.Z)*components.ChunkSize)
 	}
 
+	if w.vehSpec != nil && sys.planRoadMacro(center, mp, w.vehSpec) {
+		sys.seedForward(world, w, center, freshOrder)
+		mp.LastPlanned = elapsed
+		mp.ReplanAt = elapsed + SquadReplanInterval
+		return
+	}
+
 	path := sys.nav.FindPath(center, mp.Goal, NavOpts{
 		Locomotion: components.LocomotionFoot,
 		PathStyle:  w.pathStyle,
@@ -268,31 +316,91 @@ func (sys *SquadMacroPathSystem) processSquad(world *ecs.World, w macroPathWork,
 		}
 	}
 
-	// Seed Forward when it's still zero (fresh squad) OR on a fresh order
-	// issued from standstill: snapping the heading before anyone moves is
-	// free for infantry and saves a vehicle the 20 m U-turn loop it takes
-	// chasing a slot that sweeps 90° during the slew (M7 owner repro).
-	// Mid-march the slew-limited FormationSystem stays the only writer (#12).
-	seed := fd.Forward.X == 0 && fd.Forward.Z == 0
-	if !seed && freshOrder && squadStationary(world, roster, sys.motionMap) {
-		seed = true
-	}
-	if seed {
-		var target components.WorldPos
-		if mp.Count > 0 {
-			target = mp.Waypoints[0]
-		} else {
-			target = mp.Goal
-		}
-		diff := target.Sub(center)
-		mag := float32(math.Sqrt(float64(diff.X*diff.X + diff.Z*diff.Z)))
-		if mag > 0.01 {
-			fd.Forward = rl.Vector3{X: diff.X / mag, Y: 0, Z: diff.Z / mag}
-		}
-	}
+	sys.seedForward(world, w, center, freshOrder)
 
 	mp.LastPlanned = elapsed
 	mp.ReplanAt = elapsed + SquadReplanInterval
+}
+
+// planRoadMacro lays the macro path along the RoadGraph itinerary: on-ramp
+// point, node chain, off-ramp point, goal. Reports false when the road does
+// not win on time — the caller falls back to the nav path.
+func (sys *SquadMacroPathSystem) planRoadMacro(center components.WorldPos,
+	mp *components.MacroPath, spec *components.VehicleSpec) bool {
+	if sys.router == nil {
+		return false
+	}
+	g := sys.router.Graph()
+	if g == nil {
+		return false
+	}
+	cx, cz := worldXZ(center)
+	gx, gz := worldXZ(mp.Goal)
+	plan, ok := sys.router.PlanRoute(cx, cz, gx, gz, spec)
+	if !ok {
+		return false
+	}
+	mp.Head = 0
+	mp.Count = 0
+	push := func(x, z float32) {
+		if int(mp.Count) >= components.SquadMacroPathSize {
+			return
+		}
+		mp.Waypoints[mp.Count] = components.WorldPos{}.Add(rl.Vector3{X: x, Z: z})
+		mp.Count++
+	}
+	if plan.EntryEdge >= 0 && int(plan.EntryEdge) < len(g.Edges) {
+		x, z := sys.router.EdgePoint(plan.EntryEdge, plan.EntryT)
+		push(x, z)
+	}
+	for _, nid := range plan.Nodes {
+		if int(nid) >= len(g.Nodes) {
+			continue
+		}
+		x, z := worldXZ(g.Nodes[nid].Pos)
+		push(x, z)
+	}
+	if plan.ExitEdge >= 0 && int(plan.ExitEdge) < len(g.Edges) {
+		x, z := sys.router.EdgePoint(plan.ExitEdge, plan.ExitT)
+		push(x, z)
+	}
+	// Always end on the goal, even if the ring filled up — the column must
+	// leave the road for its target, not park at the last node.
+	if mp.Count == 0 || centerXZDistSq(mp.Waypoints[mp.Count-1], mp.Goal) > 1 {
+		if int(mp.Count) < components.SquadMacroPathSize {
+			mp.Waypoints[mp.Count] = mp.Goal
+			mp.Count++
+		} else {
+			mp.Waypoints[components.SquadMacroPathSize-1] = mp.Goal
+		}
+	}
+	return mp.Count > 0
+}
+
+// seedForward snaps the formation heading when it is still unset (fresh
+// squad) or on a fresh order issued from standstill: snapping before anyone
+// moves is free for infantry and saves a vehicle the 20 m U-turn loop it
+// takes chasing a slot that sweeps 90° during the slew (M7 owner repro).
+// Mid-march the slew-limited FormationSystem stays the only writer (#12).
+func (sys *SquadMacroPathSystem) seedForward(world *ecs.World, w macroPathWork,
+	center components.WorldPos, freshOrder bool) {
+	fd, mp := w.fd, w.mp
+	seed := fd.Forward.X == 0 && fd.Forward.Z == 0
+	if !seed && freshOrder && squadStationary(world, w.roster, sys.motionMap) {
+		seed = true
+	}
+	if !seed {
+		return
+	}
+	target := mp.Goal
+	if mp.Count > 0 {
+		target = mp.Waypoints[0]
+	}
+	diff := target.Sub(center)
+	mag := float32(math.Sqrt(float64(diff.X*diff.X + diff.Z*diff.Z)))
+	if mag > 0.01 {
+		fd.Forward = rl.Vector3{X: diff.X / mag, Y: 0, Z: diff.Z / mag}
+	}
 }
 
 // SquadWaypointReach is the waypoint-advance radius for a squad: the

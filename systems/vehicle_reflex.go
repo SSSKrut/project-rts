@@ -25,6 +25,11 @@ type VehicleReflexSystem struct {
 	factionMap   *ecs.Map[components.Faction]
 	worldRef     *ecs.World
 	smokePending []components.WorldPos
+	// Releasing a reflex asks the member's squad to re-form in place: the
+	// retreat can end tens of metres off the slot, and an idle squad has no
+	// other mechanism that brings a straggler home.
+	squadMemberMap *ecs.Map[components.SquadMember]
+	formationMap   *ecs.Map[components.FormationData]
 }
 
 const (
@@ -61,6 +66,8 @@ func (sys *VehicleReflexSystem) InitUI(w *ecs.World) {
 	sys.smokeMap = ecs.NewMap[components.SmokeField](w)
 	sys.awareMap = ecs.NewMap[components.Awareness](w)
 	sys.factionMap = ecs.NewMap[components.Faction](w)
+	sys.squadMemberMap = ecs.NewMap[components.SquadMember](w)
+	sys.formationMap = ecs.NewMap[components.FormationData](w)
 }
 
 func (VehicleReflexSystem) Name() string { return "vehicle_reflex" }
@@ -84,7 +91,7 @@ func (sys *VehicleReflexSystem) Update(ctx core.UpdateContext) {
 	for q.Next() {
 		veh, pos, mot, threat, ov := q.Get()
 		if ov.Kind != components.VehicleReflexNone {
-			sys.tickActive(pos, mot, ov, now)
+			sys.tickActive(q.Entity(), pos, mot, threat, ov, now)
 			continue
 		}
 		sys.tryTrigger(q.Entity(), veh, pos, mot, threat, ov, now)
@@ -103,10 +110,25 @@ func (sys *VehicleReflexSystem) Update(ctx core.UpdateContext) {
 	}
 }
 
-// tickActive releases the override once its exit condition or timer is met.
-// The driver keeps steering per the reflex until then.
-func (sys *VehicleReflexSystem) tickActive(pos *components.WorldPos, mot *components.Motion,
+// tickActive tracks the live threat direction and releases the override once
+// its exit condition or timer is met. The driver keeps steering per the
+// reflex until then.
+func (sys *VehicleReflexSystem) tickActive(ent ecs.Entity, pos *components.WorldPos,
+	mot *components.Motion, threat *components.Threat,
 	ov *components.VehicleOverride, now float32) {
+	// The trigger-time bearing goes stale the moment the shooter moves or a
+	// second source joins the cluster; FaceThreat would then present the
+	// hull's side to the live threat and call it done.
+	tx, tz := -threat.ThreatDir.X, -threat.ThreatDir.Z
+	if tx*tx+tz*tz > 1e-4 {
+		ov.ThreatYaw = float32(math.Atan2(float64(tx), float64(tz)))
+		if ov.Kind == components.VehicleReflexFlee {
+			ov.Retreat = pos.Add(rl.Vector3{
+				X: threat.ThreatDir.X * fleeAwayDist,
+				Z: threat.ThreatDir.Z * fleeAwayDist,
+			})
+		}
+	}
 	released := now >= ov.Until
 	switch ov.Kind {
 	case components.VehicleReflexFaceThreat:
@@ -120,6 +142,21 @@ func (sys *VehicleReflexSystem) tickActive(pos *components.WorldPos, mot *compon
 	}
 	if released {
 		ov.Kind = components.VehicleReflexNone
+		sys.requestReform(ent)
+	}
+}
+
+// requestReform asks the member's squad to re-form in place. A marching squad
+// drops the flag on its next pass (its slot push already recovers the hull);
+// an idle one drives everyone back to their slots — without it a hull that
+// fled after the order completed stays parked where the panic ended.
+func (sys *VehicleReflexSystem) requestReform(ent ecs.Entity) {
+	sm := sys.squadMemberMap.Get(ent)
+	if sm == nil || sm.Squad == (ecs.Entity{}) || !sys.worldRef.Alive(sm.Squad) {
+		return
+	}
+	if fd := sys.formationMap.Get(sm.Squad); fd != nil {
+		fd.ReformPending = true
 	}
 }
 
@@ -162,16 +199,14 @@ func (sys *VehicleReflexSystem) tryTrigger(ent ecs.Entity, veh *components.Vehic
 		ov.Retreat = *pos // origin snapshot for the retreat-distance exit
 		sys.smokePending = append(sys.smokePending, *pos)
 	case components.VehicleReflexFlee:
+		// Retreat point only — the driver owns locomotion for the duration
+		// (P8-f). Pushing it into the ActionQueue destroyed the player's
+		// order, and for a squad member FormationSystem overwrote it anyway.
 		ov.Until = now + fleeDuration
-		away := pos.Add(rl.Vector3{
+		ov.Retreat = pos.Add(rl.Vector3{
 			X: threat.ThreatDir.X * fleeAwayDist,
 			Z: threat.ThreatDir.Z * fleeAwayDist,
 		})
-		ov.Retreat = away
-		if aq := sys.queueMap.Get(ent); aq != nil {
-			ClearActions(aq)
-			PushAction(aq, components.Action{Kind: components.ActionMoveTo, Target: away})
-		}
 	}
 }
 
