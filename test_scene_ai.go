@@ -7,6 +7,7 @@ package main
 import (
 	"fmt"
 	"math"
+	"os"
 
 	rl "github.com/gen2brain/raylib-go/raylib"
 	"github.com/mlange-42/ark/ecs"
@@ -97,6 +98,14 @@ const (
 	// follower collapse onto one waypoint (never 3+ men bunched in a 1.2 m
 	// circle past the alignment window).
 	aiSceneMarchColumn = "ai_march_column"
+
+	// ai_wall_glide (MA2): a Column squad's straight MoveTo crosses the union
+	// footprint of two flush 20×10 houses — the route must round the 40 m
+	// south facade — then a queued OccupyBuilding sends everyone through the
+	// east house's south door. Verdict = facade clearance ≥ 0.25 m (leg 1),
+	// escape-spring < 5% of steering ticks, all inside, ≤ 2 entries per man
+	// (door-jamb oscillation re-crosses the wall plane).
+	aiSceneWallGlide = "ai_wall_glide"
 
 	// ai_cover_side (ISSUES #18): a 2-man squad stands BETWEEN a lone oak
 	// and a synthetic threat pulsing from the north (DangerBuffer injection,
@@ -236,6 +245,8 @@ func aiSceneAnchorPos() components.WorldPos {
 		return components.WorldPos{}.Add(rl.Vector3{X: 20, Z: -10})
 	case aiSceneMarchColumn:
 		return components.WorldPos{}.Add(rl.Vector3{X: 40, Z: -5})
+	case aiSceneWallGlide:
+		return components.WorldPos{}.Add(rl.Vector3{X: 30, Z: 25})
 	case aiSceneCoverSide:
 		return components.WorldPos{}.Add(rl.Vector3{X: 40, Z: -30})
 	case aiSceneVehCombat:
@@ -342,6 +353,20 @@ func aiSceneBuildings() []components.BuildingPlan {
 			DoorSide: 0,
 		}, pos, components.BuildingHouse)
 		return []components.BuildingPlan{*plan}
+	case aiSceneWallGlide:
+		// Two flush houses form one continuous 40 m south facade; the west
+		// house's door faces north so the facade has exactly one opening.
+		mk := func(seed uint64, cx float32, doorSide uint8) components.BuildingPlan {
+			pos := components.WorldPos{}.Add(rl.Vector3{X: cx, Z: 32})
+			pos.Local.Y = systems.GroundHeight(cx, 32)
+			return *buildings.GenerateHouse(seed, buildings.HouseParams{
+				Stories:  1,
+				SizeX:    20,
+				SizeZ:    10,
+				DoorSide: doorSide,
+			}, pos, components.BuildingHouse)
+		}
+		return []components.BuildingPlan{mk(0xD1, 22, 2), mk(0xD2, 42, 0)}
 	}
 	return nil
 }
@@ -447,6 +472,8 @@ func aiSpawnPos() components.WorldPos {
 		return components.WorldPos{}.Add(rl.Vector3{X: -20, Z: -40})
 	case aiSceneMarchColumn:
 		return components.WorldPos{}.Add(rl.Vector3{X: 20, Z: -25})
+	case aiSceneWallGlide:
+		return components.WorldPos{}.Add(rl.Vector3{X: 8, Z: 30})
 	}
 	return components.WorldPos{}
 }
@@ -492,8 +519,89 @@ func aiMarchColumnSpawn(
 		PosMap:         posMap,
 		RosterMap:      rosterMap,
 		MicroPathMap:   ecs.NewMap[components.MicroPath](world),
+		AQMap:          ecs.NewMap[components.ActionQueue](world),
 		orderAt:        aiOrderAt,
 		verdictAt:      90,
+	}
+}
+
+// aiWallGlideSpawn (MA2): Column squad; leg 1 straight through the flush
+// houses' union footprint (forces the 40 m facade round), leg 2 queued
+// OccupyBuilding on the east house.
+func aiWallGlideSpawn(
+	world *ecs.World,
+	squadService *systems.SquadService,
+	roleService *systems.RoleService,
+	unitFactory aiUnitSpawn,
+	playerFaction components.Faction,
+	posMap *ecs.Map[components.WorldPos],
+	rosterMap *ecs.Map[components.CommandRoster],
+) *aiTestState {
+	squad := squadService.CreateFromTemplate(
+		systems.TmplMotorRifle, aiSpawnPos(),
+		components.FormationColumn, playerFaction,
+		components.Controller{Owner: components.ControllerLocal},
+		roleService, unitFactory,
+	)
+	if squad == (ecs.Entity{}) {
+		fmt.Printf("[ai-test %s] FAILED TO SPAWN SQUAD — aborting\n", aiSceneID())
+		return nil
+	}
+	var east ecs.Entity
+	var eastFP, union components.AABB2D
+	first := true
+	bf := ecs.NewFilter1[components.Building](world)
+	q := bf.Query()
+	for q.Next() {
+		b := q.Get()
+		fp := b.Footprint
+		if first {
+			union = fp
+			first = false
+		} else {
+			if fp.MinX < union.MinX {
+				union.MinX = fp.MinX
+			}
+			if fp.MaxX > union.MaxX {
+				union.MaxX = fp.MaxX
+			}
+			if fp.MinZ < union.MinZ {
+				union.MinZ = fp.MinZ
+			}
+			if fp.MaxZ > union.MaxZ {
+				union.MaxZ = fp.MaxZ
+			}
+		}
+		if fp.CenterX() > 32 {
+			east = q.Entity()
+			eastFP = fp
+		}
+	}
+	q.Close()
+	if east == (ecs.Entity{}) {
+		fmt.Printf("[ai-test %s] NO EAST HOUSE — aborting\n", aiSceneID())
+		return nil
+	}
+	return &aiTestState{
+		sceneID:         aiSceneID(),
+		squad:           squad,
+		glideActive:     true,
+		targetBuilding:  east,
+		targetFootprint: eastFP,
+		glideUnion:      union,
+		glideMinClear:   1e9,
+		glideInside:     map[ecs.Entity]bool{},
+		glideEnter:      map[ecs.Entity]int{},
+		World:           world,
+		SquadService:    squadService,
+		PosMap:          posMap,
+		RosterMap:       rosterMap,
+		MicroPathMap:    ecs.NewMap[components.MicroPath](world),
+		AQMap:           ecs.NewMap[components.ActionQueue](world),
+		OQMap:           ecs.NewMap[components.OrderQueueHead](world),
+		orderAt:         aiOrderAt,
+		verdictAt:       90,
+		nextSampleAt:    aiOrderAt + 5,
 	}
 }
 
@@ -967,6 +1075,10 @@ func aiSceneSpawn(
 	if aiSceneID() == aiSceneVehConvoy {
 		return aiVehicleConvoySpawn(world, squadService, vehicleFactory, posMap, rosterMap)
 	}
+	if aiSceneID() == aiSceneWallGlide {
+		return aiWallGlideSpawn(world, squadService, roleService, unitFactory,
+			playerFaction, posMap, rosterMap)
+	}
 	squad := squadService.CreateFromTemplate(
 		systems.TmplMotorRifle, aiSpawnPos(),
 		components.FormationLine, playerFaction,
@@ -1291,6 +1403,18 @@ type aiTestState struct {
 	marchReplanBase float32
 	replanBaseSet   bool
 
+	// Set for ai_wall_glide (MA2): facade-clearance (leg 1 only — the door
+	// approach afterwards legitimately touches the wall line), escape-spring
+	// ratio, and door-entry oscillation metrics.
+	glideActive   bool
+	glideUnion    components.AABB2D
+	glideMinClear float32
+	glideLeg1     ecs.Entity
+	glideLeg1Done bool
+	glideInside   map[ecs.Entity]bool
+	glideEnter    map[ecs.Entity]int
+	OQMap         *ecs.Map[components.OrderQueueHead]
+
 	// Set for ai_march_column (MA1): chained legs + follower-collapse metric.
 	// Collapse = 3+ men inside a 1.2 m circle SUSTAINED (transient corner
 	// proximity is normal — ORCA keeps bodies apart; parking on one shared
@@ -1390,6 +1514,10 @@ func (s *aiTestState) Update(elapsed float32) {
 	}
 	if s.columnActive {
 		s.updateMarchColumn(elapsed)
+		return
+	}
+	if s.glideActive {
+		s.updateWallGlide(elapsed)
 		return
 	}
 	if s.avoidActive {
@@ -1551,6 +1679,28 @@ func (s *aiTestState) Update(elapsed float32) {
 				}
 			}
 		}
+		if os.Getenv("RTS_MACRO_DUMP") != "" {
+			if mpq := ecs.NewMap[components.MacroPath](s.World).Get(s.squad); mpq != nil {
+				wp := ""
+				if mpq.Head < mpq.Count {
+					w := mpq.Waypoints[mpq.Head]
+					wp = fmt.Sprintf(" wp=(%.1f,%.1f)",
+						float32(w.Chunk.X)*components.ChunkSize+w.Local.X,
+						float32(w.Chunk.Z)*components.ChunkSize+w.Local.Z)
+				}
+				center, okC := systems.SquadCenter(s.World, roster, s.PosMap)
+				cs := ""
+				if okC {
+					cs = fmt.Sprintf(" center=(%.1f,%.1f)",
+						float32(center.Chunk.X)*components.ChunkSize+center.Local.X,
+						float32(center.Chunk.Z)*components.ChunkSize+center.Local.Z)
+				}
+				diag += fmt.Sprintf(" macro=%d/%d has=%v goal=(%.1f,%.1f)%s%s",
+					mpq.Head, mpq.Count, mpq.HasGoal,
+					float32(mpq.Goal.Chunk.X)*components.ChunkSize+mpq.Goal.Local.X,
+					float32(mpq.Goal.Chunk.Z)*components.ChunkSize+mpq.Goal.Local.Z, wp, cs)
+			}
+		}
 		fmt.Printf("[ai-test %s] t=%.1fs sample: inside=%d/%d%s\n",
 			s.sceneID, elapsed, inside, alive, diag)
 		s.nextSampleAt = elapsed + aiSampleEvery
@@ -1638,9 +1788,40 @@ func (s *aiTestState) updateMarchColumn(elapsed float32) {
 		return
 	}
 
+	if os.Getenv("RTS_CLUSTER_DUMP") != "" && int(elapsed*100)%100 < 2 {
+		fmt.Printf("[col] t=%.1f", elapsed)
+		for i := uint8(0); i < roster.Count; i++ {
+			mem := roster.Members[i]
+			if mem == (ecs.Entity{}) || !s.World.Alive(mem) {
+				continue
+			}
+			p := s.PosMap.Get(mem)
+			mp := s.MicroPathMap.Get(mem)
+			if p == nil || mp == nil {
+				continue
+			}
+			tgt := ""
+			if s.AQMap != nil {
+				if aq := s.AQMap.Get(mem); aq != nil && aq.Count > 0 {
+					a := aq.Actions[aq.Head]
+					tgt = fmt.Sprintf(" T%d(%.1f,%.1f)", a.Kind,
+						float32(a.Target.Chunk.X)*components.ChunkSize+a.Target.Local.X,
+						float32(a.Target.Chunk.Z)*components.ChunkSize+a.Target.Local.Z)
+				}
+			}
+			fmt.Printf(" [%d](%.1f,%.1f h%d/%d%s)", i,
+				float32(p.Chunk.X)*components.ChunkSize+p.Local.X,
+				float32(p.Chunk.Z)*components.ChunkSize+p.Local.Z,
+				mp.Head, mp.Count, tgt)
+		}
+		fmt.Println()
+	}
 	// Follower-collapse metric: for every live member, count live members
-	// (itself included) inside 1.2 m; track the run maximum.
-	if elapsed > s.orderAt+5 {
+	// (itself included) inside 1.2 m; track the run maximum. The alignment
+	// window is 8 s (replan metric keeps 5): a TRUE-spacing column is 14 m
+	// deep and the start-line lane-sorting legitimately packs laggards for
+	// ~1 s around t≈7 — the window exists precisely to skip that phase.
+	if elapsed > s.orderAt+8 {
 		var xs, zs [16]float32
 		n := 0
 		for i := uint8(0); i < roster.Count && n < 16; i++ {
@@ -1677,6 +1858,13 @@ func (s *aiTestState) updateMarchColumn(elapsed float32) {
 			}
 			if d := elapsed - s.columnClusterSince; d > s.columnClusterWorst {
 				s.columnClusterWorst = d
+			}
+			if os.Getenv("RTS_CLUSTER_DUMP") != "" && int(elapsed*10)%5 == 0 {
+				fmt.Printf("[cluster] t=%.1f", elapsed)
+				for a := 0; a < n; a++ {
+					fmt.Printf(" (%.1f,%.1f)", xs[a], zs[a])
+				}
+				fmt.Println()
 			}
 		} else {
 			s.columnClusterSince = 0
@@ -1721,6 +1909,148 @@ func (s *aiTestState) updateMarchColumn(elapsed float32) {
 		fmt.Println("============================================================")
 		s.verdictDone = true
 	}
+}
+
+// updateWallGlide (MA2): leg 1 MoveTo whose straight line crosses the union
+// footprint — the planner must round the 40 m facade at body clearance —
+// then a queued OccupyBuilding through the east house's south door.
+func (s *aiTestState) updateWallGlide(elapsed float32) {
+	if s.verdictDone {
+		return
+	}
+	if !s.orderFired {
+		if elapsed < s.orderAt {
+			return
+		}
+		goal := components.WorldPos{}.Add(rl.Vector3{X: 70, Z: 30})
+		goal.Local.Y = systems.GroundHeight(70, 30)
+		fmt.Println("============================================================")
+		fmt.Printf("== AI WALL GLIDE: %s  squad=%v east=%v union X[%.0f..%.0f] Z[%.0f..%.0f]\n",
+			s.sceneID, s.squad, s.targetBuilding,
+			s.glideUnion.MinX, s.glideUnion.MaxX, s.glideUnion.MinZ, s.glideUnion.MaxZ)
+		fmt.Println("============================================================")
+		s.glideLeg1 = s.SquadService.IssueOrder(s.squad, components.OrderKindMoveTo,
+			goal, ecs.Entity{}, false, systems.OrderParams{})
+		s.SquadService.IssueOrder(s.squad, components.OrderKindOccupyBuilding,
+			components.WorldPos{}.Add(rl.Vector3{
+				X: s.targetFootprint.CenterX(), Z: s.targetFootprint.CenterZ()}),
+			s.targetBuilding, true, systems.OrderParams{})
+		s.orderFired = true
+		return
+	}
+	roster := s.RosterMap.Get(s.squad)
+	if roster == nil {
+		return
+	}
+	if !s.glideLeg1Done {
+		if head := s.OQMap.Get(s.squad); head == nil || head.First != s.glideLeg1 {
+			s.glideLeg1Done = true
+		}
+	}
+	insideCnt, alive, maxEnter := 0, 0, 0
+	for i := uint8(0); i < roster.Count; i++ {
+		mem := roster.Members[i]
+		if mem == (ecs.Entity{}) || !s.World.Alive(mem) {
+			continue
+		}
+		p := s.PosMap.Get(mem)
+		if p == nil {
+			continue
+		}
+		alive++
+		mx := float32(p.Chunk.X)*components.ChunkSize + p.Local.X
+		mz := float32(p.Chunk.Z)*components.ChunkSize + p.Local.Z
+		if !s.glideLeg1Done {
+			if c := rectOutsideDist(s.glideUnion, mx, mz); c < s.glideMinClear {
+				s.glideMinClear = c
+			}
+		}
+		in := s.targetFootprint.Contains(mx, mz)
+		if in && !s.glideInside[mem] {
+			s.glideEnter[mem]++
+		}
+		s.glideInside[mem] = in
+		if in {
+			insideCnt++
+		}
+		if s.glideEnter[mem] > maxEnter {
+			maxEnter = s.glideEnter[mem]
+		}
+	}
+	escFrac := s.escapeFrac(roster)
+	if elapsed >= s.nextSampleAt && elapsed < s.verdictAt {
+		s.nextSampleAt = elapsed + aiSampleEvery
+		fmt.Printf("[ai-test %s] t=%.1fs inside=%d/%d clear=%.2f esc=%.3f enterMax=%d leg1done=%v\n",
+			s.sceneID, elapsed, insideCnt, alive, s.glideMinClear, escFrac,
+			maxEnter, s.glideLeg1Done)
+	}
+	done := alive > 0 && insideCnt >= alive && elapsed > s.orderAt+10
+	if done || elapsed >= s.verdictAt {
+		pass := done &&
+			s.glideMinClear >= 0.25 &&
+			escFrac < 0.05 &&
+			maxEnter <= 2
+		verdict := "FAIL"
+		if pass {
+			verdict = "PASS"
+		}
+		fmt.Println("============================================================")
+		fmt.Printf("== VERDICT [%s]: %s  (inside=%d/%d t=%.1fs clear=%.2f esc=%.3f enterMax=%d replan=%.1f/u/min)\n",
+			s.sceneID, verdict, insideCnt, alive, elapsed, s.glideMinClear,
+			escFrac, maxEnter, s.replanRate(roster, elapsed))
+		fmt.Println("============================================================")
+		s.verdictDone = true
+	}
+}
+
+// escapeFrac — squad-wide ratio of escape-spring ticks to MoveTo steering
+// ticks (MicroPath telemetry, MA2).
+func (s *aiTestState) escapeFrac(roster *components.CommandRoster) float32 {
+	var esc, move float32
+	for i := uint8(0); i < roster.Count; i++ {
+		mem := roster.Members[i]
+		if mem == (ecs.Entity{}) || !s.World.Alive(mem) {
+			continue
+		}
+		if mp := s.MicroPathMap.Get(mem); mp != nil {
+			esc += float32(mp.EscapeTicks)
+			move += float32(mp.MoveTicks)
+		}
+	}
+	if move == 0 {
+		return 0
+	}
+	return esc / move
+}
+
+// rectOutsideDist — distance from (x, z) to the rect's boundary: positive
+// outside, negative penetration depth inside.
+func rectOutsideDist(r components.AABB2D, x, z float32) float32 {
+	var dx, dz float32
+	if x < r.MinX {
+		dx = r.MinX - x
+	} else if x > r.MaxX {
+		dx = x - r.MaxX
+	}
+	if z < r.MinZ {
+		dz = r.MinZ - z
+	} else if z > r.MaxZ {
+		dz = z - r.MaxZ
+	}
+	if dx == 0 && dz == 0 {
+		pen := x - r.MinX
+		if v := r.MaxX - x; v < pen {
+			pen = v
+		}
+		if v := z - r.MinZ; v < pen {
+			pen = v
+		}
+		if v := r.MaxZ - z; v < pen {
+			pen = v
+		}
+		return -pen
+	}
+	return float32(math.Sqrt(float64(dx*dx + dz*dz)))
 }
 
 func (s *aiTestState) updateMarch(elapsed float32) {
@@ -1800,11 +2130,15 @@ func (s *aiTestState) updateMarch(elapsed float32) {
 		s.marchHaveFYaw = true
 	}
 
-	center, okC := systems.SquadCenter(s.World, roster, s.PosMap)
+	// Arrival keys on the LEADER (MA1 precedent): order completion is
+	// anchor-based, so the parked line's centroid legitimately sits at the
+	// leader's rank, up to the completion radius short of the point.
 	arrived := false
-	if okC {
-		d := center.Sub(s.marchGoal)
-		arrived = d.X*d.X+d.Z*d.Z < 9
+	if leader := roster.Members[0]; leader != (ecs.Entity{}) && s.World.Alive(leader) {
+		if p := s.PosMap.Get(leader); p != nil {
+			d := p.Sub(s.marchGoal)
+			arrived = d.X*d.X+d.Z*d.Z < 16
+		}
 	}
 	for _, e := range s.soloEnts {
 		if e == (ecs.Entity{}) || !s.World.Alive(e) {

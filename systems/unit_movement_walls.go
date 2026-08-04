@@ -114,7 +114,7 @@ func wallBlocksApproach(pos *components.WorldPos, target components.WorldPos,
 // springs sum to ~0 instead of freezing the unit.
 func reflectAgainstWalls(curX, curZ, curY, velX, velZ, dt float32,
 	walls map[components.ChunkCoord][]colWall, home components.ChunkCoord,
-) (float32, float32) {
+) (float32, float32, bool) {
 	const escapeMargin float32 = 0.30
 	const escapeSpeed float32 = 2.0
 	const escapeBlendWeight float32 = 0.5 // additive contribution into rvx/rvz
@@ -181,7 +181,7 @@ func reflectAgainstWalls(curX, curZ, curY, velX, velZ, dt float32,
 		rvz += escapeZ * escapeBlendWeight
 	}
 	if rvx*rvx+rvz*rvz < 1e-6 {
-		return rvx, rvz
+		return rvx, rvz, escapeActive
 	}
 	for pass := 0; pass < 4; pass++ {
 		predX := curX + rvx*dt
@@ -275,8 +275,8 @@ func reflectAgainstWalls(curX, curZ, curY, velX, velZ, dt float32,
 			}
 		}
 		if !hit {
-			return rvx, rvz
+			return rvx, rvz, escapeActive
 		}
 	}
-	return rvx, rvz
+	return rvx, rvz, escapeActive
 }

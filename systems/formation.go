@@ -540,14 +540,24 @@ func (sys *FormationSystem) processSquad(world *ecs.World, w formationWork, dt f
 			// The anchor advances CONTINUOUSLY with the leader — the old
 			// discrete waypoint pick jumped ~1 m on every leader pop and the
 			// retarget+replan storm was the march jitter source (MA1 P7-a).
+			// The walk is a pure path-bending transport: subtract it back
+			// along forward so a straight march keeps the slot grid at TRUE
+			// spacing — leaving it in compressed a column's interval to
+			// Spacing−1 and shoved a line's flanks a rank ahead (the MA2
+			// column-pack regression once the stale-aim lag stopped hiding it).
 			target = centerTarget.Add(rl.Vector3{X: offX, Y: 0, Z: offZ})
 			if i > 0 {
 				leader := roster.Members[0]
 				if leader != (ecs.Entity{}) && world.Alive(leader) {
 					if leaderMP := sys.microPathMap.Get(leader); leaderMP != nil && leaderMP.Count > leaderMP.Head {
 						if lp := sys.posMap.Get(leader); lp != nil {
-							anchor := wakeAnchor(*lp, leaderMP, float32(i))
-							target = anchor.Add(rl.Vector3{X: offX, Y: 0, Z: offZ})
+							fwx, fwz := forward.X, forward.Z
+							if fwx*fwx+fwz*fwz < 1e-4 {
+								fwx, fwz = 0, 1
+							}
+							anchor, walked := wakeAnchor(*lp, leaderMP, float32(i))
+							target = anchor.Add(rl.Vector3{
+								X: offX - fwx*walked, Y: 0, Z: offZ - fwz*walked})
 							wakeTarget = true
 						}
 					}
@@ -662,23 +672,29 @@ func (sys *FormationSystem) processSquad(world *ecs.World, w formationWork, dt f
 // path polyline, measured from the leader's LIVE position (arc-length lerp).
 // Clamps to the last waypoint when the path is shorter. Continuous in the
 // leader's motion — no ±1 m jump when the leader pops a waypoint.
-func wakeAnchor(leaderPos components.WorldPos, mp *components.MicroPath, dist float32) components.WorldPos {
+// wakeAnchor also reports the distance actually walked: near the path's end
+// the walk clamps, and the caller must subtract the CLAMPED distance — the
+// requested one stretched the parked file to Spacing+1 intervals and the
+// column's centroid never entered the MoveTo completion radius.
+func wakeAnchor(leaderPos components.WorldPos, mp *components.MicroPath, dist float32) (components.WorldPos, float32) {
 	prev := leaderPos
+	walked := float32(0)
 	for k := mp.Head; k < mp.Count; k++ {
 		wp := mp.Waypoints[k]
 		d := wp.Sub(prev)
 		segLen := float32(math.Sqrt(float64(d.X*d.X + d.Z*d.Z)))
 		if dist <= segLen {
 			if segLen < 1e-4 {
-				return prev
+				return prev, walked
 			}
 			t := dist / segLen
-			return prev.Add(rl.Vector3{X: d.X * t, Y: d.Y * t, Z: d.Z * t})
+			return prev.Add(rl.Vector3{X: d.X * t, Y: d.Y * t, Z: d.Z * t}), walked + dist
 		}
 		dist -= segLen
+		walked += segLen
 		prev = wp
 	}
-	return prev
+	return prev, walked
 }
 
 // customSlotWorld projects a squad-local slot offset (X=right of forward,

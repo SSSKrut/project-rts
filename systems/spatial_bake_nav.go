@@ -134,6 +134,8 @@ func (sys *SpatialBakeSystem) bakeNavPass(ctx core.UpdateContext) []spatialBakeC
 		// window — a door in a neighbour chunk can project into rec.cc.
 		clearDoorOutsideNavInBuilding(&grid, rec.cc, wallsByChunk)
 
+		applyNavObstacleProximity(&grid)
+
 		if existing := sys.navGridMap.Get(rec.id); existing != nil {
 			existing.Cells = grid.Cells
 		} else {
@@ -442,6 +444,49 @@ func applyNavBuildings(grid *components.NavGrid, cc components.ChunkCoord, footp
 					continue
 				}
 				grid.Cells[cj*components.NavGridSide+ci].Flags |= components.NavInBuilding
+			}
+		}
+	}
+}
+
+// applyNavObstacleProximity doubles the cost of every walkable cell with a
+// blocked 8-neighbour (wall / prop / footprint / steep slope / water). A*
+// then prefers the next ring out — walkers keep ~1.5 m clearance from
+// facades and trunks instead of hugging them into the escape spring, at the
+// price of a one-cell detour when the map allows one. Walkability is
+// untouched: a doorway approach or a squeeze between obstacles still paths
+// through the penalized ring.
+func applyNavObstacleProximity(grid *components.NavGrid) {
+	var blocked [components.NavGridCells]bool
+	for i := range grid.Cells {
+		c := grid.Cells[i]
+		blocked[i] = c.Cost == 0 || c.Flags&components.NavInBuilding != 0
+	}
+	for cj := 0; cj < components.NavGridSide; cj++ {
+		for ci := 0; ci < components.NavGridSide; ci++ {
+			idx := cj*components.NavGridSide + ci
+			if blocked[idx] {
+				continue
+			}
+			near := false
+			for dj := -1; dj <= 1 && !near; dj++ {
+				nj := cj + dj
+				if nj < 0 || nj >= components.NavGridSide {
+					continue
+				}
+				for di := -1; di <= 1; di++ {
+					ni := ci + di
+					if ni < 0 || ni >= components.NavGridSide || (di == 0 && dj == 0) {
+						continue
+					}
+					if blocked[nj*components.NavGridSide+ni] {
+						near = true
+						break
+					}
+				}
+			}
+			if near && grid.Cells[idx].Cost <= 127 {
+				grid.Cells[idx].Cost *= 2
 			}
 		}
 	}

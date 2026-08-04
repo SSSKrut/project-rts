@@ -162,6 +162,34 @@ func (sys *MicroPathSystem) tickUnit(pos *components.WorldPos, mp *components.Mi
 						mp.Dirty = false
 					}
 				}
+				// Suppressing the replan must not freeze the AIM: with
+				// string-pulled (1-2 chord) paths the stored end IS the whole
+				// route, and steering at the plan-time goal while the live
+				// slot marches on locks a follower's lag in at equal speeds
+				// (the MA2 column-pack regression). When the stored end is the
+				// goal cell — not a 16-wp truncation — slide it to the live
+				// goal and re-snap; a blocked chord or a gate endpoint falls
+				// back to the honest replan.
+				if !mp.Dirty {
+					last := mp.Count - 1
+					dg := mp.Waypoints[last].Sub(mp.GoalSnap)
+					if dg.X*dg.X+dg.Z*dg.Z <= 1.0 && mp.GateMask&(1<<last) == 0 {
+						prev := *pos
+						if last > mp.Head {
+							prev = mp.Waypoints[last-1]
+						}
+						if sys.nav.SegmentClear(prev, goal) {
+							mp.Waypoints[last] = goal
+							mp.GoalSnap = goal
+							if mp.Head == last {
+								mp.BestDistSq = float32(math.MaxFloat32)
+								mp.LastProgressAt = now
+							}
+						} else {
+							mp.Dirty = true
+						}
+					}
+				}
 			}
 
 		}
@@ -213,6 +241,7 @@ func (sys *MicroPathSystem) tickUnit(pos *components.WorldPos, mp *components.Mi
 	}
 	churn := mp.Count > 0 && mp.Head < mp.Count
 	waypoints, gates := sys.nav.FindPathGates(*pos, goal, NavOpts{})
+	waypoints, gates = sys.nav.StringPull(*pos, waypoints, gates)
 	if debugLog && len(waypoints) == 0 {
 		fmt.Printf("[mp-empty] from=(%.1f,%.1f,Y%.1f) to=(%.1f,%.1f,Y%.1f)\n",
 			float32(pos.Chunk.X)*components.ChunkSize+pos.Local.X,

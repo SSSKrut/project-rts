@@ -175,26 +175,28 @@ func (sys *OrderResolverSystem) evaluateCompletion(
 		if r <= 0 {
 			r = 2.5
 		}
-		// A vehicle squad parks as a column: the leader stops rampPopRadius
-		// short of the point and the CENTROID trails by half the column
-		// depth — the infantry 2.5 m ring never closes (M7).
-		if reach := SquadWaypointReach(sys.squadService.world, roster, sys.vehicleMap); reach > SquadWaypointReached {
-			depth := float32(0)
-			if fd := sys.formationDataMap.Get(squad); fd != nil {
-				depth = fd.Spacing * float32(roster.Count) * 0.5
+		// Arrival is judged from the SAME reference point and radius the
+		// macro path clears at: the squad ANCHOR (leader), within
+		// SquadArrivalCoeff × Spacing. Any mismatch deadlocks: SquadMacroPath
+		// drops HasGoal, FormationSystem stops driving slots, and whatever
+		// the completion still measures freezes just outside its ring (the
+		// old member-centroid test needed depth-widening crutches for
+		// columns/vehicles and still froze the compound standoff MoveTo once
+		// the wake forward bias stopped overshooting centroids).
+		if fd := sys.formationDataMap.Get(squad); fd != nil {
+			if ma := SquadArrivalCoeff * fd.Spacing; ma > r {
+				r = ma
 			}
-			if vr := reach + depth; vr > r {
-				r = vr
-			}
-		} else if fd := sys.formationDataMap.Get(squad); fd != nil &&
-			fd.Type == components.FormationColumn {
-			// An infantry column trails the goal the same way a vehicle
-			// column does (slots run backward from the leader): the member
-			// centroid parks half the column depth short and the 2.5 m ring
-			// never closes (found by ai_march_column — leg 1 froze forever).
-			r += fd.Spacing * float32(roster.Count) * 0.5
 		}
-		if centerXZDistSq(center, target.Pos) < r*r {
+		// A vehicle anchor parks rampPopRadius short of the point (M7).
+		if reach := SquadWaypointReach(sys.squadService.world, roster, sys.vehicleMap); reach > r {
+			r = reach
+		}
+		anchor, okA := SquadAnchorPos(sys.squadService.world, roster, sys.posMap)
+		if !okA {
+			return completionPending
+		}
+		if centerXZDistSq(anchor, target.Pos) < r*r {
 			// Storey-target MoveTo ("Occupy L<n>"): the squad centre passes
 			// the goal XZ on the way to the stairs while still a floor below
 			// — require the centre's Y to match the target storey as well.

@@ -32,6 +32,12 @@ type MicroPath struct {
 	// 16-wp cap ran out) are legitimate extension and are not counted. The
 	// march-scene replan-rate metric budgets these per unit per minute.
 	ReplanCount uint16
+	// EscapeTicks / MoveTicks: wall-hygiene telemetry. MoveTicks counts sim
+	// ticks spent steering a MoveTo, EscapeTicks those where the wall escape
+	// spring fired (< 0.3 m from a wall face). Saturating counters — the
+	// scenes gate on the ratio.
+	EscapeTicks uint16
+	MoveTicks   uint16
 	// GateMask: bit k set ⇒ Waypoints[k] is a transition endpoint (door /
 	// stairs / wing junction). Gate waypoints advance only once the walker
 	// has crossed the opening plane — popping one by radius alone from the

@@ -312,8 +312,17 @@ func (sys *UnitMovementSystem) step(
 
 		// Slide along wall tangent when the predicted XZ step would cross
 		// a wall in the 3×3 chunk window.
+		escape := false
 		if walls != nil {
-			vx, vz = reflectAgainstWalls(selfX, selfZ, w.pos.Local.Y, vx, vz, dt, walls, w.pos.Chunk)
+			vx, vz, escape = reflectAgainstWalls(selfX, selfZ, w.pos.Local.Y, vx, vz, dt, walls, w.pos.Chunk)
+		}
+		if w.microPath != nil {
+			if w.microPath.MoveTicks < math.MaxUint16 {
+				w.microPath.MoveTicks++
+			}
+			if escape && w.microPath.EscapeTicks < math.MaxUint16 {
+				w.microPath.EscapeTicks++
+			}
 		}
 
 		// Y lerp lets units climb stairs / drop into bunkers without
