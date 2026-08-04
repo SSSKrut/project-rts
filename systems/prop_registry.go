@@ -21,6 +21,7 @@ func NewPropTypeRegistry() *components.PropTypeRegistry {
 		BBoxRadius: 2.4,
 		BlocksLOS:  true,
 		BlocksMove: true,
+		Crushable:  true,
 	}
 
 	r.Metas[components.PropPine] = components.PropMeta{
@@ -32,6 +33,7 @@ func NewPropTypeRegistry() *components.PropTypeRegistry {
 		BBoxRadius: 1.6,
 		BlocksLOS:  true,
 		BlocksMove: true,
+		Crushable:  true,
 	}
 
 	r.Metas[components.PropBirch] = components.PropMeta{
@@ -44,6 +46,7 @@ func NewPropTypeRegistry() *components.PropTypeRegistry {
 		BBoxRadius: 1.6,
 		BlocksLOS:  true,
 		BlocksMove: true,
+		Crushable:  true,
 	}
 
 	r.Metas[components.PropBush] = components.PropMeta{

@@ -38,6 +38,16 @@ type vehObstacle struct {
 	minX, minZ, maxX, maxZ float32
 }
 
+// vehPropObstacle is one BlocksMove prop (circle) in world XZ. Crushable
+// props (trees) are obstacles for Wheeled only — a Tracked hull drives
+// through at ×0.4 and the prop despawns (P8-a).
+type vehPropObstacle struct {
+	x, z, r float32
+	crush   bool
+	ent     ecs.Entity
+	chunk   components.ChunkCoord
+}
+
 func (o *vehObstacle) inflated(r float32) vehObstacle {
 	return vehObstacle{o.minX - r, o.minZ - r, o.maxX + r, o.maxZ + r}
 }
@@ -91,6 +101,91 @@ func (sys *VehicleDriverSystem) snapshotObstacles() {
 		}
 		sys.obstacles = append(sys.obstacles, vehObstacle{fp.MinX, fp.MinZ, fp.MaxX, fp.MaxZ})
 	}
+	sys.propObs = sys.propObs[:0]
+	registry := sys.registryRes.Get()
+	if registry == nil {
+		return
+	}
+	qp := sys.propFilter.Query()
+	for qp.Next() {
+		prop, pos := qp.Get()
+		meta := registry.Metas[prop.Type]
+		if !meta.BlocksMove {
+			continue
+		}
+		wx, wz := worldXZ(*pos)
+		sys.propObs = append(sys.propObs, vehPropObstacle{
+			x:     wx,
+			z:     wz,
+			r:     meta.BBoxRadius * prop.Scale,
+			crush: meta.Crushable,
+			ent:   qp.Entity(),
+			chunk: pos.Chunk,
+		})
+	}
+}
+
+// crushesProps — Tracked hulls flatten crushable props (P8-a).
+func crushesProps(spec *components.VehicleSpec) bool {
+	return spec.Locomotion == components.LocomotionTracked
+}
+
+// avoidProps redirects the aim past the tangent of the nearest blocking prop
+// circle. Crushable props are transparent to a crushing hull.
+func (sys *VehicleDriverSystem) avoidProps(px, pz, dx, dz, aimLen, look, selfR float32,
+	crusher bool) (float32, float32) {
+	if len(sys.propObs) == 0 {
+		return dx, dz
+	}
+	aimX, aimZ := dx/aimLen, dz/aimLen
+	bestFwd := float32(math.MaxFloat32)
+	var best *vehPropObstacle
+	for i := range sys.propObs {
+		o := &sys.propObs[i]
+		if o.crush && crusher {
+			continue
+		}
+		ex, ez := o.x-px, o.z-pz
+		fwd := ex*aimX + ez*aimZ
+		if fwd <= 0 || fwd > look+selfR+o.r {
+			continue
+		}
+		lat := ex*aimZ - ez*aimX
+		if lat < 0 {
+			lat = -lat
+		}
+		if lat >= selfR+o.r+avoidMargin {
+			continue
+		}
+		if fwd < bestFwd {
+			bestFwd = fwd
+			best = o
+		}
+	}
+	if best == nil {
+		return dx, dz
+	}
+	ex, ez := best.x-px, best.z-pz
+	d := float32(math.Sqrt(float64(ex*ex + ez*ez)))
+	if d < 1e-4 {
+		return dx, dz
+	}
+	combR := selfR + best.r + avoidMargin
+	sinT := combR / d
+	if sinT > 1 {
+		sinT = 1
+	}
+	offset := float32(math.Asin(float64(sinT))) + avoidTangentPad
+	bearing := float32(math.Atan2(float64(ex), float64(ez)))
+	side := ex*aimZ - ez*aimX
+	var newBearing float32
+	if side > 0 {
+		newBearing = bearing - offset
+	} else {
+		newBearing = bearing + offset
+	}
+	return float32(math.Sin(float64(newBearing))) * aimLen,
+		float32(math.Cos(float64(newBearing))) * aimLen
 }
 
 // avoid bends the aim (dx, dz) around the nearest blocking obstacle and
@@ -121,6 +216,12 @@ func (sys *VehicleDriverSystem) avoid(ent ecs.Entity, pos *components.WorldPos,
 	}
 
 	dx, dz = sys.avoidBuildings(px, pz, dx, dz, aimLen, look, spec.ColliderR)
+
+	aimLen = float32(math.Sqrt(float64(dx*dx + dz*dz)))
+	if aimLen < 1e-4 {
+		return dx, dz, cruise
+	}
+	dx, dz = sys.avoidProps(px, pz, dx, dz, aimLen, look, spec.ColliderR, crushesProps(spec))
 
 	aimLen = float32(math.Sqrt(float64(dx*dx + dz*dz)))
 	if aimLen < 1e-4 {
@@ -347,6 +448,32 @@ func (sys *VehicleDriverSystem) resolveOverlaps(ent ecs.Entity, pos *components.
 	if pLen := float32(math.Sqrt(float64(pushX*pushX + pushZ*pushZ))); pLen > resolvePushCap*dt {
 		pushX = pushX / pLen * resolvePushCap * dt
 		pushZ = pushZ / pLen * resolvePushCap * dt
+	}
+
+	// Static prop circles: same full-ejection rule as building faces. A
+	// crushing hull ignores crushable props here — it drives through and the
+	// crush pass despawns them.
+	crusher := crushesProps(spec)
+	propInfl := spec.ColliderR * 0.7
+	for i := range sys.propObs {
+		o := &sys.propObs[i]
+		if o.crush && crusher {
+			continue
+		}
+		minD := o.r + propInfl
+		dxp := px - o.x
+		dzp := pz - o.z
+		dSq := dxp*dxp + dzp*dzp
+		if dSq >= minD*minD {
+			continue
+		}
+		d := float32(math.Sqrt(float64(dSq)))
+		if d > 1e-4 {
+			pushX += dxp / d * (minD - d)
+			pushZ += dzp / d * (minD - d)
+		} else {
+			pushX += minD
+		}
 	}
 
 	// Building faces are static walls: eject the full penetration at once —

@@ -99,6 +99,16 @@ const (
 	// circle past the alignment window).
 	aiSceneMarchColumn = "ai_march_column"
 
+	// ai_vehicle_forest (MB1): truck + tank drive parallel lanes through a
+	// planted pine grove with rocks. The truck must round the grove (0 ticks
+	// with its centre inside any prop), the tank crushes through at ×0.4
+	// (>= 1 pine flattened) but never enters a rock.
+	aiSceneVehForest = "ai_vehicle_forest"
+	// ai_vehicle_slope (MB1): a tank ordered through a stamped 45°+ ridge
+	// must refuse the grade (0 ticks on slope >= 0.6) and detour around the
+	// open flank, arriving <= 60 s.
+	aiSceneVehSlope = "ai_vehicle_slope"
+
 	// ai_crowd_cross (MA3): a Line squad's straight MoveTo runs through a
 	// standing crowd of 12. Verdict = arrival + max pairwise penetration
 	// <= 0.05 m (movers fully avoid standing bodies, Resp=1) + bounded
@@ -255,6 +265,10 @@ func aiSceneAnchorPos() components.WorldPos {
 		return components.WorldPos{}.Add(rl.Vector3{X: 30, Z: 25})
 	case aiSceneCrowdCross:
 		return components.WorldPos{}.Add(rl.Vector3{X: 45, Z: 0})
+	case aiSceneVehForest:
+		return components.WorldPos{}.Add(rl.Vector3{X: 40, Z: -50})
+	case aiSceneVehSlope:
+		return components.WorldPos{}.Add(rl.Vector3{X: 45, Z: 0})
 	case aiSceneCoverSide:
 		return components.WorldPos{}.Add(rl.Vector3{X: 40, Z: -30})
 	case aiSceneVehCombat:
@@ -300,7 +314,7 @@ func aiSceneBuildings() []components.BuildingPlan {
 	switch aiSceneID() {
 	case aiSceneLosOpen, aiSceneLosDefilade, aiSceneLosCreep,
 		aiSceneMarchLine, aiSceneMarchSlope, aiSceneMarchColumn,
-		aiSceneCrowdCross:
+		aiSceneCrowdCross, aiSceneVehForest, aiSceneVehSlope:
 		return nil
 	case aiSceneDoorSouth:
 		return aiBuildingsSingleHouse(0)
@@ -613,6 +627,116 @@ func aiWallGlideSpawn(
 		orderAt:         aiOrderAt,
 		verdictAt:       90,
 		nextSampleAt:    aiOrderAt + 5,
+	}
+}
+
+// aiScenePropRec — one hand-planted prop for MB1 metrics.
+type aiScenePropRec struct {
+	x, z, r float32
+	rock    bool
+	ent     ecs.Entity
+}
+
+// aiPlantProp spawns a prop the same way PropSpawnSystem does (WorldPos +
+// Prop + LODRelevant + PropChunkIndex registration, so nav bake and chunk
+// evict both see it).
+func aiPlantProp(world *ecs.World, posMap *ecs.Map[components.WorldPos],
+	propMap *ecs.Map[components.Prop], lodMap *ecs.Map[components.LODRelevant],
+	propIdx *systems.PropChunkIndex, registry *components.PropTypeRegistry,
+	t components.PropType, x, z float32) aiScenePropRec {
+	e := world.NewEntity()
+	p := components.WorldPos{}.Add(rl.Vector3{X: x, Y: systems.GroundHeight(x, z), Z: z})
+	posMap.Add(e, &p)
+	propMap.Add(e, &components.Prop{Type: t, Scale: 1})
+	lodMap.Add(e, &components.LODRelevant{})
+	if propIdx != nil {
+		propIdx.Loaded[p.Chunk] = append(propIdx.Loaded[p.Chunk], e)
+	}
+	r := float32(1)
+	if registry != nil {
+		r = registry.Metas[t].BBoxRadius
+	}
+	return aiScenePropRec{x: x, z: z, r: r, rock: t == components.PropRock, ent: e}
+}
+
+// aiVehicleForestSpawn (MB1): pine grove across both lanes + rocks on the
+// tank's lane.
+func aiVehicleForestSpawn(world *ecs.World, vehicleFactory *entities.VehicleFactory,
+	posMap *ecs.Map[components.WorldPos]) *aiTestState {
+	if vehicleFactory == nil {
+		fmt.Printf("[ai-test %s] NO VEHICLE FACTORY — aborting\n", aiSceneID())
+		return nil
+	}
+	wp := func(x, z float32) components.WorldPos {
+		p := components.WorldPos{}.Add(rl.Vector3{X: x, Z: z})
+		p.Local.Y = systems.GroundHeight(x, z)
+		return p
+	}
+	truck := vehicleFactory.Spawn(wp(18, -44), components.VehicleTruck,
+		components.FactionPlayer, components.ControllerLocal)
+	tank := vehicleFactory.Spawn(wp(18, -56), components.VehicleTank,
+		components.FactionPlayer, components.ControllerLocal)
+	propMap := ecs.NewMap[components.Prop](world)
+	lodMap := ecs.NewMap[components.LODRelevant](world)
+	propIdxRes := ecs.NewResource[systems.PropChunkIndex](world)
+	propIdx := propIdxRes.Get()
+	registryRes := ecs.NewResource[components.PropTypeRegistry](world)
+	registry := registryRes.Get()
+	var props []aiScenePropRec
+	for x := float32(30); x <= 50; x += 4 {
+		for z := float32(-58); z <= -42; z += 4 {
+			props = append(props, aiPlantProp(world, posMap, propMap, lodMap,
+				propIdx, registry, components.PropPine, x, z))
+		}
+	}
+	props = append(props, aiPlantProp(world, posMap, propMap, lodMap,
+		propIdx, registry, components.PropRock, 36, -56))
+	props = append(props, aiPlantProp(world, posMap, propMap, lodMap,
+		propIdx, registry, components.PropRock, 44, -54))
+	return &aiTestState{
+		sceneID:      aiSceneID(),
+		forestActive: true,
+		forestTruck:  truck,
+		forestTank:   tank,
+		forestGoalTr: wp(62, -44),
+		forestGoalTk: wp(62, -56),
+		forestProps:  props,
+		World:        world,
+		PosMap:       posMap,
+		VehQueueMap:  ecs.NewMap[components.ActionQueue](world),
+		orderAt:      aiOrderAt,
+		verdictAt:    90,
+		nextSampleAt: aiOrderAt + 5,
+	}
+}
+
+// aiVehicleSlopeSpawn (MB1): tank vs a stamped ridge with an open flank.
+func aiVehicleSlopeSpawn(world *ecs.World, vehicleFactory *entities.VehicleFactory,
+	posMap *ecs.Map[components.WorldPos]) *aiTestState {
+	if vehicleFactory == nil {
+		fmt.Printf("[ai-test %s] NO VEHICLE FACTORY — aborting\n", aiSceneID())
+		return nil
+	}
+	wp := func(x, z float32) components.WorldPos {
+		p := components.WorldPos{}.Add(rl.Vector3{X: x, Z: z})
+		p.Local.Y = systems.GroundHeight(x, z)
+		return p
+	}
+	tank := vehicleFactory.Spawn(wp(25, 0), components.VehicleTank,
+		components.FactionPlayer, components.ControllerLocal)
+	return &aiTestState{
+		sceneID:      aiSceneID(),
+		slopeActive:  true,
+		slopeTank:    tank,
+		slopeGoal:    wp(62, 0),
+		Stamper:      systems.NewStamper(world),
+		World:        world,
+		PosMap:       posMap,
+		VehQueueMap:  ecs.NewMap[components.ActionQueue](world),
+		sampler:      systems.NewHeightSampler(world),
+		orderAt:      2.5,
+		verdictAt:    60,
+		nextSampleAt: aiOrderAt + 5,
 	}
 }
 
@@ -1146,6 +1270,12 @@ func aiSceneSpawn(
 		return aiCrowdCrossSpawn(world, squadService, roleService, unitFactory,
 			playerFaction, posMap, rosterMap)
 	}
+	if aiSceneID() == aiSceneVehForest {
+		return aiVehicleForestSpawn(world, vehicleFactory, posMap)
+	}
+	if aiSceneID() == aiSceneVehSlope {
+		return aiVehicleSlopeSpawn(world, vehicleFactory, posMap)
+	}
 	squad := squadService.CreateFromTemplate(
 		systems.TmplMotorRifle, aiSpawnPos(),
 		components.FormationLine, playerFaction,
@@ -1470,6 +1600,24 @@ type aiTestState struct {
 	marchReplanBase float32
 	replanBaseSet   bool
 
+	// Set for ai_vehicle_forest (MB1): prop-intrusion ticks + crush proof.
+	forestActive   bool
+	forestTruck    ecs.Entity
+	forestTank     ecs.Entity
+	forestGoalTr   components.WorldPos
+	forestGoalTk   components.WorldPos
+	forestProps    []aiScenePropRec
+	forestTruckBad int
+	forestRockBad  int
+
+	// Set for ai_vehicle_slope (MB1): stamped ridge + steep-tick metric.
+	slopeActive     bool
+	slopeTank       ecs.Entity
+	slopeGoal       components.WorldPos
+	slopeStamped    bool
+	slopeSteepTicks int
+	Stamper         *systems.Stamper
+
 	// Set for ai_crowd_cross (MA3): pairwise penetration + per-tick |dv|
 	// over squad members and the standing crowd.
 	crowdActive bool
@@ -1598,6 +1746,14 @@ func (s *aiTestState) Update(elapsed float32) {
 	}
 	if s.crowdActive {
 		s.updateCrowdCross(elapsed)
+		return
+	}
+	if s.forestActive {
+		s.updateVehForest(elapsed)
+		return
+	}
+	if s.slopeActive {
+		s.updateVehSlope(elapsed)
 		return
 	}
 	if s.avoidActive {
@@ -2108,6 +2264,171 @@ func (s *aiTestState) updateWallGlide(elapsed float32) {
 		fmt.Printf("== VERDICT [%s]: %s  (inside=%d/%d t=%.1fs clear=%.2f esc=%.3f enterMax=%d replan=%.1f/u/min)\n",
 			s.sceneID, verdict, insideCnt, alive, elapsed, s.glideMinClear,
 			escFrac, maxEnter, s.replanRate(roster, elapsed))
+		fmt.Println("============================================================")
+		s.verdictDone = true
+	}
+}
+
+// updateVehForest (MB1): parallel-lane drive through the grove. Verdict =
+// both arrived + truck never inside any prop + tank never inside a rock +
+// at least one pine flattened.
+func (s *aiTestState) updateVehForest(elapsed float32) {
+	if s.verdictDone {
+		return
+	}
+	if !s.orderFired {
+		if elapsed < s.orderAt {
+			return
+		}
+		fmt.Println("============================================================")
+		fmt.Printf("== AI VEHICLE FOREST: truck=%v tank=%v props=%d\n",
+			s.forestTruck, s.forestTank, len(s.forestProps))
+		fmt.Println("============================================================")
+		for _, v := range [2]struct {
+			e ecs.Entity
+			g components.WorldPos
+		}{{s.forestTruck, s.forestGoalTr}, {s.forestTank, s.forestGoalTk}} {
+			if aq := s.VehQueueMap.Get(v.e); aq != nil {
+				systems.ClearActions(aq)
+				systems.PushAction(aq, components.Action{
+					Kind: components.ActionMoveTo, Target: v.g})
+			}
+		}
+		s.orderFired = true
+		return
+	}
+	inside := func(e ecs.Entity, rockOnly bool) bool {
+		p := s.PosMap.Get(e)
+		if p == nil {
+			return false
+		}
+		wx := float32(p.Chunk.X)*components.ChunkSize + p.Local.X
+		wz := float32(p.Chunk.Z)*components.ChunkSize + p.Local.Z
+		for i := range s.forestProps {
+			rec := &s.forestProps[i]
+			if rockOnly && !rec.rock {
+				continue
+			}
+			if !s.World.Alive(rec.ent) {
+				continue
+			}
+			dx, dz := wx-rec.x, wz-rec.z
+			if dx*dx+dz*dz < rec.r*rec.r {
+				return true
+			}
+		}
+		return false
+	}
+	if inside(s.forestTruck, false) {
+		s.forestTruckBad++
+	}
+	if inside(s.forestTank, true) {
+		s.forestRockBad++
+	}
+	crushed := 0
+	for i := range s.forestProps {
+		if !s.forestProps[i].rock && !s.World.Alive(s.forestProps[i].ent) {
+			crushed++
+		}
+	}
+	arrivedN := 0
+	for _, v := range [2]struct {
+		e ecs.Entity
+		g components.WorldPos
+	}{{s.forestTruck, s.forestGoalTr}, {s.forestTank, s.forestGoalTk}} {
+		if p := s.PosMap.Get(v.e); p != nil {
+			d := p.Sub(v.g)
+			if d.X*d.X+d.Z*d.Z < 36 {
+				arrivedN++
+			}
+		}
+	}
+	arrived := arrivedN == 2 && elapsed > s.orderAt+5
+	if elapsed >= s.nextSampleAt && elapsed < s.verdictAt && !arrived {
+		s.nextSampleAt = elapsed + aiSampleEvery
+		fmt.Printf("[ai-test %s] t=%.1fs arrived=%d/2 truckBad=%d rockBad=%d crushed=%d\n",
+			s.sceneID, elapsed, arrivedN, s.forestTruckBad, s.forestRockBad, crushed)
+	}
+	if arrived || elapsed >= s.verdictAt {
+		pass := arrived && s.forestTruckBad == 0 && s.forestRockBad == 0 && crushed >= 1
+		verdict := "FAIL"
+		if pass {
+			verdict = "PASS"
+		}
+		fmt.Println("============================================================")
+		fmt.Printf("== VERDICT [%s]: %s  (arrived=%d/2 t=%.1fs truckBad=%d rockBad=%d crushed=%d)\n",
+			s.sceneID, verdict, arrivedN, elapsed, s.forestTruckBad, s.forestRockBad, crushed)
+		fmt.Println("============================================================")
+		s.verdictDone = true
+	}
+}
+
+// updateVehSlope (MB1): stamp the ridge once the chunks are live, order the
+// tank across, count hull ticks on impassable grade.
+func (s *aiTestState) updateVehSlope(elapsed float32) {
+	if s.verdictDone {
+		return
+	}
+	if !s.slopeStamped {
+		if elapsed < 1.2 {
+			return
+		}
+		for z := float32(-14); z <= 6; z += 4 {
+			c := components.WorldPos{}.Add(rl.Vector3{X: 48, Z: z})
+			s.Stamper.StampHeightmap(c, systems.Crater(-7, 5), 5)
+		}
+		s.slopeStamped = true
+		return
+	}
+	if !s.orderFired {
+		if elapsed < s.orderAt {
+			return
+		}
+		fmt.Println("============================================================")
+		fmt.Printf("== AI VEHICLE SLOPE: tank=%v ridge x=48 z[-19..11]\n", s.slopeTank)
+		fmt.Println("============================================================")
+		if aq := s.VehQueueMap.Get(s.slopeTank); aq != nil {
+			systems.ClearActions(aq)
+			systems.PushAction(aq, components.Action{
+				Kind: components.ActionMoveTo, Target: s.slopeGoal})
+		}
+		s.orderFired = true
+		return
+	}
+	p := s.PosMap.Get(s.slopeTank)
+	if p == nil {
+		return
+	}
+	wx := float32(p.Chunk.X)*components.ChunkSize + p.Local.X
+	wz := float32(p.Chunk.Z)*components.ChunkSize + p.Local.Z
+	gx := (s.sampler.Sample(wx+1, wz) - s.sampler.Sample(wx-1, wz)) * 0.5
+	gz := (s.sampler.Sample(wx, wz+1) - s.sampler.Sample(wx, wz-1)) * 0.5
+	if gx < 0 {
+		gx = -gx
+	}
+	if gz < 0 {
+		gz = -gz
+	}
+	if gx >= 0.6 || gz >= 0.6 {
+		s.slopeSteepTicks++
+	}
+	d := p.Sub(s.slopeGoal)
+	distSq := d.X*d.X + d.Z*d.Z
+	arrived := distSq < 36 && elapsed > s.orderAt+3
+	if elapsed >= s.nextSampleAt && elapsed < s.verdictAt && !arrived {
+		s.nextSampleAt = elapsed + aiSampleEvery
+		fmt.Printf("[ai-test %s] t=%.1fs at=(%.1f,%.1f) distGoal=%.1f steep=%d\n",
+			s.sceneID, elapsed, wx, wz, float32(math.Sqrt(float64(distSq))), s.slopeSteepTicks)
+	}
+	if arrived || elapsed >= s.verdictAt {
+		pass := arrived && s.slopeSteepTicks == 0
+		verdict := "FAIL"
+		if pass {
+			verdict = "PASS"
+		}
+		fmt.Println("============================================================")
+		fmt.Printf("== VERDICT [%s]: %s  (arrived=%v t=%.1fs steep=%d)\n",
+			s.sceneID, verdict, arrived, elapsed, s.slopeSteepTicks)
 		fmt.Println("============================================================")
 		s.verdictDone = true
 	}

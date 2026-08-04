@@ -1,6 +1,7 @@
 package systems
 
 import (
+	"fmt"
 	"math"
 
 	rl "github.com/gen2brain/raylib-go/raylib"
@@ -30,6 +31,16 @@ type VehicleDriverSystem struct {
 	sampler        *HeightSampler
 	router         *RoadRouter
 	obstacles      []vehObstacle
+	// P8-a props: BlocksMove circles snapshotted per tick; crushed trees are
+	// despawned after the query (deferred archetype change).
+	propFilter   *ecs.Filter2[components.Prop, components.WorldPos]
+	registryRes  ecs.Resource[components.PropTypeRegistry]
+	propIndexRes ecs.Resource[PropChunkIndex]
+	chunkIndex   ecs.Resource[TerrainChunkIndex]
+	navBakedMap  *ecs.Map[components.NavBaked]
+	riversRes    ecs.Resource[components.Rivers]
+	propObs      []vehPropObstacle
+	crushed      []vehPropObstacle
 	// Convoy pacing (M7): squad members read roster mates to derive the
 	// column speed cap.
 	worldRef       *ecs.World
@@ -51,6 +62,13 @@ const (
 	// commits — transient aim flips (replan, ramp pop, formation slot swing)
 	// must not trigger a three-point turn (Phase 19 M6 owner bug).
 	vehReverseHold float32 = 0.4
+	// Crawl multiplier while flattening a crushable prop (P8-a).
+	vehCrushSlowMul float32 = 0.4
+	// Terrain refusal (P8-b): per-metre grade at the nose probe that blocks a
+	// bearing; matches the nav bake's impassable threshold.
+	vehSlopeBlock float32 = 0.6
+	// Extra keep-out beyond a river's half-width for the water probe.
+	vehWaterMargin float32 = 1.0
 )
 
 func (sys *VehicleDriverSystem) InitUI(w *ecs.World) {
@@ -60,6 +78,12 @@ func (sys *VehicleDriverSystem) InitUI(w *ecs.World) {
 	sys.followerMap = ecs.NewMap[components.RoadFollower](w)
 	sys.overrideMap = ecs.NewMap[components.VehicleOverride](w)
 	sys.buildingFilter = ecs.NewFilter2[components.Building, components.WorldPos](w)
+	sys.propFilter = ecs.NewFilter2[components.Prop, components.WorldPos](w)
+	sys.registryRes = ecs.NewResource[components.PropTypeRegistry](w)
+	sys.propIndexRes = ecs.NewResource[PropChunkIndex](w)
+	sys.chunkIndex = ecs.NewResource[TerrainChunkIndex](w)
+	sys.navBakedMap = ecs.NewMap[components.NavBaked](w)
+	sys.riversRes = ecs.NewResource[components.Rivers](w)
 	sys.vehHash = ecs.NewResource[core.VehicleSpatialHash](w)
 	sys.sampler = NewHeightSampler(w)
 	sys.router = NewRoadRouter(w)
@@ -100,6 +124,70 @@ func (sys *VehicleDriverSystem) Update(ctx core.UpdateContext) {
 		}
 		sys.resolveOverlaps(ent, pos, components.SpecForVehicle(veh.Kind), dt)
 	}
+	sys.applyCrushes()
+}
+
+// applyCrushes despawns trees flattened this tick (after the query — Ark
+// forbids archetype changes inside), drops them from the PropChunkIndex so
+// chunk evict never touches a dead entity, and re-bakes the chunk's NavGrid
+// (the tree's blocked circle is gone; CoverBaked stays — the cover pass is
+// one-shot per chunk and a re-run would duplicate slot entities).
+func (sys *VehicleDriverSystem) applyCrushes() {
+	if len(sys.crushed) == 0 {
+		return
+	}
+	propIdx := sys.propIndexRes.Get()
+	chunkIdx := sys.chunkIndex.Get()
+	for i := range sys.crushed {
+		c := &sys.crushed[i]
+		if !sys.worldRef.Alive(c.ent) {
+			continue
+		}
+		if propIdx != nil {
+			list := propIdx.Loaded[c.chunk]
+			for j, e := range list {
+				if e == c.ent {
+					propIdx.Loaded[c.chunk] = append(list[:j], list[j+1:]...)
+					break
+				}
+			}
+		}
+		sys.worldRef.RemoveEntity(c.ent)
+		if chunkIdx != nil {
+			if chunkEnt, ok := chunkIdx.Loaded[c.chunk]; ok && sys.navBakedMap.Has(chunkEnt) {
+				sys.navBakedMap.Remove(chunkEnt)
+			}
+		}
+	}
+	sys.crushed = sys.crushed[:0]
+}
+
+// crushPass — a Tracked hull overlapping a crushable prop flattens it and
+// crawls (×0.4) through the debris this tick.
+func (sys *VehicleDriverSystem) crushPass(pos *components.WorldPos,
+	spec *components.VehicleSpec, cruise float32) float32 {
+	if !crushesProps(spec) || len(sys.propObs) == 0 {
+		return cruise
+	}
+	px, pz := worldXZ(*pos)
+	slowed := false
+	for i := range sys.propObs {
+		o := &sys.propObs[i]
+		if !o.crush {
+			continue
+		}
+		reach := o.r + spec.ColliderR*0.5
+		dx, dz := px-o.x, pz-o.z
+		if dx*dx+dz*dz >= reach*reach {
+			continue
+		}
+		slowed = true
+		sys.crushed = append(sys.crushed, *o)
+	}
+	if slowed {
+		cruise *= vehCrushSlowMul
+	}
+	return cruise
 }
 
 func (sys *VehicleDriverSystem) step(ent ecs.Entity, veh *components.Vehicle,
@@ -180,7 +268,120 @@ func (sys *VehicleDriverSystem) step(ent ecs.Entity, veh *components.Vehicle,
 	}
 	dist := float32(math.Sqrt(float64(distSq)))
 	cruise := spec.MaxSpeedOffroad * sys.slopeMul(pos, mot.Yaw)
-	sys.drive(ent, follower, pos, mot, spec, diff.X, diff.Z, dist, cruise, true, true, dt)
+	cruise = sys.crushPass(pos, spec, cruise)
+	dx, dz := diff.X, diff.Z
+	dx, dz, cruise = sys.terrainSteer(pos, mot, follower, spec, dx, dz, cruise)
+	sys.drive(ent, follower, pos, mot, spec, dx, dz, dist, cruise, true, true, dt)
+}
+
+// terrainSteer (P8-b): refuse a bearing whose ray probes hit impassable
+// grade (≥ vehSlopeBlock across a 2 m baseline) or water. The probe horizon
+// covers the braking distance; any refusal caps cruise at turn-slow speed so
+// the hull never carries momentum into the band. Alternate bearings scan the
+// FULL circle (±15°..±180°) — a forward hemisphere fully walled must resolve
+// into a retreat bearing, not a permanent park on the skirt.
+func (sys *VehicleDriverSystem) terrainSteer(pos *components.WorldPos,
+	mot *components.Motion, follower *components.RoadFollower,
+	spec *components.VehicleSpec, dx, dz, cruise float32) (float32, float32, float32) {
+	aimLen := float32(math.Sqrt(float64(dx*dx + dz*dz)))
+	if aimLen < 1e-4 {
+		return dx, dz, cruise
+	}
+	px, pz := worldXZ(*pos)
+	speed := mot.Speed
+	if speed < 0 {
+		speed = -speed
+	}
+	far := spec.BoxLen*0.5 + speed*speed/(2*vehDecel) + 4
+	if far < spec.BoxLen*0.5+7 {
+		far = spec.BoxLen*0.5 + 7
+	}
+	base := float32(math.Atan2(float64(dx), float64(dz)))
+	if sys.bearingPassable(px, pz, base, spec, far) {
+		if follower != nil {
+			follower.DetourSide = 0
+		}
+		return dx, dz, cruise
+	}
+	if debugLog {
+		fmt.Printf("[terr] blocked at (%.1f,%.1f) base=%.2f\n", px, pz, base)
+	}
+	if cruise > vehTurnSlowSpeed {
+		cruise = vehTurnSlowSpeed
+	}
+	// Committed-side scan (P8-c seed): the goal pull re-centres `base` every
+	// tick, and an uncommitted two-sided scan ping-pongs the hull in front of
+	// the wall forever. Hold the chosen side until the goal-ward bearing
+	// clears; flip only when the whole committed semicircle is walled.
+	sides := [2]float32{1, -1}
+	if follower != nil && follower.DetourSide != 0 {
+		sides = [2]float32{float32(follower.DetourSide), -float32(follower.DetourSide)}
+	}
+	for _, s := range sides {
+		for k := 1; k <= 12; k++ {
+			b := base + s*float32(k)*(15*math.Pi/180)
+			if sys.bearingPassable(px, pz, b, spec, far) {
+				if follower != nil {
+					follower.DetourSide = int8(s)
+				}
+				return float32(math.Sin(float64(b))) * aimLen,
+					float32(math.Cos(float64(b))) * aimLen, cruise
+			}
+		}
+	}
+	return dx, dz, 0
+}
+
+// bearingPassable probes the WHOLE ray, not one point: 3 nose-width tracks ×
+// distance steps out to the refusal horizon. A single fixed-distance probe
+// accepts bearings whose clear spot lies past (or before) the steep band and
+// the hull climbs anyway.
+func (sys *VehicleDriverSystem) bearingPassable(px, pz, bearing float32,
+	spec *components.VehicleSpec, far float32) bool {
+	dirX := float32(math.Sin(float64(bearing)))
+	dirZ := float32(math.Cos(float64(bearing)))
+	rx, rz := dirZ, -dirX
+	half := spec.BoxWid * 0.5
+	near := spec.BoxLen * 0.5
+	for dist := near; dist <= far; dist += 2.0 {
+		cx := px + dirX*dist
+		cz := pz + dirZ*dist
+		for _, o := range [3]float32{-half, 0, half} {
+			x := cx + rx*o
+			z := cz + rz*o
+			// Full gradient magnitude, not the along-ray component: an
+			// oblique ray projects a 2.2 slope down to "passable" and the
+			// hull legally traverses the cliff face sideways.
+			gx := (sys.sampler.Sample(x+1, z) - sys.sampler.Sample(x-1, z)) * 0.5
+			gz := (sys.sampler.Sample(x, z+1) - sys.sampler.Sample(x, z-1)) * 0.5
+			if gx*gx+gz*gz >= vehSlopeBlock*vehSlopeBlock {
+				return false
+			}
+			if sys.nearWater(x, z) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func (sys *VehicleDriverSystem) nearWater(x, z float32) bool {
+	rivers := sys.riversRes.Get()
+	if rivers == nil {
+		return false
+	}
+	for pi := range rivers.Polylines {
+		pl := &rivers.Polylines[pi]
+		keep := pl.Width*0.5 + vehWaterMargin
+		for si := 0; si+1 < len(pl.Points); si++ {
+			ax, az := worldXZ(pl.Points[si])
+			bx, bz := worldXZ(pl.Points[si+1])
+			if pointToSegment2D(x, z, ax, az, bx, bz) <= keep {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // drive steers toward the point at (dx, dz) relative to the hull and

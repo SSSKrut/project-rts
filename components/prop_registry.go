@@ -38,6 +38,9 @@ type PropMeta struct {
 	BlocksLOS   bool
 	BlocksMove  bool
 	Traversable bool // bridges, doors
+	// Crushable: a Tracked hull drives through (speed ×0.4, prop despawns);
+	// Wheeled treats it as a wall. Rocks stay walls for everyone.
+	Crushable bool
 }
 
 // PropTypeRegistry: 256 slots indexed by PropType.

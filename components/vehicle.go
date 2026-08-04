@@ -35,6 +35,11 @@ type RoadFollower struct {
 	Edge    int32
 	T       float32
 	RevHold float32
+	// DetourSide (MB1, P8-c seed): committed side of a terrain detour
+	// (+1/−1, 0 = free). Without commitment the goal pull re-centres the
+	// bearing scan every tick and the hull ping-pongs in front of the wall.
+	// Reset when the goal-ward bearing is passable again.
+	DetourSide int8
 }
 
 // RoadRoute is the planned road itinerary for the head MoveTo action.
