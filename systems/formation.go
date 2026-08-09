@@ -394,6 +394,10 @@ func (sys *FormationSystem) processSquad(world *ecs.World, w formationWork, dt f
 				interiorPolicy, int(roster.Count), interiorHasFacing, interiorFacingYaw)
 		}
 	}
+	// Who takes which position is a matching problem, not the roster order:
+	// index-order hands the far window to the far man and crosses every path
+	// in the doorway, and one death compacts the roster so everybody swaps.
+	slotOf := sys.matchInteriorSlots(world, roster, interiorSlots)
 
 	// Desired march direction: the current macro SEGMENT when one exists
 	// (stable between replans), else (target - center) — geometrically noisy,
@@ -542,8 +546,8 @@ func (sys *FormationSystem) processSquad(world *ecs.World, w formationWork, dt f
 			// ~0 m/s); 1.2 m offsets let the planner route them through
 			// different cells and they stay spread out inside.
 			const interiorSpreadSpacing float32 = 1.2
-			if int(i) < len(interiorSlots) {
-				slot := interiorSlots[i]
+			if si := slotIndexAt(slotOf, i); si != noSlot && int(si) < len(interiorSlots) {
+				slot := interiorSlots[si]
 				target = slot.Pos
 				// Parked at a window slot → face the opening. UnitMovement
 				// owns yaw while walking; once idle nothing else writes it.
@@ -709,6 +713,60 @@ func (sys *FormationSystem) processSquad(world *ecs.World, w formationWork, dt f
 	if fd.ReformPending && reformDone {
 		fd.ReformPending = false
 	}
+}
+
+// matchInteriorSlots decides who takes which planned position. A man under a
+// TacticalOverride is not a candidate — his slot goes to someone who can
+// actually walk to it, and the empty window gets manned instead of waiting
+// for him. His stored HeldSlot is left alone so he prefers it back on return.
+func (sys *FormationSystem) matchInteriorSlots(world *ecs.World,
+	roster *components.CommandRoster, slots []BuildingSlot) []uint8 {
+
+	if len(slots) == 0 {
+		return nil
+	}
+	n := int(roster.Count)
+	cands := make([]SlotCandidate, n)
+	for i := 0; i < n; i++ {
+		mem := roster.Members[i]
+		if mem == (ecs.Entity{}) || !world.Alive(mem) || sys.tacticalOverrideMap.Has(mem) {
+			continue
+		}
+		p := sys.posMap.Get(mem)
+		if p == nil {
+			continue
+		}
+		c := SlotCandidate{Pos: *p, Live: true}
+		if bb := sys.blackboardMap.Get(mem); bb != nil {
+			c.Held = bb.HeldSlot
+		}
+		cands[i] = c
+	}
+	out := assignSlots(cands, slots, make([]uint8, 0, n))
+	for i := 0; i < n; i++ {
+		if !cands[i].Live {
+			continue
+		}
+		bb := sys.blackboardMap.Get(roster.Members[i])
+		if bb == nil {
+			continue
+		}
+		if out[i] == noSlot {
+			bb.ClearHeldSlot()
+		} else {
+			bb.SetHeldSlot(out[i])
+		}
+	}
+	return out
+}
+
+// slotIndexAt reads an assignment safely; a nil table means "no interior
+// slots this pass".
+func slotIndexAt(a []uint8, i uint8) uint8 {
+	if int(i) < len(a) {
+		return a[i]
+	}
+	return noSlot
 }
 
 // wakeAnchor returns the point `dist` metres along the leader's remaining

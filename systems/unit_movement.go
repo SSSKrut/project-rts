@@ -40,6 +40,34 @@ const (
 	unitShoveCap    float32 = 6.0
 )
 
+// Make-way tuning (Phase 19.8 M4): how long a standing man tolerates being
+// pressed before stepping aside, and how fast he steps.
+const (
+	yieldPressureTime float32 = 0.3
+	yieldSpeed        float32 = 1.5
+)
+
+// yieldStep returns the make-way nudge: nothing until the pressure has held,
+// then a steady step along the escape normal (which already points away from
+// whoever is pressing).
+func yieldStep(pressure, dt, nx, nz float32) (float32, float32, bool) {
+	if pressure < yieldPressureTime || (nx == 0 && nz == 0) {
+		return 0, 0, false
+	}
+	d := yieldSpeed * dt
+	return nx * d, nz * d, true
+}
+
+// insideAnyFootprint reports whether (x, z) lies in any building footprint.
+func insideAnyFootprint(x, z float32, foots []components.AABB2D) bool {
+	for i := range foots {
+		if foots[i].Contains(x, z) {
+			return true
+		}
+	}
+	return false
+}
+
 // Steering-direction slew cap (rad/s): ORCA's optimal velocity can flip
 // between half-plane corners tick-to-tick; legs can't. ~720°/s bounds
 // |Δv|/tick at sprint to ~1.2 m/s while leaving doorway weaving untouched.
@@ -121,6 +149,11 @@ type UnitMovementSystem struct {
 	doorMap        *ecs.Map[components.Door]
 	collisionWalls map[components.ChunkCoord][]colWall
 
+	// Building footprints, snapshotted per tick: an order that puts a man
+	// INSIDE a building must not be executed at the combat-move crawl.
+	buildFilter *ecs.Filter1[components.Building]
+	foots       []components.AABB2D
+
 	workBuf []unitWork
 
 	// Per-worker buffers for StaminaExhausted toggles; serial post-pass
@@ -160,6 +193,7 @@ func (sys *UnitMovementSystem) InitUI(w *ecs.World) {
 	sys.vehHash = ecs.NewResource[core.VehicleSpatialHash](w)
 	sys.wallFilter = ecs.NewFilter2[components.WorldPos, components.WallSegment](w)
 	sys.doorMap = ecs.NewMap[components.Door](w)
+	sys.buildFilter = ecs.NewFilter1[components.Building](w)
 }
 
 func (UnitMovementSystem) Name() string { return "unit_movement" }
@@ -190,6 +224,11 @@ type unitWork struct {
 	// combat-move throttle is for advancing on an enemy with weapons up, and
 	// applying it to a man RUNNING FOR COVER turned a 5 m dash into 20 s.
 	evacuating bool
+	// Under a TacticalOverride: the instinct owns him, so make-way leaves him
+	// where it put him.
+	hasOverride bool
+	// Walking an order into / inside a building: no combat-move throttle.
+	interiorMove bool
 }
 
 func (sys *UnitMovementSystem) Update(ctx core.UpdateContext) {
@@ -224,6 +263,14 @@ func (sys *UnitMovementSystem) Update(ctx core.UpdateContext) {
 	}
 	walls := sys.collisionWalls
 
+	sys.foots = sys.foots[:0]
+	if sys.buildFilter != nil {
+		qB := sys.buildFilter.Query()
+		for qB.Next() {
+			sys.foots = append(sys.foots, qB.Get().Footprint)
+		}
+	}
+
 	// Snapshot units (component pointers + cached profile / stamina) so the
 	// parallel pass doesn't re-resolve squad / order / overrides per tick.
 	sys.workBuf = sys.workBuf[:0]
@@ -236,22 +283,42 @@ func (sys *UnitMovementSystem) Update(ctx core.UpdateContext) {
 		exhausted := sys.staminaExhaustedMap.Has(ent)
 		threat := sys.threatMap.Get(ent)
 		evacuating := false
+		hasOverride := false
 		if ov := sys.overrideMap.Get(ent); ov != nil {
+			hasOverride = true
 			d := pos.Sub(ov.CoverPos)
 			evacuating = d.X*d.X+d.Z*d.Z > siReachedRadius*siReachedRadius
 		}
+		// Executing an order INTO a building drops the combat-move THROTTLE
+		// only. The throttle is for advancing on an enemy with weapons up; at
+		// 0.3x a man crosses a threshold at walking-wounded pace, and the
+		// doorway is exactly where he must not linger. Threat facing stays —
+		// that is how he shoots, and taking it away indoors stopped a clearing
+		// squad killing anyone.
+		interiorMove := false
+		if queue.Count > 0 {
+			a := &queue.Actions[queue.Head]
+			if a.Kind == components.ActionMoveTo {
+				tx, tz := worldXZ(a.Target)
+				sx, sz := worldXZ(*pos)
+				interiorMove = insideAnyFootprint(tx, tz, sys.foots) ||
+					insideAnyFootprint(sx, sz, sys.foots)
+			}
+		}
 		sys.workBuf = append(sys.workBuf, unitWork{
-			ent:        ent,
-			pos:        pos,
-			mot:        mot,
-			queue:      queue,
-			stance:     stance,
-			microPath:  mp,
-			threat:     threat,
-			profile:    profile,
-			stamina:    stamina,
-			exhausted:  exhausted,
-			evacuating: evacuating,
+			ent:          ent,
+			pos:          pos,
+			mot:          mot,
+			queue:        queue,
+			stance:       stance,
+			microPath:    mp,
+			threat:       threat,
+			profile:      profile,
+			stamina:      stamina,
+			exhausted:    exhausted,
+			evacuating:   evacuating,
+			hasOverride:  hasOverride,
+			interiorMove: interiorMove,
 		})
 	}
 	work := sys.workBuf

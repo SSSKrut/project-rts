@@ -109,7 +109,31 @@ type LocalBlackboard struct {
 	// Counters for replan triggers.
 	OvercrowdedSince float32 // accumulates while ORCA reports no feasible solution
 	StuckSince       float32 // accumulates while velocity is low but pref non-zero
+
+	// YieldPressure: seconds a standing man has been pressed by another body.
+	// Past the threshold he makes way — a man parked in the only doorway
+	// blocks the storey outright, since nav cannot see bodies and there is no
+	// route around a 1.2 m opening.
+	YieldPressure float32
+
+	// HeldSlot: the interior slot this man currently owns, stored as index+1
+	// so the zero value reads as "none" without any factory init. Assignment
+	// is recomputed every formation pass; the hold bonus keyed off this field
+	// is what stops a squad reshuffling every position when one man dies.
+	HeldSlot uint8
 }
+
+// HeldSlotIndex returns the owned slot index and whether one is held.
+func (b *LocalBlackboard) HeldSlotIndex() (uint8, bool) {
+	if b.HeldSlot == 0 {
+		return 0, false
+	}
+	return b.HeldSlot - 1, true
+}
+
+func (b *LocalBlackboard) SetHeldSlot(i uint8) { b.HeldSlot = i + 1 }
+
+func (b *LocalBlackboard) ClearHeldSlot() { b.HeldSlot = 0 }
 
 // SetReason copies `text` into Blackboard.Reason without allocating. Up to
 // 32 bytes; longer text is truncated.

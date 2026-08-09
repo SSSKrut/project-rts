@@ -51,13 +51,12 @@ func (a orcaVec2) length() float32 {
 // leg to project onto.
 func det(a, b orcaVec2) float32 { return a.X*b.Z - a.Z*b.X }
 
-// orcaLine — one ORCA half-plane constraint. The feasible region is the
-// half-plane where (vel - Point) · Normal >= 0, with Normal being Dir
-// rotated 90° clockwise (Dir.Z, -Dir.X).
+// orcaLine — one ORCA half-plane constraint. A velocity satisfies it when
+// det(Dir, Point - vel) <= 0, i.e. the feasible side is on the LEFT of Dir;
+// (Dir.Z, -Dir.X) points outward.
 type orcaLine struct {
 	Point orcaVec2 // a point on the boundary line
-	Dir   orcaVec2 // unit-length direction along the line (feasible side
-	// is on the left when facing along Dir, i.e. (Dir.Z, -Dir.X) outward)
+	Dir   orcaVec2 // unit-length direction along the line
 }
 
 type orcaAgent struct {
@@ -106,7 +105,12 @@ func orcaAgentConstraint(self, other orcaAgent, tau float32) orcaLine {
 					Z: (relPos.X*combinedR + relPos.Z*leg) / distSq,
 				}
 			} else {
-				// Right leg.
+				// Right leg. NOTE (Phase 19.8): RVO2 negates the WHOLE vector
+				// here; this negates only X, which mirrors the half-plane about
+				// the line of centres. Correcting it transforms crowd flow
+				// (ai_crowd_cross 22.4 -> 8.7 s, jerk 5.2 -> 1.2) but wipes the
+				// squad in ai_bounding, so the fix needs its own retune pass —
+				// see PHASE-19.8.md "Хвосты".
 				line.Dir = orcaVec2{
 					X: -(relPos.X*leg + relPos.Z*combinedR) / distSq,
 					Z: (-relPos.X*combinedR + relPos.Z*leg) / distSq,

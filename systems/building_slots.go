@@ -50,6 +50,7 @@ type BuildingSlotPlanner struct {
 	levelMemberMap *ecs.Map[components.LevelMember]
 	levelMap       *ecs.Map[components.Level]
 	doorMap        *ecs.Map[components.Door]
+	stairsMap      *ecs.Map[components.Stairs]
 }
 
 func NewBuildingSlotPlanner(w *ecs.World) *BuildingSlotPlanner {
@@ -64,6 +65,7 @@ func NewBuildingSlotPlanner(w *ecs.World) *BuildingSlotPlanner {
 		levelMemberMap: ecs.NewMap[components.LevelMember](w),
 		levelMap:       ecs.NewMap[components.Level](w),
 		doorMap:        ecs.NewMap[components.Door](w),
+		stairsMap:      ecs.NewMap[components.Stairs](w),
 	}
 }
 
@@ -75,17 +77,39 @@ const (
 	SlotParkRadius    float32 = 0.8
 	slotRoomSpacing   float32 = 1.2
 	slotHiddenSpacing float32 = 0.8
+	// Clearance a room slot keeps from its own walls.
+	slotRoomInset float32 = 0.6
+	// Transit circles: nobody parks in a doorway or on a flight's landing.
+	slotDoorKeepOut  float32 = 0.9
+	slotStairKeepOut float32 = 0.4
+	// A keep-out belongs to the storey whose floor plate is this close in Y.
+	slotStoreyBand float32 = 1.5
 	// Pre-entry stack beside a door (ClearSeq stack-up).
 	stackStandoff   float32 = 1.1
 	stackSpacing    float32 = 1.1
 	stackSideOffset float32 = 1.2
 )
 
+// maxKeepOutsPerFloor caps the transit circles one storey contributes; past
+// that the storey is a corridor and the room clamp carries the slot anyway.
+const maxKeepOutsPerFloor = 8
+
 type slotFloor struct {
-	pos    components.WorldPos
-	level  uint8
-	rooms  [components.MaxRoomsPerLevel]components.AABB2D
-	roomsN uint8
+	pos      components.WorldPos
+	level    uint8
+	rooms    [components.MaxRoomsPerLevel]components.AABB2D
+	roomsN   uint8
+	keepOut  [maxKeepOutsPerFloor]slotKeepOut
+	keepOutN uint8
+}
+
+// addKeepOut records a transit circle, dropping duplicates past the cap.
+func (f *slotFloor) addKeepOut(x, z, r float32) {
+	if f.keepOutN >= maxKeepOutsPerFloor {
+		return
+	}
+	f.keepOut[f.keepOutN] = slotKeepOut{x: x, z: z, r: r}
+	f.keepOutN++
 }
 
 // PlanSlots returns `count` slots for `building` under `policy`; slot i is
@@ -238,8 +262,8 @@ func (p *BuildingSlotPlanner) nearestDoor(children []ecs.Entity,
 	return bestPos, bestOut, found
 }
 
-// collectFloors gathers the building's storeys with their room rects, sorted
-// by level.
+// collectFloors gathers the building's storeys with their room rects and
+// transit circles, sorted by level.
 func (p *BuildingSlotPlanner) collectFloors(children []ecs.Entity) []slotFloor {
 	var floors []slotFloor
 	for _, ch := range children {
@@ -269,10 +293,133 @@ func (p *BuildingSlotPlanner) collectFloors(children []ecs.Entity) []slotFloor {
 			floors[j-1], floors[j] = floors[j], floors[j-1]
 		}
 	}
+	p.collectKeepOuts(children, floors)
 	return floors
 }
 
+// collectKeepOuts files each doorway and stair landing under the storey it
+// serves. A slot on one of these corks the only route the rest of the squad
+// has: nav is blind to bodies and there is no way around a 1.2 m opening.
+func (p *BuildingSlotPlanner) collectKeepOuts(children []ecs.Entity, floors []slotFloor) {
+	if len(floors) == 0 {
+		return
+	}
+	file := func(y, x, z, r float32) {
+		for i := range floors {
+			if absF(y-floors[i].pos.Local.Y) <= slotStoreyBand {
+				floors[i].addKeepOut(x, z, r)
+				return
+			}
+		}
+	}
+	for _, ch := range children {
+		if !p.world.Alive(ch) {
+			continue
+		}
+		wp := p.posMap.Get(ch)
+		if wp == nil {
+			continue
+		}
+		if p.doorMap.Get(ch) != nil {
+			if wall := p.wallMap.Get(ch); wall != nil {
+				t := wall.OpeningCenterT * wall.Length
+				pos := wp.Add(rl.Vector3{
+					X: float32(math.Sin(float64(wall.Yaw))) * t,
+					Z: float32(math.Cos(float64(wall.Yaw))) * t,
+				})
+				x, z := worldXZ(pos)
+				file(pos.Local.Y, x, z, slotDoorKeepOut)
+			}
+			continue
+		}
+		if st := p.stairsMap.Get(ch); st != nil {
+			// WorldPos is the flight's BASE; the landings at both ends are
+			// where traffic converges.
+			sa := float32(math.Sin(float64(st.Yaw)))
+			ca := float32(math.Cos(float64(st.Yaw)))
+			bx, bz := worldXZ(*wp)
+			r := st.Width*0.5 + slotStairKeepOut
+			file(wp.Local.Y, bx, bz, r)
+			file(wp.Local.Y+st.Rise, bx+sa*st.Length, bz+ca*st.Length, r)
+		}
+	}
+}
+
+// slotKeepOut is a circle a planned position must stay out of: stair
+// footprints and door mouths are the routes everyone else needs, and a man
+// parked on one corks the storey.
+type slotKeepOut struct{ x, z, r float32 }
+
+// clampSlotToRoom pulls a position inside `room` leaving `inset` of clearance
+// from every wall. A room narrower than two insets collapses to its centre —
+// a slot in the middle of a broom cupboard beats one inside its wall.
+func clampSlotToRoom(pos components.WorldPos, room components.AABB2D, inset float32) components.WorldPos {
+	x, z := worldXZ(pos)
+	x = clampAxis(x, room.MinX, room.MaxX, inset)
+	z = clampAxis(z, room.MinZ, room.MaxZ, inset)
+	return components.Normalize(components.WorldPos{Local: rl.Vector3{X: x, Y: pos.Local.Y, Z: z}})
+}
+
+func clampAxis(v, lo, hi, inset float32) float32 {
+	lo += inset
+	hi -= inset
+	if lo >= hi {
+		return 0.5 * (lo + hi)
+	}
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
+}
+
+// pushOutOfKeepOuts moves a position off any transit circle it landed on,
+// re-clamping into the room after each nudge so the escape never lands in a
+// wall. Two rounds settle a slot caught between a stair and a doorway.
+func pushOutOfKeepOuts(pos components.WorldPos, zones []slotKeepOut,
+	room components.AABB2D, inset float32, useRoom bool) components.WorldPos {
+
+	if len(zones) == 0 {
+		return pos
+	}
+	for round := 0; round < 2; round++ {
+		moved := false
+		for _, z := range zones {
+			px, pz := worldXZ(pos)
+			dx, dz := px-z.x, pz-z.z
+			dSq := dx*dx + dz*dz
+			if dSq >= z.r*z.r {
+				continue
+			}
+			d := float32(math.Sqrt(float64(dSq)))
+			var nx, nz float32
+			if d > 1e-4 {
+				nx, nz = dx/d, dz/d
+			} else {
+				nx, nz = 1, 0
+			}
+			pos = components.Normalize(components.WorldPos{Local: rl.Vector3{
+				X: z.x + nx*z.r, Y: pos.Local.Y, Z: z.z + nz*z.r,
+			}})
+			if useRoom {
+				pos = clampSlotToRoom(pos, room, inset)
+			}
+			moved = true
+		}
+		if !moved {
+			break
+		}
+	}
+	return pos
+}
+
 // fillRoomSlots writes out[from:] as room-spread positions across `floors`.
+// Every position is clamped into its room and pushed off the storey's transit
+// circles: the raw Loose scatter reaches 2×spacing from the room centre, which
+// is outside any room smaller than that, and a slot inside a wall is a walker
+// grinding at a facade forever (nothing else watches that band).
 func fillRoomSlots(out []BuildingSlot, from int, floors []slotFloor, spacing float32) {
 	rest := len(out) - from
 	if rest <= 0 || len(floors) == 0 {
@@ -288,8 +435,11 @@ func fillRoomSlots(out []BuildingSlot, from int, floors []slotFloor, spacing flo
 		wi := k % perFloor
 		fl := &floors[fi]
 		var target components.WorldPos
+		hasRoom := false
+		var room components.AABB2D
 		if rc := int(fl.roomsN); rc > 1 {
-			room := fl.rooms[wi%rc]
+			room = fl.rooms[wi%rc]
+			hasRoom = true
 			offX, offZ := FormationOffset(components.FormationLoose,
 				uint8(wi/rc), spacing, rl.Vector3{X: 0, Y: 0, Z: 1})
 			target = components.WorldPos{}.Add(rl.Vector3{
@@ -297,11 +447,13 @@ func fillRoomSlots(out []BuildingSlot, from int, floors []slotFloor, spacing flo
 				Y: fl.pos.Local.Y,
 				Z: room.CenterZ() + offZ,
 			})
+			target = clampSlotToRoom(target, room, slotRoomInset)
 		} else {
 			offX, offZ := FormationOffset(components.FormationLoose,
 				uint8(wi), spacing, rl.Vector3{X: 0, Y: 0, Z: 1})
 			target = fl.pos.Add(rl.Vector3{X: offX, Y: 0, Z: offZ})
 		}
+		target = pushOutOfKeepOuts(target, fl.keepOut[:fl.keepOutN], room, slotRoomInset, hasRoom)
 		out[from+k] = BuildingSlot{Pos: target}
 	}
 }
@@ -355,6 +507,7 @@ func (p *BuildingSlotPlanner) collectWindowSlots(
 				out[j-1], out[j] = out[j], out[j-1]
 			}
 		}
+		return out
 	}
-	return out
+	return interleaveByFacade(out)
 }

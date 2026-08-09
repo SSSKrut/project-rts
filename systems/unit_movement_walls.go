@@ -102,6 +102,107 @@ func wallBlocksApproach(pos *components.WorldPos, target components.WorldPos,
 	return false
 }
 
+const (
+	// A step starting this close to a wall line reads as "already touching",
+	// not "crossing it" — clipping those would pin a body that is trying to
+	// step AWAY from the facade it is pressed against.
+	wallClipEps float32 = 1e-3
+	// Stop this far short of the crossing so the next tick's segment doesn't
+	// start exactly on the wall line.
+	wallClipBackoff float32 = 0.02
+)
+
+// firstWallCrossing returns the nearest blocking wall the segment crosses and
+// the crossing's parameter along it.
+func firstWallCrossing(curX, curZ, curY, stepX, stepZ float32,
+	walls map[components.ChunkCoord][]colWall, home components.ChunkCoord,
+) (*colWall, float32, bool) {
+	predX := curX + stepX
+	predZ := curZ + stepZ
+	var hit *colWall
+	best := float32(1)
+	for dcZ := int32(-1); dcZ <= 1; dcZ++ {
+		for dcX := int32(-1); dcX <= 1; dcX++ {
+			cc := components.ChunkCoord{X: home.X + dcX, Z: home.Z + dcZ}
+			bucket := walls[cc]
+			for i := range bucket {
+				w := &bucket[i]
+				if !unitMatchesWallStorey(curY, w.yBase, w.yTop) {
+					continue
+				}
+				toX := w.fromX + w.sa*w.length
+				toZ := w.fromZ + w.ca*w.length
+				t1, t2, ok := segmentSegmentIntersect2D(curX, curZ, predX, predZ,
+					w.fromX, w.fromZ, toX, toZ)
+				if !ok || t1 <= wallClipEps || t1 > 1 || t2 < 0 || t2 > 1 {
+					continue
+				}
+				if w.hasOpening && w.openPassable {
+					wallT := t2 * w.length
+					if wallT >= w.openStart && wallT <= w.openEnd {
+						continue
+					}
+				}
+				if t1 < best {
+					best, hit = t1, w
+				}
+			}
+		}
+	}
+	return hit, best, hit != nil
+}
+
+// clipStepAgainstWalls resolves a POSITIONAL step against walls: it advances
+// up to the facade and SLIDES whatever is left along it. Velocity-space
+// steering (reflectAgainstWalls) only guards the MoveTo branch, while shoves,
+// corridor sidesteps and the contact clamp move WorldPos directly — without
+// this an idle man pressed against a facade by a passing hull ends up inside
+// the building. Truncating the whole step instead of sliding would be just as
+// wrong the other way: a walker sliding along a wall while a crowd clamps him
+// out of a body would lose his along-wall motion and stall in the doorway.
+func clipStepAgainstWalls(curX, curZ, curY, stepX, stepZ float32,
+	walls map[components.ChunkCoord][]colWall, home components.ChunkCoord,
+) (float32, float32) {
+	if walls == nil || (stepX == 0 && stepZ == 0) {
+		return stepX, stepZ
+	}
+	posX, posZ := curX, curZ
+	remX, remZ := stepX, stepZ
+	// Two slides cover a corner; a third would be a pocket the body cannot
+	// leave this tick anyway.
+	for pass := 0; pass < 3; pass++ {
+		w, t, ok := firstWallCrossing(posX, posZ, curY, remX, remZ, walls, home)
+		if !ok {
+			posX += remX
+			posZ += remZ
+			break
+		}
+		segLen := float32(math.Sqrt(float64(remX*remX + remZ*remZ)))
+		if segLen < 1e-6 {
+			break
+		}
+		travel := t*segLen - wallClipBackoff
+		if travel < 0 {
+			travel = 0
+		}
+		f := travel / segLen
+		posX += remX * f
+		posZ += remZ * f
+		// Slide the unused remainder: drop its into-wall component, keep the
+		// tangent. The normal (ca, -sa) is unit length.
+		leftX := remX * (1 - f)
+		leftZ := remZ * (1 - f)
+		nx, nz := w.ca, -w.sa
+		dot := leftX*nx + leftZ*nz
+		remX = leftX - dot*nx
+		remZ = leftZ - dot*nz
+		if remX*remX+remZ*remZ < 1e-12 {
+			break
+		}
+	}
+	return posX - curX, posZ - curZ
+}
+
 // reflectAgainstWalls projects velocity along walls in the 3×3 chunk window
 // the predicted XZ step would cross. Sliding (v - (v·n)n) instead of full
 // reflection — units brush past corners and glide along corridor walls.

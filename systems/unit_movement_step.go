@@ -71,7 +71,9 @@ func (sys *UnitMovementSystem) step(
 				if lim := vehShoveCap * dt; push > lim {
 					push = lim
 				}
-				*w.pos = w.pos.Add(rl.Vector3{X: nx * push, Z: nz * push})
+				sx, sz := clipStepAgainstWalls(selfX, selfZ, w.pos.Local.Y,
+					nx*push, nz*push, walls, w.pos.Chunk)
+				*w.pos = w.pos.Add(rl.Vector3{X: sx, Z: sz})
 				selfX = float32(w.pos.Chunk.X)*components.ChunkSize + w.pos.Local.X
 				selfZ = float32(w.pos.Chunk.Z)*components.ChunkSize + w.pos.Local.Z
 				return
@@ -106,7 +108,9 @@ func (sys *UnitMovementSystem) step(
 				px, pz = -e.VelZ/v, e.VelX/v
 			}
 			push := vehShoveCap * dt
-			*w.pos = w.pos.Add(rl.Vector3{X: px * push, Z: pz * push})
+			sx, sz := clipStepAgainstWalls(selfX, selfZ, w.pos.Local.Y,
+				px*push, pz*push, walls, w.pos.Chunk)
+			*w.pos = w.pos.Add(rl.Vector3{X: sx, Z: sz})
 			selfX = float32(w.pos.Chunk.X)*components.ChunkSize + w.pos.Local.X
 			selfZ = float32(w.pos.Chunk.Z)*components.ChunkSize + w.pos.Local.Z
 		})
@@ -117,6 +121,11 @@ func (sys *UnitMovementSystem) step(
 	// kept: the steering pass slides velocity along that body (bodies are
 	// hard — pressing INTO one holds a shove-vs-drive equilibrium forever).
 	var bodyNX, bodyNZ, bodyDepth float32
+	// Whether the body pressing hardest is actually going somewhere: make-way
+	// is for a walker trying to get past, not for a parked neighbour touching
+	// shoulders (the shove already separates those, and stepping off the slot
+	// only makes formation walk the man back into him).
+	bodyMoving := false
 	if hash != nil {
 		hash.ForEachEntryInRadius(selfX, selfZ, unitShoveQueryR, func(e *core.SpatialEntry, dSq float32) {
 			if e.Ent == w.ent {
@@ -142,12 +151,15 @@ func (sys *UnitMovementSystem) step(
 			if depth := minD - d; depth > bodyDepth {
 				bodyDepth = depth
 				bodyNX, bodyNZ = nx, nz
+				bodyMoving = e.VelX*e.VelX+e.VelZ*e.VelZ > 0.25
 			}
 			push := (minD - d) * 0.5
 			if lim := unitShoveCap * dt; push > lim {
 				push = lim
 			}
-			*w.pos = w.pos.Add(rl.Vector3{X: nx * push, Z: nz * push})
+			sx, sz := clipStepAgainstWalls(selfX, selfZ, w.pos.Local.Y,
+				nx*push, nz*push, walls, w.pos.Chunk)
+			*w.pos = w.pos.Add(rl.Vector3{X: sx, Z: sz})
 			selfX = float32(w.pos.Chunk.X)*components.ChunkSize + w.pos.Local.X
 			selfZ = float32(w.pos.Chunk.Z)*components.ChunkSize + w.pos.Local.Z
 		})
@@ -206,13 +218,33 @@ func (sys *UnitMovementSystem) step(
 	maxSpeed *= 1 + speedJitter
 
 	if w.queue.Count == 0 {
-		// Brake instead of instant zero so the unit decelerates visibly
-		// when the queue drains.
+		// Brake instead of instant zero so the unit decelerates visibly when
+		// the queue drains. (Phase 19.8 tried zeroing here to kill the phantom
+		// velocity the spatial hash publishes for ~2 s after a sprint; it costs
+		// column cohesion — ai_march_column clusterHold 0.73 -> 2.08 s — for a
+		// crowd win the ORCA work already delivers.)
 		brake := stanceAccel[w.stance.Code] * dt
 		if w.mot.Speed > brake {
 			w.mot.Speed -= brake
 		} else {
 			w.mot.Speed = 0
+		}
+		// Make way. A man parked in the only doorway blocks the storey: nav is
+		// blind to bodies, the walker's blocked-pop is disabled at gates on
+		// purpose, and a replan hands back the identical route forever. Steady
+		// pressure from another body is the signal; formation walks him back
+		// to his slot once the pressure is gone.
+		if stepBB != nil {
+			if bodyDepth > 0 && bodyMoving && !w.hasOverride {
+				stepBB.YieldPressure += dt
+			} else {
+				stepBB.YieldPressure = 0
+			}
+			if sx, sz, ok := yieldStep(stepBB.YieldPressure, dt, bodyNX, bodyNZ); ok {
+				cx, cz := clipStepAgainstWalls(selfX, selfZ, w.pos.Local.Y,
+					sx, sz, walls, w.pos.Chunk)
+				*w.pos = w.pos.Add(rl.Vector3{X: cx, Z: cz})
+			}
 		}
 		return markerOp
 	}
@@ -243,6 +275,14 @@ func (sys *UnitMovementSystem) step(
 				if !wallBlocksApproach(w.pos, action.Target, walls) {
 					popAction(w.queue)
 					return markerOp
+				}
+				// Inside the arrival ring with the straight line walled off —
+				// a dead band no other watchdog covers: the exhausted-path
+				// replan wants > 1 m, and the stuck timers want either
+				// waypoints or an honest low speed the escape spring inflates
+				// past. Plan instead of grinding along the facade forever.
+				if w.microPath != nil {
+					w.microPath.Dirty = true
 				}
 			}
 		}
@@ -509,7 +549,7 @@ func (sys *UnitMovementSystem) step(
 		// CatchUp runner otherwise crawls at 0.3× forever while its body
 		// tracks a stale contact (P7-f). Plain turn lag keeps the throttle —
 		// the turn should land before the sprint.
-		if dist > 3.0 && speed > 0.5 &&
+		if dist > 3.0 && speed > 0.5 && !w.interiorMove &&
 			(!threatFacing || w.threat.State >= components.ThreatThreatened) {
 			bodyDelta := wrapAngle(velocityYaw - w.mot.Yaw)
 			if bodyDelta > math.Pi/2 || bodyDelta < -math.Pi/2 {
@@ -548,8 +588,10 @@ func (sys *UnitMovementSystem) step(
 				clamped = true
 			}
 			if clamped {
-				move.X = predX - selfX
-				move.Z = predZ - selfZ
+				// The clamp pushes out of a body without knowing about walls;
+				// re-clip so a crowd can't press anyone through a facade.
+				move.X, move.Z = clipStepAgainstWalls(selfX, selfZ, w.pos.Local.Y,
+					predX-selfX, predZ-selfZ, walls, w.pos.Chunk)
 			}
 		}
 		*w.pos = w.pos.Add(move)
