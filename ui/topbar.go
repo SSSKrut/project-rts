@@ -7,9 +7,12 @@ import (
 )
 
 // TimeDisplay: Scale = 0 means paused; Elapsed is scaled game-time seconds.
+// Throttled means the sim could not keep up with Scale last frame, so the
+// number is what was asked for, not what was delivered.
 type TimeDisplay struct {
-	Scale   float32
-	Elapsed float32
+	Scale     float32
+	Elapsed   float32
+	Throttled bool
 }
 
 var (
@@ -106,6 +109,8 @@ func DrawTopBar(panel Panel, font rl.Font, d TimeDisplay, tools TopBarToolCtx,
 	label := fmt.Sprintf("%.0fx", d.Scale)
 	if d.Scale <= 0 {
 		label = "PAUSED"
+	} else if d.Throttled {
+		label += " (cpu)"
 	}
 	const labelSize int32 = 16
 	labelW := rl.MeasureTextEx(font, label, float32(labelSize), 1.0).X

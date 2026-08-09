@@ -317,15 +317,7 @@ func drawInspectorEmpty(ctx InspectorCtx, x, y, width int32) int32 {
 		col.Skip(ctx.st.RowH)
 		TextRow(&col, &ctx.st, "Recent events:", ctx.st.TextDim)
 		for _, ev := range ctx.EventLog.Latest(8) {
-			color := ctx.st.Text
-			switch ev.Kind {
-			case components.EventKIA, components.EventOrderFailed:
-				color = rl.Color{R: 230, G: 110, B: 80, A: 255}
-			case components.EventSuppressionStart:
-				color = rl.Color{R: 230, G: 170, B: 90, A: 255}
-			}
-			TextRow(&col, &ctx.st, fmt.Sprintf("[%5.1fs] %-10s %s", ev.At,
-				components.EventKindLabel(ev.Kind), ev.Text), color)
+			DrawEventRow(&col, &ctx.st, ctx.in, ev)
 		}
 	}
 	return int32(col.Y)

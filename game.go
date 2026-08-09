@@ -218,6 +218,7 @@ type uiState struct {
 
 	MapPanning   bool
 	MapPanCursor rl.Vector2
+	Ruler        rulerState
 
 	CtxMenu           ui.ContextMenu
 	ContactCtxMenu    ui.ContextMenu
@@ -265,6 +266,11 @@ type uiState struct {
 	SmoothedSquadPos map[ecs.Entity]components.WorldPos
 	ExpandedHUD      bool
 	ShowMapDebugLy   bool
+
+	// Attention holds the auto-reaction policy plus the live banner; it is
+	// frame-side state and never enters a world snapshot.
+	Attention attentionState
+	Cues      audioCues
 }
 
 // rmbSession bundles RMB-hold state. Active is set on press and cleared on

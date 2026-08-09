@@ -77,7 +77,18 @@ type App struct {
 	// LastNonZeroScale remembers the pre-pause speed so unpause restores it
 	// rather than snapping to 1x.
 	LastNonZeroScale float32
+
+	// throttled: the last Advance ran fewer ticks than TimeScale asked for.
+	throttled bool
 }
+
+// AdvanceBudget caps the wall time one frame may spend inside the sim. Above
+// 8x the requested tick count can outrun the machine; rather than let the
+// frame time grow without bound (and the render half starve), Advance stops
+// early and the top bar says the speed is nominal, not actual. The first tick
+// of a frame is never negotiable — compression may fall behind, the sim must
+// not stall.
+var AdvanceBudget = 24 * time.Millisecond
 
 func NewApp() *App {
 	return &App{
@@ -160,15 +171,25 @@ const SimDt = time.Second / 60
 // one zero-delta pass so input-coupled systems (camera orbit) stay live.
 func (app *App) Advance() {
 	app.frameIndex++
+	app.throttled = false
 	n := int(app.TimeScale + 0.5)
 	if n <= 0 {
 		app.step(0, false)
 		return
 	}
+	start := time.Now()
 	for i := 0; i < n; i++ {
 		app.step(SimDt, true)
+		if i+1 < n && time.Since(start) > AdvanceBudget {
+			app.throttled = true
+			return
+		}
 	}
 }
+
+// Throttled reports whether the last Advance hit AdvanceBudget. Display only —
+// nothing in the sim may branch on it.
+func (app *App) Throttled() bool { return app.throttled }
 
 // Tick advances one raw-delta step (sandbox / test entry).
 func (app *App) Tick(delta time.Duration) {

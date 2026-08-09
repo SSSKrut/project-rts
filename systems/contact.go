@@ -59,6 +59,7 @@ type ContactSystem struct {
 	equipMap           *ecs.Map[components.Equipment]
 
 	registryRes *ecs.Resource[components.ContactRegistry]
+	eventLogRes ecs.Resource[components.EventLog]
 	indexRes    ecs.Resource[TerrainChunkIndex]
 	hmMap       *ecs.Map[components.Heightmap]
 	dtMap       *ecs.Map[components.Detectability]
@@ -197,6 +198,7 @@ func (sys *ContactSystem) InitUI(w *ecs.World) {
 	sys.equipMap = ecs.NewMap[components.Equipment](w)
 	r := ecs.NewResource[components.ContactRegistry](w)
 	sys.registryRes = &r
+	sys.eventLogRes = ecs.NewResource[components.EventLog](w)
 	sys.indexRes = ecs.NewResource[TerrainChunkIndex](w)
 	sys.hmMap = ecs.NewMap[components.Heightmap](w)
 	sys.dtMap = ecs.NewMap[components.Detectability](w)

@@ -547,9 +547,34 @@ func (sys *ContactSystem) applyContactUpsert() {
 		}
 		sys.contactMap.Add(newEnt, &c)
 		reg.Tracked[rec.target] = newEnt
+		sys.pushContactEvent(rec)
 	}
 	sys.contactsBuf = sys.contactsBuf[:0]
 	sys.enforceContactCap(reg)
+}
+
+// pushContactEvent logs a fresh track the player's own sensors just made.
+// Write-only: nothing in the sim reads the log, so the attention layer gets
+// its first-contact signal without any behaviour riding on it. Other
+// factions' tracks are their business, not the player's notification feed.
+func (sys *ContactSystem) pushContactEvent(rec *contactRec) {
+	if rec.obsFactID != components.FactionPlayer {
+		return
+	}
+	log := sys.eventLogRes.Get()
+	if log == nil {
+		return
+	}
+	text := "New contact"
+	if rec.closeLOS {
+		text = "Enemy spotted"
+	}
+	log.Push(components.EventEntry{
+		Kind: components.EventEnemyContact,
+		At:   sys.elapsed,
+		Pos:  rec.pos,
+		Text: text,
+	})
 }
 
 // enforceContactCap evicts contacts past contactCap: oldest Unknown first,

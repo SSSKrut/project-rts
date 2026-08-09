@@ -160,7 +160,12 @@ func (g *Game) handleInput() {
 
 	// LMB press. Splitter drag claims LMB exclusively. Building widget
 	// chips also claim the press — skip marquee start when over a chip.
-	widgetClickConsumed := false
+	// The banner floats over the workspace and the ruler owns the map while
+	// L is held; both claim their own press before the world sees it.
+	widgetClickConsumed := g.handleAttentionBannerClick()
+	if g.handleMapRuler() {
+		widgetClickConsumed = true
+	}
 	if !g.chromeBusy() && rl.IsMouseButtonPressed(rl.MouseButtonLeft) && g.UI.BuildingWidget != nil {
 		if hit := ui.HitTestBuildingWidget(g.UI.BuildingWidget, g.Frame.Cursor); hit != nil {
 			target := g.UI.BuildingWidget.Root
@@ -454,7 +459,10 @@ func (g *Game) clickTimeline() {
 // nextTimeScale cycles 1 -> 2 -> 4 -> 8 -> 1 (step=+1) / reverse (step=-1).
 // Paused → step=+1 jumps to 1x, step=-1 to 8x.
 func nextTimeScale(cur float32, step int) float32 {
-	stops := [...]float32{1, 2, 4, 8}
+	// Above 8x the game needs the attention layer to be worth using: the
+	// point of 32x is skipping a march, and a march is where first contact
+	// happens. See PHASE-19.7 P1.
+	stops := [...]float32{1, 2, 4, 8, 16, 32}
 	if cur <= 0 {
 		if step > 0 {
 			return stops[0]

@@ -38,11 +38,20 @@ type timelineJSON struct {
 	Follow       bool    `json:"follow"`
 }
 
+// attentionJSON is a pointer field in layoutFile so an older file (no key)
+// is distinguishable from "everything set to off" — the zero value of the
+// matrix is a valid policy that must not be inferred from absence.
+type attentionJSON struct {
+	Kinds []uint8 `json:"kinds"`
+	Muted bool    `json:"muted"`
+}
+
 type layoutFile struct {
-	Version  uint16       `json:"version"`
-	Preset   uint8        `json:"layout_preset"`
-	Tree     nodeJSON     `json:"tree"`
-	Timeline timelineJSON `json:"timeline"`
+	Version   uint16         `json:"version"`
+	Preset    uint8          `json:"layout_preset"`
+	Tree      nodeJSON       `json:"tree"`
+	Timeline  timelineJSON   `json:"timeline"`
+	Attention *attentionJSON `json:"attention,omitempty"`
 }
 
 func encodeNode(n *ui.LayoutNode) nodeJSON {
@@ -96,7 +105,8 @@ func decodeNode(j nodeJSON) *ui.LayoutNode {
 // loadLayout installs the persisted tree on the PanelManager BEFORE the
 // first Recompute, and restores the timeline leaf's view. Missing /
 // parse-fail / wrong version ⇒ defaults stay.
-func loadLayout(panelMgr *ui.PanelManager, tl *ui.TimelineViewState) {
+func loadLayout(panelMgr *ui.PanelManager, tl *ui.TimelineViewState,
+	att *ui.AttentionMatrix, muted *bool) {
 	if panelMgr == nil {
 		return
 	}
@@ -132,11 +142,35 @@ func loadLayout(panelMgr *ui.PanelManager, tl *ui.TimelineViewState) {
 		tl.Follow = lf.Timeline.Follow
 		tl.Normalize()
 	}
+	// A file written by an older build has no attention block; the caller's
+	// defaults stand. A shorter list (new event kinds since) fills as far as
+	// it reaches and leaves the rest at their default.
+	if lf.Attention == nil {
+		return
+	}
+	if att != nil {
+		for i, v := range lf.Attention.Kinds {
+			if i >= len(att) || ui.AutoReaction(v) >= ui.AutoReactionCount {
+				continue
+			}
+			att[i] = ui.AutoReaction(v)
+		}
+	}
+	if muted != nil {
+		*muted = lf.Attention.Muted
+	}
+}
+
+// persistLayout is the single call site shape: every surface that can change
+// the saved layout goes through here rather than assembling the argument list.
+func (g *Game) persistLayout() {
+	saveLayout(g.UI.PanelMgr, g.timelineLeafView(), &g.UI.Attention.Matrix, &g.UI.Cues.Muted)
 }
 
 // saveLayout marshals the current workspace tree + active preset into
 // layout.json. Atomic via .tmp + os.Rename. Errors are logged.
-func saveLayout(panelMgr *ui.PanelManager, tl *ui.TimelineViewState) {
+func saveLayout(panelMgr *ui.PanelManager, tl *ui.TimelineViewState,
+	att *ui.AttentionMatrix, muted *bool) {
 	if panelMgr == nil {
 		return
 	}
@@ -155,6 +189,16 @@ func saveLayout(panelMgr *ui.PanelManager, tl *ui.TimelineViewState) {
 			LabelW:       ui.TimelineLabelWidth(*tl),
 			PixelsPerSec: tl.PixelsPerSec,
 			Follow:       tl.Follow,
+		}
+	}
+	if att != nil {
+		kinds := make([]uint8, len(att))
+		for i, v := range att {
+			kinds[i] = uint8(v)
+		}
+		lf.Attention = &attentionJSON{Kinds: kinds}
+		if muted != nil {
+			lf.Attention.Muted = *muted
 		}
 	}
 	data, err := json.MarshalIndent(&lf, "", "  ")

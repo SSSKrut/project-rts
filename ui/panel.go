@@ -34,6 +34,7 @@ const (
 	PanelFormation PanelID = "formation"
 	PanelSymbology PanelID = "symbology"
 	PanelBehavior  PanelID = "behavior"
+	PanelEvents    PanelID = "events"
 	PanelDebug     PanelID = "debug"
 	PanelNone      PanelID = ""
 )

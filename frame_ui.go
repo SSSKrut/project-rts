@@ -24,8 +24,10 @@ func (g *Game) initUI() {
 
 	g.UI.ScreenW, g.UI.ScreenH = initialScreenWidth, initialScreenHeight
 	g.UI.PanelMgr = ui.NewPanelManager()
+	// Defaults first: a layout file with no attention block leaves them alone.
+	g.UI.Attention.Matrix = ui.DefaultAttentionMatrix()
 	// Restore split ratios from disk before the first Recompute.
-	loadLayout(g.UI.PanelMgr, g.timelineLeafView())
+	loadLayout(g.UI.PanelMgr, g.timelineLeafView(), &g.UI.Attention.Matrix, &g.UI.Cues.Muted)
 	g.UI.PanelMgr.Recompute(g.UI.ScreenW, g.UI.ScreenH)
 	g.UI.Scene3DRT = ui.NewScene3DRT(g.UI.PanelMgr.Get(ui.Panel3D))
 
@@ -64,18 +66,21 @@ func (g *Game) initUI() {
 	// symbolApplyTarget resolves to.
 	g.UI.SymbolEditor = ui.NewSymbolEditor(g.symbolApplyTarget)
 
+	g.initAudioCues()
+
 	g.applyShotSelection()
 }
 
 // shutdownUI reverses initUI. Deferred after g.Shutdown so it fires first,
 // matching the LIFO order the old main() produced.
 func (g *Game) shutdownUI() {
+	g.shutdownAudioCues()
 	g.UI.Underlay.Unload()
 	g.UI.Scene3DRT.Unload()
 	// A capture run may have swapped a leaf for -shot-panel; persisting that
 	// would leak a throwaway layout into the player's saved one.
 	if *shotPathFlag == "" {
-		saveLayout(g.UI.PanelMgr, g.timelineLeafView())
+		g.persistLayout()
 	}
 	g.Ctx.Ribbons.unload()
 	// Order is load-bearing: hand the borrowed shader / surface textures back
@@ -148,7 +153,7 @@ func (g *Game) isSelected(e ecs.Entity) int {
 
 // scrollablePanels get wheel + thumb-drag handling. A widget only reports how
 // tall its content came out; everything else is here.
-var scrollablePanels = [...]ui.PanelID{ui.PanelInspect, ui.PanelSymbology, ui.PanelBehavior}
+var scrollablePanels = [...]ui.PanelID{ui.PanelInspect, ui.PanelSymbology, ui.PanelBehavior, ui.PanelEvents}
 
 func (g *Game) scrollDragging() bool { return g.UI.ScrollDragKey != "" }
 
@@ -381,6 +386,22 @@ func (g *Game) behaviorCtx(font rl.Font, cursor rl.Vector2, lmbPress, focused bo
 // into components (Contact.LastSeenTime, OrderIssuedAt).
 func (g *Game) simNow() float32 { return float32(g.App.Elapsed().Seconds()) }
 
+// eventsCtx bundles the Events widget's inputs; the matrix travels by value
+// because edits go back through AttentionCycleRequest, not through the panel.
+func (g *Game) eventsCtx(font rl.Font, cursor rl.Vector2, lmb, focused bool,
+	scroll *ui.ScrollState) ui.EventsCtx {
+	return ui.EventsCtx{
+		Log:          g.Res.EventLog,
+		Matrix:       g.UI.Attention.Matrix,
+		Muted:        g.UI.Cues.Muted,
+		Font:         font,
+		Cursor:       cursor,
+		LMBPressed:   lmb,
+		PanelFocused: focused,
+		Scroll:       scroll,
+	}
+}
+
 // floatScroll is the scroll state of the floater being rendered. Valid only
 // inside renderFloatingWidget — and keyed off the live floater rather than the
 // "float:"+kind convention, which a chevron switch invalidates (the switch
@@ -567,6 +588,9 @@ func (g *Game) renderFloatingWidget(id ui.PanelID, content rl.Rectangle,
 		})
 	case ui.PanelBehavior:
 		ui.DrawBehaviorPanel(syn("Behavior"), g.behaviorCtx(font, cursor, lmbPress, true,
+			g.floatScroll()))
+	case ui.PanelEvents:
+		ui.DrawEventsPanel(syn("Events"), g.eventsCtx(font, cursor, lmbPress, true,
 			g.floatScroll()))
 	case ui.PanelTimeline:
 		key := g.floatSurfaceKey(ui.PanelTimeline)

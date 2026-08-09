@@ -11,6 +11,8 @@ const (
 	EventSuppressionStart
 	EventOrderCompleted
 	EventOrderFailed
+	// EventKindCount bounds any per-kind table, e.g. the attention matrix.
+	EventKindCount
 )
 
 const EventLogCapacity = 200

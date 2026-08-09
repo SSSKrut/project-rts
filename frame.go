@@ -115,6 +115,9 @@ func (g *Game) RunFrame() bool {
 	g.Sel.Units = compactAlive(g.App.World, g.Sel.Units)
 	g.Frame.MapClusters.Rebuild(g.App.World, g.Filt.Contact,
 		g.Maps.ContactOverride, g.Svc.Squad.Clock())
+	// Reads the events this tick produced; may drop TimeScale before the
+	// next frame's input runs.
+	g.updateAttention()
 
 	g.drawScene3D()
 	g.drawUI()

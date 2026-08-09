@@ -59,8 +59,9 @@ func (g *Game) drawUI() {
 		LOSWeaponRs:      g.Ctx.LOS.weaponRs,
 	}
 	ui.DrawMap(g.Frame.PanelMap, mapCtx)
+	g.drawMapRuler()
 
-	inspectorFocused := g.UI.PanelMgr.FocusedAt(g.Frame.Cursor) == ui.PanelInspect
+	inspectorFocused :=g.UI.PanelMgr.FocusedAt(g.Frame.Cursor) == ui.PanelInspect
 	inspectorPanel := g.UI.PanelMgr.Get(ui.PanelInspect)
 	inspectorScroll := g.UI.PanelMgr.ScrollByID(ui.PanelInspect)
 	ui.DrawInspector(inspectorPanel, ui.InspectorCtx{
@@ -124,6 +125,20 @@ func (g *Game) drawUI() {
 		ui.SelectUnitRequest.Unit = ecs.Entity{}
 		ui.SelectUnitRequest.Additive = false
 	}
+	if ui.EventFocusRequest.Active {
+		g.flyTo(ui.EventFocusRequest.Pos)
+		ui.EventFocusRequest.Active = false
+	}
+	if ui.AttentionCycleRequest.Active {
+		g.UI.Attention.Matrix.Cycle(ui.AttentionCycleRequest.Kind)
+		g.persistLayout()
+		ui.AttentionCycleRequest.Active = false
+	}
+	if ui.AttentionMuteRequest.Active {
+		g.UI.Cues.Muted = !g.UI.Cues.Muted
+		g.persistLayout()
+		ui.AttentionMuteRequest.Active = false
+	}
 	if ui.OpenWidgetRequest.Active {
 		id := ui.OpenWidgetRequest.Panel
 		// Already on screen as a workspace leaf? Then the click has nothing
@@ -178,8 +193,9 @@ func (g *Game) drawUI() {
 		g.UI.Floating.Get("float:"+string(ui.PanelFormation)) != nil
 	g.UI.TopBarHits = ui.DrawTopBar(
 		g.UI.PanelMgr.Get(ui.PanelTopBar), g.hudFont, ui.TimeDisplay{
-			Scale:   g.App.TimeScale,
-			Elapsed: float32(g.App.Elapsed().Seconds()),
+			Scale:     g.App.TimeScale,
+			Elapsed:   float32(g.App.Elapsed().Seconds()),
+			Throttled: g.App.Throttled(),
 		},
 		ui.TopBarToolCtx{
 			SEActive: seActive, SEEnabled: seEnabled,
@@ -228,6 +244,18 @@ func (g *Game) drawUI() {
 		// After the panel released its scissor.
 		ui.ClampScrollOffset(behPanel, behScroll)
 		ui.DrawScrollbar(behPanel, behScroll)
+	}
+
+	if g.UI.PanelMgr.LeafFor(ui.PanelEvents) != nil {
+		evPanel := g.UI.PanelMgr.Get(ui.PanelEvents)
+		evScroll := g.UI.PanelMgr.ScrollByID(ui.PanelEvents)
+		evFocused := g.UI.PanelMgr.FocusedAt(g.Frame.Cursor) == ui.PanelEvents
+		evLMB := evFocused && !g.chromeBusy() && !g.scrollDragging() &&
+			rl.IsMouseButtonPressed(rl.MouseButtonLeft)
+		ui.DrawEventsPanel(evPanel, g.eventsCtx(g.hudFont, g.Frame.Cursor, evLMB, evFocused, evScroll))
+		// After the panel released its scissor.
+		ui.ClampScrollOffset(evPanel, evScroll)
+		ui.DrawScrollbar(evPanel, evScroll)
 	}
 
 	if leaf := g.UI.PanelMgr.LeafFor(ui.PanelDebug); leaf != nil {
@@ -317,6 +345,10 @@ func (g *Game) drawUI() {
 		ui.DrawCornerDragPreview(g.UI.PanelMgr, g.Frame.Cursor)
 	}
 	ui.DrawTitleDragPreview(g.UI.PanelMgr, g.Frame.Cursor)
+
+	// Over the chrome (it must not be hidden by a title bar), under the
+	// floaters and menus (those own the cursor when they are open).
+	g.drawAttentionBanner()
 
 	g.UI.ChevronMenu.Draw(g.hudFont, g.Frame.Cursor)
 
