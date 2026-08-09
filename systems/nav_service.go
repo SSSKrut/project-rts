@@ -173,7 +173,7 @@ func (s *NavService) findPath(from, to components.WorldPos, opts NavOpts, allowF
 	toWP := s.nodeWorldPos(toNode, floors)
 
 	open := nodeHeap{}
-	open.push(nodeHeapEntry{f: nodeHeuristic(s.nodeWorldPos(fromNode, floors), toWP), node: fromNode})
+	open.push(nodeHeapEntry{f: nodeHeuristic(s.nodeWorldPos(fromNode, floors), toWP, opts.PathStyle), node: fromNode})
 
 	const sqrt2 float32 = 1.41421356
 
@@ -216,7 +216,7 @@ func (s *NavService) findPath(from, to components.WorldPos, opts NavOpts, allowF
 			}
 			states[n.node] = stateRec{g: tentativeG, parent: cur.node, hasParent: true}
 			open.push(nodeHeapEntry{
-				f:    tentativeG + nodeHeuristic(np, toWP),
+				f:    tentativeG + nodeHeuristic(np, toWP, opts.PathStyle),
 				node: n.node,
 			})
 		}
@@ -235,7 +235,7 @@ func (s *NavService) findPath(from, to components.WorldPos, opts NavOpts, allowF
 				}
 				states[edge.To] = stateRec{g: tentativeG, parent: cur.node, hasParent: true}
 				open.push(nodeHeapEntry{
-					f:    tentativeG + nodeHeuristic(s.nodeWorldPos(edge.To, floors), toWP),
+					f:    tentativeG + nodeHeuristic(s.nodeWorldPos(edge.To, floors), toWP, opts.PathStyle),
 					node: edge.To,
 				})
 			}
@@ -717,9 +717,37 @@ func (s *NavService) gridNeighbours(n components.NavNode) []gridNeighbour {
 	return out[:count]
 }
 
-// nodeHeuristic — Chebyshev distance scaled by min cell cost (navCostRoad).
-// Admissible across heterogeneous grids.
-func nodeHeuristic(a, b components.WorldPos) float32 {
+// Diagonal steps deliberately do NOT test the two cardinal cells they cut
+// across. On a plain occupancy grid that check is standard; here it closes
+// the only way in. A door's outside cell IS a footprint cell, walkable only
+// through cellAt's transition exception, and every neighbour along the facade
+// stays blocked on purpose — demanding an open companion cell shuts the
+// needle's eye (measured: 0/8 entering in ai_main_m1, ai_clear_building
+// 12.3 -> 110.3 s). Bodies are kept out of walls one layer down, by
+// UnitMovement's wall clip, which slides along a facade instead of jamming.
+
+// styleMinMul is the smallest multiplier styleCellCost can return. The
+// heuristic has to fold it in or A* stops being admissible: under RoadPrefer
+// a road metre really costs navCostRoad*0.5, so charging the full navCostRoad
+// overestimates 2:1 and the search turns greedy — it returns a path that
+// ignores the very preference the style asked for.
+func styleMinMul(style components.PathStyle) float32 {
+	switch style {
+	case components.PathStyleRoadPrefer:
+		return 0.5
+	case components.PathStyleRoadAvoid:
+		return 0.8
+	case components.PathStyleCoverSeek:
+		return 0.7
+	default:
+		return 1
+	}
+}
+
+// nodeHeuristic — Chebyshev distance scaled by the cheapest metre this style
+// can buy (min cell cost × min style multiplier). Admissible across
+// heterogeneous grids.
+func nodeHeuristic(a, b components.WorldPos, style components.PathStyle) float32 {
 	d := a.Sub(b)
 	dx := d.X
 	if dx < 0 {
@@ -733,7 +761,7 @@ func nodeHeuristic(a, b components.WorldPos) float32 {
 	if dz > cheb {
 		cheb = dz
 	}
-	return cheb * float32(navCostRoad)
+	return cheb * float32(navCostRoad) * styleMinMul(style)
 }
 
 // nodeHeap — min-heap on f-score, keyed on NavNode payload.

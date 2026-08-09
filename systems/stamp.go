@@ -326,15 +326,23 @@ func (s *Stamper) RoadCarve(cc components.ChunkCoord,
 	}
 }
 
-// vertexRange clips a local-space span to the chunk's vertex indices.
+// vertexRange clips a local-space span to the chunk's inclusive vertex
+// indices; an empty intersection comes back as a > b, which is what the
+// caller tests. Both endpoints stay inside [0, ChunkResolution-1] — clamping
+// only one side each way used to hand back a negative or over-range index for
+// a span entirely off the chunk.
 func vertexRange(lo, hi, step float32) (int, int) {
+	const last = components.ChunkResolution - 1
 	a := int(math.Floor(float64(lo / step)))
 	b := int(math.Ceil(float64(hi / step)))
+	if b < 0 || a > last {
+		return 1, 0
+	}
 	if a < 0 {
 		a = 0
 	}
-	if b > components.ChunkResolution-1 {
-		b = components.ChunkResolution - 1
+	if b > last {
+		b = last
 	}
 	return a, b
 }

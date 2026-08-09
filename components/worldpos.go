@@ -69,15 +69,26 @@ func Distance(a, b WorldPos) float32 {
 // division so negative locals push the chunk in the right direction
 // (Local.X = -1, ChunkSize = 64 -> chunk -1, Local.X = 63).
 func Normalize(p WorldPos) WorldPos {
-	if p.Local.X < 0 || p.Local.X >= ChunkSize {
-		shift := int32(math.Floor(float64(p.Local.X / ChunkSize)))
-		p.Chunk.X += shift
-		p.Local.X -= float32(shift) * ChunkSize
-	}
-	if p.Local.Z < 0 || p.Local.Z >= ChunkSize {
-		shift := int32(math.Floor(float64(p.Local.Z / ChunkSize)))
-		p.Chunk.Z += shift
-		p.Local.Z -= float32(shift) * ChunkSize
-	}
+	p.Chunk.X, p.Local.X = normalizeAxis(p.Chunk.X, p.Local.X)
+	p.Chunk.Z, p.Local.Z = normalizeAxis(p.Chunk.Z, p.Local.Z)
 	return p
+}
+
+// normalizeAxis folds one axis back into [0, ChunkSize). The second guard is
+// not redundant: float32 rounds -1e-7 + 64 up to exactly 64, so the fold can
+// hand back a Local sitting on the far edge of the chunk it just left.
+func normalizeAxis(chunk int32, local float32) (int32, float32) {
+	if local < 0 || local >= ChunkSize {
+		shift := int32(math.Floor(float64(local / ChunkSize)))
+		chunk += shift
+		local -= float32(shift) * ChunkSize
+	}
+	switch {
+	case local >= ChunkSize:
+		chunk++
+		local = 0
+	case local < 0:
+		local = 0
+	}
+	return chunk, local
 }

@@ -124,28 +124,34 @@ func (c *siCandidate) protection(dirX, dirZ float32) float32 {
 // maskProtection interpolates the 8-way mask along an arbitrary bearing: the
 // two compass sectors bracketing it vote by angular proximity, so a ridge
 // covering N and NE protects a NNE bearing fully and an E one not at all.
+//
+// Only those two vote. Letting the whole forward hemisphere vote by cos²
+// (what this did until 19.8) caps a wall that squarely blocks the bearing at
+// 0.5, because the two unmasked flanking sectors always dilute it — half the
+// scale of the sibling normal-dot branch in siCandidate.protection, so
+// mask-derived cover lost every ranking to direction-derived cover.
 func maskProtection(mask uint8, tx, tz float32) float32 {
-	l := float32(math.Sqrt(float64(tx*tx + tz*tz)))
-	if l < 1e-4 || mask == 0 {
+	if mask == 0 || tx*tx+tz*tz < 1e-8 {
 		return 0
 	}
-	tx, tz = tx/l, tz/l
-	var sum, wsum float32
-	for d := 0; d < 8; d++ {
-		dot := coverDirs[d][0]*tx + coverDirs[d][1]*tz
-		if dot <= 0 {
-			continue
-		}
-		w := dot * dot
-		wsum += w
-		if mask&(1<<uint(d)) != 0 {
-			sum += w
-		}
+	// coverDirs[0] is N (-Z) and the index runs clockwise, one sector per 45°.
+	ang := math.Atan2(float64(tx), float64(-tz))
+	if ang < 0 {
+		ang += 2 * math.Pi
 	}
-	if wsum <= 0 {
-		return 0
+	s := ang / (math.Pi / 4)
+	lo := int(s) % 8
+	hi := (lo + 1) % 8
+	f := float32(s - math.Floor(s))
+
+	var prot float32
+	if mask&(1<<uint(lo)) != 0 {
+		prot += 1 - f
 	}
-	return sum / wsum
+	if mask&(1<<uint(hi)) != 0 {
+		prot += f
+	}
+	return prot
 }
 
 // scoreCandidate ranks one place. Returns (score, ok) — ok is false when the

@@ -144,14 +144,18 @@ func wallCornerCoverSlots(walls []wallCornerSrc) []coverSlotSpec {
 				if seen[key] {
 					continue
 				}
-				seen[key] = true
 
 				nx := wi.normX + wj.normX
 				nz := wi.normZ + wj.normZ
 				ln := float32(math.Sqrt(float64(nx*nx + nz*nz)))
-				if ln <= 0 {
+				// Claim the corner only once a slot is actually emitted.
+				// Claiming before this guard let a collinear pair (opposing
+				// normals, no bisector) burn the key, so a third wall at the
+				// same vertex — with a perfectly good bisector — got nothing.
+				if ln <= 1e-3 {
 					continue
 				}
+				seen[key] = true
 				nx /= ln
 				nz /= ln
 
