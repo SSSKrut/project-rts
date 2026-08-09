@@ -28,6 +28,11 @@ func (g *Game) handleMapRuler() bool {
 		*st = rulerState{}
 		return false
 	}
+	// Release ends the drag wherever the cursor is: a drag that wandered off
+	// the panel would otherwise resume the moment it wandered back.
+	if st.Dragging && rl.IsMouseButtonReleased(rl.MouseButtonLeft) {
+		st.Dragging = false
+	}
 	if g.Frame.Focused != ui.PanelMap || g.chromeBusy() {
 		return false
 	}
@@ -43,9 +48,6 @@ func (g *Game) handleMapRuler() bool {
 	}
 	if st.Dragging {
 		st.To = cursorWorld
-		if rl.IsMouseButtonReleased(rl.MouseButtonLeft) {
-			st.Dragging = false
-		}
 		consumed = true
 	}
 	return consumed

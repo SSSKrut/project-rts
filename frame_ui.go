@@ -153,7 +153,8 @@ func (g *Game) isSelected(e ecs.Entity) int {
 
 // scrollablePanels get wheel + thumb-drag handling. A widget only reports how
 // tall its content came out; everything else is here.
-var scrollablePanels = [...]ui.PanelID{ui.PanelInspect, ui.PanelSymbology, ui.PanelBehavior, ui.PanelEvents}
+var scrollablePanels = [...]ui.PanelID{ui.PanelInspect, ui.PanelSymbology,
+	ui.PanelBehavior, ui.PanelEvents, ui.PanelSpecCard}
 
 func (g *Game) scrollDragging() bool { return g.UI.ScrollDragKey != "" }
 
@@ -386,6 +387,18 @@ func (g *Game) behaviorCtx(font rl.Font, cursor rl.Vector2, lmbPress, focused bo
 // into components (Contact.LastSeenTime, OrderIssuedAt).
 func (g *Game) simNow() float32 { return float32(g.App.Elapsed().Seconds()) }
 
+func (g *Game) specCardCtx(font rl.Font, cursor rl.Vector2, lmb, focused bool,
+	scroll *ui.ScrollState) ui.SpecCardCtx {
+	return ui.SpecCardCtx{
+		Subject:      g.UI.SpecSubject,
+		Font:         font,
+		Cursor:       cursor,
+		LMBPressed:   lmb,
+		PanelFocused: focused,
+		Scroll:       scroll,
+	}
+}
+
 // eventsCtx bundles the Events widget's inputs; the matrix travels by value
 // because edits go back through AttentionCycleRequest, not through the panel.
 func (g *Game) eventsCtx(font rl.Font, cursor rl.Vector2, lmb, focused bool,
@@ -592,6 +605,9 @@ func (g *Game) renderFloatingWidget(id ui.PanelID, content rl.Rectangle,
 	case ui.PanelEvents:
 		ui.DrawEventsPanel(syn("Events"), g.eventsCtx(font, cursor, lmbPress, true,
 			g.floatScroll()))
+	case ui.PanelSpecCard:
+		ui.DrawSpecCard(syn(ui.SpecCardTitle(g.UI.SpecSubject)),
+			g.specCardCtx(font, cursor, lmbPress, true, g.floatScroll()))
 	case ui.PanelTimeline:
 		key := g.floatSurfaceKey(ui.PanelTimeline)
 		ui.DrawTimelinePanel(syn("Timeline"), font, g.UI.TimelineData, g.timelineView(key),

@@ -271,6 +271,9 @@ type uiState struct {
 	// frame-side state and never enters a world snapshot.
 	Attention attentionState
 	Cues      audioCues
+	// SpecSubject is what the spec card currently shows; the card is a view
+	// on the spec tables, so one subject serves every surface showing it.
+	SpecSubject ui.SpecSubject
 }
 
 // rmbSession bundles RMB-hold state. Active is set on press and cleared on

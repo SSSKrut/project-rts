@@ -54,10 +54,23 @@ type attentionBanner struct {
 func (g *Game) updateAttention() {
 	st := &g.UI.Attention
 	log := g.Res.EventLog
-	if log == nil || log.Count == 0 {
+	if log == nil {
 		return
 	}
 	now := g.simNow()
+	// The first frame after boot or load swallows whatever is already in the
+	// ring: reacting to events from before the player was watching is noise.
+	// This has to happen even on an EMPTY log, or priming waits for the first
+	// event and then eats it — and the first event of a session is exactly
+	// the one worth reacting to.
+	if !st.primed {
+		st.primed = true
+		st.lastSeenAt = newestEventAt(log)
+		return
+	}
+	if log.Count == 0 {
+		return
+	}
 	// A quickload rewinds the clock; entries stamped later than now belong to
 	// the abandoned future and must not gag the restored one.
 	if now < st.lastSeenAt {
@@ -71,12 +84,6 @@ func (g *Game) updateAttention() {
 	scan := scanAttention(log.Latest(n), st.Matrix, st.lastSeenAt)
 	st.lastSeenAt = scan.Newest
 
-	// The first scan after boot or load swallows the backlog: reacting to
-	// what happened before the player was watching is noise.
-	if !st.primed {
-		st.primed = true
-		return
-	}
 	if scan.Level == ui.ReactIgnore {
 		return
 	}
@@ -94,6 +101,13 @@ func (g *Game) updateAttention() {
 	st.lastFireAt = now
 	st.lastLevel = scan.Level
 	g.applyAttentionReaction(scan.Level, scan.Cause)
+}
+
+func newestEventAt(log *components.EventLog) float32 {
+	if latest := log.Latest(1); len(latest) == 1 {
+		return latest[0].At
+	}
+	return 0
 }
 
 // attentionScan is one frame's worth of verdict: the loudest reaction, what
@@ -139,11 +153,13 @@ func (g *Game) applyAttentionReaction(level ui.AutoReaction, ev components.Event
 	action := ""
 	switch level {
 	case ui.ReactPause:
+		// Only when this reaction is what stopped the clock: a game the
+		// player paused by hand keeps the speed they meant to resume at.
 		if g.App.TimeScale > 0 {
 			g.App.TimeScale = 0
+			g.App.LastNonZeroScale = 1
 			action = "paused"
 		}
-		g.App.LastNonZeroScale = 1
 	case ui.ReactSlow:
 		if g.App.TimeScale > 1 {
 			g.App.TimeScale = 1

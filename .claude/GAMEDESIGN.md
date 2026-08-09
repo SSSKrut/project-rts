@@ -614,10 +614,12 @@ func mapWorldToScreen(wp components.WorldPos, mapCam MapCamera) rl.Vector2
 | Element | Action |
 |---|---|
 | Pause/Resume | Space |
-| Speed compression | `+` / `-` (циклит 1 → 2 → 4 → 8 → 1) |
-| Display | Текст "PAUSED" / "1×" / "2×" / "4×" / "8×" в bottom bar |
+| Speed compression | `+` / `-` (циклит 1 → 2 → 4 → 8 → 16 → 32 → 1) |
+| Display | Текст "PAUSED" / "1×" … "32×" (+ `(cpu)` когда сим не успевает) |
 
-Implementation: `app.TimeScale float32`. `app.Tick` умножает dt на TimeScale. При TimeScale=0 — paused (input принимается, физика стоит).
+Implementation: `app.TimeScale float32` = число фиксированных тиков `SimDt` за кадр (шаг симуляции неизменен никогда). При TimeScale=0 — paused (input принимается, физика стоит).
+
+**Компрессия выше 8× не существует без авто-реакции** (Phase 19.7 P1). Смысл 32× — проскочить марш, а марш — это ровно то место, где случается первый контакт; скорость без механизма «игра сама заметила» покупает скуку ценой пропущенного боя. Поэтому `AttentionMatrix` (`EventKind → Ignore/Notify/Slow/Pause` поверх `EventLog`) и высокие скорости — одна фича, а не две. Правило: **автоматика только понижает скорость, повышает только игрок** — авто-возврат к компрессии превращается в йо-йо и отнимает у игрока часы. Верхняя граница — не константа скорости, а бюджет `core.AdvanceBudget`: не успели — тиков за кадр меньше, и топбар говорит об этом честно.
 
 **Inspector содержание (Phase Interface MVP):**
 

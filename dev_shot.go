@@ -8,6 +8,7 @@ import (
 
 	rl "github.com/gen2brain/raylib-go/raylib"
 
+	"rts-go/components"
 	"rts-go/ui"
 )
 
@@ -33,6 +34,11 @@ func (g *Game) applyShotSelection() {
 			id := ui.PanelID(*shotPanelFlag)
 			leaf.Panel = id
 			leaf.Title = ui.WidgetTitle(id)
+			// The spec card is subject-driven; without one a capture shows
+			// only its "click a row" hint.
+			if id == ui.PanelSpecCard && !g.UI.SpecSubject.Valid {
+				g.UI.SpecSubject = ui.VehicleSubject(components.VehicleBMP)
+			}
 		}
 	}
 	if *shotScrollFlag != 0 {

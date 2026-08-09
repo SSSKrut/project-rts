@@ -75,9 +75,27 @@ func drawInspectorUnit(ctx InspectorCtx, ent ecs.Entity, x, y, width int32) int3
 		col.Skip(2)
 	}
 	if eq := ctx.EquipmentMap.Get(ent); eq != nil {
-		TextRowClipped(&col, &ctx.st, equipmentSummary(eq), ctx.st.Text)
+		drawPrimaryWeaponRow(ctx, &col, eq)
 	}
 	return int32(col.Y)
+}
+
+// drawPrimaryWeaponRow names the weapon instead of printing its entity id —
+// the id was unreadable, and the row is the way into the spec card.
+func drawPrimaryWeaponRow(ctx InspectorCtx, col *Column, eq *components.Equipment) {
+	if eq.Primary == (ecs.Entity{}) || !ctx.World.Alive(eq.Primary) {
+		TextRowClipped(col, &ctx.st, "Primary:   -", ctx.st.TextDim)
+		return
+	}
+	wc := ctx.WeaponMap.Get(eq.Primary)
+	if wc == nil {
+		TextRowClipped(col, &ctx.st, "Primary:   -", ctx.st.TextDim)
+		return
+	}
+	spec := components.SpecForWeapon(wc.Kind)
+	specLinkRow(col, &ctx.st, ctx.in,
+		fmt.Sprintf("Primary:   %-8s ammo %d", spec.Name, wc.Ammo),
+		WeaponSubject(wc.Kind))
 }
 
 // drawRoleChip paints the role's colour swatch with its short label, then the
@@ -120,12 +138,4 @@ func factionLabel(id uint8) string {
 	default:
 		return fmt.Sprintf("F%d", id)
 	}
-}
-
-func equipmentSummary(eq *components.Equipment) string {
-	primary := "-"
-	if eq.Primary != (ecs.Entity{}) {
-		primary = fmt.Sprintf("#%X", eq.Primary.ID()&0xFFFF)
-	}
-	return "Primary:   " + primary
 }

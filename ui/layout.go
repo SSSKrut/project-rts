@@ -85,6 +85,8 @@ func WidgetTitle(id PanelID) string {
 		return "Behavior"
 	case PanelEvents:
 		return "Events"
+	case PanelSpecCard:
+		return "Spec"
 	case PanelDebug:
 		return "Debug"
 	}
@@ -93,4 +95,4 @@ func WidgetTitle(id PanelID) string {
 
 // WorkspacePanelKinds enumerates what the chevron menu can switch a leaf
 // to. TopBar is excluded — it's not a workspace widget.
-var WorkspacePanelKinds = [...]PanelID{Panel3D, PanelMap, PanelInspect, PanelTimeline, PanelFormation, PanelSymbology, PanelBehavior, PanelEvents, PanelDebug}
+var WorkspacePanelKinds = [...]PanelID{Panel3D, PanelMap, PanelInspect, PanelTimeline, PanelFormation, PanelSymbology, PanelBehavior, PanelEvents, PanelSpecCard, PanelDebug}

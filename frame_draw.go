@@ -61,7 +61,7 @@ func (g *Game) drawUI() {
 	ui.DrawMap(g.Frame.PanelMap, mapCtx)
 	g.drawMapRuler()
 
-	inspectorFocused :=g.UI.PanelMgr.FocusedAt(g.Frame.Cursor) == ui.PanelInspect
+	inspectorFocused := g.UI.PanelMgr.FocusedAt(g.Frame.Cursor) == ui.PanelInspect
 	inspectorPanel := g.UI.PanelMgr.Get(ui.PanelInspect)
 	inspectorScroll := g.UI.PanelMgr.ScrollByID(ui.PanelInspect)
 	ui.DrawInspector(inspectorPanel, ui.InspectorCtx{
@@ -133,6 +133,16 @@ func (g *Game) drawUI() {
 		g.UI.Attention.Matrix.Cycle(ui.AttentionCycleRequest.Kind)
 		g.persistLayout()
 		ui.AttentionCycleRequest.Active = false
+	}
+	if ui.SpecCardRequest.Active {
+		g.UI.SpecSubject = ui.SpecCardRequest.Subject
+		// Re-point an open card rather than stacking a second one.
+		if g.UI.PanelMgr.LeafFor(ui.PanelSpecCard) == nil &&
+			g.UI.Floating.Get("float:"+string(ui.PanelSpecCard)) == nil {
+			g.floatSpawn(ui.PanelSpecCard, ui.WidgetTitle(ui.PanelSpecCard),
+				rl.Rectangle{X: g.Frame.Cursor.X, Y: g.Frame.Cursor.Y, Width: 320, Height: 420})
+		}
+		ui.SpecCardRequest.Active = false
 	}
 	if ui.AttentionMuteRequest.Active {
 		g.UI.Cues.Muted = !g.UI.Cues.Muted
@@ -256,6 +266,17 @@ func (g *Game) drawUI() {
 		// After the panel released its scissor.
 		ui.ClampScrollOffset(evPanel, evScroll)
 		ui.DrawScrollbar(evPanel, evScroll)
+	}
+
+	if g.UI.PanelMgr.LeafFor(ui.PanelSpecCard) != nil {
+		scPanel := g.UI.PanelMgr.Get(ui.PanelSpecCard)
+		scScroll := g.UI.PanelMgr.ScrollByID(ui.PanelSpecCard)
+		scFocused := g.UI.PanelMgr.FocusedAt(g.Frame.Cursor) == ui.PanelSpecCard
+		scLMB := scFocused && !g.chromeBusy() && !g.scrollDragging() &&
+			rl.IsMouseButtonPressed(rl.MouseButtonLeft)
+		ui.DrawSpecCard(scPanel, g.specCardCtx(g.hudFont, g.Frame.Cursor, scLMB, scFocused, scScroll))
+		ui.ClampScrollOffset(scPanel, scScroll)
+		ui.DrawScrollbar(scPanel, scScroll)
 	}
 
 	if leaf := g.UI.PanelMgr.LeafFor(ui.PanelDebug); leaf != nil {
