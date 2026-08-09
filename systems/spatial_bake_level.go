@@ -213,7 +213,12 @@ func (sys *SpatialBakeSystem) bakeLevelNavPass(ctx core.UpdateContext) {
 func rasterizeFloorWall(grid *components.LevelNavGrid, wallLocal rl.Vector3,
 	w components.WallSegment, openingPassable bool,
 	originX, originZ float32) {
-	const cellInflate float32 = 0.5 // same as surface NavGrid rasterizeWall
+	// Deliberately the OPPOSITE of the surface pass, which must not inflate
+	// (it over-blocked tangential approaches outside footprints). Interior
+	// walls partition rooms on a 1 m grid and the level grid has no footprint
+	// flag to fall back on, so half a cell of inflate is what makes a
+	// partition actually separate two rooms.
+	const cellInflate float32 = 0.5
 	yaw := w.Yaw
 	length := w.Length
 	halfT := w.Thickness*0.5 + cellInflate
