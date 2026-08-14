@@ -91,6 +91,8 @@ func (g *Game) initResources() {
 	ecs.AddResource(g.World, &r.PropIndex)
 	r.Atmosphere = components.DefaultAtmosphere()
 	ecs.AddResource(g.World, &r.Atmosphere)
+	r.DayClock = components.DefaultDayClock()
+	ecs.AddResource(g.World, &r.DayClock)
 	r.Rivers = components.Rivers{Polylines: makeStartingRivers()}
 	ecs.AddResource(g.World, &r.Rivers)
 	r.RoadGraph = makeStartingRoadGraph()

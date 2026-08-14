@@ -23,6 +23,7 @@ in vec4 fragColor;
 uniform sampler2D texture0;   // pair-slice value noise (cloud texture)
 uniform vec3 uSunCam;         // sun dir in camera basis (right, up, toward-cam)
 uniform vec3 uSunColor;
+uniform vec3 uAmbient;
 uniform float uTime;
 
 out vec4 finalColor;
@@ -57,7 +58,7 @@ void main() {
     // side from going black — smoke scatters, it doesn't diffuse-shade.
     vec3 nrm = normalize(vec3(c.x, c.y, sqrt(max(1.0 - r2, 0.05))));
     float diff = clamp(dot(nrm, uSunCam) * 0.5 + 0.55, 0.0, 1.0);
-    vec3 col = fragColor.rgb * (vec3(0.50, 0.52, 0.57) + uSunColor * diff * 0.95);
+    vec3 col = fragColor.rgb * (uAmbient + uSunColor * diff * 0.95);
     finalColor = vec4(col, a);
 }
 `
@@ -77,7 +78,11 @@ type particleRenderer struct {
 	noise    rl.Texture2D
 	locSun   int32
 	locColor int32
+	locAmb   int32
 	locTime  int32
+	lightDir [3]float32
+	lightCol [3]float32
+	ambient  [3]float32
 	batch    []puffDraw
 	ok       bool
 }
@@ -91,10 +96,21 @@ func newParticleRenderer() *particleRenderer {
 	p.noise = uploadCloudNoise()
 	p.locSun = rl.GetShaderLocation(p.shader, "uSunCam")
 	p.locColor = rl.GetShaderLocation(p.shader, "uSunColor")
+	p.locAmb = rl.GetShaderLocation(p.shader, "uAmbient")
 	p.locTime = rl.GetShaderLocation(p.shader, "uTime")
-	rl.SetShaderValue(p.shader, p.locColor, sunColor[:], rl.ShaderUniformVec3)
+	p.lightDir = normalize3(sunDir)
+	p.lightCol = sunColor
+	p.ambient = [3]float32{0.50, 0.52, 0.57}
 	p.ok = true
 	return p
+}
+
+// setLight hands the frame's daylight palette to the pass; puffs share the
+// scene's sun and the cloud layer's base ambient.
+func (p *particleRenderer) setLight(pal *skyPalette) {
+	p.lightDir = pal.lightDir
+	p.lightCol = pal.lightCol
+	p.ambient = pal.cloudAmbB
 }
 
 func (p *particleRenderer) add(d puffDraw) {
@@ -124,13 +140,15 @@ func (p *particleRenderer) flush() {
 	right := vecNorm(vecCross(fwd, cam.Up))
 	up := vecCross(right, fwd)
 
-	sun := normalize3(sunDir)
+	sun := p.lightDir
 	sunCam := []float32{
 		sun[0]*right.X + sun[1]*right.Y + sun[2]*right.Z,
 		sun[0]*up.X + sun[1]*up.Y + sun[2]*up.Z,
 		-(sun[0]*fwd.X + sun[1]*fwd.Y + sun[2]*fwd.Z),
 	}
 	rl.SetShaderValue(p.shader, p.locSun, sunCam, rl.ShaderUniformVec3)
+	setVec3(p.shader, p.locColor, p.lightCol)
+	setVec3(p.shader, p.locAmb, p.ambient)
 	rl.SetShaderValue(p.shader, p.locTime, []float32{float32(rl.GetTime())}, rl.ShaderUniformFloat)
 
 	rl.BeginShaderMode(p.shader)

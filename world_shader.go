@@ -277,6 +277,10 @@ type worldShader struct {
 	locShadowMidY  int32
 	locCloudCover  int32
 	locShadowOn    int32
+	locSunDir      int32
+	locSunColor    int32
+	locSkyColor    int32
+	locBounce      int32
 
 	ok bool
 }
@@ -311,6 +315,10 @@ func newWorldShader() *worldShader {
 	ws.locShadowMidY = rl.GetShaderLocation(ws.shader, "uShadowMidY")
 	ws.locCloudCover = rl.GetShaderLocation(ws.shader, "uCloudCover")
 	ws.locShadowOn = rl.GetShaderLocation(ws.shader, "uShadowOn")
+	ws.locSunDir = rl.GetShaderLocation(ws.shader, "uSunDir")
+	ws.locSunColor = rl.GetShaderLocation(ws.shader, "uSunColor")
+	ws.locSkyColor = rl.GetShaderLocation(ws.shader, "uSkyColor")
+	ws.locBounce = rl.GetShaderLocation(ws.shader, "uBounceColor")
 
 	colors := make([]float32, 0, len(groundSurfaces)*4)
 	for i := range groundSurfaces {
@@ -382,9 +390,10 @@ func (ws *worldShader) release(mat *rl.Material) {
 }
 
 // beginFrame re-anchors the UV origin (the render origin shifts by whole
-// chunks as the camera travels), updates the camera position the fade needs
-// and feeds the cloud-shadow uniforms from the Atmosphere resource.
-func (ws *worldShader) beginFrame(atm *components.Atmosphere, drift rl.Vector2) {
+// chunks as the camera travels), updates the camera position the fade needs,
+// feeds the cloud-shadow uniforms from the Atmosphere resource and the light
+// set from the daylight palette.
+func (ws *worldShader) beginFrame(atm *components.Atmosphere, drift rl.Vector2, pal *skyPalette) {
 	if !ws.ok {
 		return
 	}
@@ -395,13 +404,20 @@ func (ws *worldShader) beginFrame(atm *components.Atmosphere, drift rl.Vector2) 
 	cam := systems.CurrentCamera.Position
 	rl.SetShaderValue(ws.shader, ws.locCam,
 		[]float32{cam.X, cam.Y, cam.Z}, rl.ShaderUniformVec3)
+	setVec3(ws.shader, ws.locSunDir, pal.lightDir)
+	setVec3(ws.shader, ws.locSunColor, pal.lightCol)
+	setVec3(ws.shader, ws.locSkyColor, pal.ambSky)
+	setVec3(ws.shader, ws.locBounce, pal.ambBounce)
 	cover := float32(0)
 	if debugOverlay.Clouds && atm != nil {
 		cover = atm.Coverage
 	}
 	if atm != nil {
 		mid := (atm.CloudBase + atm.CloudTop) * 0.5
-		sun := normalize3(sunDir)
+		// shadowDir is elevation-clamped: a horizon sun would project the
+		// layer kilometres away; the shadow term only scales the direct
+		// light, which is near zero then anyway.
+		sun := pal.shadowDir
 		rl.SetShaderValue(ws.shader, ws.locShadowOfs,
 			[]float32{-sun[0] / sun[1] * mid, -sun[2] / sun[1] * mid}, rl.ShaderUniformVec2)
 		rl.SetShaderValue(ws.shader, ws.locShadowMidY,

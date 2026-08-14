@@ -54,11 +54,18 @@ func (g *Game) drawScene3D() {
 	g.Ctx.CloudDrift.X += atm.WindX * gust * dtDrift
 	g.Ctx.CloudDrift.Y += atm.WindZ * gust * dtDrift
 
+	// One daylight palette per frame drives terrain, clouds and particles.
+	hours := g.Res.DayClock.HoursAt(g.App.Elapsed().Seconds())
+	g.Ctx.Daylight = daylightPalette(hours)
+	if g.Ctx.Particle.Puffs != nil {
+		g.Ctx.Particle.Puffs.setLight(&g.Ctx.Daylight)
+	}
+
 	rl.BeginTextureMode(g.UI.Scene3DRT.RT)
 	rl.ClearBackground(rl.RayWhite)
 	rl.BeginMode3D(systems.CurrentCamera)
 
-	g.Ctx.WorldShader.beginFrame(atm, g.Ctx.CloudDrift)
+	g.Ctx.WorldShader.beginFrame(atm, g.Ctx.CloudDrift, &g.Ctx.Daylight)
 	g.Ctx.WorldShader.setGround(true)
 
 	g.Frame.ChunksActive = 0

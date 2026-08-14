@@ -34,6 +34,9 @@ type DebugPanelCtx struct {
 	WeatherLabel   string
 	WeatherButtons []DebugButton
 
+	TimeLabel   string
+	TimeButtons []DebugButton
+
 	DumpLines []string
 
 	Footer string
@@ -66,9 +69,9 @@ const (
 )
 
 // DrawDebugPanel mutates toggle bools directly; returns the clicked indices
-// of Sim / Spawn / Weather buttons (-1 = none this frame).
-func DrawDebugPanel(panel Panel, font rl.Font, ctx DebugPanelCtx) (simClicked, spawnClicked, weatherClicked int) {
-	simClicked, spawnClicked, weatherClicked = -1, -1, -1
+// of Sim / Spawn / Weather / Time buttons (-1 = none this frame).
+func DrawDebugPanel(panel Panel, font rl.Font, ctx DebugPanelCtx) (simClicked, spawnClicked, weatherClicked, timeClicked int) {
+	simClicked, spawnClicked, weatherClicked, timeClicked = -1, -1, -1, -1
 	content := ContentRect(panel)
 	if content.Width <= 0 || content.Height <= 0 {
 		return
@@ -124,6 +127,18 @@ func DrawDebugPanel(panel Panel, font rl.Font, ctx DebugPanelCtx) (simClicked, s
 			y += float32(debugFooterSize) + 4
 		}
 		weatherClicked = drawDebugButtonRow(&st, in, ctx.WeatherButtons, x, &y, rowW)
+		y += debugPad
+	}
+
+	// Time of day.
+	if len(ctx.TimeButtons) > 0 {
+		section("Time")
+		if ctx.TimeLabel != "" {
+			rl.DrawTextEx(font, ctx.TimeLabel, rl.Vector2{X: x, Y: y},
+				float32(debugFooterSize), 1.0, debugSubtitle)
+			y += float32(debugFooterSize) + 4
+		}
+		timeClicked = drawDebugButtonRow(&st, in, ctx.TimeButtons, x, &y, rowW)
 		y += debugPad
 	}
 

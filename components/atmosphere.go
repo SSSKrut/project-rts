@@ -1,5 +1,7 @@
 package components
 
+import "math"
+
 // Atmosphere is the single source of truth for sky, wind and visibility.
 // Render reads it every frame (clouds, cloud shadows, aerial fog); sim-side
 // consumers (particle advection, smoke drift — later sensor range and audio
@@ -65,3 +67,34 @@ var WeatherSpecs = [WeatherCount]WeatherSpec{
 }
 
 func DefaultAtmosphere() Atmosphere { return WeatherSpecs[WeatherScattered].Atmo }
+
+// DayClock anchors the time of day to the sim clock: hours are DERIVED as
+// Start + simNow*rate (no accumulator), so time compresses with TimeScale,
+// stops on pause, and stays deterministic for future sim consumers (night
+// sensor penalties). Render reads it every frame for the sun path. Weather
+// presets never touch it — swapping to Storm must not move the clock.
+type DayClock struct {
+	StartHours  float32 // hours at simNow = 0
+	HoursPerSec float32 // game-hours per sim-second; 0 freezes the clock
+}
+
+// DayClockRate: full day in 48 min at 1x speed (1.5 min at 32x).
+const DayClockRate float32 = 1.0 / 120.0
+
+func (d *DayClock) HoursAt(simNow float64) float32 {
+	h := float32(math.Mod(float64(d.StartHours)+simNow*float64(d.HoursPerSec), 24))
+	if h < 0 {
+		h += 24
+	}
+	return h
+}
+
+// Anchor re-bases StartHours so HoursAt(simNow) == hours — rate changes and
+// time jumps stay continuous.
+func (d *DayClock) Anchor(hours float32, simNow float64) {
+	d.StartHours = hours - float32(simNow)*d.HoursPerSec
+}
+
+func DefaultDayClock() DayClock {
+	return DayClock{StartHours: 10.5, HoursPerSec: DayClockRate}
+}

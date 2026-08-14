@@ -78,6 +78,10 @@ uniform vec3 uSunDir;
 uniform vec3 uSunColor;
 uniform vec2 uNearFar;
 uniform float uCoverage;
+uniform vec3 uSkyZenith;
+uniform vec3 uSkyHorizon;
+uniform vec3 uCloudAmbB;
+uniform vec3 uCloudAmbT;
 
 out vec4 finalColor;
 
@@ -142,11 +146,12 @@ float hg(float c, float g) {
 
 vec3 skyColor(vec3 rd) {
     float t = clamp(rd.y * 1.6 + 0.15, 0.0, 1.0);
-    vec3 c = mix(vec3(0.80, 0.84, 0.89), vec3(0.32, 0.49, 0.72), pow(t, 0.65));
+    vec3 c = mix(uSkyHorizon, uSkyZenith, pow(t, 0.65));
     if (rd.y < 0.0) {
         // Below the horizon with no geometry = ground past the far plane;
-        // tint the haze toward a ground tone so the void reads as distant land.
-        c = mix(c, vec3(0.58, 0.62, 0.57), clamp(-rd.y * 2.5, 0.0, 0.65));
+        // tint the haze toward a ground tone (a fixed ratio of the horizon
+        // color, so it darkens through dusk with the rest of the sky).
+        c = mix(c, uSkyHorizon * vec3(0.73, 0.74, 0.64), clamp(-rd.y * 2.5, 0.0, 0.65));
     }
     float s = max(dot(rd, uSunDir), 0.0);
     c += uSunColor * (0.20 * pow(s, 6.0) + 1.1 * pow(s, 400.0));
@@ -209,7 +214,7 @@ void main() {
                 float h = clamp((p.y - uCloudLayer.x) / (uCloudLayer.y - uCloudLayer.x), 0.0, 1.0);
                 float lt = lightTrans(p);
                 float pw = 1.0 - 0.55 * exp(-den * 6.0);
-                vec3 amb = mix(vec3(0.50, 0.54, 0.62), vec3(0.98, 1.00, 1.04), h);
+                vec3 amb = mix(uCloudAmbB, uCloudAmbT, h);
                 vec3 S = uSunColor * lt * (ph * pw + 0.8 * sqrt(lt)) + amb * 0.62;
                 float aT = exp(-den * SIGMA * dt);
                 acc += T * (1.0 - aT) * S;
@@ -237,20 +242,26 @@ type cloudRenderer struct {
 	shader rl.Shader
 	noise  rl.Texture2D
 
-	locDepth   int32
-	locNoise   int32
-	locCamPos  int32
-	locFwd     int32
-	locRight   int32
-	locUp      int32
-	locTanFov  int32
-	locPanel   int32
-	locScreenH int32
-	locWorld   int32
-	locWind    int32
-	locFogK    int32
-	locLayer   int32
-	locCover   int32
+	locDepth    int32
+	locNoise    int32
+	locCamPos   int32
+	locFwd      int32
+	locRight    int32
+	locUp       int32
+	locTanFov   int32
+	locPanel    int32
+	locScreenH  int32
+	locWorld    int32
+	locWind     int32
+	locFogK     int32
+	locLayer    int32
+	locCover    int32
+	locSunDir   int32
+	locSunColor int32
+	locZenith   int32
+	locHorizon  int32
+	locAmbB     int32
+	locAmbT     int32
 
 	ok bool
 }
@@ -278,10 +289,13 @@ func newCloudRenderer() *cloudRenderer {
 	c.locFogK = loc("uFogK")
 	c.locLayer = loc("uCloudLayer")
 	c.locCover = loc("uCoverage")
+	c.locSunDir = loc("uSunDir")
+	c.locSunColor = loc("uSunColor")
+	c.locZenith = loc("uSkyZenith")
+	c.locHorizon = loc("uSkyHorizon")
+	c.locAmbB = loc("uCloudAmbB")
+	c.locAmbT = loc("uCloudAmbT")
 
-	sun := normalize3(sunDir)
-	rl.SetShaderValue(c.shader, loc("uSunDir"), sun[:], rl.ShaderUniformVec3)
-	rl.SetShaderValue(c.shader, loc("uSunColor"), sunColor[:], rl.ShaderUniformVec3)
 	rl.SetShaderValue(c.shader, loc("uNearFar"),
 		[]float32{renderNearPlane, renderFarPlane}, rl.ShaderUniformVec2)
 
@@ -291,7 +305,7 @@ func newCloudRenderer() *cloudRenderer {
 
 // composite replaces Scene3DRT.Composite: same quad, cloud shader on top.
 func (c *cloudRenderer) composite(rt *ui.Scene3DRT, panel ui.Panel,
-	atm *components.Atmosphere, drift rl.Vector2) {
+	atm *components.Atmosphere, drift rl.Vector2, pal *skyPalette) {
 	content := ui.ContentRect(panel)
 	cam := systems.CurrentCamera
 
@@ -324,6 +338,12 @@ func (c *cloudRenderer) composite(rt *ui.Scene3DRT, panel ui.Panel,
 	set(c.locFogK, []float32{atm.FogK()}, rl.ShaderUniformFloat)
 	set(c.locLayer, []float32{atm.CloudBase, atm.CloudTop}, rl.ShaderUniformVec2)
 	set(c.locCover, []float32{atm.Coverage}, rl.ShaderUniformFloat)
+	setVec3(c.shader, c.locSunDir, pal.lightDir)
+	setVec3(c.shader, c.locSunColor, pal.lightCol)
+	setVec3(c.shader, c.locZenith, pal.zenith)
+	setVec3(c.shader, c.locHorizon, pal.horizon)
+	setVec3(c.shader, c.locAmbB, pal.cloudAmbB)
+	setVec3(c.shader, c.locAmbT, pal.cloudAmbT)
 
 	rl.BeginShaderMode(c.shader)
 	rl.SetShaderValueTexture(c.shader, c.locDepth, rt.RT.Depth)
