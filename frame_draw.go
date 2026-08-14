@@ -286,7 +286,11 @@ func (g *Game) drawUI() {
 		g.drawDebugWidget(g.UI.PanelMgr.Get(ui.PanelDebug), g.hudFont, g.Frame.Cursor, debugLMB)
 	}
 
-	g.UI.Scene3DRT.Composite(g.Frame.Panel3D)
+	if debugOverlay.Clouds && g.UI.Scene3DRT.DepthTex && g.Ctx.Clouds != nil && g.Ctx.Clouds.ok {
+		g.Ctx.Clouds.composite(g.UI.Scene3DRT, g.Frame.Panel3D)
+	} else {
+		g.UI.Scene3DRT.Composite(g.Frame.Panel3D)
+	}
 
 	// Role labels are 2D screen-projected after RT composite; scissored
 	// to Panel3D so they don't bleed onto neighbouring panels.

@@ -30,6 +30,7 @@ func (g *Game) initUI() {
 	loadLayout(g.UI.PanelMgr, g.timelineLeafView(), &g.UI.Attention.Matrix, &g.UI.Cues.Muted)
 	g.UI.PanelMgr.Recompute(g.UI.ScreenW, g.UI.ScreenH)
 	g.UI.Scene3DRT = ui.NewScene3DRT(g.UI.PanelMgr.Get(ui.Panel3D))
+	g.Ctx.Clouds = newCloudRenderer()
 
 	// Pre-bake the map underlay (2 km x 2 km, 4 m/pixel = 500x500 = 250 KB).
 	g.UI.Underlay = ui.BakeUnderlay(0, 0, 2000, 4, func(wx, wz float32) float32 {
@@ -76,6 +77,7 @@ func (g *Game) initUI() {
 func (g *Game) shutdownUI() {
 	g.shutdownAudioCues()
 	g.UI.Underlay.Unload()
+	g.Ctx.Clouds.unload()
 	g.UI.Scene3DRT.Unload()
 	// A capture run may have swapped a leaf for -shot-panel; persisting that
 	// would leak a throwaway layout into the player's saved one.

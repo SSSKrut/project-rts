@@ -82,6 +82,12 @@ func (g *Game) drawScene3D() {
 	g.Frame.RibbonsDrawn = g.Ctx.Ribbons.Roads.draw(g.terrainMaterial)
 
 	rl.DrawCircle3D(anchorRender, 1, rl.Vector3{X: 1, Y: 0, Z: 0}, 90, rl.Blue)
+	if orb := g.Maps.Orbit.Get(g.camEnt); orb != nil && orb.ViewLift > 0.05 {
+		top := anchorRender
+		top.Y += orb.ViewLift
+		rl.DrawLine3D(anchorRender, top, rl.Red)
+		rl.DrawCircle3D(top, 0.6, rl.Vector3{X: 1, Y: 0, Z: 0}, 90, rl.Red)
+	}
 
 	g.Frame.UnitsLive = 0
 	fowNow := g.Svc.Squad.Clock()

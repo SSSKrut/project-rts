@@ -59,6 +59,7 @@ func (g *Game) spawnAnchorAndCamera() {
 			SensitivityPitch: 0.01,
 			SensitivityZoom:  4.0,
 			Smooth:           0,
+			ViewLift:         float32(*shotLiftFlag),
 		})
 		g.Maps.ActiveCam.Add(g.camEnt, &components.ActiveCamera{})
 	}

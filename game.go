@@ -177,6 +177,7 @@ type renderCtx struct {
 	Particle    ParticleRenderCtx
 	Ribbons     ribbonSet
 	WorldShader *worldShader
+	Clouds      *cloudRenderer
 }
 
 // sceneHarness holds the scripted test scenes (-scene=...); nil in normal play.

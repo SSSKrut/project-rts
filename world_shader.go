@@ -122,6 +122,7 @@ uniform sampler2D texture1;   // baked soil
 uniform sampler2D texture2;   // coarse companion
 uniform sampler2D texture3;   // gravel
 uniform sampler2D texture4;   // sand
+uniform sampler2D texture5;   // cloud pair-slice noise
 
 uniform vec4 uSurfaceColor[4];
 uniform vec2 uSandBand;
@@ -142,8 +143,44 @@ uniform vec2 uMacroFade;
 uniform vec2 uMacro;          // x = tile multiplier, y = weight
 uniform vec2 uSurface;        // x = AO strength, y = albedo variation strength
 uniform vec3 uCamPos;
+uniform float uCloudTime;
+uniform float uCloudCover;    // 0 disables cloud shadows
+uniform float uShadowOn;      // 0 for batch objects: texture5 is unbound there
 
 out vec4 finalColor;
+
+// Mirrors the cloud pass's density field (same noise, wind and thresholds) so
+// ground shadows track the actual puffs; sampled at mid-layer height, offset
+// along the sun so shadows land where the light says they should.
+float cnoise3(vec3 x) {
+    vec3 p = floor(x);
+    vec3 f = fract(x);
+    f = f * f * (3.0 - 2.0 * f);
+    vec2 uv = (p.xy + vec2(37.0, 239.0) * p.z) + f.xy;
+    vec2 rg = textureLod(texture5, (uv + 0.5) / 256.0, 0.0).yx;
+    return mix(rg.x, rg.y, f.z);
+}
+
+float cfbm(vec3 p) {
+    float a = 0.5;
+    float s = 0.0;
+    for (int i = 0; i < 4; i++) {
+        s += a * cnoise3(p);
+        p *= 2.02;
+        a *= 0.5;
+    }
+    return s;
+}
+
+float cloudShadow(vec2 wxz) {
+    vec2 sw = wxz + vec2(-543.0, -481.0) + uCloudTime * vec2(9.0, 4.0);
+    float cov = cfbm(vec3(sw.x * 0.00042, 7.31, sw.y * 0.00042));
+    cov = smoothstep(1.0 - uCloudCover, 1.0 - uCloudCover + 0.35, cov);
+    if (cov <= 0.001) return 1.0;
+    float sh = cfbm(vec3(sw.x * 0.0011, 1.265, sw.y * 0.0011));
+    float d = clamp((sh * 0.95 - (1.0 - cov * 0.85)) * 4.0, 0.0, 1.0);
+    return 1.0 - 0.62 * d;
+}
 
 // Weights are ordered exactly like groundSurfaces: turf, soil, gravel, sand.
 vec4 surfaceWeights(float height, float steepness, float patch) {
@@ -210,8 +247,12 @@ void main() {
         }
     }
 
+    float sunShadow = 1.0;
+    if (uShadowOn > 0.5 && uCloudCover > 0.001) {
+        sunShadow = cloudShadow(fragPosition.xz + uWorldOffset);
+    }
     vec3 ambient = mix(uBounceColor, uSkyColor, 0.5 + 0.5 * n.y);
-    vec3 light = (ambient + uSunColor * max(dot(n, uSunDir), 0.0)) * ao;
+    vec3 light = (ambient + uSunColor * max(dot(n, uSunDir), 0.0) * sunShadow) * ao;
     finalColor = vec4(albedo * light, fragColor.a);
 }
 `
@@ -221,10 +262,14 @@ type worldShader struct {
 	shader   rl.Shader
 	surfaces [len(groundSurfaces)]rl.Texture2D
 	macro    rl.Texture2D
+	cloudTex rl.Texture2D
 
-	locOffset int32
-	locGround int32
-	locCam    int32
+	locOffset     int32
+	locGround     int32
+	locCam        int32
+	locCloudTime  int32
+	locCloudCover int32
+	locShadowOn   int32
 
 	ok bool
 }
@@ -248,10 +293,15 @@ func newWorldShader() *worldShader {
 	ws.macro = uploadSurface(
 		textures.Ground(textures.SoftGroundParams(macroTexSize, surfaceSeed+7)), macroTexSize)
 	ws.shader.UpdateLocation(rl.ShaderLocMapNormal, rl.GetShaderLocation(ws.shader, "texture2"))
+	ws.cloudTex = uploadCloudNoise()
+	ws.shader.UpdateLocation(rl.ShaderLocMapEmission, rl.GetShaderLocation(ws.shader, "texture5"))
 
 	ws.locOffset = rl.GetShaderLocation(ws.shader, "uWorldOffset")
 	ws.locGround = rl.GetShaderLocation(ws.shader, "uGround")
 	ws.locCam = rl.GetShaderLocation(ws.shader, "uCamPos")
+	ws.locCloudTime = rl.GetShaderLocation(ws.shader, "uCloudTime")
+	ws.locCloudCover = rl.GetShaderLocation(ws.shader, "uCloudCover")
+	ws.locShadowOn = rl.GetShaderLocation(ws.shader, "uShadowOn")
 
 	colors := make([]float32, 0, len(groundSurfaces)*4)
 	for i := range groundSurfaces {
@@ -297,6 +347,7 @@ func (ws *worldShader) apply(mat *rl.Material) {
 		mat.GetMap(groundSurfaces[i].mapSlot).Texture = ws.surfaces[i]
 	}
 	mat.GetMap(rl.MapNormal).Texture = ws.macro
+	mat.GetMap(rl.MapEmission).Texture = ws.cloudTex
 }
 
 // release takes the borrowed handles back out of a material before it is
@@ -318,6 +369,7 @@ func (ws *worldShader) release(mat *rl.Material) {
 		mat.GetMap(groundSurfaces[i].mapSlot).Texture.ID = 0
 	}
 	mat.GetMap(rl.MapNormal).Texture.ID = 0
+	mat.GetMap(rl.MapEmission).Texture.ID = 0
 }
 
 // beginFrame re-anchors the UV origin (the render origin shifts by whole
@@ -334,6 +386,14 @@ func (ws *worldShader) beginFrame() {
 	cam := systems.CurrentCamera.Position
 	rl.SetShaderValue(ws.shader, ws.locCam,
 		[]float32{cam.X, cam.Y, cam.Z}, rl.ShaderUniformVec3)
+	cover := float32(0)
+	if debugOverlay.Clouds {
+		cover = cloudCoverage
+	}
+	rl.SetShaderValue(ws.shader, ws.locCloudTime,
+		[]float32{float32(rl.GetTime())}, rl.ShaderUniformFloat)
+	rl.SetShaderValue(ws.shader, ws.locCloudCover, []float32{cover}, rl.ShaderUniformFloat)
+	rl.SetShaderValue(ws.shader, ws.locShadowOn, []float32{1}, rl.ShaderUniformFloat)
 }
 
 // setGround switches the surface blend between draw groups: terrain gets it,
@@ -357,6 +417,9 @@ func (ws *worldShader) beginObjects() {
 		return
 	}
 	ws.setGround(false)
+	// Batch geometry has no material maps, so texture5 is unbound there —
+	// uShadowOn keeps the shadow term out of those fragments.
+	rl.SetShaderValue(ws.shader, ws.locShadowOn, []float32{0}, rl.ShaderUniformFloat)
 	rl.BeginShaderMode(ws.shader)
 }
 
@@ -365,6 +428,7 @@ func (ws *worldShader) endObjects() {
 		return
 	}
 	rl.EndShaderMode()
+	rl.SetShaderValue(ws.shader, ws.locShadowOn, []float32{1}, rl.ShaderUniformFloat)
 }
 
 func (ws *worldShader) unload() {
@@ -375,6 +439,7 @@ func (ws *worldShader) unload() {
 		rl.UnloadTexture(ws.surfaces[i])
 	}
 	rl.UnloadTexture(ws.macro)
+	rl.UnloadTexture(ws.cloudTex)
 	rl.UnloadShader(ws.shader)
 	ws.ok = false
 }

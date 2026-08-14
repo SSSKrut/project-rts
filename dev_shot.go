@@ -22,6 +22,7 @@ var (
 	shotScrollFlag = flag.Float64("shot-scroll", 0, "dev: scroll offset applied to every scrollable panel for -shot")
 	shotPanelFlag  = flag.String("shot-panel", "", "dev: show this widget kind in the Inspector leaf for -shot (e.g. behavior)")
 	shotVehFlag    = flag.Int("shot-select-veh", 0, "dev: also preselect N vehicles (squad bar / vehicle panels)")
+	shotLiftFlag   = flag.Float64("shot-lift", 0, "dev: starting camera ViewLift in metres for -shot")
 )
 
 // applyShotSelection preselects units for a capture — inspector panels are
