@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"math"
 
 	rl "github.com/gen2brain/raylib-go/raylib"
 
@@ -310,18 +311,37 @@ func buildBuildingPopupSections(
 	return []ui.ContextMenuSection{atk, inter}
 }
 
-// pickRoomTarget maps the raw press point to a room of `lvl`: XZ inside a
-// room rect picks that room's centre at the storey floor, otherwise the
-// level centre. Shared by the popup commit and the hover ghost so the
-// preview shows exactly what the click orders.
+// pickRoomTarget maps the raw press point to a room of `lvl`: the NEAREST
+// room rect's centre at the storey floor (containment = distance zero). The
+// level AABB centre is only for room-less levels — on a ring building it is
+// the middle of the open well, a goal nav can never reach. Shared by the
+// popup commit, the hover ghost and the ai_* level probes so preview,
+// execution and gate all order the same point.
 func pickRoomTarget(lvl *components.Level, raw components.WorldPos) components.WorldPos {
 	wx := float32(raw.Chunk.X)*components.ChunkSize + raw.Local.X
 	wz := float32(raw.Chunk.Z)*components.ChunkSize + raw.Local.Z
 	cx, cz := lvl.AABB.CenterX(), lvl.AABB.CenterZ()
+	best := float32(math.MaxFloat32)
 	for r := uint8(0); r < lvl.RoomCount; r++ {
-		if lvl.Rooms[r].Contains(wx, wz) {
-			cx, cz = lvl.Rooms[r].CenterX(), lvl.Rooms[r].CenterZ()
-			break
+		rm := &lvl.Rooms[r]
+		dx := float32(0)
+		if wx < rm.MinX {
+			dx = rm.MinX - wx
+		} else if wx > rm.MaxX {
+			dx = wx - rm.MaxX
+		}
+		dz := float32(0)
+		if wz < rm.MinZ {
+			dz = rm.MinZ - wz
+		} else if wz > rm.MaxZ {
+			dz = wz - rm.MaxZ
+		}
+		if d := dx*dx + dz*dz; d < best {
+			best = d
+			cx, cz = rm.CenterX(), rm.CenterZ()
+			if d == 0 {
+				break
+			}
 		}
 	}
 	return components.WorldPos{}.Add(rl.Vector3{X: cx, Y: lvl.AABB.MinY, Z: cz})
@@ -358,17 +378,23 @@ func issueBuildingPopupOrder(
 		}
 	}
 
-	if item.HoldFireCrouchPreset {
-		preset := components.ApplyPreset(components.PresetStealth)
-		params.MovementOverride = &preset
-		holdFire := components.HoldFire
-		params.EngagementOverride = &holdFire
-	}
-
 	fmt.Printf("[rmb-popup] item=%q kind=%d holdFireCrouch=%v level=%v target=(%.1f,%.1f)\n",
 		item.Label, kind, item.HoldFireCrouchPreset, item.LevelEntity != (ecs.Entity{}),
 		target.Local.X+float32(target.Chunk.X)*components.ChunkSize,
 		target.Local.Z+float32(target.Chunk.Z)*components.ChunkSize)
+
+	if item.HoldFireCrouchPreset {
+		// "Hidden position" is order + STANDING rules in one gesture — the
+		// crouch/hold-fire half must survive the order's completion.
+		groups := groupSelectionByOwner(selected, squadMemberMap)
+		for _, s := range groups.SquadsToOrder {
+			squadService.IssueOrderHidden(s, target, entity, shiftHeld)
+		}
+		for _, e := range groups.Soloists {
+			pushSoloMove(actionQueueMap, posMap, e, target, shiftHeld)
+		}
+		return
+	}
 
 	issueDirectOrder(selected, kind, target, entity, shiftHeld, params,
 		squadService, navService, squadMemberMap, posMap, actionQueueMap)

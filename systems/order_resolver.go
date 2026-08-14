@@ -53,6 +53,11 @@ type OrderResolverSystem struct {
 	// Read on MoveTo / DefendPosition completion to apply arrived-facing
 	// (instant snap) to every roster member's Motion.Yaw.
 	motionMap *ecs.Map[components.Motion]
+	// Garrison completion / facing read each member's LIVE slot assignment
+	// (LocalBlackboard.HeldSlot, written by FormationSystem's matcher) — the
+	// old member-i↔slot-i pairing diverged from the matcher and completed on
+	// coincidence while snapping only index-aligned men.
+	blackboardMap *ecs.Map[components.LocalBlackboard]
 
 	buildingMap    *ecs.Map[components.Building]
 	trenchRootMap  *ecs.Map[components.TrenchRoot]
@@ -110,6 +115,7 @@ func (sys *OrderResolverSystem) InitUI(w *ecs.World) {
 	sys.orderOwnerMap = ecs.NewMap[components.OrderOwner](w)
 	sys.orderFacingMap = ecs.NewMap[components.OrderParamFacing](w)
 	sys.slotPlanner = NewBuildingSlotPlanner(w)
+	sys.blackboardMap = ecs.NewMap[components.LocalBlackboard](w)
 	sys.orderSuppressMap = ecs.NewMap[components.OrderParamSuppress](w)
 	sys.orderOutOfRangeMap = ecs.NewMap[components.OrderOutOfRangeTracker](w)
 	sys.equipmentMap = ecs.NewMap[components.Equipment](w)

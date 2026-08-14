@@ -63,6 +63,17 @@ const (
 	// pathing history.
 	aiSceneMainM0 = "ai_main_m0" // main wing, ground floor
 	aiSceneMainM1 = "ai_main_m1" // main wing, second storey (via stairs)
+	// Live-map "Occupy L1" probes on the two multi-storey buildings the
+	// ai_main_*/office scenes do not cover: the 2-storey house at (40, 30)
+	// and the toroidal courtyard at (-20, -60).
+	aiSceneHouseL1 = "ai_house_l1"
+	aiSceneCourtL1 = "ai_courtyard_l1"
+	// Live-map building-popup probes on the same house: "Attacking position
+	// at windows" (Garrison) and "Hidden position" (OccupyBuilding +
+	// Stealth preset + HoldFire override — everyone inside, crouched, and
+	// nobody silhouetted at a window slot).
+	aiSceneGarrisonHouse = "ai_garrison_house"
+	aiSceneHiddenHouse   = "ai_hidden_house"
 	aiSceneMainE  = "ai_main_e"  // east wing
 	aiSceneMainN  = "ai_main_n"  // north wing
 
@@ -253,6 +264,14 @@ func aiMainSpecFor(id string) (aiMainSpec, bool) {
 	// The office on the REAL main map (70, -20) — 3 storeys, cascade stairs.
 	case aiSceneOfficeL2:
 		return aiMainSpec{wingX: 70, wingZ: -20, levelIdx: 2}, true
+	case aiSceneHouseL1:
+		return aiMainSpec{wingX: 40, wingZ: 30, levelIdx: 1}, true
+	case aiSceneCourtL1:
+		return aiMainSpec{wingX: -20, wingZ: -60, levelIdx: 1}, true
+	// levelIdx -1 = a building order (Garrison / OccupyBuilding), not a
+	// storey MoveTo; the spec only picks the target building.
+	case aiSceneGarrisonHouse, aiSceneHiddenHouse:
+		return aiMainSpec{wingX: 40, wingZ: 30, levelIdx: -1}, true
 	}
 	return aiMainSpec{}, false
 }
@@ -295,6 +314,10 @@ func aiSceneAnchorPos() components.WorldPos {
 		return components.WorldPos{}.Add(rl.Vector3{X: 32, Z: 40})
 	case aiSceneOfficeL2:
 		return components.WorldPos{}.Add(rl.Vector3{X: 66, Z: -29})
+	case aiSceneHouseL1, aiSceneGarrisonHouse, aiSceneHiddenHouse:
+		return components.WorldPos{}.Add(rl.Vector3{X: 40, Z: 18})
+	case aiSceneCourtL1:
+		return components.WorldPos{}.Add(rl.Vector3{X: -20, Z: -78})
 	case aiSceneFarBuilding:
 		return components.WorldPos{}.Add(rl.Vector3{X: 0, Z: 0})
 	case aiSceneMainM0, aiSceneMainM1, aiSceneMainE, aiSceneMainN:
@@ -591,6 +614,10 @@ func aiSpawnPos() components.WorldPos {
 		return components.WorldPos{}.Add(rl.Vector3{X: 27, Z: 44})
 	case aiSceneOfficeL2:
 		return components.WorldPos{}.Add(rl.Vector3{X: 70, Z: -33})
+	case aiSceneHouseL1, aiSceneGarrisonHouse, aiSceneHiddenHouse:
+		return components.WorldPos{}.Add(rl.Vector3{X: 40, Z: 12})
+	case aiSceneCourtL1:
+		return components.WorldPos{}.Add(rl.Vector3{X: -20, Z: -82})
 	case aiSceneFarBuilding:
 		return components.WorldPos{}.Add(rl.Vector3{X: 0, Z: 0})
 	case aiSceneMainM0, aiSceneMainM1, aiSceneMainE, aiSceneMainN:
@@ -1845,8 +1872,12 @@ func aiSceneSpawn(
 		st.liftTrack = true
 		st.sampler = systems.NewHeightSampler(world)
 	}
-	if aiSceneID() == aiSceneGarrisonWin {
+	if id := aiSceneID(); id == aiSceneGarrisonWin || id == aiSceneGarrisonHouse {
 		st.garrisonCheck = true
+		st.slotPlanner = systems.NewBuildingSlotPlanner(world)
+	}
+	if aiSceneID() == aiSceneHiddenHouse {
+		st.hiddenCheck = true
 		st.slotPlanner = systems.NewBuildingSlotPlanner(world)
 	}
 
@@ -1877,7 +1908,8 @@ func aiSceneSpawn(
 
 	// ai_main_* scenes target one storey: resolve the Level entity via
 	// BuildingPlanIndex (same path the in-game "Occupy L<n>" popup takes).
-	if isMainScene {
+	// levelIdx -1 = a building order — the spec only picked the target.
+	if isMainScene && mainSpec.levelIdx >= 0 {
 		planIdxRes := ecs.NewResource[systems.BuildingPlanIndex](world)
 		planIdx := planIdxRes.Get()
 		levelMap := ecs.NewMap[components.Level](world)
@@ -1901,6 +1933,12 @@ func aiSceneSpawn(
 		st.targetLevel = levelEnt
 		st.targetLevelMinY = lvl.AABB.MinY
 		st.targetLevelAABB = lvl.AABB
+		// The exact goal the popup would commit: pickRoomTarget with the raw
+		// press in the building's middle. On a ring building the AABB centre
+		// is the open well — the room fallback is the mechanic under test.
+		raw := components.WorldPos{}.Add(rl.Vector3{
+			X: lvl.AABB.CenterX(), Z: lvl.AABB.CenterZ()})
+		st.targetLevelGoal = pickRoomTarget(lvl, raw)
 	}
 	return st
 }
@@ -1917,6 +1955,7 @@ type aiTestState struct {
 	targetLevel     ecs.Entity
 	targetLevelMinY float32
 	targetLevelAABB components.AABB3D
+	targetLevelGoal components.WorldPos
 
 	// Set for ai_office_rooms: every band must hold >=1 member at verdict.
 	roomBands []aiRoomBand
@@ -1930,6 +1969,9 @@ type aiTestState struct {
 	// Set for ai_garrison_windows: order kind = Garrison, verdict demands
 	// every planned window slot manned by a member facing the opening.
 	garrisonCheck bool
+	// hiddenCheck: OccupyBuilding + Stealth + HoldFire ("Hidden position") —
+	// verdict adds all-crouched and nobody parked at a window slot.
+	hiddenCheck bool
 	slotPlanner   *systems.BuildingSlotPlanner
 
 	// Set for ai_los_* scenes: verdict counts Contacts on this entity and
@@ -2381,16 +2423,12 @@ func (s *aiTestState) Update(elapsed float32) {
 			return
 		}
 		if s.targetLevel != (ecs.Entity{}) {
-			// Storey goal: MoveTo on the Level entity, target at the level
-			// AABB centre — the exact order the building-popup "Occupy L<n>"
-			// emits, so the test exercises the real player mechanic.
-			targetPos := components.WorldPos{}.Add(rl.Vector3{
-				X: s.targetLevelAABB.CenterX(),
-				Z: s.targetLevelAABB.CenterZ(),
-			})
-			targetPos.Local.Y = s.targetLevelMinY
+			// Storey goal: MoveTo on the Level entity, target from
+			// pickRoomTarget — the exact order the building-popup
+			// "Occupy L<n>" emits, so the test exercises the real player
+			// mechanic (including the nearest-room fallback on ring shapes).
 			s.SquadService.IssueOrder(s.squad,
-				components.OrderKindMoveTo, targetPos, s.targetLevel,
+				components.OrderKindMoveTo, s.targetLevelGoal, s.targetLevel,
 				false, systems.OrderParams{})
 			s.orderFired = true
 			fmt.Printf("[ai-test %s] t=%.1fs ORDER ISSUED MoveTo level=%v Y=%.1f\n",
@@ -2403,13 +2441,23 @@ func (s *aiTestState) Update(elapsed float32) {
 		})
 		kind := components.OrderKindOccupyBuilding
 		kindName := "OccupyBuilding"
+		params := systems.OrderParams{}
 		if s.garrisonCheck {
 			kind = components.OrderKindGarrison
 			kindName = "Garrison"
 		}
+		if s.hiddenCheck {
+			// The exact call the popup's "Hidden position" item commits —
+			// order params for the approach + standing rules for the hold.
+			s.SquadService.IssueOrderHidden(s.squad, targetPos, s.targetBuilding, false)
+			s.orderFired = true
+			fmt.Printf("[ai-test %s] t=%.1fs ORDER ISSUED OccupyBuilding+Hidden target=%v\n",
+				s.sceneID, elapsed, s.targetBuilding)
+			return
+		}
 		s.SquadService.IssueOrder(s.squad,
 			kind, targetPos, s.targetBuilding,
-			false, systems.OrderParams{})
+			false, params)
 		s.orderFired = true
 		fmt.Printf("[ai-test %s] t=%.1fs ORDER ISSUED %s target=%v\n",
 			s.sceneID, elapsed, kindName, s.targetBuilding)
@@ -2546,6 +2594,13 @@ func (s *aiTestState) Update(elapsed float32) {
 				verdict = "FAIL"
 			}
 			roomsInfo += fmt.Sprintf("  windows=%d/%d faced=%d", manned, expected, faced)
+		}
+		if s.hiddenCheck {
+			crouched, atWindow, total := s.countHidden()
+			if total == 0 || crouched < total || atWindow > 0 {
+				verdict = "FAIL"
+			}
+			roomsInfo += fmt.Sprintf("  crouched=%d/%d atWindow=%d", crouched, total, atWindow)
 		}
 		fmt.Println("============================================================")
 		fmt.Printf("== VERDICT [%s]: %s  (%d/%d members inside)%s\n",
@@ -4792,6 +4847,52 @@ func (s *aiTestState) countRoomOccupancy() []int {
 		}
 	}
 	return counts
+}
+
+// countHidden tallies live members that hold StanceCrouch and how many stand
+// within park radius of a window fire slot — a hidden squad must show zero
+// silhouettes in the openings.
+func (s *aiTestState) countHidden() (crouched, atWindow, total int) {
+	roster := s.RosterMap.Get(s.squad)
+	if roster == nil {
+		return 0, 0, 0
+	}
+	stanceMap := ecs.NewMap[components.Stance](s.World)
+	var windows []systems.BuildingSlot
+	if s.slotPlanner != nil {
+		for _, slot := range s.slotPlanner.PlanSlots(s.targetBuilding,
+			systems.SlotWindows, int(roster.Count), false, 0) {
+			if slot.Window {
+				windows = append(windows, slot)
+			}
+		}
+	}
+	for i := uint8(0); i < roster.Count; i++ {
+		mem := roster.Members[i]
+		if mem == (ecs.Entity{}) || !s.World.Alive(mem) {
+			continue
+		}
+		total++
+		if st := stanceMap.Get(mem); st != nil && st.Code == components.StanceCrouch {
+			crouched++
+		}
+		pos := s.PosMap.Get(mem)
+		if pos == nil {
+			continue
+		}
+		for _, slot := range windows {
+			d := pos.Sub(slot.Pos)
+			if d.Y < -0.8 || d.Y > 0.8 {
+				continue
+			}
+			r := systems.SlotParkRadius
+			if d.X*d.X+d.Z*d.Z <= r*r {
+				atWindow++
+				break
+			}
+		}
+	}
+	return crouched, atWindow, total
 }
 
 // countWindowSlots recomputes the Garrison window plan and tallies how many

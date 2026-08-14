@@ -9,6 +9,7 @@ ai_compound_south ai_compound_east ai_compound_north ai_compound_west \
 ai_compound_main ai_compound_plus_south ai_compound_plus_east \
 ai_compound_plus_north ai_compound_plus_west ai_office_front ai_office_l2 \
 ai_office_rooms ai_house2_north ai_garrison_windows \
+ai_house_l1 ai_courtyard_l1 ai_garrison_house ai_hidden_house \
 ai_far_building ai_main_m0 ai_main_m1 ai_main_e ai_main_n \
 ai_los_open ai_los_defilade ai_los_creep ai_vehicle_move ai_vehicle_road \
 ai_vehicle_combat ai_vehicle_reflex ai_vehicle_avoid ai_vehicle_building \

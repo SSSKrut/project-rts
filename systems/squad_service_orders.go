@@ -329,6 +329,38 @@ func (s *SquadService) RecordOrderEnd(ord ecs.Entity, outcome components.OrderOu
 	hist.Push(rec)
 }
 
+// IssueOrderHidden — the building popup's "Hidden position": OccupyBuilding
+// with the Stealth march override for the approach, PLUS the persistent half
+// written into the squad's STANDING rules (MovementProfile = stealth preset,
+// EngagementRules.Mode = HoldFire). Order-scoped params die with the order —
+// that is what they are for — but "stay crouched, hold fire" must outlive
+// completion, and standing rules are the layer that persists (COMMAND-MODEL
+// §4). Visible and revertible in the Behavior panel.
+func (s *SquadService) IssueOrderHidden(
+	squad ecs.Entity,
+	target components.WorldPos,
+	entityTarget ecs.Entity,
+	appendToQueue bool,
+) ecs.Entity {
+	preset := components.ApplyPreset(components.PresetStealth)
+	holdFire := components.HoldFire
+	ord := s.IssueOrder(squad, components.OrderKindOccupyBuilding, target, entityTarget,
+		appendToQueue, OrderParams{
+			MovementOverride:   &preset,
+			EngagementOverride: &holdFire,
+		})
+	if ord == (ecs.Entity{}) {
+		return ord
+	}
+	if profile := s.movementProfileMap.Get(squad); profile != nil {
+		*profile = preset
+	}
+	if rules := s.engagementRulesMap.Get(squad); rules != nil {
+		rules.Mode = components.HoldFire
+	}
+	return ord
+}
+
 // OrderMoveTo is a compat wrapper around IssueOrder.
 func (s *SquadService) OrderMoveTo(squad ecs.Entity, goal components.WorldPos) {
 	s.IssueOrder(squad, components.OrderKindMoveTo, goal, ecs.Entity{}, false, OrderParams{})

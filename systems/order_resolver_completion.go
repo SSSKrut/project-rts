@@ -213,14 +213,13 @@ func (sys *OrderResolverSystem) evaluateCompletion(
 	return completionPending
 }
 
-// windowSlotsManned recomputes the Garrison window plan (same planner call
-// FormationSystem executes) and pairs member i with slot i. Dead members
-// waive their slot; nil plan (floors not streamed) reports 0/0 = satisfied.
-func (sys *OrderResolverSystem) windowSlotsManned(
+// garrisonWindowSlots recomputes the Garrison window plan — the same planner
+// call FormationSystem executes.
+func (sys *OrderResolverSystem) garrisonWindowSlots(
 	ord, building ecs.Entity, roster *components.CommandRoster,
-) (manned, expected int) {
+) []BuildingSlot {
 	if sys.slotPlanner == nil {
-		return 0, 0
+		return nil
 	}
 	hasFacing := false
 	var yaw float32
@@ -228,13 +227,33 @@ func (sys *OrderResolverSystem) windowSlotsManned(
 		hasFacing = true
 		yaw = f.YawRad
 	}
-	slots := sys.slotPlanner.PlanSlots(building, SlotWindows, int(roster.Count), hasFacing, yaw)
-	for i := 0; i < len(slots) && i < int(roster.Count); i++ {
-		if !slots[i].Window {
-			continue
-		}
+	return sys.slotPlanner.PlanSlots(building, SlotWindows, int(roster.Count), hasFacing, yaw)
+}
+
+// windowSlotsManned counts assigned window slots and how many hold their
+// member. WHO holds WHICH slot comes from the matcher's live assignment
+// (LocalBlackboard.HeldSlot) — the old member-i↔slot-i pairing diverged from
+// FormationSystem the moment the slot-major matcher landed (19.8): completion
+// fired on coincidental proximity and windows the matcher dropped (scarce
+// men, overrides) blocked it. Nil plan (floors not streamed) = 0/0.
+func (sys *OrderResolverSystem) windowSlotsManned(
+	ord, building ecs.Entity, roster *components.CommandRoster,
+) (manned, expected int) {
+	slots := sys.garrisonWindowSlots(ord, building, roster)
+	if len(slots) == 0 {
+		return 0, 0
+	}
+	for i := uint8(0); i < roster.Count; i++ {
 		mem := roster.Members[i]
 		if mem == (ecs.Entity{}) || !sys.squadService.world.Alive(mem) {
+			continue
+		}
+		bb := sys.blackboardMap.Get(mem)
+		if bb == nil {
+			continue
+		}
+		si, held := bb.HeldSlotIndex()
+		if !held || int(si) >= len(slots) || !slots[si].Window {
 			continue
 		}
 		expected++
@@ -242,51 +261,65 @@ func (sys *OrderResolverSystem) windowSlotsManned(
 		if pos == nil {
 			continue
 		}
-		d := pos.Sub(slots[i].Pos)
+		d := pos.Sub(slots[si].Pos)
 		r := SlotParkRadius + 0.2
 		if d.X*d.X+d.Z*d.Z <= r*r && d.Y >= -0.8 && d.Y <= 0.8 {
 			manned++
 		}
 	}
+	if expected == 0 {
+		// Windows exist but nobody holds one yet (matcher hasn't run / every
+		// man overridden) — completing on entry is exactly the bug slot-
+		// completion exists to prevent.
+		for i := range slots {
+			if slots[i].Window {
+				return 0, 1
+			}
+		}
+	}
 	return manned, expected
 }
 
-// applyGarrisonFacing snaps every member parked on a window slot to the
-// opening's outward yaw at completion time.
+// applyGarrisonFacing snaps every member parked on its HELD window slot to
+// the opening's outward yaw at completion time. Same assignment source as
+// windowSlotsManned — the formation's own park-radius snap (0.8) misses a
+// man completing at 0.9, and after completion nothing else writes his yaw.
 func (sys *OrderResolverSystem) applyGarrisonFacing(squad, ord, building ecs.Entity) {
-	if sys.slotPlanner == nil || sys.motionMap == nil {
+	if sys.motionMap == nil {
 		return
 	}
 	roster := sys.rosterMap.Get(squad)
 	if roster == nil {
 		return
 	}
-	hasFacing := false
-	var yaw float32
-	if f := sys.orderFacingMap.Get(ord); f != nil {
-		hasFacing = true
-		yaw = f.YawRad
+	slots := sys.garrisonWindowSlots(ord, building, roster)
+	if len(slots) == 0 {
+		return
 	}
-	slots := sys.slotPlanner.PlanSlots(building, SlotWindows, int(roster.Count), hasFacing, yaw)
-	for i := 0; i < len(slots) && i < int(roster.Count); i++ {
-		if !slots[i].Window {
-			continue
-		}
+	for i := uint8(0); i < roster.Count; i++ {
 		mem := roster.Members[i]
 		if mem == (ecs.Entity{}) || !sys.squadService.world.Alive(mem) {
+			continue
+		}
+		bb := sys.blackboardMap.Get(mem)
+		if bb == nil {
+			continue
+		}
+		si, held := bb.HeldSlotIndex()
+		if !held || int(si) >= len(slots) || !slots[si].Window {
 			continue
 		}
 		pos := sys.posMap.Get(mem)
 		if pos == nil {
 			continue
 		}
-		d := pos.Sub(slots[i].Pos)
+		d := pos.Sub(slots[si].Pos)
 		r := SlotParkRadius + 0.2
 		if d.X*d.X+d.Z*d.Z > r*r || d.Y < -0.8 || d.Y > 0.8 {
 			continue
 		}
 		if m := sys.motionMap.Get(mem); m != nil {
-			m.Yaw = slots[i].Yaw
+			m.Yaw = slots[si].Yaw
 		}
 	}
 }

@@ -143,6 +143,23 @@ func GenerateCourtyard(seed uint64, p CourtyardParams, pos components.WorldPos) 
 		addStrip(minX, wMaxZ, maxX, maxZ)
 		addStrip(minX, wMinZ, wMinX, wMaxZ)
 		addStrip(wMaxX, wMinZ, maxX, wMaxZ)
+
+		// The strips are the level's ROOMS too. Without them every room-less
+		// fallback (pickRoomTarget, fillRoomSlots) aims at the level AABB
+		// centre — the middle of the open well, a goal nav can never reach.
+		addRoom := func(x0, z0, x1, z1 float32) {
+			if x1-x0 <= 0.01 || z1-z0 <= 0.01 {
+				return
+			}
+			b.AddRoom(levelRefs[s], components.AABB2D{
+				MinX: x0 + chunkBaseX, MinZ: z0 + chunkBaseZ,
+				MaxX: x1 + chunkBaseX, MaxZ: z1 + chunkBaseZ,
+			})
+		}
+		addRoom(minX, minZ, maxX, wMinZ)
+		addRoom(minX, wMaxZ, maxX, maxZ)
+		addRoom(minX, wMinZ, wMinX, wMaxZ)
+		addRoom(wMaxX, wMinZ, maxX, wMaxZ)
 	}
 
 	// Stairs live in the south gallery strip, running along +X so they stay
