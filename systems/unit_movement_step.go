@@ -353,12 +353,18 @@ func (sys *UnitMovementSystem) step(
 					return
 				}
 				resp := float32(0.5)
-				if !e.Mover {
-					// A body with no MoveTo never runs the solver and cannot
-					// reciprocate — the mover shoulders the whole avoidance.
-					// Keyed on intent, not speed: an arrived unit's braking
-					// tail read as "moving" for ~1 s and got trusted with a
-					// half it never delivered (press → clamp → shove jerk).
+				if e.VelX*e.VelX+e.VelZ*e.VelZ < 0.01 {
+					// A standing body never reciprocates (no solver call while
+					// idle) — the mover shoulders the whole avoidance.
+					// KNOWN GAP: the honest test is e.Mover, not speed — an
+					// arrived unit's braking tail reads as "moving" for ~1 s
+					// and gets trusted with a half it never delivers (press →
+					// clamp → shove jerk). But raising resp to 1 through that
+					// tail doubles dodge amplitude and trips the combat-move
+					// throttle mid-crowd (ai_crowd_cross maxDv 1.1 -> 3.2+,
+					// any graduation re-rolls ai_march_column / ai_bounding).
+					// Fix belongs to the ORCA right-leg retune pass (orca.go
+					// NOTE) — dodge geometry changes there anyway.
 					resp = 1
 				}
 				i := nearN
@@ -584,6 +590,14 @@ func (sys *UnitMovementSystem) step(
 				// inflated |v| by speed/desired whenever ORCA wanted a
 				// near-stop (position jumps; with honest Speed it compounded
 				// to a runaway).
+				// NOTE (2026-08): the instant step is a 3+ m/s one-tick jerk
+				// when it fires mid-crowd, but every softening (rate-bounded
+				// drop, hysteresis, path-based angle) re-rolled the tuned
+				// equilibria — ai_march_column packs or churns, ai_bounding
+				// swings live 1..6. It is load-bearing as the column corner
+				// brake. Smooth it only inside the ORCA right-leg retune
+				// pass (see orca.go NOTE) where dodge amplitude — the thing
+				// that trips it spuriously — changes anyway.
 				speed *= 0.3
 				vx *= 0.3
 				vz *= 0.3
