@@ -21,6 +21,11 @@ import (
 const (
 	cloudNoiseSize = 256
 	cloudNoiseSeed = 0x436C6F75647321
+
+	// Shared clip planes: set once at boot (SetClipPlanes) and fed to the
+	// cloud pass's depth linearization — they must never diverge.
+	renderNearPlane = 0.3
+	renderFarPlane  = 16000.0
 )
 
 var cloudCoverFlag = flag.Float64("cloud-cover", 0.62, "dev: cloud coverage 0..1")
@@ -160,7 +165,9 @@ void main() {
     if (skyPx) {
         base = skyColor(rd);
     } else {
-        base = mix(base, vec3(0.74, 0.79, 0.85), (1.0 - exp(-sceneDist * 0.0011)) * 0.42);
+        // Distant ground dissolves into exactly what the sky would be along
+        // this ray, so the far-terrain rings melt into the horizon seamlessly.
+        base = mix(base, skyColor(rd), 1.0 - exp(-sceneDist * 0.00022));
     }
 
     // Slab entry/exit for the cloud layer.
@@ -168,14 +175,14 @@ void main() {
     float t1 = -1.0;
     vec3 ro = uCamPos;
     if (abs(rd.y) < 1e-4) {
-        if (ro.y >= CB && ro.y <= CT) { t0 = 0.0; t1 = 9000.0; }
+        if (ro.y >= CB && ro.y <= CT) { t0 = 0.0; t1 = 20000.0; }
     } else {
         float ta = (CB - ro.y) / rd.y;
         float tb = (CT - ro.y) / rd.y;
         t0 = max(min(ta, tb), 0.0);
         t1 = max(ta, tb);
     }
-    t1 = min(min(t1, sceneDist), 9000.0);
+    t1 = min(min(t1, sceneDist), 20000.0);
     t1 = min(t1, t0 + 4200.0);
 
     if (t1 > t0) {
@@ -264,7 +271,8 @@ func newCloudRenderer() *cloudRenderer {
 	sun := normalize3(sunDir)
 	rl.SetShaderValue(c.shader, loc("uSunDir"), sun[:], rl.ShaderUniformVec3)
 	rl.SetShaderValue(c.shader, loc("uSunColor"), sunColor[:], rl.ShaderUniformVec3)
-	rl.SetShaderValue(c.shader, loc("uNearFar"), []float32{0.01, 1000.0}, rl.ShaderUniformVec2)
+	rl.SetShaderValue(c.shader, loc("uNearFar"),
+		[]float32{renderNearPlane, renderFarPlane}, rl.ShaderUniformVec2)
 
 	c.ok = true
 	return c

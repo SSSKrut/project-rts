@@ -31,6 +31,8 @@ func (g *Game) initUI() {
 	g.UI.PanelMgr.Recompute(g.UI.ScreenW, g.UI.ScreenH)
 	g.UI.Scene3DRT = ui.NewScene3DRT(g.UI.PanelMgr.Get(ui.Panel3D))
 	g.Ctx.Clouds = newCloudRenderer()
+	g.Ctx.Pyramid = systems.BakeHeightPyramid(16384, components.ChunkSize, 1, systems.GroundHeight)
+	g.Ctx.FarTerrain = newFarTerrain(g.Ctx.Pyramid)
 
 	// Pre-bake the map underlay (2 km x 2 km, 4 m/pixel = 500x500 = 250 KB).
 	g.UI.Underlay = ui.BakeUnderlay(0, 0, 2000, 4, func(wx, wz float32) float32 {
@@ -77,6 +79,7 @@ func (g *Game) initUI() {
 func (g *Game) shutdownUI() {
 	g.shutdownAudioCues()
 	g.UI.Underlay.Unload()
+	g.Ctx.FarTerrain.unload()
 	g.Ctx.Clouds.unload()
 	g.UI.Scene3DRT.Unload()
 	// A capture run may have swapped a leaf for -shot-panel; persisting that

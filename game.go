@@ -178,6 +178,8 @@ type renderCtx struct {
 	Ribbons     ribbonSet
 	WorldShader *worldShader
 	Clouds      *cloudRenderer
+	Pyramid     *systems.HeightPyramid
+	FarTerrain  *farTerrain
 }
 
 // sceneHarness holds the scripted test scenes (-scene=...); nil in normal play.

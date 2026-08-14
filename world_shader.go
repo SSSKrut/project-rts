@@ -210,10 +210,14 @@ void main() {
 
     if (uGround > 0.5) {
         vec2 world = fragPosition.xz + uWorldOffset;
+        float dist = distance(fragPosition, uCamPos);
 
         // The patch mask reuses the coarse map at a far larger scale — surfaces
-        // have to change over tens of metres, not per texel.
+        // have to change over tens of metres, not per texel. Its 133 m period
+        // reads as obvious tiling on the far rings where no detail texture
+        // breaks it up, so the patches dissolve with distance.
         float patch = texture(texture2, world / (uTileMeters * uPatchScale)).w;
+        patch *= 1.0 - smoothstep(400.0, 1500.0, dist);
         vec4 w = surfaceWeights(fragPosition.y, 1.0 - n.y, patch);
 
         // Surface colour applies at every distance: a sand flat has to read as
@@ -225,7 +229,6 @@ void main() {
         // Two bands of the same surface set. The fine one dies with distance —
         // past its fade a texel is far under a pixel and the mip chain flattens
         // it anyway; the coarse one carries the form beyond that.
-        float dist = distance(fragPosition, uCamPos);
         float near = 1.0 - smoothstep(uFade.x, uFade.y, dist);
         float far = uMacro.y * (1.0 - smoothstep(uMacroFade.x, uMacroFade.y, dist));
 

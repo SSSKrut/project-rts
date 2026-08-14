@@ -32,6 +32,10 @@ var reliefStops = [...]struct {
 	{14, 220, 215, 205}, // peak
 }
 
+// ReliefColor exposes the ramp to render-side consumers (far-terrain rings)
+// so distant ground shares the chunk meshes' albedo exactly.
+func ReliefColor(y float32) (uint8, uint8, uint8) { return reliefColor(y) }
+
 // reliefColor maps height to the ground's albedo — a linear blend between
 // reliefStops. Pure colour: the slope shade that used to be baked in here now
 // comes from the world shader's sun.
