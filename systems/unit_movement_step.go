@@ -151,7 +151,10 @@ func (sys *UnitMovementSystem) step(
 			if depth := minD - d; depth > bodyDepth {
 				bodyDepth = depth
 				bodyNX, bodyNZ = nx, nz
-				bodyMoving = e.VelX*e.VelX+e.VelZ*e.VelZ > 0.25
+				// Intent, not speed: a walker corked to ~0 m/s in a doorway
+				// is still pressing to get past, while an arrived body's
+				// braking tail is not — the speed test had both backwards.
+				bodyMoving = e.Mover
 			}
 			push := (minD - d) * 0.5
 			if lim := unitShoveCap * dt; push > lim {
@@ -296,9 +299,29 @@ func (sys *UnitMovementSystem) step(
 			shortArrive = gateMouthRadius
 		}
 		if distSq < shortArrive*shortArrive {
-			// Reached the short-term waypoint; don't pop (final-goal arrival
-			// already handled). MicroPathSystem advances Head next tick.
-			return markerOp
+			// Reached the short-term waypoint — MicroPathSystem pops it later
+			// this tick, so this wait is normally one tick long. Its two
+			// non-radius pop guards are mirrored here, or the walker freezes
+			// inside the ring: a storey-mismatched waypoint (XZ under a
+			// cascade's upper flight) never pops and never fixes itself —
+			// replan now instead of grinding out the stuck watchdog; an
+			// uncrossed gate plane means KEEP WALKING through the opening.
+			stallY := morePath && (diff.Y > arrivalYBand || diff.Y < -arrivalYBand)
+			if !morePath || stallY || !gatePlaneUncrossed(*w.pos, w.microPath) {
+				if stallY {
+					w.microPath.Dirty = true
+				}
+				// The body is stopped on this branch — brake honestly, or the
+				// hash keeps publishing the pre-stop speed and neighbours
+				// dodge / make way for a man who is standing still.
+				brake := stanceAccel[w.stance.Code] * dt
+				if w.mot.Speed > brake {
+					w.mot.Speed -= brake
+				} else {
+					w.mot.Speed = 0
+				}
+				return markerOp
+			}
 		}
 		dist := float32(math.Sqrt(float64(distSq)))
 		invDist := 1 / dist
@@ -330,9 +353,12 @@ func (sys *UnitMovementSystem) step(
 					return
 				}
 				resp := float32(0.5)
-				if e.VelX*e.VelX+e.VelZ*e.VelZ < 0.01 {
-					// A standing body never reciprocates (no solver call while
-					// idle) — the mover shoulders the whole avoidance.
+				if !e.Mover {
+					// A body with no MoveTo never runs the solver and cannot
+					// reciprocate — the mover shoulders the whole avoidance.
+					// Keyed on intent, not speed: an arrived unit's braking
+					// tail read as "moving" for ~1 s and got trusted with a
+					// half it never delivered (press → clamp → shove jerk).
 					resp = 1
 				}
 				i := nearN

@@ -19,6 +19,7 @@ type SpatialHashRebuildSystem struct {
 	vehFilter   *ecs.Filter2[components.Vehicle, components.WorldPos]
 	motionMap   *ecs.Map[components.Motion]
 	colliderMap *ecs.Map[components.Collider]
+	queueMap    *ecs.Map[components.ActionQueue]
 	snapshot    []core.SpatialEntry
 	vehSnapshot []core.SpatialEntry
 }
@@ -42,6 +43,7 @@ func (sys *SpatialHashRebuildSystem) InitUI(w *ecs.World) {
 	sys.vehFilter = ecs.NewFilter2[components.Vehicle, components.WorldPos](w)
 	sys.motionMap = ecs.NewMap[components.Motion](w)
 	sys.colliderMap = ecs.NewMap[components.Collider](w)
+	sys.queueMap = ecs.NewMap[components.ActionQueue](w)
 	sys.hash = ecs.NewResource[core.SpatialHash](w)
 	sys.vehHash = ecs.NewResource[core.VehicleSpatialHash](w)
 }
@@ -81,6 +83,11 @@ func collectSpatial[T any](sys *SpatialHashRebuildSystem, q ecs.Query2[T, compon
 		if col := sys.colliderMap.Get(ent); col != nil && col.Radius > 0 {
 			radius = col.Radius
 		}
+		mover := false
+		if q := sys.queueMap.Get(ent); q != nil && q.Count > 0 &&
+			q.Actions[q.Head].Kind == components.ActionMoveTo {
+			mover = true
+		}
 		out = append(out, core.SpatialEntry{
 			Ent:    ent,
 			X:      float32(pos.Chunk.X)*components.ChunkSize + pos.Local.X,
@@ -89,6 +96,7 @@ func collectSpatial[T any](sys *SpatialHashRebuildSystem, q ecs.Query2[T, compon
 			VelX:   velX,
 			VelZ:   velZ,
 			Radius: radius,
+			Mover:  mover,
 		})
 	}
 	return out

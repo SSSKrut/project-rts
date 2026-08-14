@@ -29,6 +29,10 @@ type SpatialEntry struct {
 	Y          float32 // foot height — storey filters (ORCA / yield) read it
 	VelX, VelZ float32 // world-space XZ velocity (m/s) at snapshot time
 	Radius     float32 // collider radius (default pre-applied by rebuild)
+	// Executing a MoveTo this tick — i.e. WILL run its own avoidance solver.
+	// Vel alone can't answer that: an arrived unit brakes over ~1 s and its
+	// decaying "phantom" speed reads as a mover long after it stopped.
+	Mover bool
 }
 
 type SpatialHash struct {
@@ -183,7 +187,7 @@ func (h *SpatialHash) QueryInto(x, z, r float32, buf []ecs.Entity) []ecs.Entity 
 // ApproximateMemory returns a rough byte-count for debug HUD use.
 func (h *SpatialHash) ApproximateMemory() int {
 	const (
-		sizeofEntry = 8 + 6*4 // Ent + X/Z/VelX/VelZ/Radius
+		sizeofEntry = 8 + 6*4 + 4 // Ent + X/Z/Y/VelX/VelZ/Radius + Mover(padded)
 		sizeofIdx   = 4
 	)
 	bytes := len(h.entries) * sizeofEntry

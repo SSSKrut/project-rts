@@ -12,8 +12,10 @@ import (
 )
 
 const (
-	// Close enough to a waypoint to advance Head. Lower than
-	// UnitMovement.arrivalRadius (0.6) so pops happen without overshoot.
+	// Close enough to a waypoint to advance Head. Must not exceed
+	// UnitMovement's arrivalRadius: steering stops inside that ring, so a
+	// waypoint it can't pop there is a frozen walker. The non-radius pop
+	// guards are shared for the same reason (gatePlaneUncrossed, Y-band).
 	microPathArrivalRadius float32 = 0.6
 	// The mouth waypoint right before a gate needs a precise approach;
 	// UnitMovement mirrors this radius so steering doesn't stop early.
@@ -103,19 +105,8 @@ func (sys *MicroPathSystem) tickUnit(pos *components.WorldPos, mp *components.Mi
 		if d.Y > arrivalYBand || d.Y < -arrivalYBand {
 			break
 		}
-		if mp.GateMask&(1<<mp.Head) != 0 && mp.Head > 0 {
-			// Far endpoint of a transition (door / stairs / junction):
-			// radius alone reaches across the wall from the wrong side and
-			// strands the walker steering at the next interior waypoint
-			// through solid wall beside the opening. Require crossing the
-			// opening plane: projection onto prev→gate beyond the midpoint.
-			prev := mp.Waypoints[mp.Head-1]
-			u := pos.Sub(prev)
-			v := wp.Sub(prev)
-			vlen2 := v.X*v.X + v.Z*v.Z
-			if u.X*v.X+u.Z*v.Z <= 0.5*vlen2 && vlen2 >= 1e-6 {
-				break
-			}
+		if gatePlaneUncrossed(*pos, mp) {
+			break
 		}
 		if mp.Head+1 < mp.Count && mp.GateMask&(1<<(mp.Head+1)) != 0 &&
 			distSq >= gateMouthRadius*gateMouthRadius {
@@ -291,6 +282,24 @@ func (sys *MicroPathSystem) tickUnit(pos *components.WorldPos, mp *components.Mi
 		mp.ReplanCount++
 	}
 	*budget--
+}
+
+// gatePlaneUncrossed reports a gated Head waypoint whose opening plane the
+// walker has not crossed. Far endpoint of a transition (door / stairs /
+// junction): radius alone reaches across the wall from the wrong side and
+// strands the walker beside the opening, so the pop demands the projection
+// onto prev→gate to pass the midpoint. Shared with UnitMovement's short-term
+// wait — if the guards disagreed, the walker would freeze inside the arrival
+// ring on the near side of the door.
+func gatePlaneUncrossed(pos components.WorldPos, mp *components.MicroPath) bool {
+	if mp.Head >= mp.Count || mp.GateMask&(1<<mp.Head) == 0 || mp.Head == 0 {
+		return false
+	}
+	prev := mp.Waypoints[mp.Head-1]
+	u := pos.Sub(prev)
+	v := mp.Waypoints[mp.Head].Sub(prev)
+	vlen2 := v.X*v.X + v.Z*v.Z
+	return vlen2 >= 1e-6 && u.X*v.X+u.Z*v.Z <= 0.5*vlen2
 }
 
 func clearMicroPath(mp *components.MicroPath) {
