@@ -467,5 +467,6 @@ func (g *Game) initRenderHandles() {
 	g.Ctx.Particle = ParticleRenderCtx{
 		Filter: ecs.NewFilter3[components.Particle, components.WorldPos, components.ParticleVisual](g.App.World),
 		EndMap: ecs.NewMap[components.ParticleEnd](g.App.World),
+		Smoke:  g.Filt.SmokeRender,
 	}
 }

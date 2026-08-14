@@ -604,14 +604,6 @@ func (g *Game) drawScene3D() {
 	// reject whatever stands beyond the surface.
 	g.Frame.RibbonsDrawn += g.Ctx.Ribbons.Water.draw(g.terrainMaterial)
 
-	qsmoke := g.Filt.SmokeRender.Query()
-	for qsmoke.Next() {
-		sp, sf := qsmoke.Get()
-		c := sp.ToRenderSpace(systems.CurrentOriginChunk)
-		c.Y += sf.Radius * 0.5
-		rl.DrawSphere(c, sf.Radius, rl.Color{R: 150, G: 150, B: 155, A: 70})
-	}
-
 	drawParticles(g.Ctx.Particle, float32(g.App.Elapsed().Seconds()))
 
 	rl.EndMode3D()

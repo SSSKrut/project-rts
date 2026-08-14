@@ -27,6 +27,75 @@ func (sys *WeaponSystem) spawnDustBurst(pos rl.Vector3, now float32, n int, base
 	}
 }
 
+// spawnRocketTrail lays a line of puffs along the flight path. The rocket is
+// hitscan, so the whole trail appears at once; wind advection and the erosion
+// fade sell the aftermath.
+func (sys *WeaponSystem) spawnRocketTrail(from, to rl.Vector3, now float32) {
+	if sys.particles == nil {
+		return
+	}
+	dx := to.X - from.X
+	dy := to.Y - from.Y
+	dz := to.Z - from.Z
+	dist := float32(math.Sqrt(float64(dx*dx + dy*dy + dz*dz)))
+	if dist < 4 {
+		return
+	}
+	const spacing float32 = 7.0
+	n := int(dist / spacing)
+	if n > 30 {
+		n = 30
+	}
+	seed := uint64(now*10000.0) ^ uint64(dist*100)
+	color := rl.Color{R: 172, G: 172, B: 175, A: 190}
+	for i := 1; i <= n; i++ {
+		t := float32(i) / float32(n+1)
+		seed++
+		jx := float32(splitmix(&seed))/float32(0x40000000) - 1
+		seed++
+		jy := float32(splitmix(&seed))/float32(0x40000000) - 1
+		p := rl.Vector3{
+			X: from.X + dx*t + jx*0.4,
+			Y: from.Y + dy*t + jy*0.3,
+			Z: from.Z + dz*t + jx*0.3,
+		}
+		sys.particles.SpawnPuff(p, color, rl.Vector3{Y: 0.15}, 0.42, 3.2, now)
+	}
+}
+
+// spawnExplosionSmoke — the blast cloud: a few large dark puffs rising from
+// the crater, scaled by splash radius.
+func (sys *WeaponSystem) spawnExplosionSmoke(pos rl.Vector3, radius, now float32) {
+	if sys.particles == nil {
+		return
+	}
+	if radius < 1 {
+		radius = 1
+	}
+	n := 4 + int(radius*0.5)
+	if n > 8 {
+		n = 8
+	}
+	seed := uint64(now*10000.0) ^ uint64(radius*77)
+	for i := 0; i < n; i++ {
+		seed++
+		rx := float32(splitmix(&seed))/float32(0x40000000) - 1
+		seed++
+		rz := float32(splitmix(&seed))/float32(0x40000000) - 1
+		seed++
+		rr := float32(splitmix(&seed)) / float32(0x40000000) * 0.5
+		p := rl.Vector3{
+			X: pos.X + rx*radius*0.35,
+			Y: pos.Y + rr*radius*0.3,
+			Z: pos.Z + rz*radius*0.35,
+		}
+		shade := uint8(58 + i*9)
+		color := rl.Color{R: shade, G: shade, B: shade, A: 210}
+		vel := rl.Vector3{X: rx * 0.7, Y: 1.1 + rr, Z: rz * 0.7}
+		sys.particles.SpawnPuff(p, color, vel, radius*(0.28+rr*0.3), 3.5+rr*2, now)
+	}
+}
+
 func (sys *WeaponSystem) spawnDebrisBurst(pos rl.Vector3, now float32, n int) {
 	if sys.particles == nil {
 		return

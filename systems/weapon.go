@@ -123,6 +123,8 @@ type shotWork struct {
 	vsSoft  float32
 	vsLight float32
 	vsHeavy float32
+	// Rocket-propelled shots leave a smoke trail along the flight path.
+	trail bool
 }
 
 func vsClassOf(soft, light, heavy float32, class components.ArmorClass) float32 {
@@ -167,6 +169,7 @@ type tracerSpec struct {
 	Color     rl.Color
 	SpawnTime float32
 	TTL       float32
+	Trail     bool
 }
 
 type impactSpec struct {
@@ -467,6 +470,7 @@ func (sys *WeaponSystem) snapshotShots(now float32) {
 			vsSoft:        wspec.VsSoft,
 			vsLight:       wspec.VsLight,
 			vsHeavy:       wspec.VsHeavy,
+			trail:         weapon.Kind == components.WeaponRPG7 || weapon.Kind == components.WeaponATGM,
 		})
 	}
 }
@@ -510,6 +514,9 @@ func (sys *WeaponSystem) applyPostPass(now float32) {
 				// Muzzle flash at the From end of each tracer - short-lived
 				// bright sphere, colour matches tracer hue.
 				sys.particles.SpawnMuzzleFlash(t.From, t.Color, t.SpawnTime)
+				if t.Trail {
+					sys.spawnRocketTrail(t.From, t.To, t.SpawnTime)
+				}
 			}
 			for _, im := range sys.workerImpact[w] {
 				sys.particles.SpawnImpact(im.Pos, im.Color, im.SpawnTime, im.TTL)
@@ -522,10 +529,10 @@ func (sys *WeaponSystem) applyPostPass(now float32) {
 				}
 			}
 		}
-		// Splash bursts: dense smoke + bigger debris cluster.
+		// Splash bursts: explosion smoke cloud + bigger debris cluster.
 		for w := range sys.workerSplash {
 			for _, ev := range sys.workerSplash[w] {
-				sys.particles.SpawnSmoke(ev.pos, rl.Color{R: 90, G: 90, B: 90, A: 200}, now)
+				sys.spawnExplosionSmoke(ev.pos, ev.radius, now)
 				sys.spawnDebrisBurst(ev.pos, now, 10)
 			}
 		}

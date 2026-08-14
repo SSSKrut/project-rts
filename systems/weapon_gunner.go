@@ -104,6 +104,7 @@ func (sys *WeaponSystem) snapshotVehicleShots(now, dt float32) {
 				vsSoft:        wspec.VsSoft,
 				vsLight:       wspec.VsLight,
 				vsHeavy:       wspec.VsHeavy,
+				trail:         weapon.Kind == components.WeaponRPG7 || weapon.Kind == components.WeaponATGM,
 			})
 		}
 	}

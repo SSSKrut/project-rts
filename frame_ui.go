@@ -31,6 +31,7 @@ func (g *Game) initUI() {
 	g.UI.PanelMgr.Recompute(g.UI.ScreenW, g.UI.ScreenH)
 	g.UI.Scene3DRT = ui.NewScene3DRT(g.UI.PanelMgr.Get(ui.Panel3D))
 	g.Ctx.Clouds = newCloudRenderer()
+	g.Ctx.Particle.Puffs = newParticleRenderer()
 	if atmo, ok := weatherFromFlag(); ok {
 		g.Res.Atmosphere = atmo
 	}
@@ -86,6 +87,7 @@ func (g *Game) shutdownUI() {
 	g.shutdownAudioCues()
 	g.UI.Underlay.Unload()
 	g.Ctx.FarTerrain.unload()
+	g.Ctx.Particle.Puffs.unload()
 	g.Ctx.Clouds.unload()
 	g.UI.Scene3DRT.Unload()
 	// A capture run may have swapped a leaf for -shot-panel; persisting that
