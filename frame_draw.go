@@ -287,7 +287,7 @@ func (g *Game) drawUI() {
 	}
 
 	if debugOverlay.Clouds && g.UI.Scene3DRT.DepthTex && g.Ctx.Clouds != nil && g.Ctx.Clouds.ok {
-		g.Ctx.Clouds.composite(g.UI.Scene3DRT, g.Frame.Panel3D)
+		g.Ctx.Clouds.composite(g.UI.Scene3DRT, g.Frame.Panel3D, &g.Res.Atmosphere, g.Ctx.CloudDrift)
 	} else {
 		g.UI.Scene3DRT.Composite(g.Frame.Panel3D)
 	}

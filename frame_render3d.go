@@ -46,11 +46,19 @@ func (g *Game) drawScene3D() {
 	g.Frame.AnchorPos = g.Maps.Pos.Get(g.anchor)
 	anchorRender := g.Frame.AnchorPos.ToRenderSpace(systems.CurrentOriginChunk)
 
+	// Wind drift accumulates instead of multiplying time — a live weather
+	// change must shift the field's future, not rewrite its history.
+	atm := &g.Res.Atmosphere
+	gust := systems.WindGust(atm, rl.GetTime())
+	dtDrift := float32(g.Frame.DtReal.Seconds())
+	g.Ctx.CloudDrift.X += atm.WindX * gust * dtDrift
+	g.Ctx.CloudDrift.Y += atm.WindZ * gust * dtDrift
+
 	rl.BeginTextureMode(g.UI.Scene3DRT.RT)
 	rl.ClearBackground(rl.RayWhite)
 	rl.BeginMode3D(systems.CurrentCamera)
 
-	g.Ctx.WorldShader.beginFrame()
+	g.Ctx.WorldShader.beginFrame(atm, g.Ctx.CloudDrift)
 	g.Ctx.WorldShader.setGround(true)
 
 	g.Frame.ChunksActive = 0

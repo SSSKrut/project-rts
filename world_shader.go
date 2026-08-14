@@ -143,7 +143,9 @@ uniform vec2 uMacroFade;
 uniform vec2 uMacro;          // x = tile multiplier, y = weight
 uniform vec2 uSurface;        // x = AO strength, y = albedo variation strength
 uniform vec3 uCamPos;
-uniform float uCloudTime;
+uniform vec2 uCloudWind;      // accumulated wind drift, metres (matches clouds)
+uniform vec2 uShadowOfs;      // sun-projected offset of the cloud layer
+uniform float uShadowMidY;    // mid-layer height x shape frequency
 uniform float uCloudCover;    // 0 disables cloud shadows
 uniform float uShadowOn;      // 0 for batch objects: texture5 is unbound there
 
@@ -173,11 +175,11 @@ float cfbm(vec3 p) {
 }
 
 float cloudShadow(vec2 wxz) {
-    vec2 sw = wxz + vec2(-543.0, -481.0) + uCloudTime * vec2(9.0, 4.0);
+    vec2 sw = wxz + uShadowOfs + uCloudWind;
     float cov = cfbm(vec3(sw.x * 0.00042, 7.31, sw.y * 0.00042));
     cov = smoothstep(1.0 - uCloudCover, 1.0 - uCloudCover + 0.35, cov);
     if (cov <= 0.001) return 1.0;
-    float sh = cfbm(vec3(sw.x * 0.0011, 1.265, sw.y * 0.0011));
+    float sh = cfbm(vec3(sw.x * 0.0011, uShadowMidY, sw.y * 0.0011));
     float d = clamp((sh * 0.95 - (1.0 - cov * 0.85)) * 4.0, 0.0, 1.0);
     return 1.0 - 0.62 * d;
 }
@@ -267,12 +269,14 @@ type worldShader struct {
 	macro    rl.Texture2D
 	cloudTex rl.Texture2D
 
-	locOffset     int32
-	locGround     int32
-	locCam        int32
-	locCloudTime  int32
-	locCloudCover int32
-	locShadowOn   int32
+	locOffset      int32
+	locGround      int32
+	locCam         int32
+	locCloudWind   int32
+	locShadowOfs   int32
+	locShadowMidY  int32
+	locCloudCover  int32
+	locShadowOn    int32
 
 	ok bool
 }
@@ -302,7 +306,9 @@ func newWorldShader() *worldShader {
 	ws.locOffset = rl.GetShaderLocation(ws.shader, "uWorldOffset")
 	ws.locGround = rl.GetShaderLocation(ws.shader, "uGround")
 	ws.locCam = rl.GetShaderLocation(ws.shader, "uCamPos")
-	ws.locCloudTime = rl.GetShaderLocation(ws.shader, "uCloudTime")
+	ws.locCloudWind = rl.GetShaderLocation(ws.shader, "uCloudWind")
+	ws.locShadowOfs = rl.GetShaderLocation(ws.shader, "uShadowOfs")
+	ws.locShadowMidY = rl.GetShaderLocation(ws.shader, "uShadowMidY")
 	ws.locCloudCover = rl.GetShaderLocation(ws.shader, "uCloudCover")
 	ws.locShadowOn = rl.GetShaderLocation(ws.shader, "uShadowOn")
 
@@ -376,9 +382,9 @@ func (ws *worldShader) release(mat *rl.Material) {
 }
 
 // beginFrame re-anchors the UV origin (the render origin shifts by whole
-// chunks as the camera travels) and updates the camera position the fade
-// needs.
-func (ws *worldShader) beginFrame() {
+// chunks as the camera travels), updates the camera position the fade needs
+// and feeds the cloud-shadow uniforms from the Atmosphere resource.
+func (ws *worldShader) beginFrame(atm *components.Atmosphere, drift rl.Vector2) {
 	if !ws.ok {
 		return
 	}
@@ -390,11 +396,19 @@ func (ws *worldShader) beginFrame() {
 	rl.SetShaderValue(ws.shader, ws.locCam,
 		[]float32{cam.X, cam.Y, cam.Z}, rl.ShaderUniformVec3)
 	cover := float32(0)
-	if debugOverlay.Clouds {
-		cover = cloudCoverage
+	if debugOverlay.Clouds && atm != nil {
+		cover = atm.Coverage
 	}
-	rl.SetShaderValue(ws.shader, ws.locCloudTime,
-		[]float32{float32(rl.GetTime())}, rl.ShaderUniformFloat)
+	if atm != nil {
+		mid := (atm.CloudBase + atm.CloudTop) * 0.5
+		sun := normalize3(sunDir)
+		rl.SetShaderValue(ws.shader, ws.locShadowOfs,
+			[]float32{-sun[0] / sun[1] * mid, -sun[2] / sun[1] * mid}, rl.ShaderUniformVec2)
+		rl.SetShaderValue(ws.shader, ws.locShadowMidY,
+			[]float32{mid * 0.0022}, rl.ShaderUniformFloat)
+	}
+	rl.SetShaderValue(ws.shader, ws.locCloudWind,
+		[]float32{drift.X, drift.Y}, rl.ShaderUniformVec2)
 	rl.SetShaderValue(ws.shader, ws.locCloudCover, []float32{cover}, rl.ShaderUniformFloat)
 	rl.SetShaderValue(ws.shader, ws.locShadowOn, []float32{1}, rl.ShaderUniformFloat)
 }

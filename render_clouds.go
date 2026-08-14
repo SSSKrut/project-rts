@@ -5,6 +5,7 @@ import (
 	"image"
 	"math"
 	"math/rand"
+	"strings"
 
 	rl "github.com/gen2brain/raylib-go/raylib"
 
@@ -28,9 +29,17 @@ const (
 	renderFarPlane  = 16000.0
 )
 
-var cloudCoverFlag = flag.Float64("cloud-cover", 0.62, "dev: cloud coverage 0..1")
+var cloudCoverFlag = flag.Float64("cloud-cover", -1, "dev: override cloud coverage 0..1 (-1 = preset)")
+var weatherFlag = flag.String("weather", "", "dev: starting weather preset (clear/scattered/overcast/storm/fog)")
 
-var cloudCoverage float32 = 0.62
+func weatherFromFlag() (components.Atmosphere, bool) {
+	for i := range components.WeatherSpecs {
+		if strings.EqualFold(components.WeatherSpecs[i].Label, *weatherFlag) {
+			return components.WeatherSpecs[i].Atmo, true
+		}
+	}
+	return components.Atmosphere{}, false
+}
 
 const cloudVS = `#version 330
 in vec3 vertexPosition;
@@ -62,7 +71,9 @@ uniform vec2 uTanFov;         // tan(fov/2): x horizontal, y vertical
 uniform vec4 uPanel;          // content rect x, yTop, w, h (window px, top-left)
 uniform float uScreenH;
 uniform vec2 uWorldOffset;    // origin-chunk world XZ
-uniform float uTime;
+uniform vec2 uWindOfs;        // accumulated wind drift, metres
+uniform vec2 uCloudLayer;     // base, top
+uniform float uFogK;
 uniform vec3 uSunDir;
 uniform vec3 uSunColor;
 uniform vec2 uNearFar;
@@ -70,9 +81,6 @@ uniform float uCoverage;
 
 out vec4 finalColor;
 
-const float CB = 350.0;
-const float CT = 800.0;
-const float LAYER = CT - CB;
 const int STEPS = 54;
 const int LSTEPS = 5;
 const float SIGMA = 0.028;
@@ -99,10 +107,10 @@ float fbm(vec3 p) {
 }
 
 float cloudMap(vec3 p, float detail) {
-    float h = (p.y - CB) / LAYER;
+    float h = (p.y - uCloudLayer.x) / (uCloudLayer.y - uCloudLayer.x);
     if (h < 0.0 || h > 1.0) return 0.0;
     vec3 q = vec3(p.x + uWorldOffset.x, p.y, p.z + uWorldOffset.y);
-    q.xz += uTime * vec2(9.0, 4.0);
+    q.xz += uWindOfs;
     float cov = fbm(vec3(q.x * 0.00042, 7.31, q.z * 0.00042));
     cov = smoothstep(1.0 - uCoverage, 1.0 - uCoverage + 0.35, cov);
     if (cov <= 0.001) return 0.0;
@@ -167,7 +175,7 @@ void main() {
     } else {
         // Distant ground dissolves into exactly what the sky would be along
         // this ray, so the far-terrain rings melt into the horizon seamlessly.
-        base = mix(base, skyColor(rd), 1.0 - exp(-sceneDist * 0.00022));
+        base = mix(base, skyColor(rd), 1.0 - exp(-sceneDist * uFogK));
     }
 
     // Slab entry/exit for the cloud layer.
@@ -175,10 +183,10 @@ void main() {
     float t1 = -1.0;
     vec3 ro = uCamPos;
     if (abs(rd.y) < 1e-4) {
-        if (ro.y >= CB && ro.y <= CT) { t0 = 0.0; t1 = 20000.0; }
+        if (ro.y >= uCloudLayer.x && ro.y <= uCloudLayer.y) { t0 = 0.0; t1 = 20000.0; }
     } else {
-        float ta = (CB - ro.y) / rd.y;
-        float tb = (CT - ro.y) / rd.y;
+        float ta = (uCloudLayer.x - ro.y) / rd.y;
+        float tb = (uCloudLayer.y - ro.y) / rd.y;
         t0 = max(min(ta, tb), 0.0);
         t1 = max(ta, tb);
     }
@@ -198,7 +206,7 @@ void main() {
             vec3 p = ro + rd * t;
             float den = cloudMap(p, 1.0);
             if (den > 0.004) {
-                float h = clamp((p.y - CB) / LAYER, 0.0, 1.0);
+                float h = clamp((p.y - uCloudLayer.x) / (uCloudLayer.y - uCloudLayer.x), 0.0, 1.0);
                 float lt = lightTrans(p);
                 float pw = 1.0 - 0.55 * exp(-den * 6.0);
                 vec3 amb = mix(vec3(0.50, 0.54, 0.62), vec3(0.98, 1.00, 1.04), h);
@@ -215,7 +223,7 @@ void main() {
             vec3 cc = acc / a;
             float peak = max(cc.r, max(cc.g, cc.b));
             cc /= 1.0 + 0.25 * max(peak - 1.0, 0.0);
-            float haze = 1.0 - exp(-max(t0 - 900.0, 0.0) * 0.00028);
+            float haze = 1.0 - exp(-max(t0 - 900.0, 0.0) * uFogK * 1.3);
             cc = mix(cc, skyColor(rd), haze);
             base = mix(base, cc, a);
         }
@@ -239,14 +247,15 @@ type cloudRenderer struct {
 	locPanel   int32
 	locScreenH int32
 	locWorld   int32
-	locTime    int32
+	locWind    int32
+	locFogK    int32
+	locLayer   int32
 	locCover   int32
 
 	ok bool
 }
 
 func newCloudRenderer() *cloudRenderer {
-	cloudCoverage = float32(*cloudCoverFlag)
 	c := &cloudRenderer{}
 	c.shader = rl.LoadShaderFromMemory(cloudVS, cloudFS)
 	if c.shader.ID == 0 {
@@ -265,7 +274,9 @@ func newCloudRenderer() *cloudRenderer {
 	c.locPanel = loc("uPanel")
 	c.locScreenH = loc("uScreenH")
 	c.locWorld = loc("uWorldOffset")
-	c.locTime = loc("uTime")
+	c.locWind = loc("uWindOfs")
+	c.locFogK = loc("uFogK")
+	c.locLayer = loc("uCloudLayer")
 	c.locCover = loc("uCoverage")
 
 	sun := normalize3(sunDir)
@@ -279,7 +290,8 @@ func newCloudRenderer() *cloudRenderer {
 }
 
 // composite replaces Scene3DRT.Composite: same quad, cloud shader on top.
-func (c *cloudRenderer) composite(rt *ui.Scene3DRT, panel ui.Panel) {
+func (c *cloudRenderer) composite(rt *ui.Scene3DRT, panel ui.Panel,
+	atm *components.Atmosphere, drift rl.Vector2) {
 	content := ui.ContentRect(panel)
 	cam := systems.CurrentCamera
 
@@ -308,8 +320,10 @@ func (c *cloudRenderer) composite(rt *ui.Scene3DRT, panel ui.Panel) {
 		float32(systems.CurrentOriginChunk.X) * components.ChunkSize,
 		float32(systems.CurrentOriginChunk.Z) * components.ChunkSize,
 	}, rl.ShaderUniformVec2)
-	set(c.locTime, []float32{float32(rl.GetTime())}, rl.ShaderUniformFloat)
-	set(c.locCover, []float32{cloudCoverage}, rl.ShaderUniformFloat)
+	set(c.locWind, []float32{drift.X, drift.Y}, rl.ShaderUniformVec2)
+	set(c.locFogK, []float32{atm.FogK()}, rl.ShaderUniformFloat)
+	set(c.locLayer, []float32{atm.CloudBase, atm.CloudTop}, rl.ShaderUniformVec2)
+	set(c.locCover, []float32{atm.Coverage}, rl.ShaderUniformFloat)
 
 	rl.BeginShaderMode(c.shader)
 	rl.SetShaderValueTexture(c.shader, c.locDepth, rt.RT.Depth)

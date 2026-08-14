@@ -31,6 +31,12 @@ func (g *Game) initUI() {
 	g.UI.PanelMgr.Recompute(g.UI.ScreenW, g.UI.ScreenH)
 	g.UI.Scene3DRT = ui.NewScene3DRT(g.UI.PanelMgr.Get(ui.Panel3D))
 	g.Ctx.Clouds = newCloudRenderer()
+	if atmo, ok := weatherFromFlag(); ok {
+		g.Res.Atmosphere = atmo
+	}
+	if *cloudCoverFlag >= 0 {
+		g.Res.Atmosphere.Coverage = float32(*cloudCoverFlag)
+	}
 	g.Ctx.Pyramid = systems.BakeHeightPyramid(16384, components.ChunkSize, 1, systems.GroundHeight)
 	g.Ctx.FarTerrain = newFarTerrain(g.Ctx.Pyramid)
 
@@ -508,7 +514,14 @@ func (g *Game) drawDebugWidget(panel ui.Panel, font rl.Font, cursorV rl.Vector2,
 	if len(g.Sel.Units) > 0 {
 		dump = devComponentDump(g.App.World, g.Sel.Units[0])
 	}
-	simIdx, spawnIdx := ui.DrawDebugPanel(panel, font, ui.DebugPanelCtx{
+	weatherButtons := make([]ui.DebugButton, components.WeatherCount)
+	for i := range components.WeatherSpecs {
+		weatherButtons[i] = ui.DebugButton{
+			Label: components.WeatherSpecs[i].Label,
+			Armed: g.Res.Atmosphere.Weather == components.WeatherKind(i),
+		}
+	}
+	simIdx, spawnIdx, weatherIdx := ui.DrawDebugPanel(panel, font, ui.DebugPanelCtx{
 		Cursor:   cursorV,
 		LMBPress: lmb,
 		Toggles:  debugOverlayToggles(&debugOverlay),
@@ -516,11 +529,16 @@ func (g *Game) drawDebugWidget(panel ui.Panel, font rl.Font, cursorV rl.Vector2,
 		SimButtons: []ui.DebugButton{
 			{Label: "Step 1"}, {Label: "Step 10"}, {Label: "Step 60"},
 		},
-		SpawnLabel:   "Arm + LMB in 3D places the entity",
-		SpawnButtons: spawnButtons,
-		DumpLines:    dump,
-		Footer:       "Overlay radius: 2 chunks around camera",
+		SpawnLabel:     "Arm + LMB in 3D places the entity",
+		SpawnButtons:   spawnButtons,
+		WeatherLabel:   "Preset swaps the Atmosphere resource",
+		WeatherButtons: weatherButtons,
+		DumpLines:      dump,
+		Footer:         "Overlay radius: 2 chunks around camera",
 	})
+	if weatherIdx >= 0 {
+		g.Res.Atmosphere = components.WeatherSpecs[weatherIdx].Atmo
+	}
 	if simIdx >= 0 {
 		g.App.TimeScale = 0 // stepping implies pause
 		g.Dev.PendingSteps += []int{1, 10, 60}[simIdx]

@@ -89,6 +89,8 @@ func (g *Game) initResources() {
 	ecs.AddResource(g.World, r.PropRegistry)
 	r.PropIndex = systems.NewPropChunkIndex()
 	ecs.AddResource(g.World, &r.PropIndex)
+	r.Atmosphere = components.DefaultAtmosphere()
+	ecs.AddResource(g.World, &r.Atmosphere)
 	r.Rivers = components.Rivers{Polylines: makeStartingRivers()}
 	ecs.AddResource(g.World, &r.Rivers)
 	r.RoadGraph = makeStartingRoadGraph()

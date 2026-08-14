@@ -23,6 +23,7 @@ type ParticleSystem struct {
 	visualMap *ecs.Map[components.ParticleVisual]
 	velMap    *ecs.Map[components.ParticleVel]
 	endMap    *ecs.Map[components.ParticleEnd]
+	atmRes    ecs.Resource[components.Atmosphere]
 	world     *ecs.World
 	removeBuf []ecs.Entity
 	sortBuf   []particleAge
@@ -46,6 +47,7 @@ func (sys *ParticleSystem) InitUI(w *ecs.World) {
 	sys.visualMap = ecs.NewMap[components.ParticleVisual](w)
 	sys.velMap = ecs.NewMap[components.ParticleVel](w)
 	sys.endMap = ecs.NewMap[components.ParticleEnd](w)
+	sys.atmRes = ecs.NewResource[components.Atmosphere](w)
 	sys.world = w
 }
 
@@ -67,6 +69,24 @@ var kindGravity = [...]float32{
 	components.ParticleSmoke:       +0.5,
 	components.ParticleDust:        -1.0,
 	components.ParticleDebris:      -9.8,
+}
+
+// kindWindGrip: per-second relaxation of horizontal velocity toward the local
+// wind. Smoke surrenders to it, dust partially, ballistic debris barely.
+var kindWindGrip = [...]float32{
+	components.ParticleTracer:      0,
+	components.ParticleImpact:      0,
+	components.ParticleMuzzleFlash: 0,
+	components.ParticleSmoke:       1.4,
+	components.ParticleDust:        0.6,
+	components.ParticleDebris:      0.12,
+}
+
+func windGripFor(kind components.ParticleKind) float32 {
+	if int(kind) < len(kindWindGrip) {
+		return kindWindGrip[kind]
+	}
+	return 0
 }
 
 func (sys *ParticleSystem) Update(ctx core.UpdateContext) {
@@ -91,6 +111,16 @@ func (sys *ParticleSystem) Update(ctx core.UpdateContext) {
 		if vel := sys.velMap.Get(ent); vel != nil {
 			if int(vis.Kind) < len(kindGravity) {
 				vel.Vel.Y += kindGravity[vis.Kind] * dt
+			}
+			if grip := windGripFor(vis.Kind); grip > 0 {
+				// Particle positions are absolute (chunk 0 convention).
+				wxv, wzv := WindAt(sys.atmRes.Get(), pos.Local.X, pos.Local.Z, ctx.SimNow)
+				k := grip * dt
+				if k > 1 {
+					k = 1
+				}
+				vel.Vel.X += (wxv - vel.Vel.X) * k
+				vel.Vel.Z += (wzv - vel.Vel.Z) * k
 			}
 			pos.Local.X += vel.Vel.X * dt
 			pos.Local.Y += vel.Vel.Y * dt
