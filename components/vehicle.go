@@ -85,3 +85,7 @@ type SmokeField struct {
 	Radius    float32
 	ExpiresAt float64
 }
+
+// SmokeFieldTTL is shared with the render side: spawn time is reconstructed
+// as ExpiresAt - TTL for the ease-in, so the component stays two fields.
+const SmokeFieldTTL float32 = 8.0

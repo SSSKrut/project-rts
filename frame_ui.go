@@ -30,6 +30,19 @@ func (g *Game) initUI() {
 	loadLayout(g.UI.PanelMgr, g.timelineLeafView(), &g.UI.Attention.Matrix, &g.UI.Cues.Muted)
 	g.UI.PanelMgr.Recompute(g.UI.ScreenW, g.UI.ScreenH)
 	g.UI.Scene3DRT = ui.NewScene3DRT(g.UI.PanelMgr.Get(ui.Panel3D))
+	g.Ctx.Clouds = newCloudRenderer()
+	g.Ctx.Particle.Puffs = newParticleRenderer()
+	if atmo, ok := weatherFromFlag(); ok {
+		g.Res.Atmosphere = atmo
+	}
+	if *cloudCoverFlag >= 0 {
+		g.Res.Atmosphere.Coverage = float32(*cloudCoverFlag)
+	}
+	if *hourFlag >= 0 {
+		g.Res.DayClock = components.DayClock{StartHours: float32(*hourFlag)}
+	}
+	g.Ctx.Pyramid = systems.BakeHeightPyramid(16384, components.ChunkSize, 1, systems.GroundHeight)
+	g.Ctx.FarTerrain = newFarTerrain(g.Ctx.Pyramid)
 
 	// Pre-bake the map underlay (2 km x 2 km, 4 m/pixel = 500x500 = 250 KB).
 	g.UI.Underlay = ui.BakeUnderlay(0, 0, 2000, 4, func(wx, wz float32) float32 {
@@ -76,6 +89,9 @@ func (g *Game) initUI() {
 func (g *Game) shutdownUI() {
 	g.shutdownAudioCues()
 	g.UI.Underlay.Unload()
+	g.Ctx.FarTerrain.unload()
+	g.Ctx.Particle.Puffs.unload()
+	g.Ctx.Clouds.unload()
 	g.UI.Scene3DRT.Unload()
 	// A capture run may have swapped a leaf for -shot-panel; persisting that
 	// would leak a throwaway layout into the player's saved one.
@@ -490,6 +506,13 @@ func (g *Game) devSpawnAt(target components.WorldPos) {
 	}
 }
 
+var dayTimeChips = []struct {
+	label string
+	hours float32
+}{
+	{"Night", 0.5}, {"Dawn", 6.3}, {"Day", 10.5}, {"Golden", 17.3}, {"Dusk", 18.6},
+}
+
 func (g *Game) drawDebugWidget(panel ui.Panel, font rl.Font, cursorV rl.Vector2, lmb bool) {
 	simLabel := fmt.Sprintf("tick %d  speed x%d", g.App.TickIndex(), int(g.App.TimeScale))
 	if g.App.TimeScale == 0 {
@@ -503,7 +526,24 @@ func (g *Game) drawDebugWidget(panel ui.Panel, font rl.Font, cursorV rl.Vector2,
 	if len(g.Sel.Units) > 0 {
 		dump = devComponentDump(g.App.World, g.Sel.Units[0])
 	}
-	simIdx, spawnIdx := ui.DrawDebugPanel(panel, font, ui.DebugPanelCtx{
+	weatherButtons := make([]ui.DebugButton, components.WeatherCount)
+	for i := range components.WeatherSpecs {
+		weatherButtons[i] = ui.DebugButton{
+			Label: components.WeatherSpecs[i].Label,
+			Armed: g.Res.Atmosphere.Weather == components.WeatherKind(i),
+		}
+	}
+	simNow := g.App.Elapsed().Seconds()
+	hours := g.Res.DayClock.HoursAt(simNow)
+	timeButtons := make([]ui.DebugButton, len(dayTimeChips)+1)
+	for i, c := range dayTimeChips {
+		d := hours - c.hours
+		timeButtons[i] = ui.DebugButton{Label: c.label, Armed: d > -0.5 && d < 0.5}
+	}
+	timeButtons[len(dayTimeChips)] = ui.DebugButton{
+		Label: "Run", Armed: g.Res.DayClock.HoursPerSec > 0,
+	}
+	simIdx, spawnIdx, weatherIdx, timeIdx := ui.DrawDebugPanel(panel, font, ui.DebugPanelCtx{
 		Cursor:   cursorV,
 		LMBPress: lmb,
 		Toggles:  debugOverlayToggles(&debugOverlay),
@@ -511,11 +551,31 @@ func (g *Game) drawDebugWidget(panel ui.Panel, font rl.Font, cursorV rl.Vector2,
 		SimButtons: []ui.DebugButton{
 			{Label: "Step 1"}, {Label: "Step 10"}, {Label: "Step 60"},
 		},
-		SpawnLabel:   "Arm + LMB in 3D places the entity",
-		SpawnButtons: spawnButtons,
-		DumpLines:    dump,
-		Footer:       "Overlay radius: 2 chunks around camera",
+		SpawnLabel:     "Arm + LMB in 3D places the entity",
+		SpawnButtons:   spawnButtons,
+		WeatherLabel:   "Preset swaps the Atmosphere resource",
+		WeatherButtons: weatherButtons,
+		TimeLabel: fmt.Sprintf("%02d:%02d  sun follows the sim clock",
+			int(hours), int(hours*60)%60),
+		TimeButtons: timeButtons,
+		DumpLines:   dump,
+		Footer:      "Overlay radius: 2 chunks around camera",
 	})
+	if weatherIdx >= 0 {
+		g.Res.Atmosphere = components.WeatherSpecs[weatherIdx].Atmo
+	}
+	if timeIdx >= 0 {
+		if timeIdx < len(dayTimeChips) {
+			g.Res.DayClock.Anchor(dayTimeChips[timeIdx].hours, simNow)
+		} else {
+			rate := components.DayClockRate
+			if g.Res.DayClock.HoursPerSec > 0 {
+				rate = 0
+			}
+			g.Res.DayClock.HoursPerSec = rate
+			g.Res.DayClock.Anchor(hours, simNow)
+		}
+	}
 	if simIdx >= 0 {
 		g.App.TimeScale = 0 // stepping implies pause
 		g.Dev.PendingSteps += []int{1, 10, 60}[simIdx]

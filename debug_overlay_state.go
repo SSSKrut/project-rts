@@ -26,9 +26,11 @@ type DebugOverlayState struct {
 	Roofs bool
 	// TerrainDetail is the normal-mapped ground micro-relief (hotkey N).
 	TerrainDetail bool
+	// Clouds is the volumetric sky post-pass over the scene composite.
+	Clouds bool
 }
 
-var debugOverlay = DebugOverlayState{Roofs: true, TerrainDetail: true}
+var debugOverlay = DebugOverlayState{Roofs: true, TerrainDetail: true, Clouds: true}
 
 func debugOverlayToggles(s *DebugOverlayState) []ui.DebugToggle {
 	return []ui.DebugToggle{
@@ -43,6 +45,7 @@ func debugOverlayToggles(s *DebugOverlayState) []ui.DebugToggle {
 		{Label: "Squad lines (K)", On: &s.SquadLines},
 		{Label: "Roofs (R)", On: &s.Roofs},
 		{Label: "Terrain detail (N)", On: &s.TerrainDetail},
+		{Label: "Clouds + sky", On: &s.Clouds},
 	}
 }
 

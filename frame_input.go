@@ -11,6 +11,11 @@ import (
 	"rts-go/ui"
 )
 
+const (
+	viewLiftSpeed float32 = 40.0
+	viewLiftMax   float32 = 900.0
+)
+
 // handleInput covers sim controls, WASD, per-panel input (map / inspector /
 // top bar / timeline) and LMB selection.
 func (g *Game) handleInput() {
@@ -64,6 +69,31 @@ func (g *Game) handleInput() {
 			inRight -= 1
 		}
 	}
+	// Q/Z lift the orbit focus off the ground-stuck anchor; the anchor itself
+	// never leaves the terrain, so picking and GroundStick stay untouched.
+	if wasdAllowed {
+		var lift float32
+		if rl.IsKeyDown(rl.KeyQ) {
+			lift += 1
+		}
+		if rl.IsKeyDown(rl.KeyZ) {
+			lift -= 1
+		}
+		if lift != 0 {
+			step := viewLiftSpeed * float32(g.Frame.DtReal.Seconds())
+			if g.Frame.Shift {
+				step *= 4
+			}
+			orbit.ViewLift += lift * step
+			if orbit.ViewLift < 0 {
+				orbit.ViewLift = 0
+			}
+			if orbit.ViewLift > viewLiftMax {
+				orbit.ViewLift = viewLiftMax
+			}
+		}
+	}
+
 	g.Frame.WASDActive = inFwd != 0 || inRight != 0
 	if g.Frame.WASDActive {
 		if mag := float32(math.Sqrt(float64(inFwd*inFwd + inRight*inRight))); mag > 1 {

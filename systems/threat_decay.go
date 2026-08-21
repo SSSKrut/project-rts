@@ -1,6 +1,7 @@
 package systems
 
 import (
+	rl "github.com/gen2brain/raylib-go/raylib"
 	"github.com/mlange-42/ark/ecs"
 
 	"rts-go/components"
@@ -13,9 +14,10 @@ import (
 // window".
 type ThreatDecaySystem struct {
 	filter    *ecs.Filter1[components.ThreatSource]
-	smoke     *ecs.Filter1[components.SmokeField]
+	smoke     *ecs.Filter2[components.SmokeField, components.WorldPos]
 	blast     *ecs.Filter1[components.BlastMark]
 	unsafe    *ecs.Filter1[components.UnsafeArea]
+	atmRes    ecs.Resource[components.Atmosphere]
 	despawned []ecs.Entity
 }
 
@@ -27,9 +29,10 @@ func NewThreatDecaySystem() *ThreatDecaySystem {
 
 func (sys *ThreatDecaySystem) InitUI(w *ecs.World) {
 	sys.filter = ecs.NewFilter1[components.ThreatSource](w)
-	sys.smoke = ecs.NewFilter1[components.SmokeField](w)
+	sys.smoke = ecs.NewFilter2[components.SmokeField, components.WorldPos](w)
 	sys.blast = ecs.NewFilter1[components.BlastMark](w)
 	sys.unsafe = ecs.NewFilter1[components.UnsafeArea](w)
+	sys.atmRes = ecs.NewResource[components.Atmosphere](w)
 }
 
 func (ThreatDecaySystem) Name() string { return "threat_decay" }
@@ -56,10 +59,22 @@ func (sys *ThreatDecaySystem) Update(ctx core.UpdateContext) {
 	}
 	q.Close()
 
+	// Smoke drifts downwind at half the local wind — a screening volume that
+	// slides off its target is the tactical cost of smoking in a gale.
+	atm := sys.atmRes.Get()
+	dt := float32(ctx.Delta.Seconds())
 	qs := sys.smoke.Query()
 	for qs.Next() {
-		if float64(now) >= qs.Get().ExpiresAt {
+		sf, pos := qs.Get()
+		if float64(now) >= sf.ExpiresAt {
 			sys.despawned = append(sys.despawned, qs.Entity())
+			continue
+		}
+		if atm != nil && dt > 0 {
+			wx := float32(pos.Chunk.X)*components.ChunkSize + pos.Local.X
+			wz := float32(pos.Chunk.Z)*components.ChunkSize + pos.Local.Z
+			wxv, wzv := WindAt(atm, wx, wz, ctx.SimNow)
+			*pos = pos.Add(rl.Vector3{X: wxv * 0.5 * dt, Z: wzv * 0.5 * dt})
 		}
 	}
 	qs.Close()

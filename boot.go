@@ -43,6 +43,9 @@ func bootGame() *Game {
 
 	rl.SetConfigFlags(rl.FlagWindowResizable)
 	rl.InitWindow(initialScreenWidth, initialScreenHeight, "RTS/FPS 3D ECS Prototype")
+	// Defaults are 0.01/1000: the far plane cuts the horizon rings, and a
+	// centimetre near plane burns the whole depth range within ~90 m.
+	rl.SetClipPlanes(renderNearPlane, renderFarPlane)
 
 	g := &Game{}
 	g.hudFont, g.hudFontIsCustom = loadHUDFont()
@@ -86,6 +89,10 @@ func (g *Game) initResources() {
 	ecs.AddResource(g.World, r.PropRegistry)
 	r.PropIndex = systems.NewPropChunkIndex()
 	ecs.AddResource(g.World, &r.PropIndex)
+	r.Atmosphere = components.DefaultAtmosphere()
+	ecs.AddResource(g.World, &r.Atmosphere)
+	r.DayClock = components.DefaultDayClock()
+	ecs.AddResource(g.World, &r.DayClock)
 	r.Rivers = components.Rivers{Polylines: makeStartingRivers()}
 	ecs.AddResource(g.World, &r.Rivers)
 	r.RoadGraph = makeStartingRoadGraph()

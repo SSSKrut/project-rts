@@ -69,6 +69,8 @@ type worldRes struct {
 	OrderHistory     *components.OrderHistory
 	ContactRegistry  components.ContactRegistry
 	Symbology        components.SymbologyPresets
+	Atmosphere       components.Atmosphere
+	DayClock         components.DayClock
 }
 
 type gameServices struct {
@@ -177,6 +179,11 @@ type renderCtx struct {
 	Particle    ParticleRenderCtx
 	Ribbons     ribbonSet
 	WorldShader *worldShader
+	Clouds      *cloudRenderer
+	Pyramid     *systems.HeightPyramid
+	FarTerrain  *farTerrain
+	CloudDrift  rl.Vector2
+	Daylight    skyPalette
 }
 
 // sceneHarness holds the scripted test scenes (-scene=...); nil in normal play.

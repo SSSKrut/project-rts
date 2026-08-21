@@ -267,9 +267,10 @@ func (g *Game) handleOrders() {
 		}
 	}
 
-	// Q -> toggle behavior panel floating. Uses the floatSpawn ID convention
-	// so the panel shares its scroll state with the workspace flavour.
-	if rl.IsKeyPressed(rl.KeyQ) {
+	// O -> toggle behavior panel floating (Q lifts the camera on this branch).
+	// Uses the floatSpawn ID convention so the panel shares its scroll state
+	// with the workspace flavour.
+	if rl.IsKeyPressed(rl.KeyO) {
 		id := "float:" + string(ui.PanelBehavior)
 		if g.UI.Floating.IsOpen(id) {
 			g.UI.Floating.Close(id)

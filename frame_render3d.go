@@ -46,11 +46,26 @@ func (g *Game) drawScene3D() {
 	g.Frame.AnchorPos = g.Maps.Pos.Get(g.anchor)
 	anchorRender := g.Frame.AnchorPos.ToRenderSpace(systems.CurrentOriginChunk)
 
+	// Wind drift accumulates instead of multiplying time — a live weather
+	// change must shift the field's future, not rewrite its history.
+	atm := &g.Res.Atmosphere
+	gust := systems.WindGust(atm, rl.GetTime())
+	dtDrift := float32(g.Frame.DtReal.Seconds())
+	g.Ctx.CloudDrift.X += atm.WindX * gust * dtDrift
+	g.Ctx.CloudDrift.Y += atm.WindZ * gust * dtDrift
+
+	// One daylight palette per frame drives terrain, clouds and particles.
+	hours := g.Res.DayClock.HoursAt(g.App.Elapsed().Seconds())
+	g.Ctx.Daylight = daylightPalette(hours)
+	if g.Ctx.Particle.Puffs != nil {
+		g.Ctx.Particle.Puffs.setLight(&g.Ctx.Daylight)
+	}
+
 	rl.BeginTextureMode(g.UI.Scene3DRT.RT)
 	rl.ClearBackground(rl.RayWhite)
 	rl.BeginMode3D(systems.CurrentCamera)
 
-	g.Ctx.WorldShader.beginFrame()
+	g.Ctx.WorldShader.beginFrame(atm, g.Ctx.CloudDrift, &g.Ctx.Daylight)
 	g.Ctx.WorldShader.setGround(true)
 
 	g.Frame.ChunksActive = 0
@@ -78,10 +93,19 @@ func (g *Game) drawScene3D() {
 		rl.DrawMesh(mesh.Mesh, g.terrainMaterial, xform)
 	}
 
+	g.Ctx.FarTerrain.ensure(g.Frame.AnchorPos.Chunk)
+	g.Ctx.FarTerrain.draw(g.terrainMaterial)
+
 	g.Ctx.WorldShader.setGround(false)
 	g.Frame.RibbonsDrawn = g.Ctx.Ribbons.Roads.draw(g.terrainMaterial)
 
 	rl.DrawCircle3D(anchorRender, 1, rl.Vector3{X: 1, Y: 0, Z: 0}, 90, rl.Blue)
+	if orb := g.Maps.Orbit.Get(g.camEnt); orb != nil && orb.ViewLift > 0.05 {
+		top := anchorRender
+		top.Y += orb.ViewLift
+		rl.DrawLine3D(anchorRender, top, rl.Red)
+		rl.DrawCircle3D(top, 0.6, rl.Vector3{X: 1, Y: 0, Z: 0}, 90, rl.Red)
+	}
 
 	g.Frame.UnitsLive = 0
 	fowNow := g.Svc.Squad.Clock()
@@ -586,14 +610,6 @@ func (g *Game) drawScene3D() {
 	// Translucent: after every opaque draw, or the depth write would
 	// reject whatever stands beyond the surface.
 	g.Frame.RibbonsDrawn += g.Ctx.Ribbons.Water.draw(g.terrainMaterial)
-
-	qsmoke := g.Filt.SmokeRender.Query()
-	for qsmoke.Next() {
-		sp, sf := qsmoke.Get()
-		c := sp.ToRenderSpace(systems.CurrentOriginChunk)
-		c.Y += sf.Radius * 0.5
-		rl.DrawSphere(c, sf.Radius, rl.Color{R: 150, G: 150, B: 155, A: 70})
-	}
 
 	drawParticles(g.Ctx.Particle, float32(g.App.Elapsed().Seconds()))
 

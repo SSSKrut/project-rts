@@ -25,4 +25,7 @@ type OrbitController struct {
 
 	// Smoothing factor (0 = instant, >0 = lerp factor per second).
 	Smooth float32
+
+	// Vertical offset of the orbit focus above the target entity (Q/Z).
+	ViewLift float32
 }

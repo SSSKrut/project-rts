@@ -48,6 +48,7 @@ func (sys CameraSystem) Update(ctx core.UpdateContext) {
 				tptr := sys.posMap.Get(orb.Target)
 				if tptr != nil {
 					targetPos = *tptr
+					targetPos.Local.Y += orb.ViewLift
 				}
 			}
 

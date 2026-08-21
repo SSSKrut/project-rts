@@ -59,6 +59,7 @@ func (sys *OrbitSystem) Update(ctx core.UpdateContext) {
 			tptr := sys.posMap.Get(orbit.Target)
 			if tptr != nil {
 				target = *tptr
+				target.Local.Y += orbit.ViewLift
 				hasTarget = true
 			}
 		}

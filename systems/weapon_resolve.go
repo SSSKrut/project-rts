@@ -104,6 +104,7 @@ func resolveShot(
 	*tracerBuf = append(*tracerBuf, tracerSpec{
 		From: s.muzzle, To: impact,
 		Color: s.tracerColor, SpawnTime: now, TTL: weaponTracerTTL,
+		Trail: s.trail,
 	})
 
 	impactColor := rl.Color{R: 230, G: 200, B: 80, A: 255}

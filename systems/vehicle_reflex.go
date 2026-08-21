@@ -51,7 +51,6 @@ const (
 	reflexEngageWindow float32 = 3.0
 
 	smokeFieldRadius float32 = 8.0
-	smokeFieldTTL    float32 = 8.0
 )
 
 func NewVehicleReflexSystem() *VehicleReflexSystem {
@@ -105,7 +104,7 @@ func (sys *VehicleReflexSystem) Update(ctx core.UpdateContext) {
 		sys.posMap.Add(e, &p)
 		sys.smokeMap.Add(e, &components.SmokeField{
 			Radius:    smokeFieldRadius,
-			ExpiresAt: float64(now) + float64(smokeFieldTTL),
+			ExpiresAt: float64(now) + float64(components.SmokeFieldTTL),
 		})
 	}
 }
