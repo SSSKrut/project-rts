@@ -207,6 +207,37 @@ func (g *Game) drawScene3D() {
 		}
 	}
 
+	qair := g.Filt.AircraftRender.Query()
+	for qair.Next() {
+		pos, ac := qair.Get()
+		ent := qair.Entity()
+		renderPos := pos.ToRenderSpace(systems.CurrentOriginChunk)
+		yaw := float32(0)
+		if m := g.Svc.UnitFactory.MotionMap.Get(ent); m != nil {
+			yaw = m.Yaw
+		}
+		side := components.SideWest
+		if f := g.Maps.Faction.Get(ent); f != nil {
+			side = components.AssetSideForFaction(f.ID)
+		}
+		if g.Ctx.Models.hasAircraft(ac.Kind, side) {
+			g.drawAircraftModel(ent, renderPos, ac.Kind, side, yaw, rl.White)
+		} else {
+			drawAircraftBox(renderPos, yaw, ac.Kind, g.squadColor(ent))
+		}
+		// A shadow disc is the only cue that says how high the airframe is:
+		// on a 3D view from above, altitude reads as nothing at all.
+		g.drawAircraftShadow(*pos, renderPos, ac.Kind)
+		if g.isSelected(ent) >= 0 || g.Sel.Hovered == ent {
+			spec := components.SpecForAircraft(ac.Kind)
+			c := rl.Color{R: 0, G: 220, B: 220, A: 255}
+			if g.Sel.Hovered == ent {
+				c = rl.Color{R: 240, G: 240, B: 120, A: 255}
+			}
+			rl.DrawCircle3D(renderPos, spec.ColliderR, rl.Vector3{X: 1, Y: 0, Z: 0}, 90, c)
+		}
+	}
+
 	g.Ctx.WorldShader.beginObjects()
 	g.Frame.PropsLive = 0
 	camPos := systems.CurrentCamera.Position

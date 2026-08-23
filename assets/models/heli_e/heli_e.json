@@ -20,14 +20,14 @@
   {
    "lod": 0,
    "ratio": 0.2547,
-   "tris": 10997,
-   "draws": 2
+   "tris": 10996,
+   "draws": 4
   },
   {
    "lod": 1,
-   "ratio": 0.0206,
-   "tris": 3198,
-   "draws": 2
+   "ratio": 0.0202,
+   "tris": 3197,
+   "draws": 4
   },
   {
    "lod": 2,
@@ -49,24 +49,24 @@
      {
       "mesh": 1,
       "bucket": "opaque",
-      "tris": 10475
+      "tris": 8736
      }
     ],
     "1": [
      {
-      "mesh": 2,
+      "mesh": 4,
       "bucket": "glass",
-      "tris": 42
+      "tris": 41
      },
      {
-      "mesh": 3,
+      "mesh": 5,
       "bucket": "opaque",
-      "tris": 3156
+      "tris": 2468
      }
     ],
     "2": [
      {
-      "mesh": 4,
+      "mesh": 8,
       "bucket": "opaque",
       "tris": 895
      }
@@ -81,13 +81,89 @@
    "parent": "",
    "bbox": {
     "min": [
-     -6.0109,
+     -5.3008,
      -0.0,
      -7.2711
     ],
     "max": [
-     4.8832,
+     4.0134,
      5.249,
+     5.76
+    ]
+   }
+  },
+  {
+   "id": "rotor_left",
+   "lods": {
+    "0": [
+     {
+      "mesh": 2,
+      "bucket": "opaque",
+      "tris": 869
+     }
+    ],
+    "1": [
+     {
+      "mesh": 6,
+      "bucket": "opaque",
+      "tris": 344
+     }
+    ]
+   },
+   "pivot": [
+    -0.72,
+    4.161,
+    0.2
+   ],
+   "axis": "spin_y_rev",
+   "parent": "hull",
+   "bbox": {
+    "min": [
+     -6.0109,
+     2.3152,
+     -0.2665
+    ],
+    "max": [
+     4.8832,
+     5.1425,
+     0.6665
+    ]
+   }
+  },
+  {
+   "id": "rotor_right",
+   "lods": {
+    "0": [
+     {
+      "mesh": 3,
+      "bucket": "opaque",
+      "tris": 869
+     }
+    ],
+    "1": [
+     {
+      "mesh": 7,
+      "bucket": "opaque",
+      "tris": 344
+     }
+    ]
+   },
+   "pivot": [
+    0.72,
+    4.161,
+    0.2
+   ],
+   "axis": "spin_y",
+   "parent": "hull",
+   "bbox": {
+    "min": [
+     0.1751,
+     3.6511,
+     -5.4
+    ],
+    "max": [
+     1.1507,
+     4.7324,
      5.8
     ]
    }
@@ -123,5 +199,5 @@
    ]
   }
  ],
- "bytes": 650812
+ "bytes": 644644
 }

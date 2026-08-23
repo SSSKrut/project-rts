@@ -82,6 +82,17 @@ type gameServices struct {
 	Role           *systems.RoleService
 	UnitFactory    *entities.UnitFactory
 	VehicleFactory *entities.VehicleFactory
+	// AircraftFactory is built with the other gameplay handles, LATE, so the
+	// aircraft component types take IDs after every existing one. Ark assigns
+	// IDs on first registration and the ID order decides archetype iteration
+	// order, which decides float accumulation order in the movement passes —
+	// registering these early would drift every existing scene's replay hash
+	// for no reason.
+	AircraftFactory *entities.AircraftFactory
+	// AirTraffic is held so the factory can be injected after construction:
+	// the system is registered in registerSystems, which runs before the
+	// factory exists.
+	AirTraffic *systems.AirTrafficSystem
 }
 
 // gameMaps holds every ecs.Map handle the UI / input / render halves read.
@@ -137,7 +148,8 @@ type gameMaps struct {
 // gameFilters holds the query handles used outside the systems.
 type gameFilters struct {
 	UnitRender    *ecs.Filter3[components.WorldPos, components.Unit, components.Stance]
-	VehicleRender *ecs.Filter2[components.WorldPos, components.Vehicle]
+	VehicleRender  *ecs.Filter2[components.WorldPos, components.Vehicle]
+	AircraftRender *ecs.Filter2[components.WorldPos, components.Aircraft]
 	SmokeRender   *ecs.Filter2[components.WorldPos, components.SmokeField]
 	ChunkActive   *ecs.Filter3[components.WorldPos, components.ChunkMesh, components.LODActive]
 	ChunkRelevant *ecs.Filter3[components.WorldPos, components.ChunkMesh, components.LODRelevant]

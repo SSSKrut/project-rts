@@ -26,17 +26,27 @@ type modelSet struct {
 	byKind  [components.VehicleKindCount][components.AssetSideCount]assets.ModelID
 	hasKind [components.VehicleKindCount][components.AssetSideCount]bool
 
+	byAir  [components.AircraftKindCount][components.AssetSideCount]assets.ModelID
+	hasAir [components.AircraftKindCount][components.AssetSideCount]bool
+
 	digits    assets.ModelID
 	hasDigits bool
 
 	spin     map[ecs.Entity]float32
 	spinSeen map[ecs.Entity]float32
+	// Rotor phase, kept apart from wheel spin: an airframe has both (main
+	// rotor about the mast, tail rotor about a lateral shaft) and they turn at
+	// unrelated rates. Cosmetics, so neither enters a component or a hash.
+	rotor     map[ecs.Entity]float32
+	rotorSeen map[ecs.Entity]float32
 }
 
 func newModelSet() *modelSet {
 	m := &modelSet{
-		spin:     make(map[ecs.Entity]float32),
-		spinSeen: make(map[ecs.Entity]float32),
+		spin:      make(map[ecs.Entity]float32),
+		spinSeen:  make(map[ecs.Entity]float32),
+		rotor:     make(map[ecs.Entity]float32),
+		rotorSeen: make(map[ecs.Entity]float32),
 	}
 	reg, err := assets.LoadRegistry(modelDir)
 	if err != nil {
@@ -53,6 +63,17 @@ func newModelSet() *modelSet {
 			if id, ok := reg.ID(name); ok {
 				m.byKind[kind][side] = id
 				m.hasKind[kind][side] = true
+			}
+		}
+	}
+	for kind, sides := range components.AircraftAssetName {
+		for side, name := range sides {
+			if name == "" {
+				continue
+			}
+			if id, ok := reg.ID(name); ok {
+				m.byAir[kind][side] = id
+				m.hasAir[kind][side] = true
 			}
 		}
 	}
@@ -83,10 +104,16 @@ func (m *modelSet) beginFrame(pal skyPalette, camPos rl.Vector3) {
 	}, camPos)
 	m.spin, m.spinSeen = m.spinSeen, m.spin
 	clear(m.spinSeen)
+	m.rotor, m.rotorSeen = m.rotorSeen, m.rotor
+	clear(m.rotorSeen)
 }
 
 func (m *modelSet) has(kind components.VehicleKind, side components.AssetSide) bool {
 	return m.reg != nil && int(kind) < len(m.hasKind) && m.hasKind[kind][side]
+}
+
+func (m *modelSet) hasAircraft(kind components.AircraftKind, side components.AssetSide) bool {
+	return m.reg != nil && int(kind) < len(m.hasAir) && m.hasAir[kind][side]
 }
 
 // rollWheels integrates the wheel angle from ground speed. Radius comes from
@@ -127,6 +154,47 @@ func (g *Game) drawVehicleModel(ent ecs.Entity, pos rl.Vector3, kind components.
 	m.reg.Draw(id, lod, assets.Pose{
 		Pos: pos, Yaw: yaw, Turret: turretYaw,
 		WheelSpin: spin, Steer: steer, Tint: tint,
+	})
+	return lod
+}
+
+// rotorRPS is the main-rotor rate. Constant rather than derived from speed:
+// a rotor is governed to constant RPM in real flight and only the collective
+// changes, so tying it to groundspeed would look wrong in exactly the case
+// that matters — a hover.
+const rotorRPS float32 = 5.0
+
+// spinRotor integrates the rotor phase. Wrapped every turn so a long session
+// cannot walk the float into a range where the angle quantises visibly.
+func (m *modelSet) spinRotor(ent ecs.Entity, dt float32) float32 {
+	a := m.rotor[ent] + rotorRPS*2*float32(math.Pi)*dt
+	if a > 2*math.Pi {
+		a = float32(math.Mod(float64(a), 2*math.Pi))
+	}
+	m.rotorSeen[ent] = a
+	return a
+}
+
+// drawAircraftModel draws one airframe. Roll and pitch are deliberately absent:
+// the driver is kinematic and has no bank state, and faking a bank from yaw
+// rate would put the model at an attitude the sim does not believe in — the
+// same class of lie the transposed-matrix bug was.
+func (g *Game) drawAircraftModel(ent ecs.Entity, pos rl.Vector3,
+	kind components.AircraftKind, side components.AssetSide,
+	yaw float32, tint rl.Color) int {
+	m := g.Ctx.Models
+	id := m.byAir[kind][side]
+	dt := rl.GetFrameTime()
+	cam := systems.CurrentCamera.Position
+	dist := rl.Vector3Distance(cam, pos)
+	lod := m.reg.PickLOD(id, dist, systems.CurrentCamera.Fovy, float32(g.UI.ScreenH))
+	m.reg.Draw(id, lod, assets.Pose{
+		Pos: pos, Yaw: yaw,
+		Rotor: m.spinRotor(ent, dt),
+		// Tail rotor rides the wheel-spin channel: an airframe has no wheels,
+		// and its shaft is lateral — the same axis a wheel turns about.
+		WheelSpin: m.rollWheels(ent, rotorRPS*6, 1, dt),
+		Tint:      tint,
 	})
 	return lod
 }

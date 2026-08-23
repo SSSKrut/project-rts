@@ -17,7 +17,11 @@ type Pose struct {
 	Gun       float32
 	WheelSpin float32
 	Steer     float32
-	Tint      rl.Color
+	// Rotor drives parts on the "spin_y" axis — a mast, which turns about up.
+	// A tail rotor is not this: its shaft is lateral, which is what "spin"
+	// already means, so it rides WheelSpin instead of growing a third channel.
+	Rotor float32
+	Tint  rl.Color
 }
 
 // Ensure uploads the geometry on first use. Returns nil if the asset does not
@@ -105,6 +109,13 @@ func (a *Asset) partMatrices(p Pose, out []rl.Matrix) []rl.Matrix {
 			if part.Steer {
 				local = rl.MatrixMultiply(local, rotY(p.Steer))
 			}
+		case "spin_y":
+			local = rotY(p.Rotor)
+		case "spin_y_rev":
+			// Counter-rotating pair (tandem, coaxial, twin-mast). One angle
+			// drives both, negated here, so the two discs can never drift out
+			// of step the way two independent phases would.
+			local = rotY(-p.Rotor)
 		}
 		if part.Axis != "" {
 			pv := part.pivot

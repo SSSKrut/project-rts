@@ -23,6 +23,8 @@ import (
 type ReplayHasher struct {
 	unitFilter    *ecs.Filter4[components.Unit, components.WorldPos, components.Motion, components.ActionQueue]
 	vehFilter     *ecs.Filter4[components.Vehicle, components.WorldPos, components.Motion, components.ActionQueue]
+	airFilter     *ecs.Filter3[components.Aircraft, components.WorldPos, components.Motion]
+	arrivalFilter *ecs.Filter1[components.AirArrival]
 	orderFilter   *ecs.Filter1[components.OrderState]
 	planFilter    *ecs.Filter2[components.Squad, components.SquadPlan]
 	contactFilter *ecs.Filter1[components.Contact]
@@ -33,6 +35,7 @@ type ReplayHasher struct {
 	routeMap      *ecs.Map[components.RoadRoute]
 	followerMap   *ecs.Map[components.RoadFollower]
 	overrideMap   *ecs.Map[components.VehicleOverride]
+	queueMap      *ecs.Map[components.ActionQueue]
 	world         *ecs.World
 
 	scratch []entHash
@@ -59,6 +62,9 @@ func NewReplayHasher(w *ecs.World) *ReplayHasher {
 		routeMap:      ecs.NewMap[components.RoadRoute](w),
 		followerMap:   ecs.NewMap[components.RoadFollower](w),
 		overrideMap:   ecs.NewMap[components.VehicleOverride](w),
+		airFilter:     ecs.NewFilter3[components.Aircraft, components.WorldPos, components.Motion](w),
+		arrivalFilter: ecs.NewFilter1[components.AirArrival](w),
+		queueMap:      ecs.NewMap[components.ActionQueue](w),
 	}
 }
 
@@ -179,6 +185,56 @@ func (r *ReplayHasher) Hash() uint64 {
 			pos(ov.Retreat)
 		}
 		take(ent)
+	}
+	fold()
+
+	// Airframes. Y is hashed with the rest of the position (pos() covers it),
+	// which matters more here than anywhere else: an aircraft's altitude IS
+	// simulation state, not a render clamp, and a drift there is invisible in
+	// XZ until the airframe walks into a hillside. Arrivals are folded too —
+	// an unreleased schedule entry that came back from a save one tick early
+	// spawns a whole airframe out of step.
+	qair := r.airFilter.Query()
+	for qair.Next() {
+		ac, p, mot := qair.Get()
+		ent := qair.Entity()
+		pos(*p)
+		f32(mot.Yaw)
+		f32(mot.Speed)
+		u8(uint8(ac.Kind))
+		u8(uint8(ac.AltRef))
+		f32(ac.AltSet)
+		f32(ac.SpeedSet)
+		f32(ac.Fuel)
+		if ac.Egressing {
+			u8(1)
+		} else {
+			u8(0)
+		}
+		if hp := r.hpMap.Get(ent); hp != nil {
+			f32(hp.Current)
+		}
+		if aq := r.queueMap.Get(ent); aq != nil {
+			u8(aq.Head)
+			u8(aq.Count)
+			if aq.Count > 0 {
+				a := aq.Actions[aq.Head%components.ActionQueueSize]
+				u8(uint8(a.Kind))
+				pos(a.Target)
+			}
+		}
+		take(ent)
+	}
+	fold()
+
+	qarr := r.arrivalFilter.Query()
+	for qarr.Next() {
+		a := qarr.Get()
+		f32(a.At)
+		u8(uint8(a.Kind))
+		u8(a.FactionID)
+		pos(a.Entry)
+		take(qarr.Entity())
 	}
 	fold()
 

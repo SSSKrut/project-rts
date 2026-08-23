@@ -218,6 +218,13 @@ const (
 	// road speed — offroad the river cut is impassable, so the road is the
 	// only way east.
 	aiSceneVehConvoyRoad = "ai_vehicle_convoy_road"
+
+	// _air_transit (Phase 20 M0): a gunship arrives on schedule, flies four
+	// legs across `hills` at a nap-of-the-earth AGL dial, then is sent home
+	// and clears the map. PASS demands the release fired, every leg was
+	// consumed, the airframe tracked the terrain within tolerance, never got
+	// closer to it than the clearance floor, and actually despawned.
+	aiSceneAirTransit = "ai_air_transit"
 )
 
 // aiSceneMapName lets a scene demand a specific map manifest ("" = default).
@@ -227,6 +234,10 @@ func aiSceneMapName() string {
 		return "hills"
 	case aiSceneVehRoad, aiSceneVehConvoyRoad:
 		return "valley"
+	case aiSceneAirTransit:
+		// Terrain following is the point: on flat ground an AGL dial and an
+		// AMSL one are the same run.
+		return "hills"
 	case aiSceneCoverNone:
 		return "flat"
 	case aiSceneCoverDefilade:
@@ -380,6 +391,8 @@ func aiSceneAnchorPos() components.WorldPos {
 		return components.WorldPos{}.Add(rl.Vector3{X: 45, Z: -20})
 	case aiSceneVehConvoyRoad:
 		return components.WorldPos{}.Add(rl.Vector3{X: 10, Z: -12})
+	case aiSceneAirTransit:
+		return components.WorldPos{}.Add(rl.Vector3{X: 0, Z: 0})
 	}
 	return components.WorldPos{}
 }
@@ -1634,6 +1647,7 @@ func aiSceneSpawn(
 	roleService *systems.RoleService,
 	unitFactory aiUnitSpawn,
 	vehicleFactory *entities.VehicleFactory,
+	aircraftFactory *entities.AircraftFactory,
 	playerFaction components.Faction,
 	posMap *ecs.Map[components.WorldPos],
 	rosterMap *ecs.Map[components.CommandRoster],
@@ -1641,6 +1655,9 @@ func aiSceneSpawn(
 ) *aiTestState {
 	if !isAIScene() {
 		return nil
+	}
+	if aiSceneID() == aiSceneAirTransit {
+		return aiAirTransitSpawn(world, aircraftFactory, posMap)
 	}
 	if aiSceneID() == aiSceneVehMove {
 		return aiVehicleSceneSpawn(world, vehicleFactory, posMap)
@@ -1993,6 +2010,24 @@ type aiTestState struct {
 	VehFollowerMap   *ecs.Map[components.RoadFollower]
 	vehGraphRes      ecs.Resource[components.RoadGraph]
 
+	// Set for ai_air_transit (Phase 20 M0). See test_scene_air.go.
+	airActive      bool
+	airEnt         ecs.Entity
+	airWaypoints   []components.WorldPos
+	airLegsPushed  bool
+	airReleasedAt  float32
+	airLegsLeft    int
+	airMinClear    float32
+	airAltErrMax   float32
+	airCaptured    bool
+	airCaptureAt   float32
+	airTrackedFor  float32
+	airDespawnedAt float32
+	airSentHome    bool
+	AircraftMap    *ecs.Map[components.Aircraft]
+	airSampler     *systems.HeightSampler
+	airFilter      *ecs.Filter1[components.Aircraft]
+
 	// Set for ai_vehicle_combat: two sides duel, verdict = enemy side dead.
 	vehCombatActive bool
 	vehFoes         []ecs.Entity
@@ -2299,6 +2334,10 @@ func (s *aiTestState) Update(elapsed float32) {
 		return
 	}
 	s.elapsed = elapsed
+	if s.airActive {
+		s.updateAirTransit(elapsed)
+		return
+	}
 	if s.coverActive {
 		s.updateCoverSide(elapsed)
 		return

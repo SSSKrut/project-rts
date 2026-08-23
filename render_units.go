@@ -338,6 +338,48 @@ func drawVehicleBox(pos rl.Vector3, yaw, turretYaw float32, kind components.Vehi
 	rl.PopMatrix()
 }
 
+// drawAircraftBox is the placeholder for an unbaked airframe: a fuselage with
+// a disc where the rotor is. The disc matters — without it a box in the sky
+// reads as a floating crate and there is no telling which way is up.
+func drawAircraftBox(pos rl.Vector3, yaw float32, kind components.AircraftKind, col rl.Color) {
+	spec := components.SpecForAircraft(kind)
+	body := rl.Vector3{X: spec.BoxWid * 0.55, Y: spec.BoxHgt * 0.45, Z: spec.BoxLen * 0.7}
+	rl.PushMatrix()
+	rl.Translatef(pos.X, pos.Y+body.Y*0.5, pos.Z)
+	rl.Rotatef(yaw*(180.0/math.Pi), 0, 1, 0)
+	wire := rl.Color{R: 30, G: 34, B: 26, A: col.A}
+	rl.DrawCubeV(rl.Vector3{}, body, col)
+	rl.DrawCubeWiresV(rl.Vector3{}, body, wire)
+	rl.DrawCircle3D(rl.Vector3{Y: body.Y*0.5 + 0.6}, spec.BoxLen*0.42,
+		rl.Vector3{X: 1}, 90, wire)
+	rl.PopMatrix()
+}
+
+// drawAircraftShadow puts a disc on the ground under the airframe. It is the
+// only altitude cue a top-down-ish camera has: two aircraft at 30 m and 300 m
+// draw at nearly the same screen position, and the gap to the shadow is what
+// tells them apart.
+func (g *Game) drawAircraftShadow(pos components.WorldPos, renderPos rl.Vector3,
+	kind components.AircraftKind) {
+	wx := float32(pos.Chunk.X)*components.ChunkSize + pos.Local.X
+	wz := float32(pos.Chunk.Z)*components.ChunkSize + pos.Local.Z
+	ground := systems.GroundHeight(wx, wz)
+	agl := pos.Local.Y - ground
+	if agl < 0.5 {
+		return
+	}
+	spec := components.SpecForAircraft(kind)
+	// Fade and spread with height, the way a real penumbra does.
+	t := clampF(agl/400, 0, 1)
+	alpha := uint8(110 * (1 - t))
+	if alpha < 12 {
+		return
+	}
+	r := spec.BoxLen*0.4 + agl*0.05
+	c := rl.Vector3{X: renderPos.X, Y: renderPos.Y - agl + 0.15, Z: renderPos.Z}
+	rl.DrawCircle3D(c, r, rl.Vector3{X: 1}, 90, rl.Color{R: 20, G: 24, B: 20, A: alpha})
+}
+
 // Faction-split palettes. Player = blue/green spectrum, enemy = red/orange.
 // SplitMix hash picks per-squad shade within each faction.
 var squadPalettePlayer = [...]rl.Color{

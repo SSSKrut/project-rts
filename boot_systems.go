@@ -57,6 +57,16 @@ func (g *Game) registerSystems() {
 	vehicleDriverSys := &systems.VehicleDriverSystem{}
 	vehicleDriverSys.InitUI(app.World)
 
+	// Air traffic runs BEFORE the air driver: a released airframe flies its
+	// first tick immediately, and one that reached its exit last tick is off
+	// the map before anything else this tick can look at it.
+	airTrafficSys := systems.NewAirTrafficSystem()
+	airTrafficSys.InitUI(app.World)
+	g.Svc.AirTraffic = airTrafficSys
+
+	airDriverSys := &systems.AirDriverSystem{}
+	airDriverSys.InitUI(app.World)
+
 	contactSys := systems.NewContactSystem(workerPool)
 	contactSys.InitUI(app.World)
 
@@ -159,6 +169,8 @@ func (g *Game) registerSystems() {
 	app.AddSystem(circlePatrolSys)
 	app.AddSystem(unitMovementSys)
 	app.AddSystem(vehicleDriverSys)
+	app.AddSystem(airTrafficSys)
+	app.AddSystem(airDriverSys)
 	app.AddSystem(contactSys)
 	app.AddSystem(weaponSys)
 	app.AddSystem(particleSys)

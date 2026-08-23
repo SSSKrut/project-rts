@@ -20,14 +20,14 @@
   {
    "lod": 0,
    "ratio": 0.2048,
-   "tris": 10806,
-   "draws": 3
+   "tris": 10804,
+   "draws": 5
   },
   {
    "lod": 1,
-   "ratio": 0.0214,
-   "tris": 3190,
-   "draws": 3
+   "ratio": 0.0206,
+   "tris": 3187,
+   "draws": 5
   },
   {
    "lod": 2,
@@ -49,24 +49,24 @@
      {
       "mesh": 1,
       "bucket": "opaque",
-      "tris": 9998
+      "tris": 8105
      }
     ],
     "1": [
      {
-      "mesh": 3,
+      "mesh": 5,
       "bucket": "glass",
-      "tris": 67
+      "tris": 65
      },
      {
-      "mesh": 4,
+      "mesh": 6,
       "bucket": "opaque",
-      "tris": 3059
+      "tris": 2498
      }
     ],
     "2": [
      {
-      "mesh": 6,
+      "mesh": 10,
       "bucket": "opaque",
       "tris": 880
      }
@@ -81,14 +81,90 @@
    "parent": "",
    "bbox": {
     "min": [
-     -4.8715,
+     -3.82,
      -0.0,
-     -7.6783
+     -7.6767
+    ],
+    "max": [
+     3.82,
+     4.486,
+     5.5519
+    ]
+   }
+  },
+  {
+   "id": "rotor_main",
+   "lods": {
+    "0": [
+     {
+      "mesh": 2,
+      "bucket": "opaque",
+      "tris": 1787
+     }
+    ],
+    "1": [
+     {
+      "mesh": 7,
+      "bucket": "opaque",
+      "tris": 518
+     }
+    ]
+   },
+   "pivot": [
+    -0.0,
+    3.55,
+    0.85
+   ],
+   "axis": "spin_y",
+   "parent": "hull",
+   "bbox": {
+    "min": [
+     -4.8715,
+     3.0757,
+     -4.0215
     ],
     "max": [
      4.8715,
-     4.486,
+     4.01,
      5.7215
+    ]
+   }
+  },
+  {
+   "id": "rotor_tail",
+   "lods": {
+    "0": [
+     {
+      "mesh": 3,
+      "bucket": "opaque",
+      "tris": 104
+     }
+    ],
+    "1": [
+     {
+      "mesh": 8,
+      "bucket": "opaque",
+      "tris": 44
+     }
+    ]
+   },
+   "pivot": [
+    0.4,
+    3.32,
+    -6.62
+   ],
+   "axis": "spin",
+   "parent": "hull",
+   "bbox": {
+    "min": [
+     0.27,
+     2.5921,
+     -7.6783
+    ],
+    "max": [
+     0.53,
+     4.4844,
+     -5.8711
     ]
    }
   },
@@ -97,21 +173,21 @@
    "lods": {
     "0": [
      {
-      "mesh": 2,
+      "mesh": 4,
       "bucket": "opaque",
       "tris": 162
      }
     ],
     "1": [
      {
-      "mesh": 5,
+      "mesh": 9,
       "bucket": "opaque",
-      "tris": 64
+      "tris": 62
      }
     ],
     "2": [
      {
-      "mesh": 7,
+      "mesh": 11,
       "bucket": "opaque",
       "tris": 18
      }
@@ -139,5 +215,5 @@
   }
  ],
  "mounts": [],
- "bytes": 614284
+ "bytes": 619864
 }

@@ -61,6 +61,7 @@ func main() {
 	shotLOD := flag.Int("shot-lod", 0, "LOD to capture")
 	shotCam := flag.String("shot-cam", "", "dist,pitchDeg,yawDeg for the capture")
 	shotYaw := flag.Float64("shot-yaw", 0, "hull yaw in degrees for the capture")
+	shotRotor := flag.Float64("shot-rotor", 0, "rotor angle in degrees for the capture")
 	flag.Parse()
 
 	// raylib's TakeScreenshot always prepends the working directory, so an
@@ -107,12 +108,13 @@ func main() {
 	forceLOD, autoLOD := 0, false
 	showMounts, showPivots, wire, grid := true, false, false, true
 	sweep, roll := false, false
-	var turret, gun, spin, steer, hull float32
+	var turret, gun, spin, steer, hull, rotor float32
 
 	light := assets.DefaultLight()
 
 	if *shot != "" {
 		hull = float32(*shotYaw) * math.Pi / 180
+		rotor = float32(*shotRotor) * math.Pi / 180
 		forceLOD = *shotLOD
 		if n, _ := fmt.Sscanf(*shotCam, "%f,%f,%f", &dist, &pitch, &yaw); n == 3 {
 			pitch *= math.Pi / 180
@@ -167,6 +169,9 @@ func main() {
 		if roll {
 			spin += dt * 4
 			steer = float32(math.Sin(float64(spin)*0.25)) * 0.45
+			// Rotors ride the same toggle: an airframe has no wheels to roll,
+			// so R means "turn whatever this thing turns".
+			rotor += dt * 6
 		}
 		// Hull yaw by hand: the one convention the engine and the bake have to
 		// agree on is that forward at yaw 0 is +Z and yaw 90 deg is +X.
@@ -193,7 +198,7 @@ func main() {
 
 		pose := assets.Pose{
 			Yaw:    hull,
-			Turret: turret, Gun: gun, WheelSpin: spin, Steer: steer,
+			Turret: turret, Gun: gun, WheelSpin: spin, Steer: steer, Rotor: rotor,
 			Tint: rl.White,
 		}
 

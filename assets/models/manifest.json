@@ -2808,14 +2808,14 @@
    {
     "lod": 0,
     "ratio": 0.2318,
-    "tris": 10994,
-    "draws": 2
+    "tris": 10993,
+    "draws": 4
    },
    {
     "lod": 1,
-    "ratio": 0.0228,
-    "tris": 3201,
-    "draws": 2
+    "ratio": 0.0223,
+    "tris": 3199,
+    "draws": 4
    },
    {
     "lod": 2,
@@ -2837,24 +2837,24 @@
       {
        "mesh": 1,
        "bucket": "opaque",
-       "tris": 10973
+       "tris": 8210
       }
      ],
      "1": [
       {
-       "mesh": 2,
+       "mesh": 4,
        "bucket": "glass",
        "tris": 5
       },
       {
-       "mesh": 3,
+       "mesh": 5,
        "bucket": "opaque",
-       "tris": 3196
+       "tris": 2370
       }
      ],
      "2": [
       {
-       "mesh": 4,
+       "mesh": 8,
        "bucket": "opaque",
        "tris": 898
       }
@@ -2869,14 +2869,90 @@
     "parent": "",
     "bbox": {
      "min": [
-      -4.3075,
+      -2.46,
       -0.0,
       -6.3475
      ],
      "max": [
+      2.46,
+      4.995,
+      5.2019
+     ]
+    }
+   },
+   {
+    "id": "rotor_lower",
+    "lods": {
+     "0": [
+      {
+       "mesh": 2,
+       "bucket": "opaque",
+       "tris": 1625
+      }
+     ],
+     "1": [
+      {
+       "mesh": 6,
+       "bucket": "opaque",
+       "tris": 436
+      }
+     ]
+    },
+    "pivot": [
+     -0.0,
+     3.87,
+     0.55
+    ],
+    "axis": "spin_y",
+    "parent": "hull",
+    "bbox": {
+     "min": [
+      -4.3075,
+      3.4236,
+      -2.1849
+     ],
+     "max": [
+      4.408,
+      4.33,
+      5.45
+     ]
+    }
+   },
+   {
+    "id": "rotor_upper",
+    "lods": {
+     "0": [
+      {
+       "mesh": 3,
+       "bucket": "opaque",
+       "tris": 1137
+      }
+     ],
+     "1": [
+      {
+       "mesh": 7,
+       "bucket": "opaque",
+       "tris": 388
+      }
+     ]
+    },
+    "pivot": [
+     -0.0,
+     4.77,
+     0.55
+    ],
+    "axis": "spin_y_rev",
+    "parent": "hull",
+    "bbox": {
+     "min": [
+      -4.3075,
+      4.3212,
+      -4.35
+     ],
+     "max": [
       4.408,
       5.23,
-      5.45
+      3.2849
      ]
     }
    }
@@ -2925,7 +3001,7 @@
     ]
    }
   ],
-  "bytes": 631036
+  "bytes": 635824
  },
  {
   "name": "gunship_w",
@@ -2949,14 +3025,14 @@
    {
     "lod": 0,
     "ratio": 0.2048,
-    "tris": 10806,
-    "draws": 3
+    "tris": 10804,
+    "draws": 5
    },
    {
     "lod": 1,
-    "ratio": 0.0214,
-    "tris": 3190,
-    "draws": 3
+    "ratio": 0.0206,
+    "tris": 3187,
+    "draws": 5
    },
    {
     "lod": 2,
@@ -2978,24 +3054,24 @@
       {
        "mesh": 1,
        "bucket": "opaque",
-       "tris": 9998
+       "tris": 8105
       }
      ],
      "1": [
       {
-       "mesh": 3,
+       "mesh": 5,
        "bucket": "glass",
-       "tris": 67
+       "tris": 65
       },
       {
-       "mesh": 4,
+       "mesh": 6,
        "bucket": "opaque",
-       "tris": 3059
+       "tris": 2498
       }
      ],
      "2": [
       {
-       "mesh": 6,
+       "mesh": 10,
        "bucket": "opaque",
        "tris": 880
       }
@@ -3010,14 +3086,90 @@
     "parent": "",
     "bbox": {
      "min": [
-      -4.8715,
+      -3.82,
       -0.0,
-      -7.6783
+      -7.6767
+     ],
+     "max": [
+      3.82,
+      4.486,
+      5.5519
+     ]
+    }
+   },
+   {
+    "id": "rotor_main",
+    "lods": {
+     "0": [
+      {
+       "mesh": 2,
+       "bucket": "opaque",
+       "tris": 1787
+      }
+     ],
+     "1": [
+      {
+       "mesh": 7,
+       "bucket": "opaque",
+       "tris": 518
+      }
+     ]
+    },
+    "pivot": [
+     -0.0,
+     3.55,
+     0.85
+    ],
+    "axis": "spin_y",
+    "parent": "hull",
+    "bbox": {
+     "min": [
+      -4.8715,
+      3.0757,
+      -4.0215
      ],
      "max": [
       4.8715,
-      4.486,
+      4.01,
       5.7215
+     ]
+    }
+   },
+   {
+    "id": "rotor_tail",
+    "lods": {
+     "0": [
+      {
+       "mesh": 3,
+       "bucket": "opaque",
+       "tris": 104
+      }
+     ],
+     "1": [
+      {
+       "mesh": 8,
+       "bucket": "opaque",
+       "tris": 44
+      }
+     ]
+    },
+    "pivot": [
+     0.4,
+     3.32,
+     -6.62
+    ],
+    "axis": "spin",
+    "parent": "hull",
+    "bbox": {
+     "min": [
+      0.27,
+      2.5921,
+      -7.6783
+     ],
+     "max": [
+      0.53,
+      4.4844,
+      -5.8711
      ]
     }
    },
@@ -3026,21 +3178,21 @@
     "lods": {
      "0": [
       {
-       "mesh": 2,
+       "mesh": 4,
        "bucket": "opaque",
        "tris": 162
       }
      ],
      "1": [
       {
-       "mesh": 5,
+       "mesh": 9,
        "bucket": "opaque",
-       "tris": 64
+       "tris": 62
       }
      ],
      "2": [
       {
-       "mesh": 7,
+       "mesh": 11,
        "bucket": "opaque",
        "tris": 18
       }
@@ -3068,7 +3220,7 @@
    }
   ],
   "mounts": [],
-  "bytes": 614284
+  "bytes": 619864
  },
  {
   "name": "heli_e",
@@ -3092,14 +3244,14 @@
    {
     "lod": 0,
     "ratio": 0.2547,
-    "tris": 10997,
-    "draws": 2
+    "tris": 10996,
+    "draws": 4
    },
    {
     "lod": 1,
-    "ratio": 0.0206,
-    "tris": 3198,
-    "draws": 2
+    "ratio": 0.0202,
+    "tris": 3197,
+    "draws": 4
    },
    {
     "lod": 2,
@@ -3121,24 +3273,24 @@
       {
        "mesh": 1,
        "bucket": "opaque",
-       "tris": 10475
+       "tris": 8736
       }
      ],
      "1": [
       {
-       "mesh": 2,
+       "mesh": 4,
        "bucket": "glass",
-       "tris": 42
+       "tris": 41
       },
       {
-       "mesh": 3,
+       "mesh": 5,
        "bucket": "opaque",
-       "tris": 3156
+       "tris": 2468
       }
      ],
      "2": [
       {
-       "mesh": 4,
+       "mesh": 8,
        "bucket": "opaque",
        "tris": 895
       }
@@ -3153,13 +3305,89 @@
     "parent": "",
     "bbox": {
      "min": [
-      -6.0109,
+      -5.3008,
       -0.0,
       -7.2711
      ],
      "max": [
-      4.8832,
+      4.0134,
       5.249,
+      5.76
+     ]
+    }
+   },
+   {
+    "id": "rotor_left",
+    "lods": {
+     "0": [
+      {
+       "mesh": 2,
+       "bucket": "opaque",
+       "tris": 869
+      }
+     ],
+     "1": [
+      {
+       "mesh": 6,
+       "bucket": "opaque",
+       "tris": 344
+      }
+     ]
+    },
+    "pivot": [
+     -0.72,
+     4.161,
+     0.2
+    ],
+    "axis": "spin_y_rev",
+    "parent": "hull",
+    "bbox": {
+     "min": [
+      -6.0109,
+      2.3152,
+      -0.2665
+     ],
+     "max": [
+      4.8832,
+      5.1425,
+      0.6665
+     ]
+    }
+   },
+   {
+    "id": "rotor_right",
+    "lods": {
+     "0": [
+      {
+       "mesh": 3,
+       "bucket": "opaque",
+       "tris": 869
+      }
+     ],
+     "1": [
+      {
+       "mesh": 7,
+       "bucket": "opaque",
+       "tris": 344
+      }
+     ]
+    },
+    "pivot": [
+     0.72,
+     4.161,
+     0.2
+    ],
+    "axis": "spin_y",
+    "parent": "hull",
+    "bbox": {
+     "min": [
+      0.1751,
+      3.6511,
+      -5.4
+     ],
+     "max": [
+      1.1507,
+      4.7324,
       5.8
      ]
     }
@@ -3195,7 +3423,7 @@
     ]
    }
   ],
-  "bytes": 650812
+  "bytes": 644644
  },
  {
   "name": "heli_w",
@@ -3219,14 +3447,14 @@
    {
     "lod": 0,
     "ratio": 0.2418,
-    "tris": 10919,
-    "draws": 2
+    "tris": 10917,
+    "draws": 4
    },
    {
     "lod": 1,
-    "ratio": 0.0086,
-    "tris": 3182,
-    "draws": 2
+    "ratio": 0.0083,
+    "tris": 3180,
+    "draws": 4
    },
    {
     "lod": 2,
@@ -3248,24 +3476,24 @@
       {
        "mesh": 1,
        "bucket": "opaque",
-       "tris": 10299
+       "tris": 6908
       }
      ],
      "1": [
       {
-       "mesh": 2,
+       "mesh": 4,
        "bucket": "glass",
-       "tris": 22
+       "tris": 21
       },
       {
-       "mesh": 3,
+       "mesh": 5,
        "bucket": "opaque",
-       "tris": 3160
+       "tris": 2582
       }
      ],
      "2": [
       {
-       "mesh": 4,
+       "mesh": 8,
        "bucket": "opaque",
        "tris": 862
       }
@@ -3280,20 +3508,96 @@
     "parent": "",
     "bbox": {
      "min": [
-      -5.8063,
+      -2.6116,
       -0.0,
+      -11.2345
+     ],
+     "max": [
+      2.6116,
+      6.02,
+      10.3535
+     ]
+    }
+   },
+   {
+    "id": "rotor_aft",
+    "lods": {
+     "0": [
+      {
+       "mesh": 2,
+       "bucket": "opaque",
+       "tris": 1695
+      }
+     ],
+     "1": [
+      {
+       "mesh": 6,
+       "bucket": "opaque",
+       "tris": 289
+      }
+     ]
+    },
+    "pivot": [
+     0.0,
+     5.91,
+     -6.3
+    ],
+    "axis": "spin_y_rev",
+    "parent": "hull",
+    "bbox": {
+     "min": [
+      -5.8063,
+      5.1944,
       -12.9
      ],
      "max": [
       5.9487,
       6.37,
+      -2.5966
+     ]
+    }
+   },
+   {
+    "id": "rotor_fwd",
+    "lods": {
+     "0": [
+      {
+       "mesh": 3,
+       "bucket": "opaque",
+       "tris": 1694
+      }
+     ],
+     "1": [
+      {
+       "mesh": 7,
+       "bucket": "opaque",
+       "tris": 288
+      }
+     ]
+    },
+    "pivot": [
+     -0.0,
+     4.51,
+     6.3
+    ],
+    "axis": "spin_y",
+    "parent": "hull",
+    "bbox": {
+     "min": [
+      -5.8063,
+      3.7981,
+      2.5966
+     ],
+     "max": [
+      5.9487,
+      4.97,
       12.9
      ]
     }
    }
   ],
   "mounts": [],
-  "bytes": 754992
+  "bytes": 650752
  },
  {
   "name": "m113",

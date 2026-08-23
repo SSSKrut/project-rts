@@ -178,6 +178,9 @@ var saveComponents = map[string]saveEntry{
 	"components.RoadRoute":       saveReg[components.RoadRoute](SaveMemcpy),
 	"components.SmokeField":      saveReg[components.SmokeField](SaveMemcpy),
 	"components.VehicleOverride": saveReg[components.VehicleOverride](SaveMemcpy),
+
+	"components.Aircraft":   saveReg[components.Aircraft](SaveMemcpy),
+	"components.AirArrival": saveReg[components.AirArrival](SaveMemcpy),
 }
 
 func savePolicyFor(t reflect.Type) (SavePolicy, error) {

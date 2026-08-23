@@ -175,6 +175,10 @@ func (g *Game) initGameplayHandles() {
 	g.Svc.UnitFactory = entities.NewUnitFactory(g.App.World, g.Maps.Pos)
 	g.Maps.ActionQueue = g.Svc.UnitFactory.ActionQueueMap
 	g.Svc.VehicleFactory = entities.NewVehicleFactory(g.App.World, g.Maps.Pos)
+	g.Svc.AircraftFactory = entities.NewAircraftFactory(g.App.World, g.Maps.Pos)
+	if g.Svc.AirTraffic != nil {
+		g.Svc.AirTraffic.SetSpawner(g.Svc.AircraftFactory)
+	}
 
 	g.Ctx.LOS = newLOSPreview(g.App.World)
 
@@ -218,7 +222,8 @@ func (g *Game) spawnScene() {
 		// Snapshot restores all entities; scene / default spawns skipped.
 	} else if isAIScene() {
 		g.Scene.AI = aiSceneSpawn(g.App.World, g.Svc.Squad, g.Svc.Role, g.unitFactory,
-			g.Svc.VehicleFactory, playerFaction, g.Maps.Pos, g.Maps.Roster, g.Maps.Building)
+			g.Svc.VehicleFactory, g.Svc.AircraftFactory, playerFaction,
+			g.Maps.Pos, g.Maps.Roster, g.Maps.Building)
 	} else if isDoorScene() {
 		testSquad := g.Svc.Squad.CreateFromTemplate(
 			systems.TmplMotorRifle, doorSceneSquadSpawn(),
@@ -332,6 +337,26 @@ func (g *Game) spawnScene() {
 		// with a real model, so it is what a look at the playground is for.
 		g.Svc.VehicleFactory.Spawn(components.WorldPos{}.Add(rl.Vector3{X: -14, Z: 4}),
 			components.VehicleCar, components.FactionPlayer, components.ControllerLocal)
+
+		// Phase 20 M0: one of each rotary class, arriving on schedule rather
+		// than spawned, so the playground exercises the same release path the
+		// gate does. They hold station where they appear until ordered.
+		for i, ak := range []components.AircraftKind{
+			components.AircraftHeliAttack, components.AircraftHeliTransport,
+		} {
+			entry := components.WorldPos{}.Add(
+				rl.Vector3{X: -30 + float32(i)*40, Y: 60, Z: 55})
+			g.Svc.AircraftFactory.Arrival(components.AirArrival{
+				At:         2 + float32(i),
+				Kind:       ak,
+				FactionID:  components.FactionPlayer,
+				Controller: components.ControllerLocal,
+				Entry:      entry,
+				Exit:       systems.AirExitFor(entry, 400),
+				AltRef:     components.AltAGL,
+				AltSet:     components.SpecForAircraft(ak).DefaultAltAGL,
+			})
+		}
 	}
 }
 
@@ -366,6 +391,7 @@ func (g *Game) loadSnapshot() {
 func (g *Game) initRenderHandles() {
 	g.Filt.UnitRender = ecs.NewFilter3[components.WorldPos, components.Unit, components.Stance](g.App.World)
 	g.Filt.VehicleRender = ecs.NewFilter2[components.WorldPos, components.Vehicle](g.App.World)
+	g.Filt.AircraftRender = ecs.NewFilter2[components.WorldPos, components.Aircraft](g.App.World)
 	g.Filt.SmokeRender = ecs.NewFilter2[components.WorldPos, components.SmokeField](g.App.World)
 	g.Maps.Turret = ecs.NewMap[components.Turret](g.App.World)
 	g.Filt.ChunkActive = ecs.NewFilter3[components.WorldPos, components.ChunkMesh, components.LODActive](g.App.World)

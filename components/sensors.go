@@ -132,3 +132,15 @@ var VehicleOpticalProfile = FacingProfile{
 	ForwardConeRad: float32(math.Pi / 6), // 30°
 	SideConeRad:    float32(math.Pi / 2), // 90°
 }
+
+// AircraftOpticalProfile — a crew looking DOWN at open ground loses far less
+// off-axis than one peering out of a hull: nothing occludes, and the whole
+// point of putting an observer up there is the wide field. Facing still
+// matters (the nose is where the sight and the gun point), just gently.
+var AircraftOpticalProfile = FacingProfile{
+	ForwardMul:     1.0,
+	SideMul:        0.85,
+	RearMul:        0.55,
+	ForwardConeRad: float32(math.Pi / 3),     // 60°
+	SideConeRad:    float32(5 * math.Pi / 6), // 150°
+}
