@@ -1,0 +1,88 @@
+{
+ "name": "rifle_e",
+ "class": "weapon",
+ "side": "east",
+ "kind": "",
+ "forward": "+Z",
+ "up": "+Y",
+ "vertex_color_space": "linear",
+ "size": [
+  0.3,
+  1.003,
+  0.885
+ ],
+ "source": {
+  "blend": "exports/blend/rifle_e.blend",
+  "objects": 83,
+  "tris": 10648
+ },
+ "lods": [
+  {
+   "lod": 0,
+   "ratio": 1.0,
+   "tris": 10648,
+   "draws": 1
+  },
+  {
+   "lod": 1,
+   "ratio": 0.1387,
+   "tris": 3200,
+   "draws": 1
+  },
+  {
+   "lod": 2,
+   "ratio": 0.2127,
+   "tris": 900,
+   "draws": 1
+  }
+ ],
+ "parts": [
+  {
+   "id": "hull",
+   "lods": {
+    "0": [
+     {
+      "mesh": 0,
+      "bucket": "opaque",
+      "tris": 10648
+     }
+    ],
+    "1": [
+     {
+      "mesh": 1,
+      "bucket": "opaque",
+      "tris": 3200
+     }
+    ],
+    "2": [
+     {
+      "mesh": 2,
+      "bucket": "opaque",
+      "tris": 900
+     }
+    ]
+   },
+   "pivot": [
+    0.0,
+    0.0,
+    -0.0
+   ],
+   "axis": "",
+   "parent": "",
+   "bbox": {
+    "min": [
+     -0.1499,
+     -0.0022,
+     -0.4147
+    ],
+    "max": [
+     0.1499,
+     1.001,
+     0.4707
+    ]
+   }
+  }
+ ],
+ "mounts": [],
+ "bytes": 1149320
+}

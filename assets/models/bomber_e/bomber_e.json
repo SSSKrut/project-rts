@@ -1,0 +1,127 @@
+{
+ "name": "bomber_e",
+ "class": "aircraft",
+ "side": "east",
+ "kind": "",
+ "forward": "+Z",
+ "up": "+Y",
+ "vertex_color_space": "linear",
+ "size": [
+  60.44,
+  7.4,
+  35.407
+ ],
+ "source": {
+  "blend": "exports/blend/bomber_e.blend",
+  "objects": 136,
+  "tris": 42460
+ },
+ "lods": [
+  {
+   "lod": 0,
+   "ratio": 0.2591,
+   "tris": 10998,
+   "draws": 2
+  },
+  {
+   "lod": 1,
+   "ratio": 0.003,
+   "tris": 2848,
+   "draws": 2
+  },
+  {
+   "lod": 2,
+   "ratio": 0.0034,
+   "tris": 724,
+   "draws": 1
+  }
+ ],
+ "parts": [
+  {
+   "id": "hull",
+   "lods": {
+    "0": [
+     {
+      "mesh": 0,
+      "bucket": "glass",
+      "tris": 430
+     },
+     {
+      "mesh": 1,
+      "bucket": "opaque",
+      "tris": 10568
+     }
+    ],
+    "1": [
+     {
+      "mesh": 2,
+      "bucket": "glass",
+      "tris": 2
+     },
+     {
+      "mesh": 3,
+      "bucket": "opaque",
+      "tris": 2846
+     }
+    ],
+    "2": [
+     {
+      "mesh": 4,
+      "bucket": "opaque",
+      "tris": 724
+     }
+    ]
+   },
+   "pivot": [
+    0.0,
+    0.0,
+    -0.0
+   ],
+   "axis": "",
+   "parent": "",
+   "bbox": {
+    "min": [
+     -30.22,
+     -0.0,
+     -18.1071
+    ],
+    "max": [
+     30.22,
+     7.4,
+     17.3
+    ]
+   }
+  }
+ ],
+ "mounts": [
+  {
+   "id": "decal.number.left",
+   "part": "hull",
+   "pos": [
+    9.1,
+    5.1,
+    -14.42
+   ],
+   "dir": [
+    1.0,
+    0.0,
+    0.0
+   ]
+  },
+  {
+   "id": "decal.number.right",
+   "part": "hull",
+   "pos": [
+    -9.1,
+    5.1,
+    -14.42
+   ],
+   "dir": [
+    -1.0,
+    0.0,
+    -0.0
+   ]
+  }
+ ],
+ "bytes": 560280
+}

@@ -1,0 +1,183 @@
+{
+ "name": "uaz",
+ "class": "vehicle",
+ "side": "",
+ "kind": "",
+ "forward": "+Z",
+ "up": "+Y",
+ "vertex_color_space": "linear",
+ "size": [
+  2.144,
+  2.95,
+  4.712
+ ],
+ "source": {
+  "blend": "exports/blend/uaz.blend",
+  "objects": 192,
+  "tris": 45071
+ },
+ "lods": [
+  {
+   "lod": 0,
+   "ratio": 0.2441,
+   "tris": 10996,
+   "draws": 2
+  },
+  {
+   "lod": 1,
+   "ratio": 0.0329,
+   "tris": 3190,
+   "draws": 2
+  },
+  {
+   "lod": 2,
+   "ratio": 0.0399,
+   "tris": 897,
+   "draws": 1
+  }
+ ],
+ "parts": [
+  {
+   "id": "hull",
+   "lods": {
+    "0": [
+     {
+      "mesh": 0,
+      "bucket": "glass",
+      "tris": 6
+     },
+     {
+      "mesh": 1,
+      "bucket": "opaque",
+      "tris": 10990
+     }
+    ],
+    "1": [
+     {
+      "mesh": 2,
+      "bucket": "glass",
+      "tris": 3
+     },
+     {
+      "mesh": 3,
+      "bucket": "opaque",
+      "tris": 3187
+     }
+    ],
+    "2": [
+     {
+      "mesh": 4,
+      "bucket": "opaque",
+      "tris": 897
+     }
+    ]
+   },
+   "pivot": [
+    0.0,
+    0.0,
+    -0.0
+   ],
+   "axis": "",
+   "parent": "",
+   "bbox": {
+    "min": [
+     -1.072,
+     -0.0283,
+     -2.4371
+    ],
+    "max": [
+     1.072,
+     2.9216,
+     2.275
+    ]
+   }
+  }
+ ],
+ "mounts": [
+  {
+   "id": "decal.number.left",
+   "part": "hull",
+   "pos": [
+    0.942,
+    0.86,
+    -0.0738
+   ],
+   "dir": [
+    1.0,
+    0.0,
+    0.0
+   ]
+  },
+  {
+   "id": "decal.number.right",
+   "part": "hull",
+   "pos": [
+    -0.942,
+    0.86,
+    0.0538
+   ],
+   "dir": [
+    -1.0,
+    0.0,
+    -0.0
+   ]
+  },
+  {
+   "id": "exhaust.0",
+   "part": "hull",
+   "pos": [
+    0.5962,
+    0.5994,
+    -1.7237
+   ],
+   "dir": [
+    0.0,
+    1.0,
+    -0.0
+   ]
+  },
+  {
+   "id": "light.tail.left",
+   "part": "hull",
+   "pos": [
+    0.6,
+    1.0,
+    -2.09
+   ],
+   "dir": [
+    0.0,
+    0.0,
+    -1.0
+   ]
+  },
+  {
+   "id": "light.tail.right",
+   "part": "hull",
+   "pos": [
+    -0.6,
+    1.0,
+    -2.09
+   ],
+   "dir": [
+    0.0,
+    0.0,
+    -1.0
+   ]
+  },
+  {
+   "id": "muzzle.main",
+   "part": "turret",
+   "pos": [
+    -0.0,
+    2.06,
+    0.21
+   ],
+   "dir": [
+    -0.0,
+    0.0,
+    1.0
+   ]
+  }
+ ],
+ "bytes": 1131144
+}

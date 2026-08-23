@@ -1,0 +1,141 @@
+{
+ "name": "gunship_e",
+ "class": "aircraft",
+ "side": "east",
+ "kind": "",
+ "forward": "+Z",
+ "up": "+Y",
+ "vertex_color_space": "linear",
+ "size": [
+  8.716,
+  5.23,
+  11.797
+ ],
+ "source": {
+  "blend": "exports/blend/gunship_e.blend",
+  "objects": 266,
+  "tris": 47464
+ },
+ "lods": [
+  {
+   "lod": 0,
+   "ratio": 0.2318,
+   "tris": 10994,
+   "draws": 2
+  },
+  {
+   "lod": 1,
+   "ratio": 0.0228,
+   "tris": 3201,
+   "draws": 2
+  },
+  {
+   "lod": 2,
+   "ratio": 0.0251,
+   "tris": 898,
+   "draws": 1
+  }
+ ],
+ "parts": [
+  {
+   "id": "hull",
+   "lods": {
+    "0": [
+     {
+      "mesh": 0,
+      "bucket": "glass",
+      "tris": 21
+     },
+     {
+      "mesh": 1,
+      "bucket": "opaque",
+      "tris": 10973
+     }
+    ],
+    "1": [
+     {
+      "mesh": 2,
+      "bucket": "glass",
+      "tris": 5
+     },
+     {
+      "mesh": 3,
+      "bucket": "opaque",
+      "tris": 3196
+     }
+    ],
+    "2": [
+     {
+      "mesh": 4,
+      "bucket": "opaque",
+      "tris": 898
+     }
+    ]
+   },
+   "pivot": [
+    0.0,
+    0.0,
+    -0.0
+   ],
+   "axis": "",
+   "parent": "",
+   "bbox": {
+    "min": [
+     -4.3075,
+     -0.0,
+     -6.3475
+    ],
+    "max": [
+     4.408,
+     5.23,
+     5.45
+    ]
+   }
+  }
+ ],
+ "mounts": [
+  {
+   "id": "decal.number.left",
+   "part": "hull",
+   "pos": [
+    1.46,
+    3.26,
+    -5.4544
+   ],
+   "dir": [
+    1.0,
+    0.0,
+    0.0
+   ]
+  },
+  {
+   "id": "decal.number.right",
+   "part": "hull",
+   "pos": [
+    -1.46,
+    3.26,
+    -5.4256
+   ],
+   "dir": [
+    -1.0,
+    0.0,
+    -0.0
+   ]
+  },
+  {
+   "id": "muzzle.main",
+   "part": "turret",
+   "pos": [
+    -0.98,
+    1.96,
+    4.63
+   ],
+   "dir": [
+    -0.0,
+    0.0,
+    1.0
+   ]
+  }
+ ],
+ "bytes": 631036
+}

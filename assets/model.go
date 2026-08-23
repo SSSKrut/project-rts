@@ -212,3 +212,39 @@ func (r *Registry) Unload() {
 		r.matReady = false
 	}
 }
+
+// PartMatrix is the world transform of one part for a pose — the frame a decal
+// or an attached prop has to be placed in.
+func (r *Registry) PartMatrix(id ModelID, part string, p Pose) (rl.Matrix, bool) {
+	a := r.Get(id)
+	if a == nil {
+		return rl.MatrixIdentity(), false
+	}
+	r.scratch = a.partMatrices(p, r.scratch)
+	i, ok := a.partByID[part]
+	if !ok || i >= len(r.scratch) {
+		return rl.MatrixIdentity(), false
+	}
+	return r.scratch[i], true
+}
+
+// DrawPartAt draws one named part at an arbitrary transform, ignoring the pose
+// machinery. Used for the digit glyphs stamped onto a hull.
+func (r *Registry) DrawPartAt(id ModelID, part string, lod int, m rl.Matrix, tint rl.Color) {
+	a := r.Ensure(id)
+	if a == nil {
+		return
+	}
+	p := a.Part(part)
+	if p == nil {
+		return
+	}
+	r.setEncode(a.ColorSpace != "srgb")
+	r.material.GetMap(rl.MapDiffuse).Color = tint
+	meshes := a.model.GetMeshes()
+	for _, ref := range p.meshesAt(lod) {
+		if int(ref.Mesh) < len(meshes) {
+			rl.DrawMesh(meshes[ref.Mesh], r.material, m)
+		}
+	}
+}

@@ -1,0 +1,224 @@
+{
+ "name": "m113",
+ "class": "vehicle",
+ "side": "",
+ "kind": "",
+ "forward": "+Z",
+ "up": "+Y",
+ "vertex_color_space": "linear",
+ "size": [
+  3.372,
+  3.67,
+  5.337
+ ],
+ "source": {
+  "blend": "exports/blend/m113.blend",
+  "objects": 259,
+  "tris": 79400
+ },
+ "lods": [
+  {
+   "lod": 0,
+   "ratio": 0.1385,
+   "tris": 10976,
+   "draws": 4
+  },
+  {
+   "lod": 1,
+   "ratio": 0.0317,
+   "tris": 3189,
+   "draws": 4
+  },
+  {
+   "lod": 2,
+   "ratio": 0.0458,
+   "tris": 896,
+   "draws": 2
+  }
+ ],
+ "parts": [
+  {
+   "id": "hull",
+   "lods": {
+    "0": [
+     {
+      "mesh": 0,
+      "bucket": "glass",
+      "tris": 58
+     },
+     {
+      "mesh": 1,
+      "bucket": "opaque",
+      "tris": 9606
+     }
+    ],
+    "1": [
+     {
+      "mesh": 4,
+      "bucket": "glass",
+      "tris": 10
+     },
+     {
+      "mesh": 5,
+      "bucket": "opaque",
+      "tris": 2817
+     }
+    ],
+    "2": [
+     {
+      "mesh": 8,
+      "bucket": "opaque",
+      "tris": 792
+     }
+    ]
+   },
+   "pivot": [
+    0.0,
+    0.0,
+    -0.0
+   ],
+   "axis": "",
+   "parent": "",
+   "bbox": {
+    "min": [
+     -1.692,
+     0.0519,
+     -2.7166
+    ],
+    "max": [
+     1.68,
+     3.7217,
+     2.62
+    ]
+   }
+  },
+  {
+   "id": "turret",
+   "lods": {
+    "0": [
+     {
+      "mesh": 2,
+      "bucket": "glass",
+      "tris": 88
+     },
+     {
+      "mesh": 3,
+      "bucket": "opaque",
+      "tris": 1224
+     }
+    ],
+    "1": [
+     {
+      "mesh": 6,
+      "bucket": "glass",
+      "tris": 18
+     },
+     {
+      "mesh": 7,
+      "bucket": "opaque",
+      "tris": 344
+     }
+    ],
+    "2": [
+     {
+      "mesh": 9,
+      "bucket": "opaque",
+      "tris": 104
+     }
+    ]
+   },
+   "pivot": [
+    -0.2,
+    1.89,
+    0.15
+   ],
+   "axis": "yaw",
+   "parent": "hull",
+   "bbox": {
+    "min": [
+     -1.645,
+     1.13,
+     -2.26
+    ],
+    "max": [
+     1.645,
+     2.6122,
+     1.595
+    ]
+   }
+  }
+ ],
+ "mounts": [
+  {
+   "id": "exhaust.0",
+   "part": "turret",
+   "pos": [
+    -1.5,
+    1.75,
+    0.9799
+   ],
+   "dir": [
+    0.0,
+    1.0,
+    -0.0
+   ]
+  },
+  {
+   "id": "light.tail.left",
+   "part": "hull",
+   "pos": [
+    1.26,
+    1.62,
+    -2.595
+   ],
+   "dir": [
+    0.0,
+    0.0,
+    -1.0
+   ]
+  },
+  {
+   "id": "light.tail.right",
+   "part": "hull",
+   "pos": [
+    -1.26,
+    1.62,
+    -2.595
+   ],
+   "dir": [
+    0.0,
+    0.0,
+    -1.0
+   ]
+  },
+  {
+   "id": "smoke.launcher.left",
+   "part": "turret",
+   "pos": [
+    0.0504,
+    1.9818,
+    1.2727
+   ],
+   "dir": [
+    0.2736,
+    0.2736,
+    0.9221
+   ]
+  },
+  {
+   "id": "smoke.launcher.right",
+   "part": "turret",
+   "pos": [
+    -1.2629,
+    1.9818,
+    1.2727
+   ],
+   "dir": [
+    -0.2736,
+    0.2736,
+    0.9221
+   ]
+  }
+ ],
+ "bytes": 1001376
+}

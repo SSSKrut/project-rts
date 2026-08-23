@@ -1,0 +1,98 @@
+{
+ "name": "at_gun_w",
+ "class": "vehicle",
+ "side": "west",
+ "kind": "",
+ "forward": "+Z",
+ "up": "+Y",
+ "vertex_color_space": "linear",
+ "size": [
+  2.291,
+  1.711,
+  7.498
+ ],
+ "source": {
+  "blend": "exports/blend/at_gun_w.blend",
+  "objects": 98,
+  "tris": 22458
+ },
+ "lods": [
+  {
+   "lod": 0,
+   "ratio": 0.4898,
+   "tris": 10999,
+   "draws": 2
+  },
+  {
+   "lod": 1,
+   "ratio": 0.1046,
+   "tris": 3197,
+   "draws": 2
+  },
+  {
+   "lod": 2,
+   "ratio": 0.1354,
+   "tris": 899,
+   "draws": 1
+  }
+ ],
+ "parts": [
+  {
+   "id": "hull",
+   "lods": {
+    "0": [
+     {
+      "mesh": 0,
+      "bucket": "glass",
+      "tris": 29
+     },
+     {
+      "mesh": 1,
+      "bucket": "opaque",
+      "tris": 10970
+     }
+    ],
+    "1": [
+     {
+      "mesh": 2,
+      "bucket": "glass",
+      "tris": 6
+     },
+     {
+      "mesh": 3,
+      "bucket": "opaque",
+      "tris": 3191
+     }
+    ],
+    "2": [
+     {
+      "mesh": 4,
+      "bucket": "opaque",
+      "tris": 899
+     }
+    ]
+   },
+   "pivot": [
+    0.0,
+    0.0,
+    -0.0
+   ],
+   "axis": "",
+   "parent": "",
+   "bbox": {
+    "min": [
+     -1.1457,
+     -0.0339,
+     -3.3533
+    ],
+    "max": [
+     1.1456,
+     1.6775,
+     4.1446
+    ]
+   }
+  }
+ ],
+ "mounts": [],
+ "bytes": 1143872
+}

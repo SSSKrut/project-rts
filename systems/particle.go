@@ -1,8 +1,6 @@
 package systems
 
 import (
-	"math"
-
 	rl "github.com/gen2brain/raylib-go/raylib"
 	"github.com/mlange-42/ark/ecs"
 
@@ -20,25 +18,16 @@ import (
 // Render lives in render_world.go (drawParticles); ParticleSystem doesn't
 // touch raylib drawing.
 type ParticleSystem struct {
-	filter     *ecs.Filter3[components.Particle, components.WorldPos, components.ParticleVisual]
-	vehFilter  *ecs.Filter3[components.Vehicle, components.WorldPos, components.Motion]
-	posMap     *ecs.Map[components.WorldPos]
-	visualMap  *ecs.Map[components.ParticleVisual]
-	velMap     *ecs.Map[components.ParticleVel]
-	endMap     *ecs.Map[components.ParticleEnd]
-	particle   *ecs.Map[components.Particle]
-	atmRes     ecs.Resource[components.Atmosphere]
-	world      *ecs.World
-	removeBuf  []ecs.Entity
-	sortBuf    []particleAge
-	exhaustBuf []exhaustSpawn
-}
-
-type exhaustSpawn struct {
-	pos   rl.Vector3
-	vel   rl.Vector3
-	color rl.Color
-	size  float32
+	filter    *ecs.Filter3[components.Particle, components.WorldPos, components.ParticleVisual]
+	posMap    *ecs.Map[components.WorldPos]
+	visualMap *ecs.Map[components.ParticleVisual]
+	velMap    *ecs.Map[components.ParticleVel]
+	endMap    *ecs.Map[components.ParticleEnd]
+	particle  *ecs.Map[components.Particle]
+	atmRes    ecs.Resource[components.Atmosphere]
+	world     *ecs.World
+	removeBuf []ecs.Entity
+	sortBuf   []particleAge
 }
 
 type particleAge struct {
@@ -55,7 +44,6 @@ func NewParticleSystem() *ParticleSystem {
 
 func (sys *ParticleSystem) InitUI(w *ecs.World) {
 	sys.filter = ecs.NewFilter3[components.Particle, components.WorldPos, components.ParticleVisual](w)
-	sys.vehFilter = ecs.NewFilter3[components.Vehicle, components.WorldPos, components.Motion](w)
 	sys.posMap = ecs.NewMap[components.WorldPos](w)
 	sys.visualMap = ecs.NewMap[components.ParticleVisual](w)
 	sys.velMap = ecs.NewMap[components.ParticleVel](w)
@@ -163,63 +151,6 @@ func (sys *ParticleSystem) Update(ctx core.UpdateContext) {
 		}
 	}
 
-	sys.emitExhaust(ctx, now)
-}
-
-// emitExhaust drops engine-smoke puffs behind every live vehicle on a
-// deterministic tick cadence (TickIndex + entity ID — no private state, no
-// RNG). Sim-side so headless runs stay bit-identical with watched ones.
-func (sys *ParticleSystem) emitExhaust(ctx core.UpdateContext, now float32) {
-	sys.exhaustBuf = sys.exhaustBuf[:0]
-	q := sys.vehFilter.Query()
-	for q.Next() {
-		veh, pos, mot := q.Get()
-		moving := mot.Speed > 0.5 || mot.Speed < -0.5
-		period := uint64(36)
-		if moving {
-			period = 10
-		}
-		if (ctx.TickIndex+uint64(q.Entity().ID()))%period != 0 {
-			continue
-		}
-		spec := components.SpecForVehicle(veh.Kind)
-		sinY := float32(math.Sin(float64(mot.Yaw)))
-		cosY := float32(math.Cos(float64(mot.Yaw)))
-		absX := float32(pos.Chunk.X)*components.ChunkSize + pos.Local.X
-		absZ := float32(pos.Chunk.Z)*components.ChunkSize + pos.Local.Z
-		rear := spec.BoxLen * 0.42
-		p := rl.Vector3{
-			X: absX - sinY*rear,
-			Y: pos.Local.Y + spec.BoxHgt*0.55,
-			Z: absZ - cosY*rear,
-		}
-		color := rl.Color{R: 96, G: 96, B: 100, A: 150}
-		if spec.Locomotion == components.LocomotionTracked {
-			color = rl.Color{R: 62, G: 62, B: 64, A: 185}
-		}
-		size := float32(0.30)
-		if moving {
-			size = 0.45
-		}
-		sys.exhaustBuf = append(sys.exhaustBuf, exhaustSpawn{
-			pos:   p,
-			vel:   rl.Vector3{X: -sinY * 0.3, Y: 0.7, Z: -cosY * 0.3},
-			color: color,
-			size:  size,
-		})
-	}
-	for i := range sys.exhaustBuf {
-		e := sys.exhaustBuf[i]
-		ent := sys.world.NewEntity()
-		sys.particle.Add(ent, &components.Particle{})
-		posCopy := components.WorldPos{Local: e.pos}
-		sys.posMap.Add(ent, &posCopy)
-		sys.visualMap.Add(ent, &components.ParticleVisual{
-			Kind: components.ParticleSmoke, Color: e.color, Size: e.size,
-			SpawnTime: now, TTL: 1.6,
-		})
-		sys.velMap.Add(ent, &components.ParticleVel{Vel: e.vel})
-	}
 }
 
 // SpawnParticleHandles bundles the maps a writer (WeaponSystem) needs to

@@ -27,6 +27,9 @@ type vec3 [3]float32
 
 func (v vec3) rl() rl.Vector3 { return rl.Vector3{X: v[0], Y: v[1], Z: v[2]} }
 
+// Vec exposes a mount coordinate to callers outside the package.
+func (v vec3) Vec() rl.Vector3 { return v.rl() }
+
 // MeshRef is one drawable: a mesh index into Model.Meshes plus the material
 // bucket it belongs to. Glass is drawn after everything opaque.
 type MeshRef struct {

@@ -1,0 +1,98 @@
+{
+ "name": "heli_w",
+ "class": "aircraft",
+ "side": "west",
+ "kind": "",
+ "forward": "+Z",
+ "up": "+Y",
+ "vertex_color_space": "linear",
+ "size": [
+  11.755,
+  6.37,
+  25.8
+ ],
+ "source": {
+  "blend": "exports/blend/heli_w.blend",
+  "objects": 242,
+  "tris": 45496
+ },
+ "lods": [
+  {
+   "lod": 0,
+   "ratio": 0.2418,
+   "tris": 10919,
+   "draws": 2
+  },
+  {
+   "lod": 1,
+   "ratio": 0.0086,
+   "tris": 3182,
+   "draws": 2
+  },
+  {
+   "lod": 2,
+   "ratio": 0.0097,
+   "tris": 862,
+   "draws": 1
+  }
+ ],
+ "parts": [
+  {
+   "id": "hull",
+   "lods": {
+    "0": [
+     {
+      "mesh": 0,
+      "bucket": "glass",
+      "tris": 620
+     },
+     {
+      "mesh": 1,
+      "bucket": "opaque",
+      "tris": 10299
+     }
+    ],
+    "1": [
+     {
+      "mesh": 2,
+      "bucket": "glass",
+      "tris": 22
+     },
+     {
+      "mesh": 3,
+      "bucket": "opaque",
+      "tris": 3160
+     }
+    ],
+    "2": [
+     {
+      "mesh": 4,
+      "bucket": "opaque",
+      "tris": 862
+     }
+    ]
+   },
+   "pivot": [
+    0.0,
+    0.0,
+    -0.0
+   ],
+   "axis": "",
+   "parent": "",
+   "bbox": {
+    "min": [
+     -5.8063,
+     -0.0,
+     -12.9
+    ],
+    "max": [
+     5.9487,
+     6.37,
+     12.9
+    ]
+   }
+  }
+ ],
+ "mounts": [],
+ "bytes": 754992
+}

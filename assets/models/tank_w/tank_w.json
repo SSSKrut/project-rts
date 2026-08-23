@@ -1,0 +1,190 @@
+{
+ "name": "tank_w",
+ "class": "vehicle",
+ "side": "west",
+ "kind": "",
+ "forward": "+Z",
+ "up": "+Y",
+ "vertex_color_space": "linear",
+ "size": [
+  3.97,
+  4.122,
+  10.228
+ ],
+ "source": {
+  "blend": "exports/blend/tank_w.blend",
+  "objects": 154,
+  "tris": 80732
+ },
+ "lods": [
+  {
+   "lod": 0,
+   "ratio": 0.1363,
+   "tris": 10994,
+   "draws": 2
+  },
+  {
+   "lod": 1,
+   "ratio": 0.0243,
+   "tris": 3192,
+   "draws": 2
+  },
+  {
+   "lod": 2,
+   "ratio": 0.0338,
+   "tris": 894,
+   "draws": 2
+  }
+ ],
+ "parts": [
+  {
+   "id": "hull",
+   "lods": {
+    "0": [
+     {
+      "mesh": 0,
+      "bucket": "opaque",
+      "tris": 9307
+     }
+    ],
+    "1": [
+     {
+      "mesh": 2,
+      "bucket": "opaque",
+      "tris": 2510
+     }
+    ],
+    "2": [
+     {
+      "mesh": 4,
+      "bucket": "opaque",
+      "tris": 658
+     }
+    ]
+   },
+   "pivot": [
+    0.0,
+    0.0,
+    -0.0
+   ],
+   "axis": "",
+   "parent": "",
+   "bbox": {
+    "min": [
+     -1.985,
+     0.2,
+     -3.5685
+    ],
+    "max": [
+     1.985,
+     4.3217,
+     3.45
+    ]
+   }
+  },
+  {
+   "id": "turret",
+   "lods": {
+    "0": [
+     {
+      "mesh": 1,
+      "bucket": "opaque",
+      "tris": 1687
+     }
+    ],
+    "1": [
+     {
+      "mesh": 3,
+      "bucket": "opaque",
+      "tris": 682
+     }
+    ],
+    "2": [
+     {
+      "mesh": 5,
+      "bucket": "opaque",
+      "tris": 236
+     }
+    ]
+   },
+   "pivot": [
+    -0.0,
+    1.46,
+    0.265
+   ],
+   "axis": "yaw",
+   "parent": "hull",
+   "bbox": {
+    "min": [
+     -1.585,
+     1.44,
+     -1.75
+    ],
+    "max": [
+     1.585,
+     2.875,
+     6.6595
+    ]
+   }
+  }
+ ],
+ "mounts": [
+  {
+   "id": "exhaust.0",
+   "part": "hull",
+   "pos": [
+    0.0,
+    1.34,
+    -3.3
+   ],
+   "dir": [
+    0.0,
+    1.0,
+    -0.0
+   ]
+  },
+  {
+   "id": "light.head.left",
+   "part": "turret",
+   "pos": [
+    0.52,
+    2.18,
+    1.965
+   ],
+   "dir": [
+    -0.0,
+    0.0,
+    1.0
+   ]
+  },
+  {
+   "id": "muzzle.main",
+   "part": "turret",
+   "pos": [
+    -0.0,
+    1.9,
+    6.6595
+   ],
+   "dir": [
+    -0.0,
+    0.0,
+    1.0
+   ]
+  },
+  {
+   "id": "smoke.launcher.left",
+   "part": "turret",
+   "pos": [
+    -0.0,
+    2.0257,
+    1.1319
+   ],
+   "dir": [
+    0.2736,
+    0.2736,
+    0.9221
+   ]
+  }
+ ],
+ "bytes": 990452
+}

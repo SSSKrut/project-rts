@@ -22,6 +22,7 @@ func (g *Game) initUI() {
 	g.Ctx.WorldShader.apply(&g.terrainMaterial)
 	g.Ctx.Ribbons.upload()
 	g.Ctx.Models = newModelSet()
+	g.Ctx.Exhaust = newExhaustField()
 
 	g.UI.ScreenW, g.UI.ScreenH = initialScreenWidth, initialScreenHeight
 	g.UI.PanelMgr = ui.NewPanelManager()

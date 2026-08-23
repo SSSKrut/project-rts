@@ -180,6 +180,7 @@ type renderCtx struct {
 	Ribbons     ribbonSet
 	WorldShader *worldShader
 	Models      *modelSet
+	Exhaust     *exhaustField
 	Clouds      *cloudRenderer
 	Pyramid     *systems.HeightPyramid
 	FarTerrain  *farTerrain

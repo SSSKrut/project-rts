@@ -61,6 +61,10 @@ func (g *Game) drawScene3D() {
 		g.Ctx.Particle.Puffs.setLight(&g.Ctx.Daylight)
 	}
 	g.Ctx.Models.beginFrame(g.Ctx.Daylight, systems.CurrentCamera.Position)
+	// Engine smoke is render-side now (see render_exhaust.go), so it ages on
+	// wall time and drifts with the same wind the clouds use.
+	g.Ctx.Exhaust.beginFrame(rl.GetFrameTime(), rl.Vector2{X: atm.WindX, Y: atm.WindZ})
+	night := hours < 6.4 || hours > 19.6
 
 	rl.BeginTextureMode(g.UI.Scene3DRT.RT)
 	rl.ClearBackground(rl.RayWhite)
@@ -177,11 +181,20 @@ func (g *Game) drawScene3D() {
 		if t := g.Maps.Turret.Get(ent); t != nil {
 			turretYaw = t.Yaw
 		}
-		if g.Ctx.Models.has(veh.Kind) {
-			g.drawVehicleModel(ent, renderPos, veh.Kind, yaw, turretYaw, rl.White)
+		// Which factory built the hull is an art question, so it is answered
+		// from Faction here and never inside the tick.
+		side := components.SideWest
+		if f := g.Maps.Faction.Get(ent); f != nil {
+			side = components.AssetSideForFaction(f.ID)
+		}
+		if g.Ctx.Models.has(veh.Kind, side) {
+			lod := g.drawVehicleModel(ent, renderPos, veh.Kind, side, yaw, turretYaw, rl.White)
+			g.drawVehicleNumber(ent, veh.Kind, side, renderPos, yaw, turretYaw, lod)
+			g.drawVehicleLights(ent, renderPos, veh.Kind, side, yaw, turretYaw, night)
 		} else {
 			drawVehicleBox(renderPos, yaw, turretYaw, veh.Kind, g.squadColor(ent))
 		}
+		g.emitVehicleExhaust(ent, *pos, veh.Kind, side, yaw, turretYaw)
 		if g.isSelected(ent) >= 0 {
 			spec := components.SpecForVehicle(veh.Kind)
 			rl.DrawCircle3D(renderPos, spec.ColliderR, rl.Vector3{X: 1, Y: 0, Z: 0}, 90,
@@ -616,6 +629,11 @@ func (g *Game) drawScene3D() {
 	// reject whatever stands beyond the surface.
 	g.Frame.RibbonsDrawn += g.Ctx.Ribbons.Water.draw(g.terrainMaterial)
 
+	// Exhaust queues into the same billboard batch and must land before
+	// drawParticles, which owns the flush.
+	g.Ctx.Exhaust.draw(g.Ctx.Particle.Puffs,
+		float32(systems.CurrentOriginChunk.X)*components.ChunkSize,
+		float32(systems.CurrentOriginChunk.Z)*components.ChunkSize)
 	drawParticles(g.Ctx.Particle, float32(g.App.Elapsed().Seconds()))
 
 	rl.EndMode3D()

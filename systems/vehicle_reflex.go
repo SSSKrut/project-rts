@@ -196,7 +196,18 @@ func (sys *VehicleReflexSystem) tryTrigger(ent ecs.Entity, veh *components.Vehic
 	case components.VehicleReflexSmokeAndReverse:
 		ov.Until = now + smokeReverseDuration
 		ov.Retreat = *pos // origin snapshot for the retreat-distance exit
-		sys.smokePending = append(sys.smokePending, *pos)
+		// The cloud leaves the launchers, not the hull centre. The offset is
+		// generated from the model manifest (cmd/genmounts), so a headless run
+		// has it and a re-export shows up as a diff rather than as drift.
+		at := *pos
+		side := components.SideWest
+		if f := sys.factionMap.Get(ent); f != nil {
+			side = components.AssetSideForFaction(f.ID)
+		}
+		if mnt := components.VehicleMounts[veh.Kind][side]; mnt.HasSmoke {
+			at = at.Add(components.RotateYawXZ(mnt.Smoke, mot.Yaw))
+		}
+		sys.smokePending = append(sys.smokePending, at)
 	case components.VehicleReflexFlee:
 		// Retreat point only — the driver owns locomotion for the duration
 		// (P8-f). Pushing it into the ActionQueue destroyed the player's

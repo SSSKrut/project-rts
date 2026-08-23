@@ -1,0 +1,155 @@
+{
+ "name": "mutt",
+ "class": "vehicle",
+ "side": "",
+ "kind": "",
+ "forward": "+Z",
+ "up": "+Y",
+ "vertex_color_space": "linear",
+ "size": [
+  2.14,
+  2.748,
+  4.264
+ ],
+ "source": {
+  "blend": "exports/blend/mutt.blend",
+  "objects": 193,
+  "tris": 44591
+ },
+ "lods": [
+  {
+   "lod": 0,
+   "ratio": 0.2467,
+   "tris": 10817,
+   "draws": 2
+  },
+  {
+   "lod": 1,
+   "ratio": 0.0341,
+   "tris": 3187,
+   "draws": 2
+  },
+  {
+   "lod": 2,
+   "ratio": 0.0424,
+   "tris": 898,
+   "draws": 1
+  }
+ ],
+ "parts": [
+  {
+   "id": "hull",
+   "lods": {
+    "0": [
+     {
+      "mesh": 0,
+      "bucket": "glass",
+      "tris": 1
+     },
+     {
+      "mesh": 1,
+      "bucket": "opaque",
+      "tris": 10816
+     }
+    ],
+    "1": [
+     {
+      "mesh": 2,
+      "bucket": "glass",
+      "tris": 1
+     },
+     {
+      "mesh": 3,
+      "bucket": "opaque",
+      "tris": 3186
+     }
+    ],
+    "2": [
+     {
+      "mesh": 4,
+      "bucket": "opaque",
+      "tris": 898
+     }
+    ]
+   },
+   "pivot": [
+    0.0,
+    0.0,
+    -0.0
+   ],
+   "axis": "",
+   "parent": "",
+   "bbox": {
+    "min": [
+     -1.03,
+     -0.0269,
+     -2.2324
+    ],
+    "max": [
+     1.11,
+     2.7216,
+     2.032
+    ]
+   }
+  }
+ ],
+ "mounts": [
+  {
+   "id": "exhaust.0",
+   "part": "hull",
+   "pos": [
+    0.5763,
+    0.5772,
+    -1.5844
+   ],
+   "dir": [
+    0.0,
+    1.0,
+    -0.0
+   ]
+  },
+  {
+   "id": "light.tail.left",
+   "part": "hull",
+   "pos": [
+    0.56,
+    0.92,
+    -1.86
+   ],
+   "dir": [
+    0.0,
+    0.0,
+    -1.0
+   ]
+  },
+  {
+   "id": "light.tail.right",
+   "part": "hull",
+   "pos": [
+    -0.56,
+    0.92,
+    -1.86
+   ],
+   "dir": [
+    0.0,
+    0.0,
+    -1.0
+   ]
+  },
+  {
+   "id": "muzzle.main",
+   "part": "turret",
+   "pos": [
+    -0.0,
+    1.79,
+    0.85
+   ],
+   "dir": [
+    -0.0,
+    0.0,
+    1.0
+   ]
+  }
+ ],
+ "bytes": 1226956
+}

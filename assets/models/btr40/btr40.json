@@ -1,0 +1,183 @@
+{
+ "name": "btr40",
+ "class": "vehicle",
+ "side": "",
+ "kind": "",
+ "forward": "+Z",
+ "up": "+Y",
+ "vertex_color_space": "linear",
+ "size": [
+  2.32,
+  3.336,
+  5.401
+ ],
+ "source": {
+  "blend": "exports/blend/btr40.blend",
+  "objects": 165,
+  "tris": 41339
+ },
+ "lods": [
+  {
+   "lod": 0,
+   "ratio": 0.2661,
+   "tris": 10998,
+   "draws": 2
+  },
+  {
+   "lod": 1,
+   "ratio": 0.0366,
+   "tris": 3197,
+   "draws": 2
+  },
+  {
+   "lod": 2,
+   "ratio": 0.044,
+   "tris": 899,
+   "draws": 1
+  }
+ ],
+ "parts": [
+  {
+   "id": "hull",
+   "lods": {
+    "0": [
+     {
+      "mesh": 0,
+      "bucket": "glass",
+      "tris": 5
+     },
+     {
+      "mesh": 1,
+      "bucket": "opaque",
+      "tris": 10993
+     }
+    ],
+    "1": [
+     {
+      "mesh": 2,
+      "bucket": "glass",
+      "tris": 2
+     },
+     {
+      "mesh": 3,
+      "bucket": "opaque",
+      "tris": 3195
+     }
+    ],
+    "2": [
+     {
+      "mesh": 4,
+      "bucket": "opaque",
+      "tris": 899
+     }
+    ]
+   },
+   "pivot": [
+    0.0,
+    0.0,
+    -0.0
+   ],
+   "axis": "",
+   "parent": "",
+   "bbox": {
+    "min": [
+     -1.16,
+     -0.0341,
+     -2.7764
+    ],
+    "max": [
+     1.16,
+     3.3015,
+     2.625
+    ]
+   }
+  }
+ ],
+ "mounts": [
+  {
+   "id": "decal.number.left",
+   "part": "hull",
+   "pos": [
+    0.855,
+    1.45,
+    -1.1
+   ],
+   "dir": [
+    1.0,
+    0.0,
+    0.0
+   ]
+  },
+  {
+   "id": "decal.number.right",
+   "part": "hull",
+   "pos": [
+    -0.855,
+    1.45,
+    -1.1
+   ],
+   "dir": [
+    -1.0,
+    0.0,
+    -0.0
+   ]
+  },
+  {
+   "id": "exhaust.0",
+   "part": "hull",
+   "pos": [
+    0.6162,
+    0.6814,
+    -1.9933
+   ],
+   "dir": [
+    0.0,
+    1.0,
+    -0.0
+   ]
+  },
+  {
+   "id": "light.tail.left",
+   "part": "hull",
+   "pos": [
+    0.72,
+    1.02,
+    -2.31
+   ],
+   "dir": [
+    0.0,
+    0.0,
+    -1.0
+   ]
+  },
+  {
+   "id": "light.tail.right",
+   "part": "hull",
+   "pos": [
+    -0.72,
+    1.02,
+    -2.31
+   ],
+   "dir": [
+    0.0,
+    0.0,
+    -1.0
+   ]
+  },
+  {
+   "id": "muzzle.main",
+   "part": "turret",
+   "pos": [
+    -0.0,
+    2.09,
+    1.8
+   ],
+   "dir": [
+    -0.0,
+    0.0,
+    1.0
+   ]
+  }
+ ],
+ "bytes": 1207172
+}

@@ -1,0 +1,214 @@
+{
+ "name": "btr60",
+ "class": "vehicle",
+ "side": "",
+ "kind": "",
+ "forward": "+Z",
+ "up": "+Y",
+ "vertex_color_space": "linear",
+ "size": [
+  2.903,
+  3.899,
+  7.669
+ ],
+ "source": {
+  "blend": "exports/blend/btr60.blend",
+  "objects": 306,
+  "tris": 82724
+ },
+ "lods": [
+  {
+   "lod": 0,
+   "ratio": 0.133,
+   "tris": 10339,
+   "draws": 3
+  },
+  {
+   "lod": 1,
+   "ratio": 0.0344,
+   "tris": 3191,
+   "draws": 3
+  },
+  {
+   "lod": 2,
+   "ratio": 0.0425,
+   "tris": 893,
+   "draws": 2
+  }
+ ],
+ "parts": [
+  {
+   "id": "hull",
+   "lods": {
+    "0": [
+     {
+      "mesh": 0,
+      "bucket": "glass",
+      "tris": 29
+     },
+     {
+      "mesh": 1,
+      "bucket": "opaque",
+      "tris": 9642
+     }
+    ],
+    "1": [
+     {
+      "mesh": 3,
+      "bucket": "glass",
+      "tris": 5
+     },
+     {
+      "mesh": 4,
+      "bucket": "opaque",
+      "tris": 2960
+     }
+    ],
+    "2": [
+     {
+      "mesh": 6,
+      "bucket": "opaque",
+      "tris": 828
+     }
+    ]
+   },
+   "pivot": [
+    0.0,
+    0.0,
+    -0.0
+   ],
+   "axis": "",
+   "parent": "",
+   "bbox": {
+    "min": [
+     -1.4515,
+     -0.0372,
+     -3.78
+    ],
+    "max": [
+     1.4515,
+     3.8619,
+     3.889
+    ]
+   }
+  },
+  {
+   "id": "turret",
+   "lods": {
+    "0": [
+     {
+      "mesh": 2,
+      "bucket": "opaque",
+      "tris": 668
+     }
+    ],
+    "1": [
+     {
+      "mesh": 5,
+      "bucket": "opaque",
+      "tris": 226
+     }
+    ],
+    "2": [
+     {
+      "mesh": 7,
+      "bucket": "opaque",
+      "tris": 65
+     }
+    ]
+   },
+   "pivot": [
+    -0.0,
+    1.945,
+    1.0
+   ],
+   "axis": "yaw",
+   "parent": "hull",
+   "bbox": {
+    "min": [
+     -0.74,
+     1.945,
+     0.26
+    ],
+    "max": [
+     0.74,
+     2.5475,
+     3.23
+    ]
+   }
+  }
+ ],
+ "mounts": [
+  {
+   "id": "decal.number.left",
+   "part": "hull",
+   "pos": [
+    1.2476,
+    1.48,
+    0.05
+   ],
+   "dir": [
+    1.0,
+    0.0,
+    0.0
+   ]
+  },
+  {
+   "id": "decal.number.right",
+   "part": "hull",
+   "pos": [
+    -1.2476,
+    1.48,
+    0.05
+   ],
+   "dir": [
+    -1.0,
+    0.0,
+    -0.0
+   ]
+  },
+  {
+   "id": "exhaust.0",
+   "part": "hull",
+   "pos": [
+    0.0,
+    1.3218,
+    -2.97
+   ],
+   "dir": [
+    0.0,
+    1.0,
+    -0.0
+   ]
+  },
+  {
+   "id": "light.tail.left",
+   "part": "hull",
+   "pos": [
+    0.62,
+    1.5,
+    -3.65
+   ],
+   "dir": [
+    0.0,
+    0.0,
+    -1.0
+   ]
+  },
+  {
+   "id": "light.tail.right",
+   "part": "hull",
+   "pos": [
+    -0.62,
+    1.5,
+    -3.65
+   ],
+   "dir": [
+    0.0,
+    0.0,
+    -1.0
+   ]
+  }
+ ],
+ "bytes": 888880
+}

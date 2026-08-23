@@ -1,0 +1,108 @@
+{
+ "name": "sniper_w",
+ "class": "weapon",
+ "side": "west",
+ "kind": "",
+ "forward": "+Z",
+ "up": "+Y",
+ "vertex_color_space": "linear",
+ "size": [
+  0.3,
+  1.053,
+  1.097
+ ],
+ "source": {
+  "blend": "exports/blend/sniper_w.blend",
+  "objects": 54,
+  "tris": 8302
+ },
+ "lods": [
+  {
+   "lod": 0,
+   "ratio": 1.0,
+   "tris": 8302,
+   "draws": 2
+  },
+  {
+   "lod": 1,
+   "ratio": 0.1461,
+   "tris": 3198,
+   "draws": 1
+  },
+  {
+   "lod": 2,
+   "ratio": 0.1711,
+   "tris": 900,
+   "draws": 1
+  }
+ ],
+ "parts": [
+  {
+   "id": "hull",
+   "lods": {
+    "0": [
+     {
+      "mesh": 0,
+      "bucket": "glass",
+      "tris": 68
+     },
+     {
+      "mesh": 1,
+      "bucket": "opaque",
+      "tris": 8234
+     }
+    ],
+    "1": [
+     {
+      "mesh": 2,
+      "bucket": "opaque",
+      "tris": 3198
+     }
+    ],
+    "2": [
+     {
+      "mesh": 3,
+      "bucket": "opaque",
+      "tris": 900
+     }
+    ]
+   },
+   "pivot": [
+    0.0,
+    0.0,
+    -0.0
+   ],
+   "axis": "",
+   "parent": "",
+   "bbox": {
+    "min": [
+     -0.1499,
+     -0.0022,
+     -0.4546
+    ],
+    "max": [
+     0.1499,
+     1.0505,
+     0.6424
+    ]
+   }
+  }
+ ],
+ "mounts": [
+  {
+   "id": "muzzle.main",
+   "part": "turret",
+   "pos": [
+    -0.0,
+    0.95,
+    0.6424
+   ],
+   "dir": [
+    -0.0,
+    0.0,
+    1.0
+   ]
+  }
+ ],
+ "bytes": 866624
+}

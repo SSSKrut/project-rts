@@ -18,20 +18,16 @@ import (
 // still runs on a tree that has not been baked.
 const modelDir = "assets/models"
 
-// vehicleAssetName binds a class to a baked asset. Kinds absent here keep the
-// box. Once both sides have models this becomes (kind, side) — the sim never
-// sees either, so the mapping can change without touching a hash.
-var vehicleAssetName = map[components.VehicleKind]string{
-	components.VehicleCar: "mrap_2",
-}
-
 // modelSet is the render-side model state: the registry plus the per-entity
 // wheel angle. Spin is integrated here rather than stored on the entity —
 // it is pure cosmetics, so it must not enter a component, save_spec or a hash.
 type modelSet struct {
 	reg     *assets.Registry
-	byKind  [components.VehicleKindCount]assets.ModelID
-	hasKind [components.VehicleKindCount]bool
+	byKind  [components.VehicleKindCount][components.AssetSideCount]assets.ModelID
+	hasKind [components.VehicleKindCount][components.AssetSideCount]bool
+
+	digits    assets.ModelID
+	hasDigits bool
 
 	spin     map[ecs.Entity]float32
 	spinSeen map[ecs.Entity]float32
@@ -48,10 +44,16 @@ func newModelSet() *modelSet {
 		return m
 	}
 	m.reg = reg
-	for kind, name := range vehicleAssetName {
-		if id, ok := reg.ID(name); ok {
-			m.byKind[kind] = id
-			m.hasKind[kind] = true
+	m.digits, m.hasDigits = reg.ID(digitsAsset)
+	for kind, sides := range components.VehicleAssetName {
+		for side, name := range sides {
+			if name == "" {
+				continue
+			}
+			if id, ok := reg.ID(name); ok {
+				m.byKind[kind][side] = id
+				m.hasKind[kind][side] = true
+			}
 		}
 	}
 	return m
@@ -83,8 +85,8 @@ func (m *modelSet) beginFrame(pal skyPalette, camPos rl.Vector3) {
 	clear(m.spinSeen)
 }
 
-func (m *modelSet) has(kind components.VehicleKind) bool {
-	return m.reg != nil && int(kind) < len(m.hasKind) && m.hasKind[kind]
+func (m *modelSet) has(kind components.VehicleKind, side components.AssetSide) bool {
+	return m.reg != nil && int(kind) < len(m.hasKind) && m.hasKind[kind][side]
 }
 
 // rollWheels integrates the wheel angle from ground speed. Radius comes from
@@ -106,9 +108,9 @@ func (m *modelSet) rollWheels(ent ecs.Entity, speed, radius, dt float32) float32
 // Turret yaw is the sim's; wheel spin and steer are derived here — the driver
 // never stores them, and neither does the save.
 func (g *Game) drawVehicleModel(ent ecs.Entity, pos rl.Vector3, kind components.VehicleKind,
-	yaw, turretYaw float32, tint rl.Color) {
+	side components.AssetSide, yaw, turretYaw float32, tint rl.Color) int {
 	m := g.Ctx.Models
-	id := m.byKind[kind]
+	id := m.byKind[kind][side]
 	spec := components.SpecForVehicle(kind)
 
 	speed, velYaw := float32(0), float32(0)
@@ -126,17 +128,19 @@ func (g *Game) drawVehicleModel(ent ecs.Entity, pos rl.Vector3, kind components.
 		Pos: pos, Yaw: yaw, Turret: turretYaw,
 		WheelSpin: spin, Steer: steer, Tint: tint,
 	})
+	return lod
 }
 
 // vehicleMountWorld resolves a named attachment point on a live hull. Callers
 // that have no model fall back to their own box-relative guess.
-func (g *Game) vehicleMountWorld(ent ecs.Entity, kind components.VehicleKind, mount string,
+func (g *Game) vehicleMountWorld(ent ecs.Entity, kind components.VehicleKind,
+	side components.AssetSide, mount string,
 	pos rl.Vector3, yaw, turretYaw float32) (rl.Vector3, rl.Vector3, bool) {
 	m := g.Ctx.Models
-	if !m.has(kind) {
+	if !m.has(kind, side) {
 		return rl.Vector3{}, rl.Vector3{}, false
 	}
-	return m.reg.MountWorld(m.byKind[kind], mount,
+	return m.reg.MountWorld(m.byKind[kind][side], mount,
 		assets.Pose{Pos: pos, Yaw: yaw, Turret: turretYaw})
 }
 

@@ -1,0 +1,141 @@
+{
+ "name": "m35",
+ "class": "vehicle",
+ "side": "",
+ "kind": "",
+ "forward": "+Z",
+ "up": "+Y",
+ "vertex_color_space": "linear",
+ "size": [
+  2.55,
+  3.658,
+  6.835
+ ],
+ "source": {
+  "blend": "exports/blend/m35.blend",
+  "objects": 283,
+  "tris": 64993
+ },
+ "lods": [
+  {
+   "lod": 0,
+   "ratio": 0.1692,
+   "tris": 10548,
+   "draws": 2
+  },
+  {
+   "lod": 1,
+   "ratio": 0.028,
+   "tris": 3191,
+   "draws": 2
+  },
+  {
+   "lod": 2,
+   "ratio": 0.0341,
+   "tris": 897,
+   "draws": 1
+  }
+ ],
+ "parts": [
+  {
+   "id": "hull",
+   "lods": {
+    "0": [
+     {
+      "mesh": 0,
+      "bucket": "glass",
+      "tris": 4
+     },
+     {
+      "mesh": 1,
+      "bucket": "opaque",
+      "tris": 10544
+     }
+    ],
+    "1": [
+     {
+      "mesh": 2,
+      "bucket": "glass",
+      "tris": 4
+     },
+     {
+      "mesh": 3,
+      "bucket": "opaque",
+      "tris": 3187
+     }
+    ],
+    "2": [
+     {
+      "mesh": 4,
+      "bucket": "opaque",
+      "tris": 897
+     }
+    ]
+   },
+   "pivot": [
+    0.0,
+    0.0,
+    -0.0
+   ],
+   "axis": "",
+   "parent": "",
+   "bbox": {
+    "min": [
+     -1.275,
+     -0.0367,
+     -3.33
+    ],
+    "max": [
+     1.275,
+     3.6216,
+     3.505
+    ]
+   }
+  }
+ ],
+ "mounts": [
+  {
+   "id": "exhaust.0",
+   "part": "hull",
+   "pos": [
+    0.666,
+    2.945,
+    0.792
+   ],
+   "dir": [
+    0.0,
+    1.0,
+    -0.0
+   ]
+  },
+  {
+   "id": "light.tail.left",
+   "part": "hull",
+   "pos": [
+    0.72,
+    1.16,
+    -3.11
+   ],
+   "dir": [
+    0.0,
+    0.0,
+    -1.0
+   ]
+  },
+  {
+   "id": "light.tail.right",
+   "part": "hull",
+   "pos": [
+    -0.72,
+    1.16,
+    -3.11
+   ],
+   "dir": [
+    0.0,
+    0.0,
+    -1.0
+   ]
+  }
+ ],
+ "bytes": 1158812
+}

@@ -1,0 +1,98 @@
+{
+ "name": "bomber_w",
+ "class": "aircraft",
+ "side": "west",
+ "kind": "",
+ "forward": "+Z",
+ "up": "+Y",
+ "vertex_color_space": "linear",
+ "size": [
+  55.24,
+  8.7,
+  33.907
+ ],
+ "source": {
+  "blend": "exports/blend/bomber_w.blend",
+  "objects": 117,
+  "tris": 35976
+ },
+ "lods": [
+  {
+   "lod": 0,
+   "ratio": 0.3058,
+   "tris": 10981,
+   "draws": 2
+  },
+  {
+   "lod": 1,
+   "ratio": 0.0039,
+   "tris": 3136,
+   "draws": 2
+  },
+  {
+   "lod": 2,
+   "ratio": 0.0043,
+   "tris": 848,
+   "draws": 1
+  }
+ ],
+ "parts": [
+  {
+   "id": "hull",
+   "lods": {
+    "0": [
+     {
+      "mesh": 0,
+      "bucket": "glass",
+      "tris": 298
+     },
+     {
+      "mesh": 1,
+      "bucket": "opaque",
+      "tris": 10683
+     }
+    ],
+    "1": [
+     {
+      "mesh": 2,
+      "bucket": "glass",
+      "tris": 2
+     },
+     {
+      "mesh": 3,
+      "bucket": "opaque",
+      "tris": 3134
+     }
+    ],
+    "2": [
+     {
+      "mesh": 4,
+      "bucket": "opaque",
+      "tris": 848
+     }
+    ]
+   },
+   "pivot": [
+    0.0,
+    0.0,
+    -0.0
+   ],
+   "axis": "",
+   "parent": "",
+   "bbox": {
+    "min": [
+     -27.62,
+     -0.0,
+     -17.0071
+    ],
+    "max": [
+     27.62,
+     8.7,
+     16.9
+    ]
+   }
+  }
+ ],
+ "mounts": [],
+ "bytes": 519284
+}

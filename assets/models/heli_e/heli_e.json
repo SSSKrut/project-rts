@@ -1,0 +1,127 @@
+{
+ "name": "heli_e",
+ "class": "aircraft",
+ "side": "east",
+ "kind": "",
+ "forward": "+Z",
+ "up": "+Y",
+ "vertex_color_space": "linear",
+ "size": [
+  10.894,
+  5.249,
+  13.071
+ ],
+ "source": {
+  "blend": "exports/blend/heli_e.blend",
+  "objects": 307,
+  "tris": 43196
+ },
+ "lods": [
+  {
+   "lod": 0,
+   "ratio": 0.2547,
+   "tris": 10997,
+   "draws": 2
+  },
+  {
+   "lod": 1,
+   "ratio": 0.0206,
+   "tris": 3198,
+   "draws": 2
+  },
+  {
+   "lod": 2,
+   "ratio": 0.0234,
+   "tris": 895,
+   "draws": 1
+  }
+ ],
+ "parts": [
+  {
+   "id": "hull",
+   "lods": {
+    "0": [
+     {
+      "mesh": 0,
+      "bucket": "glass",
+      "tris": 522
+     },
+     {
+      "mesh": 1,
+      "bucket": "opaque",
+      "tris": 10475
+     }
+    ],
+    "1": [
+     {
+      "mesh": 2,
+      "bucket": "glass",
+      "tris": 42
+     },
+     {
+      "mesh": 3,
+      "bucket": "opaque",
+      "tris": 3156
+     }
+    ],
+    "2": [
+     {
+      "mesh": 4,
+      "bucket": "opaque",
+      "tris": 895
+     }
+    ]
+   },
+   "pivot": [
+    0.0,
+    0.0,
+    -0.0
+   ],
+   "axis": "",
+   "parent": "",
+   "bbox": {
+    "min": [
+     -6.0109,
+     -0.0,
+     -7.2711
+    ],
+    "max": [
+     4.8832,
+     5.249,
+     5.8
+    ]
+   }
+  }
+ ],
+ "mounts": [
+  {
+   "id": "decal.number.left",
+   "part": "hull",
+   "pos": [
+    1.62,
+    3.42,
+    -6.28
+   ],
+   "dir": [
+    1.0,
+    0.0,
+    0.0
+   ]
+  },
+  {
+   "id": "decal.number.right",
+   "part": "hull",
+   "pos": [
+    -1.62,
+    3.42,
+    -6.28
+   ],
+   "dir": [
+    -1.0,
+    0.0,
+    -0.0
+   ]
+  }
+ ],
+ "bytes": 650812
+}

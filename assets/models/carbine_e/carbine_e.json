@@ -1,0 +1,88 @@
+{
+ "name": "carbine_e",
+ "class": "weapon",
+ "side": "east",
+ "kind": "",
+ "forward": "+Z",
+ "up": "+Y",
+ "vertex_color_space": "linear",
+ "size": [
+  0.3,
+  1.001,
+  0.691
+ ],
+ "source": {
+  "blend": "exports/blend/carbine_e.blend",
+  "objects": 84,
+  "tris": 11920
+ },
+ "lods": [
+  {
+   "lod": 0,
+   "ratio": 0.9228,
+   "tris": 11000,
+   "draws": 1
+  },
+  {
+   "lod": 1,
+   "ratio": 0.141,
+   "tris": 3200,
+   "draws": 1
+  },
+  {
+   "lod": 2,
+   "ratio": 0.1823,
+   "tris": 900,
+   "draws": 1
+  }
+ ],
+ "parts": [
+  {
+   "id": "hull",
+   "lods": {
+    "0": [
+     {
+      "mesh": 0,
+      "bucket": "opaque",
+      "tris": 11000
+     }
+    ],
+    "1": [
+     {
+      "mesh": 1,
+      "bucket": "opaque",
+      "tris": 3200
+     }
+    ],
+    "2": [
+     {
+      "mesh": 2,
+      "bucket": "opaque",
+      "tris": 900
+     }
+    ]
+   },
+   "pivot": [
+    0.0,
+    0.0,
+    -0.0
+   ],
+   "axis": "",
+   "parent": "",
+   "bbox": {
+    "min": [
+     -0.1499,
+     -0.0021,
+     -0.3583
+    ],
+    "max": [
+     0.1499,
+     0.999,
+     0.3324
+    ]
+   }
+  }
+ ],
+ "mounts": [],
+ "bytes": 1187364
+}

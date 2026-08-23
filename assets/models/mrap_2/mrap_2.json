@@ -13,20 +13,20 @@
  ],
  "source": {
   "blend": "exports/blend/mrap_2.blend",
-  "objects": 399,
-  "tris": 83744
+  "objects": 400,
+  "tris": 83756
  },
  "lods": [
   {
    "lod": 0,
-   "ratio": 0.1314,
+   "ratio": 0.1313,
    "tris": 10424,
    "draws": 9
   },
   {
    "lod": 1,
-   "ratio": 0.0394,
-   "tris": 3590,
+   "ratio": 0.0315,
+   "tris": 3195,
    "draws": 4
   },
   {
@@ -75,24 +75,24 @@
      {
       "mesh": 1,
       "bucket": "glass",
-      "tris": 7
+      "tris": 8
      },
      {
       "mesh": 2,
       "bucket": "opaque",
-      "tris": 7061
+      "tris": 7060
      }
     ],
     "1": [
      {
       "mesh": 9,
       "bucket": "glass",
-      "tris": 7
+      "tris": 8
      },
      {
       "mesh": 10,
       "bucket": "opaque",
-      "tris": 3315
+      "tris": 2902
      }
     ],
     "2": [
@@ -147,7 +147,7 @@
      {
       "mesh": 12,
       "bucket": "opaque",
-      "tris": 267
+      "tris": 284
      }
     ],
     "2": [
@@ -587,5 +587,5 @@
    ]
   }
  ],
- "bytes": 928284
+ "bytes": 1028796
 }

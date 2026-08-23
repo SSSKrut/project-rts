@@ -1,0 +1,169 @@
+{
+ "name": "ural",
+ "class": "vehicle",
+ "side": "",
+ "kind": "",
+ "forward": "+Z",
+ "up": "+Y",
+ "vertex_color_space": "linear",
+ "size": [
+  2.81,
+  3.963,
+  7.196
+ ],
+ "source": {
+  "blend": "exports/blend/ural.blend",
+  "objects": 288,
+  "tris": 65845
+ },
+ "lods": [
+  {
+   "lod": 0,
+   "ratio": 0.1671,
+   "tris": 10987,
+   "draws": 2
+  },
+  {
+   "lod": 1,
+   "ratio": 0.0266,
+   "tris": 3185,
+   "draws": 2
+  },
+  {
+   "lod": 2,
+   "ratio": 0.032,
+   "tris": 897,
+   "draws": 1
+  }
+ ],
+ "parts": [
+  {
+   "id": "hull",
+   "lods": {
+    "0": [
+     {
+      "mesh": 0,
+      "bucket": "glass",
+      "tris": 26
+     },
+     {
+      "mesh": 1,
+      "bucket": "opaque",
+      "tris": 10961
+     }
+    ],
+    "1": [
+     {
+      "mesh": 2,
+      "bucket": "glass",
+      "tris": 5
+     },
+     {
+      "mesh": 3,
+      "bucket": "opaque",
+      "tris": 3180
+     }
+    ],
+    "2": [
+     {
+      "mesh": 4,
+      "bucket": "opaque",
+      "tris": 897
+     }
+    ]
+   },
+   "pivot": [
+    0.0,
+    0.0,
+    -0.0
+   ],
+   "axis": "",
+   "parent": "",
+   "bbox": {
+    "min": [
+     -1.405,
+     -0.0408,
+     -3.7057
+    ],
+    "max": [
+     1.405,
+     3.9221,
+     3.49
+    ]
+   }
+  }
+ ],
+ "mounts": [
+  {
+   "id": "decal.number.left",
+   "part": "hull",
+   "pos": [
+    1.095,
+    1.6475,
+    1.06
+   ],
+   "dir": [
+    1.0,
+    0.0,
+    0.0
+   ]
+  },
+  {
+   "id": "decal.number.right",
+   "part": "hull",
+   "pos": [
+    -1.095,
+    1.6475,
+    1.06
+   ],
+   "dir": [
+    -1.0,
+    0.0,
+    -0.0
+   ]
+  },
+  {
+   "id": "exhaust.0",
+   "part": "hull",
+   "pos": [
+    0.8072,
+    0.9294,
+    -1.476
+   ],
+   "dir": [
+    0.0,
+    1.0,
+    -0.0
+   ]
+  },
+  {
+   "id": "light.tail.left",
+   "part": "hull",
+   "pos": [
+    0.8,
+    1.06,
+    -3.56
+   ],
+   "dir": [
+    0.0,
+    0.0,
+    -1.0
+   ]
+  },
+  {
+   "id": "light.tail.right",
+   "part": "hull",
+   "pos": [
+    -0.8,
+    1.06,
+    -3.56
+   ],
+   "dir": [
+    0.0,
+    0.0,
+    -1.0
+   ]
+  }
+ ],
+ "bytes": 1117780
+}

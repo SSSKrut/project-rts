@@ -1,0 +1,117 @@
+{
+ "name": "aa_gun_e",
+ "class": "vehicle",
+ "side": "east",
+ "kind": "",
+ "forward": "+Z",
+ "up": "+Y",
+ "vertex_color_space": "linear",
+ "size": [
+  2.18,
+  2.376,
+  2.615
+ ],
+ "source": {
+  "blend": "exports/blend/aa_gun_e.blend",
+  "objects": 80,
+  "tris": 19442
+ },
+ "lods": [
+  {
+   "lod": 0,
+   "ratio": 0.5658,
+   "tris": 10999,
+   "draws": 1
+  },
+  {
+   "lod": 1,
+   "ratio": 0.0544,
+   "tris": 3197,
+   "draws": 1
+  },
+  {
+   "lod": 2,
+   "ratio": 0.0726,
+   "tris": 900,
+   "draws": 1
+  }
+ ],
+ "parts": [
+  {
+   "id": "hull",
+   "lods": {
+    "0": [
+     {
+      "mesh": 0,
+      "bucket": "opaque",
+      "tris": 10999
+     }
+    ],
+    "1": [
+     {
+      "mesh": 1,
+      "bucket": "opaque",
+      "tris": 3197
+     }
+    ],
+    "2": [
+     {
+      "mesh": 2,
+      "bucket": "opaque",
+      "tris": 900
+     }
+    ]
+   },
+   "pivot": [
+    0.0,
+    0.0,
+    -0.0
+   ],
+   "axis": "",
+   "parent": "",
+   "bbox": {
+    "min": [
+     -1.09,
+     0.0,
+     -1.2252
+    ],
+    "max": [
+     1.09,
+     2.3764,
+     1.39
+    ]
+   }
+  }
+ ],
+ "mounts": [
+  {
+   "id": "decal.number.left",
+   "part": "hull",
+   "pos": [
+    -0.342,
+    0.22,
+    0.3
+   ],
+   "dir": [
+    1.0,
+    0.0,
+    0.0
+   ]
+  },
+  {
+   "id": "decal.number.right",
+   "part": "hull",
+   "pos": [
+    -0.342,
+    0.22,
+    0.3
+   ],
+   "dir": [
+    -1.0,
+    0.0,
+    -0.0
+   ]
+  }
+ ],
+ "bytes": 1072500
+}
