@@ -179,6 +179,7 @@ type renderCtx struct {
 	Particle    ParticleRenderCtx
 	Ribbons     ribbonSet
 	WorldShader *worldShader
+	Models      *modelSet
 	Clouds      *cloudRenderer
 	Pyramid     *systems.HeightPyramid
 	FarTerrain  *farTerrain

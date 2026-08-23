@@ -1,0 +1,591 @@
+{
+ "name": "mrap_2",
+ "class": "vehicle",
+ "side": "west",
+ "kind": "",
+ "forward": "+Z",
+ "up": "+Y",
+ "vertex_color_space": "linear",
+ "size": [
+  2.97,
+  3.593,
+  6.679
+ ],
+ "source": {
+  "blend": "exports/blend/mrap_2.blend",
+  "objects": 399,
+  "tris": 83744
+ },
+ "lods": [
+  {
+   "lod": 0,
+   "ratio": 0.1314,
+   "tris": 10424,
+   "draws": 9
+  },
+  {
+   "lod": 1,
+   "ratio": 0.0394,
+   "tris": 3590,
+   "draws": 4
+  },
+  {
+   "lod": 2,
+   "ratio": 0.0406,
+   "tris": 893,
+   "draws": 2
+  }
+ ],
+ "parts": [
+  {
+   "id": "gun",
+   "lods": {
+    "0": [
+     {
+      "mesh": 0,
+      "bucket": "opaque",
+      "tris": 552
+     }
+    ]
+   },
+   "pivot": [
+    -0.0,
+    2.99,
+    0.24
+   ],
+   "axis": "pitch",
+   "parent": "turret",
+   "bbox": {
+    "min": [
+     -0.355,
+     2.41,
+     -0.3271
+    ],
+    "max": [
+     0.135,
+     3.225,
+     1.58
+    ]
+   }
+  },
+  {
+   "id": "hull",
+   "lods": {
+    "0": [
+     {
+      "mesh": 1,
+      "bucket": "glass",
+      "tris": 7
+     },
+     {
+      "mesh": 2,
+      "bucket": "opaque",
+      "tris": 7061
+     }
+    ],
+    "1": [
+     {
+      "mesh": 9,
+      "bucket": "glass",
+      "tris": 7
+     },
+     {
+      "mesh": 10,
+      "bucket": "opaque",
+      "tris": 3315
+     }
+    ],
+    "2": [
+     {
+      "mesh": 13,
+      "bucket": "opaque",
+      "tris": 813
+     }
+    ]
+   },
+   "pivot": [
+    0.0,
+    0.0,
+    -0.0
+   ],
+   "axis": "",
+   "parent": "",
+   "bbox": {
+    "min": [
+     -1.485,
+     0.435,
+     -3.5592
+    ],
+    "max": [
+     1.485,
+     3.5522,
+     3.12
+    ]
+   }
+  },
+  {
+   "id": "turret",
+   "lods": {
+    "0": [
+     {
+      "mesh": 3,
+      "bucket": "glass",
+      "tris": 1
+     },
+     {
+      "mesh": 4,
+      "bucket": "opaque",
+      "tris": 487
+     }
+    ],
+    "1": [
+     {
+      "mesh": 11,
+      "bucket": "glass",
+      "tris": 1
+     },
+     {
+      "mesh": 12,
+      "bucket": "opaque",
+      "tris": 267
+     }
+    ],
+    "2": [
+     {
+      "mesh": 14,
+      "bucket": "opaque",
+      "tris": 80
+     }
+    ]
+   },
+   "pivot": [
+    0.0,
+    2.39,
+    -0.1
+   ],
+   "axis": "yaw",
+   "parent": "hull",
+   "bbox": {
+    "min": [
+     -0.6994,
+     2.065,
+     -0.9338
+    ],
+    "max": [
+     0.6994,
+     3.1468,
+     0.4193
+    ]
+   }
+  },
+  {
+   "id": "wheel_fl",
+   "lods": {
+    "0": [
+     {
+      "mesh": 5,
+      "bucket": "opaque",
+      "tris": 579
+     }
+    ]
+   },
+   "pivot": [
+    1.05,
+    0.6,
+    1.75
+   ],
+   "axis": "spin",
+   "parent": "hull",
+   "steer": true,
+   "bbox": {
+    "min": [
+     0.7262,
+     -0.0408,
+     1.0871
+    ],
+    "max": [
+     1.3737,
+     1.2406,
+     2.4129
+    ]
+   }
+  },
+  {
+   "id": "wheel_fr",
+   "lods": {
+    "0": [
+     {
+      "mesh": 6,
+      "bucket": "opaque",
+      "tris": 579
+     }
+    ]
+   },
+   "pivot": [
+    -1.05,
+    0.6,
+    1.75
+   ],
+   "axis": "spin",
+   "parent": "hull",
+   "steer": true,
+   "bbox": {
+    "min": [
+     -1.3738,
+     -0.0408,
+     1.0871
+    ],
+    "max": [
+     -0.7263,
+     1.2406,
+     2.4129
+    ]
+   }
+  },
+  {
+   "id": "wheel_rl",
+   "lods": {
+    "0": [
+     {
+      "mesh": 7,
+      "bucket": "opaque",
+      "tris": 579
+     }
+    ]
+   },
+   "pivot": [
+    1.05,
+    0.6,
+    -1.7
+   ],
+   "axis": "spin",
+   "parent": "hull",
+   "bbox": {
+    "min": [
+     0.7707,
+     -0.0408,
+     -2.3385
+    ],
+    "max": [
+     1.3292,
+     1.2406,
+     -1.0615
+    ]
+   }
+  },
+  {
+   "id": "wheel_rr",
+   "lods": {
+    "0": [
+     {
+      "mesh": 8,
+      "bucket": "opaque",
+      "tris": 579
+     }
+    ]
+   },
+   "pivot": [
+    -1.05,
+    0.6,
+    -1.7
+   ],
+   "axis": "spin",
+   "parent": "hull",
+   "bbox": {
+    "min": [
+     -1.3293,
+     -0.0408,
+     -2.3385
+    ],
+    "max": [
+     -0.7708,
+     1.2406,
+     -1.0615
+    ]
+   }
+  }
+ ],
+ "mounts": [
+  {
+   "id": "decal.number.left",
+   "part": "hull",
+   "pos": [
+    1.19,
+    1.1,
+    0.3
+   ],
+   "dir": [
+    1.0,
+    0.0,
+    0.0
+   ]
+  },
+  {
+   "id": "decal.number.right",
+   "part": "hull",
+   "pos": [
+    -1.19,
+    1.1,
+    0.3
+   ],
+   "dir": [
+    -1.0,
+    0.0,
+    -0.0
+   ]
+  },
+  {
+   "id": "door.left",
+   "part": "hull",
+   "pos": [
+    1.75,
+    0.0,
+    0.0
+   ],
+   "dir": [
+    1.0,
+    0.0,
+    0.0
+   ]
+  },
+  {
+   "id": "door.right",
+   "part": "hull",
+   "pos": [
+    -1.75,
+    0.0,
+    -0.0
+   ],
+   "dir": [
+    -1.0,
+    0.0,
+    -0.0
+   ]
+  },
+  {
+   "id": "exhaust.0",
+   "part": "hull",
+   "pos": [
+    1.16,
+    2.4093,
+    -2.31
+   ],
+   "dir": [
+    0.0,
+    1.0,
+    -0.0
+   ]
+  },
+  {
+   "id": "hatch.gunner",
+   "part": "turret",
+   "pos": [
+    0.0,
+    2.726,
+    -0.745
+   ],
+   "dir": [
+    0.0,
+    1.0,
+    -0.0
+   ]
+  },
+  {
+   "id": "light.head.left",
+   "part": "hull",
+   "pos": [
+    0.855,
+    1.12,
+    2.88
+   ],
+   "dir": [
+    -0.0,
+    0.0,
+    1.0
+   ]
+  },
+  {
+   "id": "light.head.right",
+   "part": "hull",
+   "pos": [
+    -0.855,
+    1.12,
+    2.88
+   ],
+   "dir": [
+    -0.0,
+    0.0,
+    1.0
+   ]
+  },
+  {
+   "id": "light.marker.left",
+   "part": "hull",
+   "pos": [
+    1.0,
+    1.3,
+    2.83
+   ],
+   "dir": [
+    -0.0,
+    0.0,
+    1.0
+   ]
+  },
+  {
+   "id": "light.marker.right",
+   "part": "hull",
+   "pos": [
+    -1.0,
+    1.3,
+    2.83
+   ],
+   "dir": [
+    -0.0,
+    0.0,
+    1.0
+   ]
+  },
+  {
+   "id": "light.tail.left",
+   "part": "hull",
+   "pos": [
+    0.72,
+    1.28,
+    -2.96
+   ],
+   "dir": [
+    0.0,
+    0.0,
+    -1.0
+   ]
+  },
+  {
+   "id": "light.tail.right",
+   "part": "hull",
+   "pos": [
+    -0.72,
+    1.28,
+    -2.96
+   ],
+   "dir": [
+    0.0,
+    0.0,
+    -1.0
+   ]
+  },
+  {
+   "id": "muzzle.main",
+   "part": "gun",
+   "pos": [
+    -0.0,
+    3.06,
+    1.58
+   ],
+   "dir": [
+    -0.0,
+    0.0,
+    1.0
+   ]
+  },
+  {
+   "id": "seat.commander",
+   "part": "hull",
+   "pos": [
+    -0.6,
+    1.42,
+    0.3
+   ],
+   "dir": [
+    -0.0,
+    0.0,
+    1.0
+   ]
+  },
+  {
+   "id": "seat.driver",
+   "part": "hull",
+   "pos": [
+    0.6,
+    1.42,
+    0.3
+   ],
+   "dir": [
+    -0.0,
+    0.0,
+    1.0
+   ]
+  },
+  {
+   "id": "seat.gunner",
+   "part": "turret",
+   "pos": [
+    0.0,
+    2.115,
+    -0.4
+   ],
+   "dir": [
+    -0.0,
+    0.0,
+    1.0
+   ]
+  },
+  {
+   "id": "seat.rear.left",
+   "part": "hull",
+   "pos": [
+    0.42,
+    1.42,
+    -0.42
+   ],
+   "dir": [
+    -0.0,
+    0.0,
+    1.0
+   ]
+  },
+  {
+   "id": "seat.rear.right",
+   "part": "hull",
+   "pos": [
+    -0.42,
+    1.42,
+    -0.42
+   ],
+   "dir": [
+    -0.0,
+    0.0,
+    1.0
+   ]
+  },
+  {
+   "id": "smoke.launcher.left",
+   "part": "turret",
+   "pos": [
+    0.58,
+    2.745,
+    0.2209
+   ],
+   "dir": [
+    0.2736,
+    0.2736,
+    0.9221
+   ]
+  },
+  {
+   "id": "smoke.launcher.right",
+   "part": "turret",
+   "pos": [
+    -0.58,
+    2.745,
+    0.2209
+   ],
+   "dir": [
+    -0.2736,
+    0.2736,
+    0.9221
+   ]
+  }
+ ],
+ "bytes": 928284
+}

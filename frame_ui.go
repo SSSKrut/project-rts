@@ -21,6 +21,7 @@ func (g *Game) initUI() {
 	g.Ctx.WorldShader = newWorldShader()
 	g.Ctx.WorldShader.apply(&g.terrainMaterial)
 	g.Ctx.Ribbons.upload()
+	g.Ctx.Models = newModelSet()
 
 	g.UI.ScreenW, g.UI.ScreenH = initialScreenWidth, initialScreenHeight
 	g.UI.PanelMgr = ui.NewPanelManager()
@@ -99,6 +100,7 @@ func (g *Game) shutdownUI() {
 		g.persistLayout()
 	}
 	g.Ctx.Ribbons.unload()
+	g.Ctx.Models.unload()
 	// Order is load-bearing: hand the borrowed shader / surface textures back
 	// first, then free the material (only its map array is raylib's), then let
 	// their real owner free them exactly once.

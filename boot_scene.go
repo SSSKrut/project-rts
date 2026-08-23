@@ -328,6 +328,10 @@ func (g *Game) spawnScene() {
 				components.WorldPos{}.Add(rl.Vector3{X: -55, Z: -12 + float32(i)*10}),
 				vk, components.FactionPlayer, components.ControllerLocal)
 		}
+		// The Car parks in front of the starting camera: it is the one class
+		// with a real model, so it is what a look at the playground is for.
+		g.Svc.VehicleFactory.Spawn(components.WorldPos{}.Add(rl.Vector3{X: -14, Z: 4}),
+			components.VehicleCar, components.FactionPlayer, components.ControllerLocal)
 	}
 }
 

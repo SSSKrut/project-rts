@@ -60,6 +60,7 @@ func (g *Game) drawScene3D() {
 	if g.Ctx.Particle.Puffs != nil {
 		g.Ctx.Particle.Puffs.setLight(&g.Ctx.Daylight)
 	}
+	g.Ctx.Models.beginFrame(g.Ctx.Daylight, systems.CurrentCamera.Position)
 
 	rl.BeginTextureMode(g.UI.Scene3DRT.RT)
 	rl.ClearBackground(rl.RayWhite)
@@ -176,7 +177,11 @@ func (g *Game) drawScene3D() {
 		if t := g.Maps.Turret.Get(ent); t != nil {
 			turretYaw = t.Yaw
 		}
-		drawVehicleBox(renderPos, yaw, turretYaw, veh.Kind, g.squadColor(ent))
+		if g.Ctx.Models.has(veh.Kind) {
+			g.drawVehicleModel(ent, renderPos, veh.Kind, yaw, turretYaw, rl.White)
+		} else {
+			drawVehicleBox(renderPos, yaw, turretYaw, veh.Kind, g.squadColor(ent))
+		}
 		if g.isSelected(ent) >= 0 {
 			spec := components.SpecForVehicle(veh.Kind)
 			rl.DrawCircle3D(renderPos, spec.ColliderR, rl.Vector3{X: 1, Y: 0, Z: 0}, 90,

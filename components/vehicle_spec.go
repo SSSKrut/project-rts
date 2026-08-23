@@ -104,6 +104,18 @@ var VehicleSpecs = [VehicleKindCount]VehicleSpec{
 		Class: ArmorClassLight, ReflexKind: VehicleReflexSmokeAndReverse,
 		WeaponCount: 1, WeaponKinds: [2]WeaponKind{WeaponATGM},
 	},
+	// Protected patrol vehicle: fast on a road, poor off it, a ring-mounted MG
+	// and armour that stops rifle fire and nothing heavier.
+	VehicleCar: {
+		Kind: VehicleCar, Name: "Car", HP: 160,
+		MaxSpeedRoad: 22, MaxSpeedOffroad: 8, MaxSpeedReverse: 4, TurnRadiusM: 6.5,
+		SeatCount: 5, ArmorFront: 0.7, ArmorSide: 0.85, ArmorRear: 1.0,
+		TurretSlewDps: 60, Locomotion: LocomotionWheeled, ColliderR: 2.4,
+		BoxLen: 6.7, BoxWid: 3.0, BoxHgt: 2.6,
+		SensorRangeM: 60, DetectMul: 1.5, NoiseRadiusM: 110,
+		Class: ArmorClassSoft, ReflexKind: VehicleReflexSmokeAndReverse,
+		WeaponCount: 1, WeaponKinds: [2]WeaponKind{WeaponPKM},
+	},
 }
 
 // Compile-time exhaustiveness: adding a VehicleKind without a row fails here.

@@ -10,6 +10,7 @@ const (
 	VehicleBMP
 	VehicleTank
 	VehicleATCarrier
+	VehicleCar
 	VehicleKindCount
 )
 
