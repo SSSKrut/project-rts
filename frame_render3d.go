@@ -446,6 +446,7 @@ func (g *Game) drawScene3D() {
 		g.UI.ShowMapDebugLy = false
 	}
 
+	drawSelectionCoverage(g.Ctx.Coverage)
 	drawLOSPreview(g.Ctx.LOS)
 	if debugOverlay.NavGrid {
 		qNav := g.Filt.NavOverlay.Query()

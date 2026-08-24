@@ -60,6 +60,7 @@ func (g *Game) drawUI() {
 		LOSFanRange:      g.Ctx.LOS.sensorR,
 		LOSFanFalloff:    g.Ctx.LOS.falloff,
 		LOSWeaponRs:      g.Ctx.LOS.weaponRs,
+		Coverage:         &g.Ctx.Coverage.View,
 	}
 	ui.DrawMap(g.Frame.PanelMap, mapCtx)
 	g.drawMapRuler()

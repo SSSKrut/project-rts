@@ -8,6 +8,7 @@ import (
 
 	"rts-go/components"
 	"rts-go/systems"
+	"rts-go/ui"
 )
 
 type orderMarkerCtx struct {
@@ -406,7 +407,7 @@ func drawRoadGraphDebug(g *components.RoadGraph) {
 
 // drawLOSPreview renders the hold-V visibility fan: sector quads per visible
 // run (alpha = channel falloff at run midpoint), sensor-range ring, weapon
-// range rings. Both windings drawn so the fan reads from any camera side.
+// range rings.
 func drawLOSPreview(lp *losPreviewState) {
 	if !lp.active || !lp.haveSweep {
 		return
@@ -414,15 +415,59 @@ func drawLOSPreview(lp *losPreviewState) {
 	base := lp.origin.ToRenderSpace(systems.CurrentOriginChunk)
 	wx := float32(lp.origin.Chunk.X)*components.ChunkSize + lp.origin.Local.X
 	wz := float32(lp.origin.Chunk.Z)*components.ChunkSize + lp.origin.Local.Z
-	yAt := func(dx, dz float32) float32 { return lp.sampler.Sample(wx+dx, wz+dz) + 0.15 }
+	drawVisFan(lp.sampler, wx, wz, base, lp.runs, lp.sensorR, lp.falloff, 30, 90)
+	drawTerrainRing(lp.sampler, wx, wz, base, lp.sensorR, rl.Color{R: 240, G: 220, B: 80, A: 200}, false)
+	for _, wr := range lp.weaponRs {
+		drawTerrainRing(lp.sampler, wx, wz, base, wr, rl.Color{R: 240, G: 120, B: 80, A: 170}, false)
+	}
+}
 
-	rays := len(lp.runs)
+// drawSelectionCoverage renders the persistent reach of the current selection
+// (Phase 20.7 L1). Dashed = detection, solid red = how far the group is
+// heard, solid orange = weapon reach. The fan is dimmer than hold-V's so the
+// planning tool and the state indicator stay tellable apart.
+func drawSelectionCoverage(cs *coverageState) {
+	v := &cs.View
+	if !v.Active {
+		return
+	}
+	base := v.Origin.ToRenderSpace(systems.CurrentOriginChunk)
+	wx := float32(v.Origin.Chunk.X)*components.ChunkSize + v.Origin.Local.X
+	wz := float32(v.Origin.Chunk.Z)*components.ChunkSize + v.Origin.Local.Z
+	if len(v.Runs) > 0 {
+		drawVisFan(cs.sampler, wx, wz, base, v.Runs, v.VisR, v.Falloff, 14, 52)
+	}
+	if v.EmitR > 0 {
+		eb := v.EmitOrigin.ToRenderSpace(systems.CurrentOriginChunk)
+		ex := float32(v.EmitOrigin.Chunk.X)*components.ChunkSize + v.EmitOrigin.Local.X
+		ez := float32(v.EmitOrigin.Chunk.Z)*components.ChunkSize + v.EmitOrigin.Local.Z
+		col := ui.CoverageEmitColor
+		col.A = 200
+		drawTerrainRing(cs.sampler, ex, ez, eb, v.EmitR, col, false)
+	}
+	for _, ring := range v.Rings {
+		col := ui.SensorRingColor(ring.Kind)
+		col.A = 170
+		drawTerrainRing(cs.sampler, wx, wz, base, ring.RadiusM, col, true)
+	}
+	for _, wr := range v.WeaponRs {
+		drawTerrainRing(cs.sampler, wx, wz, base, wr, rl.Color{R: 240, G: 120, B: 80, A: 150}, false)
+	}
+}
+
+// drawVisFan draws sector quads per visible run. Both windings drawn so the
+// fan reads from any camera side.
+func drawVisFan(sampler *systems.HeightSampler, wx, wz float32, base rl.Vector3,
+	allRuns [][]components.VisRun, rangeM float32, falloff components.FalloffKind,
+	aBase, aSpan float32) {
+	rays := len(allRuns)
 	if rays == 0 {
 		return
 	}
+	yAt := func(dx, dz float32) float32 { return sampler.Sample(wx+dx, wz+dz) + 0.15 }
 	halfStep := math.Pi / float64(rays)
 	fill := rl.Color{R: 70, G: 210, B: 130}
-	for r, runs := range lp.runs {
+	for r, runs := range allRuns {
 		angC := float64(r) * (2 * math.Pi / float64(rays))
 		s0 := float32(math.Sin(angC - halfStep))
 		c0 := float32(math.Cos(angC - halfStep))
@@ -437,9 +482,9 @@ func drawLOSPreview(lp *losPreviewState) {
 				continue
 			}
 			t1 := run.T1
-			a := components.Falloff(lp.falloff, (t0+t1)*0.5, lp.sensorR)
+			a := components.Falloff(falloff, (t0+t1)*0.5, rangeM)
 			col := fill
-			col.A = uint8(30 + 90*a)
+			col.A = uint8(aBase + aSpan*a)
 			v00 := rl.Vector3{X: base.X + s0*t0, Y: yAt(s0*t0, c0*t0), Z: base.Z + c0*t0}
 			v01 := rl.Vector3{X: base.X + s1*t0, Y: yAt(s1*t0, c1*t0), Z: base.Z + c1*t0}
 			v10 := rl.Vector3{X: base.X + s0*t1, Y: yAt(s0*t1, c0*t1), Z: base.Z + c0*t1}
@@ -450,28 +495,34 @@ func drawLOSPreview(lp *losPreviewState) {
 			rl.DrawTriangle3D(v00, v10, v11, col)
 		}
 	}
-
-	drawTerrainRing(lp, wx, wz, base, lp.sensorR, rl.Color{R: 240, G: 220, B: 80, A: 200})
-	for _, wr := range lp.weaponRs {
-		drawTerrainRing(lp, wx, wz, base, wr, rl.Color{R: 240, G: 120, B: 80, A: 170})
-	}
 }
 
-func drawTerrainRing(lp *losPreviewState, wx, wz float32, base rl.Vector3, radius float32, col rl.Color) {
-	const segs = 96
-	var prev rl.Vector3
-	for i := 0; i <= segs; i++ {
-		ang := float64(i) * (2 * math.Pi / segs)
+// drawTerrainRing draws a terrain-following circle; segment count scales with
+// radius so a 700 m ESM ring stays round. Dashed = detection semantics.
+func drawTerrainRing(sampler *systems.HeightSampler, wx, wz float32, base rl.Vector3,
+	radius float32, col rl.Color, dashed bool) {
+	segs := int(radius * 1.5)
+	if segs < 96 {
+		segs = 96
+	}
+	if segs > 288 {
+		segs = 288
+	}
+	segs &^= 1
+	pt := func(i int) rl.Vector3 {
+		ang := float64(i) * (2 * math.Pi / float64(segs))
 		s := float32(math.Sin(ang))
 		c := float32(math.Cos(ang))
-		p := rl.Vector3{
+		return rl.Vector3{
 			X: base.X + s*radius,
-			Y: lp.sampler.Sample(wx+s*radius, wz+c*radius) + 0.2,
+			Y: sampler.Sample(wx+s*radius, wz+c*radius) + 0.2,
 			Z: base.Z + c*radius,
 		}
-		if i > 0 {
-			rl.DrawLine3D(prev, p, col)
+	}
+	for i := 0; i < segs; i++ {
+		if dashed && i%2 == 1 {
+			continue
 		}
-		prev = p
+		rl.DrawLine3D(pt(i), pt(i+1), col)
 	}
 }

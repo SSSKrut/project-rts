@@ -117,6 +117,7 @@ func (g *Game) RunFrame() bool {
 	// Units die inside Advance; scrub the selection before the render
 	// half derefs components (Ark Map.Get panics on dead entities).
 	g.Sel.Units = compactAlive(g.App.World, g.Sel.Units)
+	g.Ctx.Coverage.update(g.App.World, g.Sel.Units)
 	g.Frame.MapClusters.Rebuild(g.App.World, g.Filt.Contact,
 		g.Maps.ContactOverride, g.Svc.Squad.Clock())
 	// Reads the events this tick produced; may drop TimeScale before the

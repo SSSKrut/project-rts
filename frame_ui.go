@@ -648,6 +648,7 @@ func (g *Game) renderFloatingWidget(id ui.PanelID, content rl.Rectangle,
 			LOSFanRange:      g.Ctx.LOS.sensorR,
 			LOSFanFalloff:    g.Ctx.LOS.falloff,
 			LOSWeaponRs:      g.Ctx.LOS.weaponRs,
+			Coverage:         &g.Ctx.Coverage.View,
 		})
 	case ui.PanelInspect:
 		ui.DrawInspector(syn("Inspector"), ui.InspectorCtx{

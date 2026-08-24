@@ -186,6 +186,7 @@ type gameFilters struct {
 // renderCtx bundles the purpose-built context structs the draw helpers take.
 type renderCtx struct {
 	LOS         *losPreviewState
+	Coverage    *coverageState
 	Inspector   ui.InspectorMaps
 	Behavior    ui.BehaviorMaps
 	HitTest     *HitTester

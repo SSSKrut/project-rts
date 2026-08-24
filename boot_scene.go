@@ -181,6 +181,7 @@ func (g *Game) initGameplayHandles() {
 	}
 
 	g.Ctx.LOS = newLOSPreview(g.App.World)
+	g.Ctx.Coverage = newCoverageState(g.App.World)
 
 	g.Ctx.Inspector = ui.NewInspectorMaps(g.App.World)
 	g.Ctx.Behavior = ui.NewBehaviorMaps(g.App.World)
