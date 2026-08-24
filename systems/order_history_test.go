@@ -70,8 +70,8 @@ func TestCancelChainRecordsEveryOrder(t *testing.T) {
 	if queued.Outcome != components.OutcomeCancelled {
 		t.Errorf("queued leg outcome = %v", queued.Outcome)
 	}
-	if queued.Squad != squad {
-		t.Errorf("record lost its squad: %v", queued.Squad)
+	if queued.Commander != squad {
+		t.Errorf("record lost its squad: %v", queued.Commander)
 	}
 }
 

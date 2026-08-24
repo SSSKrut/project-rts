@@ -57,6 +57,10 @@ func (s *SquadService) CreateFromUnits(units []ecs.Entity, kind components.Forma
 		if aq := s.actionQueueMap.Get(u); aq != nil {
 			ClearActions(aq)
 		}
+		// Two commanders for one body is how an order outlives its own
+		// cancellation: the squad would steer the unit while its personal
+		// order kept resolving and kept a row in the timeline.
+		s.dropSoloCommand(u)
 	}
 
 	// Stage 3 — spawn the new squad with the roster pre-populated as a value;
@@ -144,6 +148,7 @@ func (s *SquadService) Join(squad, unit ecs.Entity) bool {
 	if r == nil || r.Count == components.SquadRosterSize {
 		return false
 	}
+	s.dropSoloCommand(unit)
 	idx := r.Count
 	r.Members[idx] = unit
 	r.Count++

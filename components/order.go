@@ -54,10 +54,17 @@ type OrderState struct {
 	Code OrderStateCode
 }
 
-// OrderOwner is the back-reference to the Squad entity executing this order.
-// One-to-one. Joint orders add a sibling OrderGroup, not a list.
+// OrderOwner is the back-reference to the COMMANDER executing this order —
+// a squad, or a single vehicle or airframe acting on its own behalf. One-to-one.
+// Joint orders add a sibling OrderGroup, not a list.
+//
+// The field is not called Squad because it is not always one: what makes an
+// entity commandable is owning an OrderQueueHead, not wearing the Squad marker.
+// Squad means squad BEHAVIOUR (formation, brain, macro path) and every one of
+// those systems filters on the marker, which is why a lone truck can hold an
+// order without acquiring a formation.
 type OrderOwner struct {
-	Squad ecs.Entity
+	Commander ecs.Entity
 }
 
 // OrderTarget bundles spatial and entity targets. Only one of (Pos, Entity)
@@ -126,8 +133,11 @@ type OrderOutOfRangeTracker struct {
 	Elapsed float32
 }
 
-// OrderQueueHead lives on the Squad entity. First = zero => squad is idle.
-// The chain extends via OrderChain.Next on the head order.
+// OrderQueueHead lives on the commander — a squad, or a soloist that has been
+// given an order. Its PRESENCE is the definition of "can be commanded
+// independently"; a unit inside a squad must never have one, or it would answer
+// for itself alongside the squad that already answers for it.
+// First = zero => idle. The chain extends via OrderChain.Next on the head.
 type OrderQueueHead struct {
 	First ecs.Entity
 }

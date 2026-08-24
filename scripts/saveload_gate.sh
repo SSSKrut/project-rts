@@ -5,7 +5,7 @@
 set -u
 cd "$(dirname "$0")/.."
 
-SCENES=${@:-"ai_los_open ai_los_creep ai_compound_main ai_main_m1 ai_vehicle_move ai_vehicle_road ai_vehicle_combat ai_vehicle_reflex ai_vehicle_avoid ai_vehicle_building ai_vehicle_yield ai_vehicle_group ai_vehicle_convoy ai_vehicle_convoy_road ai_vehicle_flee ai_march_slope ai_march_column ai_wall_glide ai_crowd_cross ai_vehicle_forest ai_vehicle_slope ai_vehicle_stuck ai_cover_side ai_shellfire ai_cover_trench ai_cover_hull ai_cover_defilade ai_cover_none ai_bounding ai_clear_building ai_focus_fire ai_mass ai_air_transit ai_air_recon"}
+SCENES=${@:-"ai_los_open ai_los_creep ai_compound_main ai_main_m1 ai_vehicle_move ai_vehicle_road ai_vehicle_combat ai_vehicle_reflex ai_vehicle_avoid ai_vehicle_building ai_vehicle_yield ai_vehicle_group ai_vehicle_convoy ai_vehicle_convoy_road ai_vehicle_flee ai_march_slope ai_march_column ai_wall_glide ai_crowd_cross ai_vehicle_forest ai_vehicle_slope ai_vehicle_stuck ai_cover_side ai_shellfire ai_cover_trench ai_cover_hull ai_cover_defilade ai_cover_none ai_bounding ai_clear_building ai_focus_fire ai_mass ai_air_transit ai_air_recon ai_solo_orders"}
 TICKS=2000
 SAVE_AT=1000
 D=/tmp/rts-saveload

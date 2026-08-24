@@ -37,11 +37,13 @@ func OrderOutcomeLabel(o OrderOutcome) string {
 // OrderRecord is one finished order, carrying enough to redraw its block
 // without the entity.
 type OrderRecord struct {
-	Squad   ecs.Entity
-	Target  WorldPos
-	Kind    OrderKindCode
-	Outcome OrderOutcome
-	IssuedT float32
+	// Commander that owned the order — a squad, or a soloist. Not "Squad":
+	// see OrderOwner.
+	Commander ecs.Entity
+	Target    WorldPos
+	Kind      OrderKindCode
+	Outcome   OrderOutcome
+	IssuedT   float32
 	// StartedT is OrderNeverStarted for a queued order cancelled before its
 	// turn came — it has an issue time and an end, but never ran.
 	StartedT float32

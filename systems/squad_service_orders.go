@@ -114,7 +114,7 @@ func (s *SquadService) issueOrderRaw(
 	appendToQueue bool,
 	params OrderParams,
 ) ecs.Entity {
-	if squad == (ecs.Entity{}) || !s.world.Alive(squad) {
+	if !s.ensureCommandable(squad) {
 		return ecs.Entity{}
 	}
 	head := s.orderQueueMap.Get(squad)
@@ -135,7 +135,7 @@ func (s *SquadService) issueOrderRaw(
 	s.orderMap.Add(ord, &components.Order{})
 	s.orderKindMap.Add(ord, &components.OrderKind{Code: kind})
 	s.orderStateMap.Add(ord, &components.OrderState{Code: components.OrderStateIssued})
-	s.orderOwnerMap.Add(ord, &components.OrderOwner{Squad: squad})
+	s.orderOwnerMap.Add(ord, &components.OrderOwner{Commander: squad})
 	s.orderTargetMap.Add(ord, &components.OrderTarget{Pos: target, Entity: entityTarget})
 	s.orderIssuedAtMap.Add(ord, &components.OrderIssuedAt{
 		Time: s.clock, StartedTime: components.OrderNeverStarted,
@@ -190,6 +190,12 @@ func (s *SquadService) issueOrderRaw(
 		if mp := s.macroPathMap.Get(squad); mp != nil {
 			mp.ReplanAt = 0
 		}
+		// A squad's members are driven to the order by FormationSystem. A
+		// soloist has no formation, so the order has to reach its ActionQueue
+		// here — in the SAME tick the player clicked, exactly as the old
+		// direct push did. A tick of delay would be a behaviour change hiding
+		// inside a refactor.
+		s.driveSoloCommander(squad, ord)
 	} else {
 		tail := head.First
 		for {
@@ -310,12 +316,12 @@ func (s *SquadService) RecordOrderEnd(ord ecs.Entity, outcome components.OrderOu
 		return
 	}
 	rec := components.OrderRecord{
-		Squad:    owner.Squad,
-		Kind:     kind.Code,
-		Outcome:  outcome,
-		IssuedT:  s.clock,
-		StartedT: components.OrderNeverStarted,
-		EndedT:   s.clock,
+		Commander: owner.Commander,
+		Kind:      kind.Code,
+		Outcome:   outcome,
+		IssuedT:   s.clock,
+		StartedT:  components.OrderNeverStarted,
+		EndedT:    s.clock,
 	}
 	if t := s.orderTargetMap.Get(ord); t != nil {
 		rec.Target = t.Pos
@@ -370,3 +376,94 @@ func (s *SquadService) OrderMoveTo(squad ecs.Entity, goal components.WorldPos) {
 func (s *SquadService) Stop(squad ecs.Entity) {
 	s.CancelAllOrders(squad)
 }
+
+// ensureCommandable makes `ent` able to hold an order of its own. A squad
+// already is one; a lone vehicle or airframe becomes one the first time it is
+// given an order, and stops being one the moment it joins a squad.
+//
+// The self-roster is what keeps this cheap. Every completion arm, every centre
+// calculation and every override sweep in the resolver already asks
+// `rosterMap.Get(commander)`, and a roster of one answers all of them without a
+// single call site learning that soloists exist. What it must NOT come with is
+// the `Squad` MARKER: formation, brain, macro path and the survival instinct
+// all filter on that, and a truck has no business acquiring a formation.
+func (s *SquadService) ensureCommandable(ent ecs.Entity) bool {
+	if ent == (ecs.Entity{}) || !s.world.Alive(ent) {
+		return false
+	}
+	if s.orderQueueMap.Has(ent) {
+		return true
+	}
+	// A member's squad already answers for it; giving it a second voice would
+	// put it in the timeline twice, once on its own row and once inside its
+	// squad's.
+	if sm := s.memberMap.Get(ent); sm != nil && sm.Squad != (ecs.Entity{}) {
+		return false
+	}
+	if !s.rosterMap.Has(ent) {
+		r := components.CommandRoster{Count: 1}
+		r.Members[0] = ent
+		s.rosterMap.Add(ent, &r)
+	}
+	s.orderQueueMap.Add(ent, &components.OrderQueueHead{})
+	return true
+}
+
+// dropSoloCommand strips the self-command a soloist picked up, cancelling
+// whatever it was doing. Called when it joins a squad: two commanders for one
+// body is how an order survives its own cancellation.
+func (s *SquadService) dropSoloCommand(ent ecs.Entity) {
+	if ent == (ecs.Entity{}) || !s.world.Alive(ent) || s.squadMap.Has(ent) {
+		return
+	}
+	head := s.orderQueueMap.Get(ent)
+	if head == nil {
+		return
+	}
+	s.cancelChain(head.First)
+	s.orderQueueMap.Remove(ent)
+	if r := s.rosterMap.Get(ent); r != nil && r.Count == 1 && r.Members[0] == ent {
+		s.rosterMap.Remove(ent)
+	}
+}
+
+// IsSoloCommander reports whether `ent` commands only itself — a vehicle or an
+// airframe under direct orders rather than a squad.
+func (s *SquadService) IsSoloCommander(ent ecs.Entity) bool {
+	return s.orderQueueMap.Has(ent) && !s.squadMap.Has(ent)
+}
+
+// driveSoloCommander puts the head order's target into a solo commander's own
+// ActionQueue. No-op for a squad, whose members are steered by FormationSystem
+// off the macro path instead.
+//
+// Only MoveTo is expressible this way today, which is exactly what a soloist
+// could be told to do before it owned orders at all — the RMB path resolved a
+// kind and then threw it away. Kinds that need a roster to mean anything
+// (Garrison, ClearBuilding) reach a soloist through no gesture, so refusing
+// them here costs nothing and keeps the queue honest.
+func (s *SquadService) driveSoloCommander(cmd, ord ecs.Entity) {
+	if !s.IsSoloCommander(cmd) || ord == (ecs.Entity{}) {
+		return
+	}
+	aq := s.actionQueueMap.Get(cmd)
+	target := s.orderTargetMap.Get(ord)
+	if aq == nil || target == nil {
+		return
+	}
+	ClearActions(aq)
+	PushAction(aq, components.Action{Kind: components.ActionMoveTo, Target: target.Pos})
+	// The driver's stuck/orbit memory has to go with the old leg. It records
+	// the best distance seen toward the PREVIOUS target, and a fresh target
+	// 100 m away can never beat it — so the watchdog decides the hull is
+	// orbiting and empties the queue a few seconds later, leaving it parked
+	// short of a point it was driving to perfectly well. The driver resets this
+	// on its own arrival; an order that completes on a slightly wider ring than
+	// the driver's takes the queue away before that ever happens.
+	clearRoute(s.roadRouteMap.Get(cmd), s.roadFollowerMap.Get(cmd))
+	resetWatchdog(s.roadFollowerMap.Get(cmd))
+}
+
+// IsSquad reports whether `ent` carries squad BEHAVIOUR — formation, brain,
+// macro path. A soloist under orders is commandable but is not this.
+func (s *SquadService) IsSquad(ent ecs.Entity) bool { return s.squadMap.Has(ent) }

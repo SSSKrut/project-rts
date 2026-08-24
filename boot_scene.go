@@ -424,6 +424,7 @@ func (g *Game) initRenderHandles() {
 	g.Filt.Unit = ecs.NewFilter1[components.Unit](g.App.World)
 	g.Filt.StairsCount = ecs.NewFilter1[components.Stairs](g.App.World)
 	g.Filt.Squad = ecs.NewFilter2[components.Squad, components.CommandRoster](g.App.World)
+	g.Filt.Commander = ecs.NewFilter2[components.CommandRoster, components.OrderQueueHead](g.App.World)
 	g.Filt.Contact = ecs.NewFilter1[components.Contact](g.App.World)
 	g.Maps.Contact = ecs.NewMap[components.Contact](g.App.World)
 	g.Maps.ContactOverride = ecs.NewMap[components.ContactSymbolOverride](g.App.World)
@@ -431,6 +432,8 @@ func (g *Game) initRenderHandles() {
 	g.Maps.UnitOverride = ecs.NewMap[components.UnitSymbolOverride](g.App.World)
 	g.Maps.SquadOverride = ecs.NewMap[components.SquadSymbolOverride](g.App.World)
 	g.Maps.Vehicle = ecs.NewMap[components.Vehicle](g.App.World)
+	g.Maps.Aircraft = ecs.NewMap[components.Aircraft](g.App.World)
+	g.Maps.SquadMarker = ecs.NewMap[components.Squad](g.App.World)
 
 	g.Filt.Building = ecs.NewFilter1[components.Building](g.App.World)
 	g.Filt.TrenchRoot = ecs.NewFilter1[components.TrenchRoot](g.App.World)

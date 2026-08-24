@@ -7,8 +7,10 @@ import (
 	"strings"
 
 	rl "github.com/gen2brain/raylib-go/raylib"
+	"github.com/mlange-42/ark/ecs"
 
 	"rts-go/components"
+	"rts-go/systems"
 	"rts-go/ui"
 )
 
@@ -23,6 +25,7 @@ var (
 	shotPanelFlag  = flag.String("shot-panel", "", "dev: show this widget kind in the Inspector leaf for -shot (e.g. behavior)")
 	shotVehFlag    = flag.Int("shot-select-veh", 0, "dev: also preselect N vehicles (squad bar / vehicle panels)")
 	shotAirFlag    = flag.Int("shot-select-air", 0, "dev: also preselect N aircraft (airframe dial panel)")
+	shotOrderFlag  = flag.String("shot-order", "", "dev: issue a MoveTo chain to the preselected soloists as x,z[;x,z...] — the order surfaces are empty without one")
 	shotLiftFlag   = flag.Float64("shot-lift", 0, "dev: starting camera ViewLift in metres for -shot")
 )
 
@@ -136,4 +139,33 @@ func shotCamField(i int, def float32) float32 {
 		return float32(v)
 	}
 	return float32(v) * math.Pi / 180
+}
+
+// applyShotOrders gives the preselected soloists a route so the map markers and
+// the timeline have something to draw. Capture-only: the interactive path is
+// RMB, and a screenshot cannot click.
+func (g *Game) applyShotOrders() {
+	// Latch only once there is something to order. An airframe arrives on a
+	// schedule and does not exist on frame 0, so a flag set before the
+	// selection exists means the route is never issued at all.
+	if *shotOrderFlag == "" || g.Sel.OrderShot || len(g.Sel.Units) == 0 {
+		return
+	}
+	g.Sel.OrderShot = true
+	for _, leg := range strings.Split(*shotOrderFlag, ";") {
+		xz := strings.Split(leg, ",")
+		if len(xz) != 2 {
+			continue
+		}
+		x, _ := strconv.ParseFloat(strings.TrimSpace(xz[0]), 32)
+		z, _ := strconv.ParseFloat(strings.TrimSpace(xz[1]), 32)
+		target := components.WorldPos{}.Add(rl.Vector3{
+			X: float32(x), Y: systems.GroundHeight(float32(x), float32(z)), Z: float32(z),
+		})
+		for _, e := range g.Sel.Units {
+			g.Svc.Squad.IssueOrder(e, components.OrderKindMoveTo, target,
+				ecs.Entity{}, g.Sel.OrderShotLegs > 0, systems.OrderParams{})
+		}
+		g.Sel.OrderShotLegs++
+	}
 }

@@ -17,7 +17,10 @@ type TimelineSquadRow struct {
 	Name    string
 	Color   rl.Color
 	Members int
-	Orders  []TimelineOrderBlock
+	// Solo marks a commander that speaks only for itself — a vehicle or an
+	// airframe under direct orders. Head count is noise on such a row.
+	Solo   bool
+	Orders []TimelineOrderBlock
 }
 
 type TimelineOrderBlock struct {
@@ -639,6 +642,10 @@ func drawTimelineRowLabel(st *Style, content rl.Rectangle, labelW, rowY float32,
 func rowActivity(row TimelineSquadRow) string {
 	for _, ord := range row.Orders {
 		if ord.IsHead {
+			if row.Solo {
+				return fmt.Sprintf("%s %d%%",
+					orderKindLabel(ord.KindCode), int(ord.Progress*100))
+			}
 			return fmt.Sprintf("%s %d%%  %d men",
 				orderKindLabel(ord.KindCode), int(ord.Progress*100), row.Members)
 		}
@@ -647,9 +654,16 @@ func rowActivity(row TimelineSquadRow) string {
 	// last" is worth more of them than the word "men".
 	for i := len(row.Orders) - 1; i >= 0; i-- {
 		if ord := row.Orders[i]; ord.Historical {
+			if row.Solo {
+				return fmt.Sprintf("idle  %s %s",
+					orderKindLabel(ord.KindCode), components.OrderOutcomeLabel(ord.Outcome))
+			}
 			return fmt.Sprintf("idle %d  %s %s", row.Members,
 				orderKindLabel(ord.KindCode), components.OrderOutcomeLabel(ord.Outcome))
 		}
+	}
+	if row.Solo {
+		return "idle"
 	}
 	return fmt.Sprintf("idle  %d men", row.Members)
 }

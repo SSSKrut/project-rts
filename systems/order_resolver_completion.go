@@ -189,7 +189,7 @@ func (sys *OrderResolverSystem) evaluateCompletion(
 			}
 		}
 		// A vehicle anchor parks rampPopRadius short of the point (M7).
-		if reach := SquadWaypointReach(sys.squadService.world, roster, sys.vehicleMap); reach > r {
+		if reach := SquadWaypointReach(sys.squadService.world, roster, sys.vehicleMap, sys.aircraftMap); reach > r {
 			r = reach
 		}
 		anchor, okA := SquadAnchorPos(sys.squadService.world, roster, sys.posMap)

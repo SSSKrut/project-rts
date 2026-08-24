@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"runtime"
 	"time"
 
@@ -30,6 +31,7 @@ func (g *Game) drawUI() {
 		RosterMap:        g.Maps.Roster,
 		SquadMemberMap:   g.Maps.SquadMember,
 		SquadFilter:      g.Filt.Squad,
+		CommanderFilter:  g.Filt.Commander,
 		SquadCenter:      g.squadCenter,
 		SquadColor:       g.squadColor,
 		RoadGraph:        &g.Res.RoadGraph,
@@ -517,11 +519,14 @@ func (g *Game) buildTimelineData(nowT float32) ui.TimelineData {
 	data := ui.TimelineData{NowT: nowT}
 	past := g.timelineHistoryBySquad()
 
-	q := g.Filt.Squad.Query()
+	// Commanders, not squads: a lone vehicle or airframe owns an order queue
+	// too, and a plan the player cannot see on the timeline is a plan they
+	// have to hold in their head.
+	q := g.Filt.Commander.Query()
 	for q.Next() {
-		squad := q.Entity()
-		_, roster := q.Get()
-		if c := g.Maps.Controller.Get(squad); c == nil || c.Owner != components.ControllerLocal {
+		cmd := q.Entity()
+		roster, head := q.Get()
+		if c := g.Maps.Controller.Get(cmd); c == nil || c.Owner != components.ControllerLocal {
 			continue
 		}
 		center, _ := systems.SquadCenter(g.App.World, roster, g.Maps.Pos)
@@ -533,18 +538,33 @@ func (g *Game) buildTimelineData(nowT float32) ui.TimelineData {
 			}
 		}
 		row := ui.TimelineSquadRow{
-			Squad:   squad,
-			Color:   g.squadColor(squad),
+			Squad:   cmd,
+			Color:   g.squadColor(cmd),
 			Members: live,
-			Orders:  past[squad],
+			Orders:  past[cmd],
 		}
-		if head := g.Maps.OrderQueue.Get(squad); head != nil {
-			g.appendPlannedOrders(&row, head.First, center, nowT)
+		if !g.Maps.SquadMarker.Has(cmd) {
+			row.Solo = true
+			row.Name = g.soloCommanderName(cmd)
 		}
+		g.appendPlannedOrders(&row, head.First, center, nowT)
 		data.Rows = append(data.Rows, row)
 	}
 	q.Close()
 	return data
+}
+
+// soloCommanderName labels a one-body row. "Squad #A3" would be a lie and
+// "#A3" tells the player nothing about which of their three trucks it is.
+func (g *Game) soloCommanderName(ent ecs.Entity) string {
+	id := ent.ID() & 0xFFF
+	if ac := g.Maps.Aircraft.Get(ent); ac != nil {
+		return fmt.Sprintf("%s #%X", components.SpecForAircraft(ac.Kind).Name, id)
+	}
+	if v := g.Maps.Vehicle.Get(ent); v != nil {
+		return fmt.Sprintf("%s #%X", components.SpecForVehicle(v.Kind).Name, id)
+	}
+	return fmt.Sprintf("Unit #%X", id)
 }
 
 // timelineHistoryBySquad buckets the tombstone ring into per-squad blocks,
@@ -556,7 +576,7 @@ func (g *Game) timelineHistoryBySquad() map[ecs.Entity][]ui.TimelineOrderBlock {
 		return out
 	}
 	g.Res.OrderHistory.Each(func(r components.OrderRecord) {
-		out[r.Squad] = append(out[r.Squad], ui.HistoryBlock(r))
+		out[r.Commander] = append(out[r.Commander], ui.HistoryBlock(r))
 	})
 	return out
 }

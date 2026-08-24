@@ -233,6 +233,13 @@ const (
 	// acquisition past optical range, and that the hull HEARD the scout long
 	// before it could see one.
 	aiSceneAirRecon = "ai_air_recon"
+
+	// _solo_orders (Phase 20.7 L0): a lone vehicle takes a two-leg order
+	// chain. PASS demands it became an order-holder WITHOUT becoming a squad,
+	// that the order reached its queue in the issuing tick, that both legs
+	// completed, that the history ring kept them under the vehicle, and that
+	// joining a squad stripped the solo command.
+	aiSceneSoloOrders = "ai_solo_orders"
 )
 
 // aiSceneMapName lets a scene demand a specific map manifest ("" = default).
@@ -249,6 +256,10 @@ func aiSceneMapName() string {
 	case aiSceneAirRecon:
 		// Flat: the claims are about ranges, and a ridge that masks the hull
 		// turns a measurement into a coin toss.
+		return "flat"
+	case aiSceneSoloOrders:
+		// Flat: the claims are about the order lifecycle. A hill that stalls
+		// the hull would fail the scene for a reason it does not test.
 		return "flat"
 	case aiSceneCoverNone:
 		return "flat"
@@ -403,7 +414,7 @@ func aiSceneAnchorPos() components.WorldPos {
 		return components.WorldPos{}.Add(rl.Vector3{X: 45, Z: -20})
 	case aiSceneVehConvoyRoad:
 		return components.WorldPos{}.Add(rl.Vector3{X: 10, Z: -12})
-	case aiSceneAirTransit, aiSceneAirRecon:
+	case aiSceneAirTransit, aiSceneAirRecon, aiSceneSoloOrders:
 		return components.WorldPos{}.Add(rl.Vector3{X: 0, Z: 0})
 	}
 	return components.WorldPos{}
@@ -1674,6 +1685,9 @@ func aiSceneSpawn(
 	if aiSceneID() == aiSceneAirRecon {
 		return aiAirReconSpawn(world, aircraftFactory, vehicleFactory, posMap)
 	}
+	if aiSceneID() == aiSceneSoloOrders {
+		return aiSoloOrderSceneSpawn(world, squadService, vehicleFactory, posMap)
+	}
 	if aiSceneID() == aiSceneVehMove {
 		return aiVehicleSceneSpawn(world, vehicleFactory, posMap)
 	}
@@ -2064,10 +2078,29 @@ type aiTestState struct {
 	reconSilenced        bool
 	reconSilencedAt      float32
 	reconInterceptAtHush float32
-	SensorsMap           *ecs.Map[components.Sensors]
-	AwarenessMap         *ecs.Map[components.Awareness]
-	ContactMap           *ecs.Map[components.Contact]
-	regRes               ecs.Resource[components.ContactRegistry]
+	// Set for ai_solo_orders (Phase 20.7 L0). See test_scene_solo_orders.go.
+	soloActive          bool
+	soloVeh             ecs.Entity
+	soloMate            ecs.Entity
+	soloLegA            components.WorldPos
+	soloLegB            components.WorldPos
+	soloIssued          bool
+	soloBecameCommander bool
+	soloStayedNonSquad  bool
+	soloDroveSameTick   bool
+	soloLastHead        ecs.Entity
+	soloLegsDone        int
+	soloHistCount       int
+	soloMerged          bool
+	soloCommandDropped  bool
+	soloSvc             *systems.SquadService
+	soloHeadMap         *ecs.Map[components.OrderQueueHead]
+	soloHistRes         ecs.Resource[components.OrderHistory]
+
+	SensorsMap   *ecs.Map[components.Sensors]
+	AwarenessMap *ecs.Map[components.Awareness]
+	ContactMap   *ecs.Map[components.Contact]
+	regRes       ecs.Resource[components.ContactRegistry]
 
 	// Set for ai_vehicle_combat: two sides duel, verdict = enemy side dead.
 	vehCombatActive bool
@@ -2381,6 +2414,10 @@ func (s *aiTestState) Update(elapsed float32) {
 	}
 	if s.reconActive {
 		s.updateAirRecon(elapsed)
+		return
+	}
+	if s.soloActive {
+		s.updateSoloOrders(elapsed)
 		return
 	}
 	if s.coverActive {

@@ -21,6 +21,10 @@ type MapRenderCtx struct {
 	RosterMap      *ecs.Map[components.CommandRoster]
 	SquadMemberMap *ecs.Map[components.SquadMember]
 	SquadFilter    *ecs.Filter2[components.Squad, components.CommandRoster]
+	// CommanderFilter is everything that holds an order of its own — squads
+	// AND soloists. Order markers read it; squad markers keep to SquadFilter,
+	// because a lone truck is not a squad and must not be drawn as one.
+	CommanderFilter *ecs.Filter2[components.CommandRoster, components.OrderQueueHead]
 	// SquadCenter is injected to keep ui free of a systems import. Used
 	// as a fallback when MapMarkerCache has no entry (cold cache).
 	SquadCenter    func(world *ecs.World, roster *components.CommandRoster) (components.WorldPos, bool)
@@ -182,12 +186,14 @@ func drawOrderMarkers(content rl.Rectangle, ctx MapRenderCtx) {
 	if ctx.OrderQueueMap == nil || ctx.OrderKindMap == nil || ctx.OrderTargetMap == nil {
 		return
 	}
-	q := ctx.SquadFilter.Query()
+	if ctx.CommanderFilter == nil {
+		return
+	}
+	q := ctx.CommanderFilter.Query()
 	for q.Next() {
-		_, roster := q.Get()
+		roster, head := q.Get()
 		squad := q.Entity()
-		head := ctx.OrderQueueMap.Get(squad)
-		if head == nil || head.First == (ecs.Entity{}) || !ctx.World.Alive(head.First) {
+		if head.First == (ecs.Entity{}) || !ctx.World.Alive(head.First) {
 			continue
 		}
 		kind := ctx.OrderKindMap.Get(head.First)

@@ -55,6 +55,7 @@ type FormationSystem struct {
 	orderEngagementMap *ecs.Map[components.OrderParamEngagementOverride]
 	motionMap          *ecs.Map[components.Motion]
 	vehicleMap         *ecs.Map[components.Vehicle]
+	aircraftMap        *ecs.Map[components.Aircraft]
 	colliderMap        *ecs.Map[components.Collider]
 
 	// Members carrying a TacticalOverride are AI-driven (e.g. SurvivalInstinct
@@ -124,6 +125,7 @@ func (sys *FormationSystem) InitUI(w *ecs.World) {
 	sys.orderEngagementMap = ecs.NewMap[components.OrderParamEngagementOverride](w)
 	sys.motionMap = ecs.NewMap[components.Motion](w)
 	sys.vehicleMap = ecs.NewMap[components.Vehicle](w)
+	sys.aircraftMap = ecs.NewMap[components.Aircraft](w)
 	sys.colliderMap = ecs.NewMap[components.Collider](w)
 	sys.planMap = ecs.NewMap[components.SquadPlan](w)
 	sys.sampler = NewHeightSampler(w)
@@ -272,7 +274,7 @@ func (sys *FormationSystem) processSquad(world *ecs.World, w formationWork, dt f
 	// SquadMacroPathSystem runs every 1 s, FormationSystem at 100 ms is the
 	// responsive pace for head advance. Reach widens for a vehicle anchor —
 	// see SquadWaypointReach (dead-ring livelock).
-	reach := SquadWaypointReach(world, roster, sys.vehicleMap)
+	reach := SquadWaypointReach(world, roster, sys.vehicleMap, sys.aircraftMap)
 	for mp.Head < mp.Count {
 		d := center.Sub(mp.Waypoints[mp.Head])
 		if d.X*d.X+d.Z*d.Z < reach*reach {

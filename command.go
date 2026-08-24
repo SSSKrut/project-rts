@@ -391,7 +391,8 @@ func issueBuildingPopupOrder(
 			squadService.IssueOrderHidden(s, target, entity, shiftHeld)
 		}
 		for _, e := range groups.Soloists {
-			pushSoloMove(actionQueueMap, posMap, e, target, shiftHeld)
+			squadService.IssueOrder(e, components.OrderKindMoveTo, target,
+				ecs.Entity{}, shiftHeld, systems.OrderParams{})
 		}
 		return
 	}
@@ -423,13 +424,18 @@ func issueDirectOrder(
 		squadService.IssueOrder(s, kind, target, entity, shiftHeld, params)
 	}
 	for _, e := range groups.Soloists {
-		pushSoloMove(actionQueueMap, posMap, e, target, shiftHeld)
+		squadService.IssueOrder(e, kind, target, entity, shiftHeld, params)
 	}
 }
 
-// pushSoloMove drives one non-squad unit toward `target` — the soloist arm
-// of every RMB order path (and the ai_march_* scenes, which call it directly
-// so the gate exercises the live code). One MoveTo with the FINAL target:
+// pushSoloMove drives one non-squad unit toward `target` by writing its
+// ActionQueue directly, with no order behind it.
+//
+// It is no longer the RMB path: a soloist takes a real order now, because
+// intent that exists only in an ActionQueue cannot be drawn on the map, timed,
+// cancelled or remembered. What is left is the ai_march_* scenes, which use it
+// deliberately — they test raw movement, and an order in the way would make
+// them test the order system instead. One MoveTo with the FINAL target:
 // MicroPathSystem plans the route (GoalSnap drift flips Dirty next tick).
 // The old path-dump overflowed the 4-slot ActionQueue on any long order,
 // leaving only the last 4 waypoints — a straight chord across terrain and
@@ -529,8 +535,11 @@ func resolveRMBOrderWithParams(
 	if len(groups.Soloists) == 0 {
 		return
 	}
+	// A soloist takes the SAME order a squad would, not a bare queue push. It
+	// is the only way its intent can be drawn, timed, cancelled or remembered:
+	// every surface that answers "what is this doing" reads orders.
 	for _, e := range groups.Soloists {
-		pushSoloMove(actionQueueMap, posMap, e, target, shiftHeld)
+		squadService.IssueOrder(e, kind, target, entityTarget, shiftHeld, params)
 	}
 
 }

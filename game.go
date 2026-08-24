@@ -142,41 +142,45 @@ type gameMaps struct {
 	UnitOverride         *ecs.Map[components.UnitSymbolOverride]
 	SquadOverride        *ecs.Map[components.SquadSymbolOverride]
 	Vehicle              *ecs.Map[components.Vehicle]
+	Aircraft             *ecs.Map[components.Aircraft]
+	SquadMarker          *ecs.Map[components.Squad]
 	ActionQueue          *ecs.Map[components.ActionQueue]
 }
 
 // gameFilters holds the query handles used outside the systems.
 type gameFilters struct {
-	UnitRender    *ecs.Filter3[components.WorldPos, components.Unit, components.Stance]
+	UnitRender     *ecs.Filter3[components.WorldPos, components.Unit, components.Stance]
 	VehicleRender  *ecs.Filter2[components.WorldPos, components.Vehicle]
 	AircraftRender *ecs.Filter2[components.WorldPos, components.Aircraft]
-	SmokeRender   *ecs.Filter2[components.WorldPos, components.SmokeField]
-	ChunkActive   *ecs.Filter3[components.WorldPos, components.ChunkMesh, components.LODActive]
-	ChunkRelevant *ecs.Filter3[components.WorldPos, components.ChunkMesh, components.LODRelevant]
-	Prop          *ecs.Filter2[components.WorldPos, components.Prop]
-	WallRender    *ecs.Filter2[components.WorldPos, components.WallSegment]
-	FloorRender   *ecs.Filter2[components.WorldPos, components.Floor]
-	StairsRender  *ecs.Filter2[components.WorldPos, components.Stairs]
-	RoofRender    *ecs.Filter2[components.WorldPos, components.Roof]
-	LevelCutaway  *ecs.Filter2[components.Level, components.BuildingMember]
-	NavOverlay    *ecs.Filter4[components.WorldPos, components.ChunkCoord, components.NavGrid, components.Heightmap]
-	CoverOverlay  *ecs.Filter4[components.WorldPos, components.ChunkCoord, components.CoverMap, components.Heightmap]
-	CoverSlot     *ecs.Filter2[components.WorldPos, components.CoverSlot]
-	MapPing       *ecs.Filter2[components.WorldPos, components.MapPing]
-	NavGridChunk  *ecs.Filter1[components.NavGrid]
-	FloorNav      *ecs.Filter3[components.WorldPos, components.Level, components.LevelNavGrid]
-	VisionAware   *ecs.Filter2[components.WorldPos, components.Awareness]
-	UnitPathSquad *ecs.Filter4[components.Unit, components.WorldPos, components.MicroPath, components.SquadMember]
-	UnitPathSolo  *ecs.Filter3[components.Unit, components.WorldPos, components.MicroPath]
-	ChunkAll      *ecs.Filter1[components.TerrainChunk]
-	Weapon        *ecs.Filter1[components.Weapon]
-	Unit          *ecs.Filter1[components.Unit]
-	StairsCount   *ecs.Filter1[components.Stairs]
-	Squad         *ecs.Filter2[components.Squad, components.CommandRoster]
-	Contact       *ecs.Filter1[components.Contact]
-	Building      *ecs.Filter1[components.Building]
-	TrenchRoot    *ecs.Filter1[components.TrenchRoot]
-	UnitHit       *ecs.Filter2[components.Unit, components.WorldPos]
+	SmokeRender    *ecs.Filter2[components.WorldPos, components.SmokeField]
+	ChunkActive    *ecs.Filter3[components.WorldPos, components.ChunkMesh, components.LODActive]
+	ChunkRelevant  *ecs.Filter3[components.WorldPos, components.ChunkMesh, components.LODRelevant]
+	Prop           *ecs.Filter2[components.WorldPos, components.Prop]
+	WallRender     *ecs.Filter2[components.WorldPos, components.WallSegment]
+	FloorRender    *ecs.Filter2[components.WorldPos, components.Floor]
+	StairsRender   *ecs.Filter2[components.WorldPos, components.Stairs]
+	RoofRender     *ecs.Filter2[components.WorldPos, components.Roof]
+	LevelCutaway   *ecs.Filter2[components.Level, components.BuildingMember]
+	NavOverlay     *ecs.Filter4[components.WorldPos, components.ChunkCoord, components.NavGrid, components.Heightmap]
+	CoverOverlay   *ecs.Filter4[components.WorldPos, components.ChunkCoord, components.CoverMap, components.Heightmap]
+	CoverSlot      *ecs.Filter2[components.WorldPos, components.CoverSlot]
+	MapPing        *ecs.Filter2[components.WorldPos, components.MapPing]
+	NavGridChunk   *ecs.Filter1[components.NavGrid]
+	FloorNav       *ecs.Filter3[components.WorldPos, components.Level, components.LevelNavGrid]
+	VisionAware    *ecs.Filter2[components.WorldPos, components.Awareness]
+	UnitPathSquad  *ecs.Filter4[components.Unit, components.WorldPos, components.MicroPath, components.SquadMember]
+	UnitPathSolo   *ecs.Filter3[components.Unit, components.WorldPos, components.MicroPath]
+	ChunkAll       *ecs.Filter1[components.TerrainChunk]
+	Weapon         *ecs.Filter1[components.Weapon]
+	Unit           *ecs.Filter1[components.Unit]
+	StairsCount    *ecs.Filter1[components.Stairs]
+	Squad          *ecs.Filter2[components.Squad, components.CommandRoster]
+	// Commander: squads AND soloists — anything that owns an order queue.
+	Commander  *ecs.Filter2[components.CommandRoster, components.OrderQueueHead]
+	Contact    *ecs.Filter1[components.Contact]
+	Building   *ecs.Filter1[components.Building]
+	TrenchRoot *ecs.Filter1[components.TrenchRoot]
+	UnitHit    *ecs.Filter2[components.Unit, components.WorldPos]
 }
 
 // renderCtx bundles the purpose-built context structs the draw helpers take.
@@ -327,6 +331,9 @@ type selection struct {
 	Binds            [5]bindEntry
 	LastMapClickEnt  ecs.Entity
 	LastMapClickTime float32
+	// Capture-only: -shot-order issues its route once.
+	OrderShot     bool
+	OrderShotLegs int
 }
 
 // devState backs the Debug widget: single-step, spawn palette, recovered panic.

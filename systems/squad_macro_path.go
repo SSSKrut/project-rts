@@ -34,9 +34,10 @@ type SquadMacroPathSystem struct {
 	orderMovementOverrideMap *ecs.Map[components.OrderParamMovementProfile]
 	// Forward snap on a standstill order reads member speeds; the
 	// waypoint-reach radius widens for a vehicle anchor (M7).
-	motionMap  *ecs.Map[components.Motion]
-	vehicleMap *ecs.Map[components.Vehicle]
-	nav        *NavService
+	motionMap   *ecs.Map[components.Motion]
+	vehicleMap  *ecs.Map[components.Vehicle]
+	aircraftMap *ecs.Map[components.Aircraft]
+	nav         *NavService
 	// An all-vehicle squad plans its macro path over the RoadGraph (M7 tail):
 	// the column follows the road the way a soloist does. The router keeps
 	// scratch buffers, so those squads run serially — see Update.
@@ -66,6 +67,7 @@ func (sys *SquadMacroPathSystem) InitUI(w *ecs.World) {
 	sys.orderMovementOverrideMap = ecs.NewMap[components.OrderParamMovementProfile](w)
 	sys.motionMap = ecs.NewMap[components.Motion](w)
 	sys.vehicleMap = ecs.NewMap[components.Vehicle](w)
+	sys.aircraftMap = ecs.NewMap[components.Aircraft](w)
 	sys.router = NewRoadRouter(w)
 }
 
@@ -218,7 +220,7 @@ func (sys *SquadMacroPathSystem) processSquad(world *ecs.World, w macroPathWork,
 	// for stragglers so the FormationSystem gate stays consistent across
 	// the slower 1 s SquadMacroPath cadence.
 	if !mp.WaitingForStragglers {
-		reach := SquadWaypointReach(world, roster, sys.vehicleMap)
+		reach := SquadWaypointReach(world, roster, sys.vehicleMap, sys.aircraftMap)
 		for mp.Head < mp.Count {
 			d := center.Sub(mp.Waypoints[mp.Head])
 			if d.X*d.X+d.Z*d.Z < reach*reach {
@@ -409,16 +411,28 @@ func (sys *SquadMacroPathSystem) seedForward(world *ecs.World, w macroPathWork,
 // reach tighter than that livelocks the march in the dead ring between the
 // two radii (M7: convoy froze mid-field, every queue empty).
 func SquadWaypointReach(world *ecs.World, roster *components.CommandRoster,
-	vehicleMap *ecs.Map[components.Vehicle]) float32 {
+	vehicleMap *ecs.Map[components.Vehicle], aircraftMap *ecs.Map[components.Aircraft]) float32 {
 	r := SquadWaypointReached
-	if roster.Count > 0 {
-		if lead := roster.Members[0]; lead != (ecs.Entity{}) && world.Alive(lead) {
-			if veh := vehicleMap.Get(lead); veh != nil {
-				spec := components.SpecForVehicle(veh.Kind)
-				if vr := rampPopRadius(vehArrivalRadius, spec) + 0.5; vr > r {
-					r = vr
-				}
-			}
+	if roster.Count == 0 {
+		return r
+	}
+	lead := roster.Members[0]
+	if lead == (ecs.Entity{}) || !world.Alive(lead) {
+		return r
+	}
+	if veh := vehicleMap.Get(lead); veh != nil {
+		spec := components.SpecForVehicle(veh.Kind)
+		if vr := rampPopRadius(vehArrivalRadius, spec) + 0.5; vr > r {
+			r = vr
+		}
+	}
+	// An airframe parks a whole arrival ring short of the point, and that ring
+	// is metres wide because a helicopter at cruise crosses most of it in a
+	// tick. Judging its arrival at the infantry radius means the order never
+	// completes and the airframe hovers over a waypoint forever.
+	if aircraftMap != nil && aircraftMap.Has(lead) {
+		if ar := airArrivalRadius + 0.5; ar > r {
+			r = ar
 		}
 	}
 	return r

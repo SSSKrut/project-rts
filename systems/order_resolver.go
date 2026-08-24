@@ -26,7 +26,7 @@ func rlVec3XZ(x, z float32) rl.Vector3 { return rl.Vector3{X: x, Y: 0, Z: z} }
 // center / Floor anchor, OccupyTrench nearest polyline point) lives in
 // order_resolver_target.go.
 type OrderResolverSystem struct {
-	squadFilter      *ecs.Filter2[components.Squad, components.OrderQueueHead]
+	squadFilter      *ecs.Filter2[components.CommandRoster, components.OrderQueueHead]
 	rosterMap        *ecs.Map[components.CommandRoster]
 	posMap           *ecs.Map[components.WorldPos]
 	formationDataMap *ecs.Map[components.FormationData]
@@ -48,7 +48,8 @@ type OrderResolverSystem struct {
 	equipmentMap *ecs.Map[components.Equipment]
 	weaponMap    *ecs.Map[components.Weapon]
 	// Vehicle squads widen the MoveTo arrival ring (M7).
-	vehicleMap *ecs.Map[components.Vehicle]
+	vehicleMap  *ecs.Map[components.Vehicle]
+	aircraftMap *ecs.Map[components.Aircraft]
 
 	// Read on MoveTo / DefendPosition completion to apply arrived-facing
 	// (instant snap) to every roster member's Motion.Yaw.
@@ -98,9 +99,14 @@ func NewOrderResolverSystem(svc *SquadService) *OrderResolverSystem {
 }
 
 func (sys *OrderResolverSystem) InitUI(w *ecs.World) {
-	sys.squadFilter = ecs.NewFilter2[components.Squad, components.OrderQueueHead](w)
+	// Filtered on the ROSTER, not the Squad marker: what makes something
+	// commandable is owning an order queue, and a soloist owns one the moment
+	// it is given an order. Squad-behaviour systems (formation, brain, macro
+	// path) keep filtering on the marker and never see a lone truck.
+	sys.squadFilter = ecs.NewFilter2[components.CommandRoster, components.OrderQueueHead](w)
 	sys.rosterMap = ecs.NewMap[components.CommandRoster](w)
 	sys.vehicleMap = ecs.NewMap[components.Vehicle](w)
+	sys.aircraftMap = ecs.NewMap[components.Aircraft](w)
 	sys.posMap = ecs.NewMap[components.WorldPos](w)
 	sys.formationDataMap = ecs.NewMap[components.FormationData](w)
 	sys.macroPathMap = ecs.NewMap[components.MacroPath](w)
@@ -342,6 +348,9 @@ func (sys *OrderResolverSystem) Update(ctx core.UpdateContext) {
 			continue
 		}
 		head.First = a.newHead
+		// A soloist has no formation to walk it to the next leg, so the chain
+		// advance has to reach its ActionQueue the same way the first order did.
+		sys.squadService.driveSoloCommander(a.squad, a.newHead)
 		// Replan against new head (or stop if zero).
 		if mp := sys.macroPathMap.Get(a.squad); mp != nil {
 			if head.First == (ecs.Entity{}) {
