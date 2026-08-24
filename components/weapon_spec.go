@@ -26,15 +26,23 @@ type WeaponSpec struct {
 	VsSoft  float32
 	VsLight float32
 	VsHeavy float32
-	// VsAir is the anti-air multiplier and is zero for every weapon in the
-	// roster today, which is the point: an airframe entered Awareness in Phase
-	// 20 M1 and would otherwise read as a soft target, so a hull would empty
-	// its belt at a helicopter it cannot touch. M2 fills this in for the AA
-	// gun and the MANPADS; until then the zero IS the gate.
+	// VsAir is the anti-air multiplier; zero (the entire ground roster) keeps
+	// a weapon out of the air fight entirely — the zero IS the gate. Phase 20
+	// M2 fills it in for the AA gun and the MANPADS.
 	VsAir float32
+	// ProjSpeedM > 0 marks a lead-computing gun (Phase 20 M2): air shots
+	// resolve analytically — intercept point from target velocity, hit
+	// probability falling with range and angular rate — instead of raycast.
+	ProjSpeedM float32
+	// MissileSpeedM > 0 makes firing spawn a Missile entity instead of a
+	// shot. Turn rate and fuel bound the chase; a hard-turning target at
+	// close range beats the missile with geometry, not dice.
+	MissileSpeedM  float32
+	MissileTurnDps float32
+	MissileFuelS   float32
 }
 
-const WeaponKindCount WeaponKind = WeaponATGM + 1
+const WeaponKindCount WeaponKind = WeaponIgla + 1
 
 // WeaponSpecs - canonical table indexed by WeaponKind. Numbers are rough
 // placeholders sized for 4-vs-8 firefights ending in 30-45 s at ~50 m.
@@ -108,6 +116,23 @@ var WeaponSpecs = [WeaponKindCount]WeaponSpec{
 		SplashRadius:  3.0,
 		SplashFalloff: 2.0,
 		VsSoft:        0.3, VsLight: 1.4, VsHeavy: 1.2,
+	},
+	// Air defense (Phase 20 M2). The ZU23's RangeM is inside its host's radar
+	// reach (520) and beyond a heli's optics (140): a dark helicopter is shot
+	// before it sees the gun, an emitting one hears the gun's radar first.
+	WeaponZU23: {
+		Kind: WeaponZU23, Name: "ZU-23",
+		Ammo: 400, RangeM: 380, RoF: 8.0, Damage: 22, Dispersion: 0.03,
+		TracerColor: rl.Color{R: 255, G: 120, B: 90, A: 255},
+		VsSoft:      0.4, VsLight: 0.25, VsHeavy: 0,
+		VsAir:       1.0, ProjSpeedM: 600,
+	},
+	WeaponIgla: {
+		Kind: WeaponIgla, Name: "Igla",
+		Ammo: 3, RangeM: 900, RoF: 0.12, Damage: 200, Dispersion: 0,
+		TracerColor: rl.Color{R: 255, G: 240, B: 200, A: 255},
+		VsAir:       1.0,
+		MissileSpeedM: 180, MissileTurnDps: 120, MissileFuelS: 7,
 	},
 }
 

@@ -48,6 +48,7 @@ var cuePatterns = map[components.EventKind][]cueTone{
 	components.EventSuppressionStart: {{620, 60}, {0, 45}, {620, 60}, {0, 45}, {620, 60}},
 	components.EventOrderFailed:      {{700, 100}, {0, 30}, {430, 150}},
 	components.EventOrderCompleted:   {{990, 80}},
+	components.EventAirDown:          {{520, 120}, {0, 40}, {260, 300}},
 }
 
 // initAudioCues is a no-op headless: a gate run has no business opening an

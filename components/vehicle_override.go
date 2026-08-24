@@ -15,6 +15,10 @@ const (
 	// VehicleReflexFlee routes a full-speed retreat through the normal order
 	// queue (soft-skinned classes).
 	VehicleReflexFlee
+	// VehicleReflexGoDark shuts the radar down under fire the crew cannot
+	// answer (Phase 20 M2) — the AI half of the P4 emissions dilemma. No
+	// locomotion: the mount stays put, only the emitter goes quiet.
+	VehicleReflexGoDark
 )
 
 // VehicleOverride is the reactive-driver state, always present on a vehicle
@@ -39,6 +43,8 @@ func VehicleReflexLabel(k VehicleReflexKind) string {
 		return "Smoke and reverse"
 	case VehicleReflexFlee:
 		return "Fleeing"
+	case VehicleReflexGoDark:
+		return "Radar dark"
 	}
 	return ""
 }

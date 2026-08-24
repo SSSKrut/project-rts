@@ -20,20 +20,20 @@
   {
    "lod": 0,
    "ratio": 0.5658,
-   "tris": 10999,
-   "draws": 1
+   "tris": 10998,
+   "draws": 2
   },
   {
    "lod": 1,
-   "ratio": 0.0544,
-   "tris": 3197,
-   "draws": 1
+   "ratio": 0.0532,
+   "tris": 3196,
+   "draws": 2
   },
   {
    "lod": 2,
-   "ratio": 0.0726,
-   "tris": 900,
-   "draws": 1
+   "ratio": 0.0686,
+   "tris": 898,
+   "draws": 2
   }
  ],
  "parts": [
@@ -44,21 +44,21 @@
      {
       "mesh": 0,
       "bucket": "opaque",
-      "tris": 10999
+      "tris": 7160
      }
     ],
     "1": [
      {
-      "mesh": 1,
+      "mesh": 2,
       "bucket": "opaque",
-      "tris": 3197
+      "tris": 1690
      }
     ],
     "2": [
      {
-      "mesh": 2,
+      "mesh": 4,
       "bucket": "opaque",
-      "tris": 900
+      "tris": 508
      }
     ]
    },
@@ -77,8 +77,53 @@
     ],
     "max": [
      1.09,
-     2.3764,
+     1.1272,
      1.39
+    ]
+   }
+  },
+  {
+   "id": "turret",
+   "lods": {
+    "0": [
+     {
+      "mesh": 1,
+      "bucket": "opaque",
+      "tris": 3838
+     }
+    ],
+    "1": [
+     {
+      "mesh": 3,
+      "bucket": "opaque",
+      "tris": 1506
+     }
+    ],
+    "2": [
+     {
+      "mesh": 5,
+      "bucket": "opaque",
+      "tris": 390
+     }
+    ]
+   },
+   "pivot": [
+    0.0,
+    0.3,
+    -0.0
+   ],
+   "axis": "yaw",
+   "parent": "hull",
+   "bbox": {
+    "min": [
+     -0.52,
+     0.3,
+     -0.9105
+    ],
+    "max": [
+     0.52,
+     2.3764,
+     1.3103
     ]
    }
   }
@@ -86,7 +131,7 @@
  "mounts": [
   {
    "id": "decal.number.left",
-   "part": "hull",
+   "part": "turret",
    "pos": [
     -0.342,
     0.22,
@@ -100,7 +145,7 @@
   },
   {
    "id": "decal.number.right",
-   "part": "hull",
+   "part": "turret",
    "pos": [
     -0.342,
     0.22,
@@ -113,5 +158,5 @@
    ]
   }
  ],
- "bytes": 1072500
+ "bytes": 1069508
 }

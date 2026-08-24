@@ -16,6 +16,7 @@ import (
 type ThreatSystem struct {
 	filter    *ecs.Filter4[components.Unit, components.Threat, components.DangerBuffer, components.WorldPos]
 	vehFilter *ecs.Filter4[components.Vehicle, components.Threat, components.DangerBuffer, components.WorldPos]
+	airFilter *ecs.Filter4[components.Aircraft, components.Threat, components.DangerBuffer, components.WorldPos]
 	lastTick  float32
 
 	// Unsafe-area layer (P3): blasts that land close together in time and
@@ -49,6 +50,7 @@ func NewThreatSystem() *ThreatSystem {
 func (sys *ThreatSystem) InitUI(w *ecs.World) {
 	sys.filter = ecs.NewFilter4[components.Unit, components.Threat, components.DangerBuffer, components.WorldPos](w)
 	sys.vehFilter = ecs.NewFilter4[components.Vehicle, components.Threat, components.DangerBuffer, components.WorldPos](w)
+	sys.airFilter = ecs.NewFilter4[components.Aircraft, components.Threat, components.DangerBuffer, components.WorldPos](w)
 	sys.blastFilter = ecs.NewFilter2[components.BlastMark, components.WorldPos](w)
 	sys.unsafeFilter = ecs.NewFilter2[components.UnsafeArea, components.WorldPos](w)
 	sys.posMap = ecs.NewMap[components.WorldPos](w)
@@ -93,6 +95,15 @@ func (sys *ThreatSystem) Update(ctx core.UpdateContext) {
 	for qv.Next() {
 		_, threat, buf, pos := qv.Get()
 		sys.pushZoneDanger(buf, pos, now, dt)
+		tickThreat(threat, buf, pos, dt)
+	}
+
+	// Aircraft too (Phase 20 M2): the AA near-miss path fills their buffers,
+	// and without a drain the air reflexes would read a Threat frozen at zero.
+	// Ground zones are skipped — a blast area is not a place an airframe is in.
+	qa := sys.airFilter.Query()
+	for qa.Next() {
+		_, threat, buf, pos := qa.Get()
 		tickThreat(threat, buf, pos, dt)
 	}
 

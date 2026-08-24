@@ -72,6 +72,20 @@ func vehicleSensors(spec *components.VehicleSpec) components.Sensors {
 		DetectMask:  components.DimAll,
 	}
 	s.Count = 1
+	// Unlike the airborne set, a ground radar arrives ON: it belongs to an
+	// AI crew whose whole job is watching the sky, and going dark under fire
+	// is the crew's reflex (GoDark), not a default.
+	if spec.RadarRangeM > 0 {
+		s.Channels[s.Count] = components.SensorChannel{
+			Kind:        components.SensorRadar,
+			BaseRangeM:  spec.RadarRangeM,
+			EmitRangeM:  spec.RadarEmitM,
+			FalloffKind: components.FalloffLinear,
+			Facing:      components.OmniProfile,
+			DetectMask:  components.DimVehicle | components.DimAir | components.DimNaval,
+		}
+		s.Count++
+	}
 	if spec.ESMRangeM > 0 {
 		s.Channels[s.Count] = components.SensorChannel{
 			Kind:        components.SensorESM,

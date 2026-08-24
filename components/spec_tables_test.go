@@ -45,10 +45,12 @@ func TestWeaponSpecsCarrySaneNumbers(t *testing.T) {
 func TestEveryWeaponCanHurtSomething(t *testing.T) {
 	for k := WeaponKind(0); k < WeaponKindCount; k++ {
 		s := SpecForWeapon(k)
-		if s.VsSoft <= 0 && s.VsLight <= 0 && s.VsHeavy <= 0 {
-			t.Errorf("%s has a zero multiplier against every armour class", s.Name)
+		// Air counts (Phase 20 M2): a MANPADS hurts nothing on the ground and
+		// that is its entire identity.
+		if s.VsSoft <= 0 && s.VsLight <= 0 && s.VsHeavy <= 0 && s.VsAir <= 0 {
+			t.Errorf("%s has a zero multiplier against every target class", s.Name)
 		}
-		for name, mul := range map[string]float32{"soft": s.VsSoft, "light": s.VsLight, "heavy": s.VsHeavy} {
+		for name, mul := range map[string]float32{"soft": s.VsSoft, "light": s.VsLight, "heavy": s.VsHeavy, "air": s.VsAir} {
 			if mul < 0 {
 				t.Errorf("%s: negative %s multiplier %.2f", s.Name, name, mul)
 			}
@@ -83,7 +85,11 @@ func TestVehicleSpecsCarrySaneNumbers(t *testing.T) {
 		if s.HP <= 0 {
 			t.Errorf("%s: HP %.1f", s.Name, s.HP)
 		}
-		if s.MaxSpeedRoad <= 0 || s.MaxSpeedOffroad <= 0 || s.MaxSpeedReverse <= 0 {
+		// An emplacement (Phase 20 M2) has ALL speeds at zero by design; what
+		// stays a typo is a PARTIAL zero — a hull that drives forward but
+		// cannot reverse is a config error, not a class.
+		static := s.MaxSpeedRoad == 0 && s.MaxSpeedOffroad == 0 && s.MaxSpeedReverse == 0
+		if !static && (s.MaxSpeedRoad <= 0 || s.MaxSpeedOffroad <= 0 || s.MaxSpeedReverse <= 0) {
 			t.Errorf("%s: speeds road %.1f offroad %.1f reverse %.1f",
 				s.Name, s.MaxSpeedRoad, s.MaxSpeedOffroad, s.MaxSpeedReverse)
 		}

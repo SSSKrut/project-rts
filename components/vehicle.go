@@ -11,6 +11,10 @@ const (
 	VehicleTank
 	VehicleATCarrier
 	VehicleCar
+	// VehicleAAGun is a towed emplacement: every speed in its spec is zero
+	// and the driver simply never moves it. Emplacement-as-vehicle buys the
+	// factory, the gunner pass, the turret and the panels for free.
+	VehicleAAGun
 	VehicleKindCount
 )
 

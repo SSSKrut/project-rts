@@ -154,6 +154,16 @@ func (g *Game) registerSystems() {
 	cameraSys := &systems.CameraSystem{}
 	cameraSys.InitUI(app.World)
 
+	// Phase 20 M2 systems register LAST on purpose: their InitUI is the first
+	// registration of Missile / AircraftOverride, and a mid-order component ID
+	// would reshuffle every existing archetype (M0 finding #1). Pipeline
+	// position comes from the AddSystem block below, not from this order.
+	missileSys := systems.NewMissileSystem(damageService)
+	missileSys.InitUI(app.World)
+	airReflexSys := systems.NewAirReflexSystem()
+	airReflexSys.InitUI(app.World)
+	weaponSys.SetMissileMap(missileSys.MissileMap())
+
 	app.AddSystem(terrainStreamingSys)
 	app.AddSystem(terrainLoadSys)
 	app.AddSystem(terrainGenSys)
@@ -171,6 +181,7 @@ func (g *Game) registerSystems() {
 	app.AddSystem(vehicleDriverSys)
 	app.AddSystem(airTrafficSys)
 	app.AddSystem(airDriverSys)
+	app.AddSystem(missileSys)
 	app.AddSystem(contactSys)
 	app.AddSystem(weaponSys)
 	app.AddSystem(particleSys)
@@ -179,6 +190,7 @@ func (g *Game) registerSystems() {
 	app.AddSystem(utilityEvalSys)
 	app.AddSystem(threatDecaySys)
 	app.AddSystem(vehicleReflexSys)
+	app.AddSystem(airReflexSys)
 	app.AddSystem(levelVisSys)
 	app.AddSystem(mapPingDecaySys)
 	app.AddSystem(orderResolverSys)

@@ -237,6 +237,15 @@ func (g *Game) drawScene3D() {
 		}
 	}
 
+	qmis := g.Filt.MissileRender.Query()
+	for qmis.Next() {
+		mis, mpos := qmis.Get()
+		p := mpos.ToRenderSpace(systems.CurrentOriginChunk)
+		rl.DrawSphere(p, 0.45, rl.Color{R: 255, G: 245, B: 210, A: 255})
+		tail := rl.Vector3{X: p.X - mis.VelX*0.08, Y: p.Y - mis.VelY*0.08, Z: p.Z - mis.VelZ*0.08}
+		rl.DrawLine3D(p, tail, rl.Color{R: 255, G: 170, B: 90, A: 230})
+	}
+
 	g.Ctx.WorldShader.beginObjects()
 	g.Frame.PropsLive = 0
 	camPos := systems.CurrentCamera.Position

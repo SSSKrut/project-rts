@@ -61,6 +61,7 @@ func DefaultAttentionMatrix() AttentionMatrix {
 	m[components.EventSuppressionStart] = ReactNotify
 	m[components.EventOrderFailed] = ReactNotify
 	m[components.EventOrderCompleted] = ReactIgnore
+	m[components.EventAirDown] = ReactSlow
 	return m
 }
 

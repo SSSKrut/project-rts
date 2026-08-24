@@ -29,9 +29,10 @@ import (
 // altitude the straight line is the route, and the only thing an airframe can
 // hit is ground it was told to fly at.
 type AirDriverSystem struct {
-	filter   *ecs.Filter3[components.Aircraft, components.WorldPos, components.Motion]
-	queueMap *ecs.Map[components.ActionQueue]
-	sampler  *HeightSampler
+	filter      *ecs.Filter3[components.Aircraft, components.WorldPos, components.Motion]
+	queueMap    *ecs.Map[components.ActionQueue]
+	overrideMap *ecs.Map[components.AircraftOverride]
+	sampler     *HeightSampler
 }
 
 const (
@@ -56,11 +57,15 @@ const (
 	airMinClearance float32 = 6.0
 	// Egress despawn ring around Aircraft.Exit.
 	airExitRadius float32 = 40.0
+	// Deck height the break maneuver dives to — terrain masking without
+	// touching the player's altitude dial.
+	airEvadeAGL float32 = 12.0
 )
 
 func (sys *AirDriverSystem) InitUI(w *ecs.World) {
 	sys.filter = ecs.NewFilter3[components.Aircraft, components.WorldPos, components.Motion](w)
 	sys.queueMap = ecs.NewMap[components.ActionQueue](w)
+	sys.overrideMap = ecs.NewMap[components.AircraftOverride](w)
 	sys.sampler = NewHeightSampler(w)
 }
 
@@ -82,22 +87,24 @@ func (sys *AirDriverSystem) Update(ctx core.UpdateContext) {
 	if dt <= 0 {
 		return
 	}
+	now := float32(ctx.SimNow)
 	q := sys.filter.Query()
 	for q.Next() {
 		ac, pos, mot := q.Get()
-		aq := sys.queueMap.Get(q.Entity())
+		ent := q.Entity()
+		aq := sys.queueMap.Get(ent)
 		if aq == nil {
 			continue
 		}
-		sys.step(ac, pos, mot, aq, dt)
+		sys.step(ent, ac, pos, mot, aq, dt, now)
 	}
 }
 
 // step advances one airframe. The tick is split into whole sub-steps chosen
 // from the current speed; every sub-step re-reads its own aim, which is what
 // keeps a fast pass from cutting the corner of its arrival ring.
-func (sys *AirDriverSystem) step(ac *components.Aircraft, pos *components.WorldPos,
-	mot *components.Motion, aq *components.ActionQueue, dt float32) {
+func (sys *AirDriverSystem) step(ent ecs.Entity, ac *components.Aircraft, pos *components.WorldPos,
+	mot *components.Motion, aq *components.ActionQueue, dt, now float32) {
 	spec := components.SpecForAircraft(ac.Kind)
 
 	if ac.Fuel > 0 {
@@ -110,9 +117,67 @@ func (sys *AirDriverSystem) step(ac *components.Aircraft, pos *components.WorldP
 
 	n := sys.subSteps(mot.Speed, dt)
 	sub := dt / float32(n)
+
+	// A live Break / Flare owns locomotion (P7 mirror of the ground driver).
+	// Abort does not: it already reduced to the ordinary egress leg.
+	if ov := sys.overrideMap.Get(ent); ov != nil &&
+		ov.Kind != components.AirReflexNone &&
+		ov.Kind != components.AirReflexAbort && now < ov.Until {
+		for i := 0; i < n; i++ {
+			sys.stepEvade(spec, pos, mot, ov, sub)
+		}
+		return
+	}
+
 	for i := 0; i < n; i++ {
 		sys.substep(ac, spec, pos, mot, aq, sub)
 	}
+}
+
+// stepEvade: hard turn away from the threat bearing, full throttle, down
+// toward the deck. The altitude DIAL is untouched — the reflex borrows the
+// airframe, it does not reconfigure it.
+func (sys *AirDriverSystem) stepEvade(spec *components.AircraftSpec, pos *components.WorldPos,
+	mot *components.Motion, ov *components.AircraftOverride, dt float32) {
+	away := wrapAngle(ov.ThreatYaw + float32(math.Pi))
+	yawErr := wrapAngle(away - mot.Yaw)
+	speedAbs := mot.Speed
+	if speedAbs < 0 {
+		speedAbs = -speedAbs
+	}
+	pivot := spec.PivotDps * float32(math.Pi) / 180
+	maxYawDelta := (speedAbs/spec.TurnRadiusM + pivot) * dt
+	steer := yawErr
+	if steer > maxYawDelta {
+		steer = maxYawDelta
+	} else if steer < -maxYawDelta {
+		steer = -maxYawDelta
+	}
+	mot.Yaw = wrapAngle(mot.Yaw + steer)
+
+	if mot.Speed < spec.MaxSpeed {
+		mot.Speed += spec.AccelMs2 * dt
+		if mot.Speed > spec.MaxSpeed {
+			mot.Speed = spec.MaxSpeed
+		}
+	}
+	sys.advanceXZ(pos, mot, dt)
+
+	wx := float32(pos.Chunk.X)*components.ChunkSize + pos.Local.X
+	wz := float32(pos.Chunk.Z)*components.ChunkSize + pos.Local.Z
+	ground := sys.sampler.Sample(wx, wz)
+	want := ground + airEvadeAGL
+	if floor := ground + airMinClearance; want < floor {
+		want = floor
+	}
+	delta := want - pos.Local.Y
+	max := spec.ClimbRateMs * dt
+	if delta > max {
+		delta = max
+	} else if delta < -max {
+		delta = -max
+	}
+	pos.Local.Y += delta
 }
 
 // subSteps splits the tick so no single integration exceeds airMaxStepM.

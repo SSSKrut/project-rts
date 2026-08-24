@@ -23,6 +23,7 @@ type DamageService struct {
 	squadMemberMap *ecs.Map[components.SquadMember]
 	posMap         *ecs.Map[components.WorldPos]
 	dangerMap      *ecs.Map[components.DangerBuffer]
+	aircraftMap    *ecs.Map[components.Aircraft]
 	// Awareness sweep on death wipes LastSeen entries pointing at the just-
 	// killed unit, so readers can't dereference a recycled slot through stale
 	// Awareness data.
@@ -44,6 +45,7 @@ func NewDamageService(w *ecs.World, squads *SquadService) *DamageService {
 		squadMemberMap:  ecs.NewMap[components.SquadMember](w),
 		posMap:          ecs.NewMap[components.WorldPos](w),
 		dangerMap:       ecs.NewMap[components.DangerBuffer](w),
+		aircraftMap:     ecs.NewMap[components.Aircraft](w),
 		awarenessFilter: ecs.NewFilter1[components.Awareness](w),
 		squadService:    squads,
 		eventLogRes:     ecs.NewResource[components.EventLog](w),
@@ -152,13 +154,19 @@ func (d *DamageService) pushKIAEvent(unit ecs.Entity) {
 	if d.clock != nil {
 		now = d.clock()
 	}
+	kind := components.EventKIA
+	text := "Unit KIA"
+	if d.aircraftMap.Has(unit) {
+		kind = components.EventAirDown
+		text = "Aircraft down"
+	}
 	if log != nil {
 		log.Push(components.EventEntry{
-			Kind:  components.EventKIA,
+			Kind:  kind,
 			At:    now,
 			Pos:   pos,
 			Squad: squad,
-			Text:  "Unit KIA",
+			Text:  text,
 		})
 	}
 	if d.mapPings != nil {
@@ -176,14 +184,21 @@ func (d *DamageService) pushKIAEvent(unit ecs.Entity) {
 // before RemoveEntity so readers iterating after death can't recover the
 // stale id through Awareness.
 func (d *DamageService) sweepAwareness(dying ecs.Entity) {
-	if d.awarenessFilter == nil || dying == (ecs.Entity{}) {
+	sweepAwarenessOf(d.awarenessFilter, dying)
+}
+
+// sweepAwarenessOf is the shared FIFO scrub behind every RemoveEntity of a
+// watched combatant — death (DamageService) and egress (AirTrafficSystem)
+// alike. Any removal path that skips it leaves recycled ids in live FIFOs.
+func sweepAwarenessOf(filter *ecs.Filter1[components.Awareness], gone ecs.Entity) {
+	if filter == nil || gone == (ecs.Entity{}) {
 		return
 	}
-	q := d.awarenessFilter.Query()
+	q := filter.Query()
 	for q.Next() {
 		aware := q.Get()
 		for i := range aware.LastSeen {
-			if aware.LastSeen[i].Target == dying {
+			if aware.LastSeen[i].Target == gone {
 				aware.LastSeen[i] = components.AwarenessEntry{}
 			}
 		}

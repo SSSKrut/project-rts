@@ -107,6 +107,12 @@ func (sys *UtilityEvaluatorSystem) awarenessHasUsableTarget(seer ecs.Entity, awa
 		if slot.Time == 0 || slot.Target == (ecs.Entity{}) {
 			continue
 		}
+		// Alive BEFORE any Map.Get: death sweeps the FIFO, but an airframe
+		// that egressed off the map is removed by AirTrafficSystem, and the
+		// slot can hold its recycled id for one detect cadence.
+		if !sys.worldRef.Alive(slot.Target) {
+			continue
+		}
 		f := sys.factionMap.Get(slot.Target)
 		if f == nil || f.ID == ownFaction {
 			continue

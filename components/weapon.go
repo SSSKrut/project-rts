@@ -15,6 +15,10 @@ const (
 	WeaponAutocannon30
 	WeaponKPVT
 	WeaponATGM
+	// Air defense (Phase 20 M2). ZU23 is the lead-computing gun; Igla spawns
+	// a Missile entity instead of a hitscan shot.
+	WeaponZU23
+	WeaponIgla
 )
 
 // Weapon - per-instance state for a weapon entity. Lives on its own entity

@@ -11,6 +11,9 @@ const (
 	EventSuppressionStart
 	EventOrderCompleted
 	EventOrderFailed
+	// EventAirDown — an airframe destroyed (Phase 20 M2). Appended so saved
+	// AttentionMatrix indices stay stable.
+	EventAirDown
 	// EventKindCount bounds any per-kind table, e.g. the attention matrix.
 	EventKindCount
 )
@@ -77,6 +80,8 @@ func EventKindLabel(k EventKind) string {
 		return "Done"
 	case EventOrderFailed:
 		return "Failed"
+	case EventAirDown:
+		return "Air down"
 	}
 	return "?"
 }

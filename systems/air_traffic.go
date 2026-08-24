@@ -18,8 +18,9 @@ import (
 // second spawner (Phase 20 P9): when it lands it files the same arrival, or
 // calls the same seam, and nothing here has to learn about it.
 type AirTrafficSystem struct {
-	arrivalFilter *ecs.Filter1[components.AirArrival]
-	airFilter     *ecs.Filter2[components.Aircraft, components.WorldPos]
+	arrivalFilter   *ecs.Filter1[components.AirArrival]
+	airFilter       *ecs.Filter2[components.Aircraft, components.WorldPos]
+	awarenessFilter *ecs.Filter1[components.Awareness]
 	arrivals      *ecs.Map[components.AirArrival]
 	factory       airSpawner
 	world         *ecs.World
@@ -49,6 +50,7 @@ func (sys *AirTrafficSystem) InitUI(w *ecs.World) {
 	sys.arrivalFilter = ecs.NewFilter1[components.AirArrival](w)
 	sys.airFilter = ecs.NewFilter2[components.Aircraft, components.WorldPos](w)
 	sys.arrivals = ecs.NewMap[components.AirArrival](w)
+	sys.awarenessFilter = ecs.NewFilter1[components.Awareness](w)
 }
 
 func (AirTrafficSystem) Name() string { return "air_traffic" }
@@ -93,9 +95,15 @@ func (sys *AirTrafficSystem) Update(ctx core.UpdateContext) {
 
 	sys.release()
 	for _, ent := range sys.clear {
-		if sys.world.Alive(ent) {
-			sys.world.RemoveEntity(ent)
+		if !sys.world.Alive(ent) {
+			continue
 		}
+		// An egress despawn must sweep Awareness exactly like a death does:
+		// anyone still watching the departing airframe would otherwise hold a
+		// recycled id in its FIFO (found by ai_air_manpads — the MANPADS
+		// gunner's utility pass touched the slot one tick after departure).
+		sweepAwarenessOf(sys.awarenessFilter, ent)
+		sys.world.RemoveEntity(ent)
 	}
 }
 

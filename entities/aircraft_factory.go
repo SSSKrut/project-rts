@@ -32,6 +32,7 @@ type AircraftFactory struct {
 	DetectMap      *ecs.Map[components.Detectability]
 	ThreatMap      *ecs.Map[components.Threat]
 	DangerMap      *ecs.Map[components.DangerBuffer]
+	OverrideMap    *ecs.Map[components.AircraftOverride]
 }
 
 func NewAircraftFactory(world *ecs.World, posMap *ecs.Map[components.WorldPos]) *AircraftFactory {
@@ -50,6 +51,7 @@ func NewAircraftFactory(world *ecs.World, posMap *ecs.Map[components.WorldPos]) 
 		DetectMap:      ecs.NewMap[components.Detectability](world),
 		ThreatMap:      ecs.NewMap[components.Threat](world),
 		DangerMap:      ecs.NewMap[components.DangerBuffer](world),
+		OverrideMap:    ecs.NewMap[components.AircraftOverride](world),
 	}
 }
 
@@ -135,5 +137,6 @@ func (f *AircraftFactory) Spawn(pos, exit components.WorldPos, kind components.A
 	f.DetectMap.Add(ent, &components.Detectability{})
 	f.ThreatMap.Add(ent, &components.Threat{})
 	f.DangerMap.Add(ent, &components.DangerBuffer{})
+	f.OverrideMap.Add(ent, &components.AircraftOverride{})
 	return ent
 }

@@ -393,6 +393,7 @@ func (g *Game) initRenderHandles() {
 	g.Filt.UnitRender = ecs.NewFilter3[components.WorldPos, components.Unit, components.Stance](g.App.World)
 	g.Filt.VehicleRender = ecs.NewFilter2[components.WorldPos, components.Vehicle](g.App.World)
 	g.Filt.AircraftRender = ecs.NewFilter2[components.WorldPos, components.Aircraft](g.App.World)
+	g.Filt.MissileRender = ecs.NewFilter2[components.Missile, components.WorldPos](g.App.World)
 	g.Filt.SmokeRender = ecs.NewFilter2[components.WorldPos, components.SmokeField](g.App.World)
 	g.Maps.Turret = ecs.NewMap[components.Turret](g.App.World)
 	g.Filt.ChunkActive = ecs.NewFilter3[components.WorldPos, components.ChunkMesh, components.LODActive](g.App.World)

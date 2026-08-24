@@ -30,6 +30,8 @@ type VehicleReflexSystem struct {
 	// other mechanism that brings a straggler home.
 	squadMemberMap *ecs.Map[components.SquadMember]
 	formationMap   *ecs.Map[components.FormationData]
+	// GoDark flips the radar channel (Phase 20 M2).
+	sensorsMap *ecs.Map[components.Sensors]
 }
 
 const (
@@ -44,6 +46,7 @@ const (
 	smokeRetreatDist     float32 = 8.0 // release once backed this far from origin
 	fleeDuration         float32 = 8.0
 	fleeAwayDist         float32 = 40.0
+	goDarkDuration       float32 = 12.0
 
 	// A vehicle that has a live hostile in view within this window is trading
 	// fire — its gunner handles the threat, so the reflex holds. Reflexes are
@@ -67,6 +70,7 @@ func (sys *VehicleReflexSystem) InitUI(w *ecs.World) {
 	sys.factionMap = ecs.NewMap[components.Faction](w)
 	sys.squadMemberMap = ecs.NewMap[components.SquadMember](w)
 	sys.formationMap = ecs.NewMap[components.FormationData](w)
+	sys.sensorsMap = ecs.NewMap[components.Sensors](w)
 }
 
 func (VehicleReflexSystem) Name() string { return "vehicle_reflex" }
@@ -140,6 +144,13 @@ func (sys *VehicleReflexSystem) tickActive(ent ecs.Entity, pos *components.World
 		}
 	}
 	if released {
+		if ov.Kind == components.VehicleReflexGoDark {
+			if sn := sys.sensorsMap.Get(ent); sn != nil {
+				if i := sn.FindChannel(components.SensorRadar); i >= 0 {
+					sn.SetChannel(uint8(i), true)
+				}
+			}
+		}
 		ov.Kind = components.VehicleReflexNone
 		sys.requestReform(ent)
 	}
@@ -177,6 +188,20 @@ func (sys *VehicleReflexSystem) tryTrigger(ent ecs.Entity, veh *components.Vehic
 	// "Return fire beats flinch" only holds for a vehicle that CAN return
 	// fire — an unarmed truck flees even from a visible shooter.
 	if spec.WeaponCount > 0 && sys.engaging(ent, now) {
+		return
+	}
+	// GoDark needs no bearing: the emitter goes quiet wherever the fire came
+	// from. A crew still trading fire never reaches here (gate above), so the
+	// radar stays on exactly while the gun can answer.
+	if spec.ReflexKind == components.VehicleReflexGoDark {
+		if sn := sys.sensorsMap.Get(ent); sn != nil {
+			if i := sn.FindChannel(components.SensorRadar); i >= 0 && sn.ChannelOn(uint8(i)) {
+				sn.SetChannel(uint8(i), false)
+				ov.Kind = components.VehicleReflexGoDark
+				ov.Until = now + goDarkDuration
+				ov.LastAt = now
+			}
+		}
 		return
 	}
 	// Direction to the dominant threat: ThreatDir points from the source

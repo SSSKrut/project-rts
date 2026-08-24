@@ -42,7 +42,8 @@ func (sys *WeaponSystem) snapshotVehicleShots(now, dt float32) {
 			if !ok {
 				continue
 			}
-			if !sys.shouldFire(shooter, 0, pos, targetPos, sys.vehicleMap.Has(target)) {
+			targetIsAir := sys.aircraftMap.Has(target)
+			if !sys.shouldFire(shooter, 0, pos, targetPos, sys.vehicleMap.Has(target), targetIsAir) {
 				continue
 			}
 
@@ -68,6 +69,23 @@ func (sys *WeaponSystem) snapshotVehicleShots(now, dt float32) {
 
 			cooldown := 1.0 / weapon.RoF
 			if weapon.LastFiredAt != 0 && now-weapon.LastFiredAt < cooldown {
+				continue
+			}
+
+			// Air targets resolve analytically (weapon_air.go) — the raycast
+			// window cannot reach them and does not need to. LOS is checked
+			// BEFORE the ammo commit: no rounds into a ridge.
+			if targetIsAir {
+				muzzle := worldXYZ(*pos, spec.BoxHgt)
+				if sys.airShotBlocked(muzzle, targetPos) {
+					continue
+				}
+				weapon.LastFiredAt = now
+				weapon.Ammo--
+				velX, velZ := targetVelXZ(sys.motionMap.Get(target))
+				sys.resolveAirShotSerial(muzzle, *pos, target, targetPos, velX, velZ,
+					weapon, wspec, now,
+					uint64(shooter.ID())^uint64(now*1000.0)^uint64(slot)<<32)
 				continue
 			}
 

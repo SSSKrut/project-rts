@@ -55,6 +55,11 @@ type VehicleSpec struct {
 	// airborne radar far beyond anything it can see; a truck has no such kit
 	// and 0 means the channel is not fitted at all.
 	ESMRangeM float32
+	// Active radar (Phase 20 M2, AA assets). Same bargain as the airborne
+	// set: sees to RadarRangeM, heard by any ESM out to RadarEmitM, and the
+	// emit range must exceed the seeing range or the dilemma collapses (P4).
+	RadarRangeM float32
+	RadarEmitM  float32
 }
 
 // VehicleSpecs — canonical table indexed by VehicleKind. Numbers are rough
@@ -124,6 +129,21 @@ var VehicleSpecs = [VehicleKindCount]VehicleSpec{
 		SensorRangeM: 60, DetectMul: 1.5, NoiseRadiusM: 110,
 		Class: ArmorClassSoft, ReflexKind: VehicleReflexSmokeAndReverse,
 		WeaponCount: 1, WeaponKinds: [2]WeaponKind{WeaponPKM},
+	},
+	// Towed twin-23mm on a static mount: every speed is zero, the crew is in
+	// the open (Soft, no sector armour), and the radar is the long arm — the
+	// gun outranges the optics only while it is emitting. Its ESM hears an
+	// airborne radar; its own radar is heard even further (P4 both ways).
+	VehicleAAGun: {
+		Kind: VehicleAAGun, Name: "AA Gun", HP: 140,
+		MaxSpeedRoad: 0, MaxSpeedOffroad: 0, MaxSpeedReverse: 0, TurnRadiusM: 1,
+		SeatCount: 1, ArmorFront: 1.0, ArmorSide: 1.0, ArmorRear: 1.0,
+		TurretSlewDps: 120, Locomotion: LocomotionWheeled, ColliderR: 1.6,
+		BoxLen: 2.6, BoxWid: 2.2, BoxHgt: 2.4,
+		SensorRangeM: 200, DetectMul: 1.2, NoiseRadiusM: 40,
+		Class: ArmorClassSoft, ReflexKind: VehicleReflexGoDark,
+		WeaponCount: 1, WeaponKinds: [2]WeaponKind{WeaponZU23},
+		ESMRangeM: 900, RadarRangeM: 520, RadarEmitM: 1300,
 	},
 }
 

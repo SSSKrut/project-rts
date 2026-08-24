@@ -152,6 +152,7 @@ type gameFilters struct {
 	UnitRender     *ecs.Filter3[components.WorldPos, components.Unit, components.Stance]
 	VehicleRender  *ecs.Filter2[components.WorldPos, components.Vehicle]
 	AircraftRender *ecs.Filter2[components.WorldPos, components.Aircraft]
+	MissileRender  *ecs.Filter2[components.Missile, components.WorldPos]
 	SmokeRender    *ecs.Filter2[components.WorldPos, components.SmokeField]
 	ChunkActive    *ecs.Filter3[components.WorldPos, components.ChunkMesh, components.LODActive]
 	ChunkRelevant  *ecs.Filter3[components.WorldPos, components.ChunkMesh, components.LODRelevant]

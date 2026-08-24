@@ -12,7 +12,7 @@ import (
 	"github.com/mlange-42/ark/ecs"
 )
 
-var devSpawnLabels = []string{"Rifleman", "Enemy", "Truck", "BTR", "BMP", "Tank", "ATC"}
+var devSpawnLabels = []string{"Rifleman", "Enemy", "Truck", "BTR", "BMP", "Tank", "ATC", "AA", "AA-E"}
 
 // initUI builds the panel layout, the 2D map underlay and the widget
 // singletons. Teardown is shutdownUI, deferred by main right after this runs.
@@ -508,6 +508,13 @@ func (g *Game) devSpawnAt(target components.WorldPos) {
 	case 3, 4, 5, 6, 7:
 		g.Svc.VehicleFactory.Spawn(target, components.VehicleKind(g.Dev.SpawnKind-3),
 			components.FactionPlayer, components.ControllerLocal)
+	case 8:
+		g.Svc.VehicleFactory.Spawn(target, components.VehicleAAGun,
+			components.FactionPlayer, components.ControllerLocal)
+	case 9:
+		// The playtest case: enemy air defense against one's own airframe.
+		g.Svc.VehicleFactory.Spawn(target, components.VehicleAAGun,
+			components.FactionEnemyRed, components.ControllerAI)
 	}
 }
 

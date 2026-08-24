@@ -60,6 +60,11 @@ type WeaponSystem struct {
 
 	targetsBuf     []targetSnap
 	shotsBuf       []shotWork
+	airDangerBuf   []airDangerEvent
+	missilePending []pendingMissile
+	// missileMap arrives by setter from MissileSystem's tail registration —
+	// building it in InitUI here would hand Missile a mid-order component ID.
+	missileMap     *ecs.Map[components.Missile]
 	wallsByChunk   map[components.ChunkCoord][]losWall
 	targetsByChunk map[components.ChunkCoord][]int32
 
@@ -313,6 +318,8 @@ func (sys *WeaponSystem) Update(ctx core.UpdateContext) {
 	// Reset reusable buffers.
 	sys.targetsBuf = sys.targetsBuf[:0]
 	sys.shotsBuf = sys.shotsBuf[:0]
+	sys.airDangerBuf = sys.airDangerBuf[:0]
+	sys.missilePending = sys.missilePending[:0]
 	clear(sys.wallsByChunk)
 	clear(sys.targetsByChunk)
 	for i := range sys.workerDamage {
@@ -424,7 +431,23 @@ func (sys *WeaponSystem) snapshotShots(now float32) {
 		// RoE + AttackMove gate. Skip silently (no ammo decrement, no
 		// cooldown bump) so a HoldFire squad can resume fire the instant the
 		// player flips the rule.
-		if !sys.shouldFire(shooter, motion.Speed, pos, targetPos, sys.vehicleMap.Has(target)) {
+		if !sys.shouldFire(shooter, motion.Speed, pos, targetPos,
+			sys.vehicleMap.Has(target), sys.aircraftMap.Has(target)) {
+			continue
+		}
+		// MANPADS: the shot is a Missile entity, not a ray (Phase 20 M2, P6).
+		// LOS is checked before the round is committed.
+		if wspec.MissileSpeedM > 0 {
+			if !sys.aircraftMap.Has(target) {
+				continue
+			}
+			muzzle := worldXYZ(*pos, weaponEyeHeight)
+			if sys.airShotBlocked(muzzle, targetPos) {
+				continue
+			}
+			weapon.LastFiredAt = now
+			weapon.Ammo--
+			sys.queueMissile(target, *pos, muzzle, targetPos, wspec)
 			continue
 		}
 		targetStance := components.StanceStand
@@ -590,6 +613,20 @@ func (sys *WeaponSystem) applyPostPass(now float32) {
 	for w := range sys.workerSuppression {
 		for _, ev := range sys.workerSuppression[w] {
 			sys.propagateSuppression(ev, now)
+		}
+	}
+	sys.spawnPendingMissiles(now)
+	// Air near-misses go straight to the airframe's DangerBuffer — it lives
+	// in no ground hash (P10), so propagation cannot find it.
+	for _, ev := range sys.airDangerBuf {
+		if !sys.worldRef.Alive(ev.target) {
+			continue
+		}
+		if buf := sys.dangerBufMap.Get(ev.target); buf != nil {
+			components.PushDanger(buf, components.DangerEvent{
+				Kind: components.DangerBulletImpact, Pos: ev.muzzle,
+				Strength: ev.strength, Time: now,
+			})
 		}
 	}
 }

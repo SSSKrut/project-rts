@@ -21,7 +21,8 @@ const weaponReturnFireThreshold float32 = 0.05
 // the HoldFire silence (AttackTarget / SuppressFire carry this flag;
 // AttackMove does not).
 func (sys *WeaponSystem) shouldFire(shooter ecs.Entity, motionSpeed float32,
-	shooterPos *components.WorldPos, targetPos components.WorldPos, targetIsVeh bool) bool {
+	shooterPos *components.WorldPos, targetPos components.WorldPos,
+	targetIsVeh, targetIsAir bool) bool {
 	// Reloading / Suppressed silence the unit unconditionally — animation /
 	// shock state forbids firing even with FreeFire or AttackTarget override.
 	if b := sys.blackboardMap.Get(shooter); b != nil {
@@ -31,8 +32,11 @@ func (sys *WeaponSystem) shouldFire(shooter ecs.Entity, motionSpeed float32,
 		}
 	}
 
+	// Soloist fallback carries FireOnAir — for anything that is not an AA
+	// asset the VsAir zero in pickTarget is the real gate, and an AA gun
+	// outside a squad must be allowed to defend its sky.
 	rules := components.EngagementRules{
-		Mode: components.FreeFire, FireOnInf: true, FireOnArm: true,
+		Mode: components.FreeFire, FireOnInf: true, FireOnArm: true, FireOnAir: true,
 	}
 	attackMoveOn := false
 	overridesHoldFire := false
@@ -79,6 +83,9 @@ func (sys *WeaponSystem) shouldFire(shooter ecs.Entity, motionSpeed float32,
 	fireOn := rules.FireOnInf
 	if targetIsVeh {
 		fireOn = rules.FireOnArm
+	}
+	if targetIsAir {
+		fireOn = rules.FireOnAir
 	}
 	if !fireOn && !overridesHoldFire {
 		return false

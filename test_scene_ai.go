@@ -240,6 +240,19 @@ const (
 	// completed, that the history ring kept them under the vehicle, and that
 	// joining a squad stripped the solo command.
 	aiSceneSoloOrders = "ai_solo_orders"
+
+	// _air_aa_gun (Phase 20 M2): a player gunship transits over an enemy AA
+	// squad whose FireOnAir starts OFF. PASS demands radar-range acquisition
+	// (past anything optics could do), zero rounds while the gate is down,
+	// fire once it flips, real damage landing, and near-miss danger reaching
+	// the airframe's own Threat.
+	aiSceneAirAAGun = "ai_air_aa_gun"
+
+	// _air_manpads (Phase 20 M2): a MANPADS gunner against a transiting
+	// gunship. PASS demands a Missile entity launched, the flare override
+	// armed while the round was still flying, an honest resolution (decoyed
+	// or damage landed), and the abort rule holding at the HP floor.
+	aiSceneAirManpads = "ai_air_manpads"
 )
 
 // aiSceneMapName lets a scene demand a specific map manifest ("" = default).
@@ -260,6 +273,10 @@ func aiSceneMapName() string {
 	case aiSceneSoloOrders:
 		// Flat: the claims are about the order lifecycle. A hill that stalls
 		// the hull would fail the scene for a reason it does not test.
+		return "flat"
+	case aiSceneAirAAGun, aiSceneAirManpads:
+		// Flat: the claims are about ranges and gates; a masking ridge would
+		// turn either into a coin toss.
 		return "flat"
 	case aiSceneCoverNone:
 		return "flat"
@@ -414,7 +431,8 @@ func aiSceneAnchorPos() components.WorldPos {
 		return components.WorldPos{}.Add(rl.Vector3{X: 45, Z: -20})
 	case aiSceneVehConvoyRoad:
 		return components.WorldPos{}.Add(rl.Vector3{X: 10, Z: -12})
-	case aiSceneAirTransit, aiSceneAirRecon, aiSceneSoloOrders:
+	case aiSceneAirTransit, aiSceneAirRecon, aiSceneSoloOrders, aiSceneAirAAGun,
+		aiSceneAirManpads:
 		return components.WorldPos{}.Add(rl.Vector3{X: 0, Z: 0})
 	}
 	return components.WorldPos{}
@@ -1685,6 +1703,13 @@ func aiSceneSpawn(
 	if aiSceneID() == aiSceneAirRecon {
 		return aiAirReconSpawn(world, aircraftFactory, vehicleFactory, posMap)
 	}
+	if aiSceneID() == aiSceneAirAAGun {
+		return aiAirAASpawn(world, squadService, unitFactory, vehicleFactory,
+			aircraftFactory, posMap)
+	}
+	if aiSceneID() == aiSceneAirManpads {
+		return aiAirManpadsSpawn(world, unitFactory, aircraftFactory, posMap)
+	}
 	if aiSceneID() == aiSceneSoloOrders {
 		return aiSoloOrderSceneSpawn(world, squadService, vehicleFactory, posMap)
 	}
@@ -2102,6 +2127,49 @@ type aiTestState struct {
 	ContactMap   *ecs.Map[components.Contact]
 	regRes       ecs.Resource[components.ContactRegistry]
 
+	// Set for ai_air_aa_gun (Phase 20 M2). See test_scene_air_aa.go.
+	aaActive          bool
+	aaGun             ecs.Entity
+	aaSquad           ecs.Entity
+	aaScout           ecs.Entity
+	aaLegPushed       bool
+	aaGunWeapon       ecs.Entity
+	aaAmmoStart       uint16
+	aaAmmoNow         uint16
+	aaShotsBeforeGate bool
+	aaEnabled         bool
+	aaAcquireAt       float32
+	aaAcquireD        float32
+	aaHPStart         float32
+	aaHPNow           float32
+	aaSuppSeen        float32
+	aaDownAt          float32
+	EquipMap          *ecs.Map[components.Equipment]
+	WeaponMap         *ecs.Map[components.Weapon]
+	ThreatMap         *ecs.Map[components.Threat]
+	logRes            ecs.Resource[components.EventLog]
+
+	// Set for ai_air_manpads (Phase 20 M2). See test_scene_air_manpads.go.
+	manActive      bool
+	manGunner      ecs.Entity
+	manTube        ecs.Entity
+	manScout       ecs.Entity
+	manLegPushed   bool
+	manAmmoStart   uint16
+	manAmmoNow     uint16
+	manMissileSeen bool
+	manFlareSeen   bool
+	manDecoySeen   bool
+	manAbortSeen   bool
+	manEgressSeen  bool
+	manHPStart     float32
+	manHPNow       float32
+	manMinDist     float32
+	manDownAt      float32
+	manLeft        bool
+	AirOvMap       *ecs.Map[components.AircraftOverride]
+	MissileF       *ecs.Filter2[components.Missile, components.WorldPos]
+
 	// Set for ai_vehicle_combat: two sides duel, verdict = enemy side dead.
 	vehCombatActive bool
 	vehFoes         []ecs.Entity
@@ -2414,6 +2482,14 @@ func (s *aiTestState) Update(elapsed float32) {
 	}
 	if s.reconActive {
 		s.updateAirRecon(elapsed)
+		return
+	}
+	if s.aaActive {
+		s.updateAirAA(elapsed)
+		return
+	}
+	if s.manActive {
+		s.updateAirManpads(elapsed)
 		return
 	}
 	if s.soloActive {
