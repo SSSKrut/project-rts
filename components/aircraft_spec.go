@@ -30,6 +30,14 @@ type AircraftSpec struct {
 	DetectMul     float32
 	NoiseRadiusM  float32
 	Class         ArmorClass
+
+	// The emissions triad (P4). RadarRangeM is what the set sees when it is
+	// running; RadarEmitM is how far away it is heard doing so, and is larger
+	// on purpose. ESMRangeM is this airframe's own receiver — the passive half
+	// that makes the enemy's choice cost him too. Zero means "no such kit".
+	RadarRangeM float32
+	RadarEmitM  float32
+	ESMRangeM   float32
 }
 
 // AircraftSpecs — canonical table indexed by AircraftKind. Cold-War rotary
@@ -42,7 +50,8 @@ var AircraftSpecs = [AircraftKindCount]AircraftSpec{
 		FuelSec: 900, SeatCount: 2, ColliderR: 6.0,
 		BoxLen: 13.4, BoxWid: 3.6, BoxHgt: 4.5,
 		SensorRangeM: 140, DetectMul: 2.2, NoiseRadiusM: 400,
-		Class: ArmorClassLight,
+		Class:       ArmorClassLight,
+		RadarRangeM: 420, RadarEmitM: 1100, ESMRangeM: 1400,
 	},
 	AircraftHeliTransport: {
 		Kind: AircraftHeliTransport, Name: "Transport Heli", HP: 260,
@@ -51,7 +60,8 @@ var AircraftSpecs = [AircraftKindCount]AircraftSpec{
 		FuelSec: 1100, SeatCount: 10, ColliderR: 7.0,
 		BoxLen: 25.8, BoxWid: 5.2, BoxHgt: 6.4,
 		SensorRangeM: 110, DetectMul: 2.4, NoiseRadiusM: 520,
-		Class: ArmorClassSoft,
+		Class:     ArmorClassSoft,
+		ESMRangeM: 900,
 	},
 }
 

@@ -74,8 +74,8 @@ const (
 	// nobody silhouetted at a window slot).
 	aiSceneGarrisonHouse = "ai_garrison_house"
 	aiSceneHiddenHouse   = "ai_hidden_house"
-	aiSceneMainE  = "ai_main_e"  // east wing
-	aiSceneMainN  = "ai_main_n"  // north wing
+	aiSceneMainE         = "ai_main_e" // east wing
+	aiSceneMainN         = "ai_main_n" // north wing
 
 	// ai_los_* validate terrain-LOS + squad shared vision: one hostile 13 m
 	// north of a HoldFire squad (optical: linear falloff over 40 m ⇒
@@ -225,6 +225,14 @@ const (
 	// consumed, the airframe tracked the terrain within tolerance, never got
 	// closer to it than the clearance floor, and actually despawned.
 	aiSceneAirTransit = "ai_air_transit"
+
+	// _air_recon (Phase 20 M1): a silent scout flies past an enemy hull toward
+	// an enemy gunship whose radar is running. PASS demands the passive
+	// intercept fired far beyond any imaging sensor and as a bearing, that it
+	// died when the emitter shut down, that the scout's own radar bought
+	// acquisition past optical range, and that the hull HEARD the scout long
+	// before it could see one.
+	aiSceneAirRecon = "ai_air_recon"
 )
 
 // aiSceneMapName lets a scene demand a specific map manifest ("" = default).
@@ -238,6 +246,10 @@ func aiSceneMapName() string {
 		// Terrain following is the point: on flat ground an AGL dial and an
 		// AMSL one are the same run.
 		return "hills"
+	case aiSceneAirRecon:
+		// Flat: the claims are about ranges, and a ridge that masks the hull
+		// turns a measurement into a coin toss.
+		return "flat"
 	case aiSceneCoverNone:
 		return "flat"
 	case aiSceneCoverDefilade:
@@ -391,7 +403,7 @@ func aiSceneAnchorPos() components.WorldPos {
 		return components.WorldPos{}.Add(rl.Vector3{X: 45, Z: -20})
 	case aiSceneVehConvoyRoad:
 		return components.WorldPos{}.Add(rl.Vector3{X: 10, Z: -12})
-	case aiSceneAirTransit:
+	case aiSceneAirTransit, aiSceneAirRecon:
 		return components.WorldPos{}.Add(rl.Vector3{X: 0, Z: 0})
 	}
 	return components.WorldPos{}
@@ -1659,6 +1671,9 @@ func aiSceneSpawn(
 	if aiSceneID() == aiSceneAirTransit {
 		return aiAirTransitSpawn(world, aircraftFactory, posMap)
 	}
+	if aiSceneID() == aiSceneAirRecon {
+		return aiAirReconSpawn(world, aircraftFactory, vehicleFactory, posMap)
+	}
 	if aiSceneID() == aiSceneVehMove {
 		return aiVehicleSceneSpawn(world, vehicleFactory, posMap)
 	}
@@ -1989,7 +2004,7 @@ type aiTestState struct {
 	// hiddenCheck: OccupyBuilding + Stealth + HoldFire ("Hidden position") —
 	// verdict adds all-crouched and nobody parked at a window slot.
 	hiddenCheck bool
-	slotPlanner   *systems.BuildingSlotPlanner
+	slotPlanner *systems.BuildingSlotPlanner
 
 	// Set for ai_los_* scenes: verdict counts Contacts on this entity and
 	// tallies Direct/Shared awareness across the roster.
@@ -2027,6 +2042,32 @@ type aiTestState struct {
 	AircraftMap    *ecs.Map[components.Aircraft]
 	airSampler     *systems.HeightSampler
 	airFilter      *ecs.Filter1[components.Aircraft]
+
+	// Set for ai_air_recon (Phase 20 M1). See test_scene_air_recon.go.
+	reconActive          bool
+	reconScout           ecs.Entity
+	reconEmitter         ecs.Entity
+	reconHull            ecs.Entity
+	reconWaypoint        components.WorldPos
+	reconLegPushed       bool
+	reconESMAt           float32
+	reconESMRange        float32
+	reconBearingErr      float32
+	reconLastIntercept   float32
+	reconRanged          bool
+	reconRangedAt        float32
+	reconRadarOn         bool
+	reconRadarAt         float32
+	reconRadarRange      float32
+	reconAudioAt         float32
+	reconAudioRange      float32
+	reconSilenced        bool
+	reconSilencedAt      float32
+	reconInterceptAtHush float32
+	SensorsMap           *ecs.Map[components.Sensors]
+	AwarenessMap         *ecs.Map[components.Awareness]
+	ContactMap           *ecs.Map[components.Contact]
+	regRes               ecs.Resource[components.ContactRegistry]
 
 	// Set for ai_vehicle_combat: two sides duel, verdict = enemy side dead.
 	vehCombatActive bool
@@ -2336,6 +2377,10 @@ func (s *aiTestState) Update(elapsed float32) {
 	s.elapsed = elapsed
 	if s.airActive {
 		s.updateAirTransit(elapsed)
+		return
+	}
+	if s.reconActive {
+		s.updateAirRecon(elapsed)
 		return
 	}
 	if s.coverActive {

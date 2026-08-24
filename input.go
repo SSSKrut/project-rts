@@ -18,11 +18,14 @@ import (
 // 1 m XZ or vehicle within its ColliderR (nearest across both pools wins).
 func pickUnitFromMouse(filter *ecs.Filter3[components.WorldPos, components.Unit, components.Stance],
 	vehFilter *ecs.Filter2[components.WorldPos, components.Vehicle],
+	airFilter *ecs.Filter2[components.WorldPos, components.Aircraft],
 	anchor components.WorldPos, localCursor rl.Vector2, viewW, viewH int32) (ecs.Entity, bool) {
 	target, ok := mouseTargetWorldPos(systems.CurrentCamera,
 		anchor.ToRenderSpace(systems.CurrentOriginChunk), localCursor, viewW, viewH)
 	if !ok {
-		return ecs.Entity{}, false
+		// The cursor is off the ground plane entirely — pointing at sky. An
+		// airframe is the only thing that can be up there.
+		return pickAircraftOnScreen(airFilter, localCursor, viewW, viewH)
 	}
 	var best ecs.Entity
 	bestDSq := float32(math.MaxFloat32)
@@ -49,25 +52,80 @@ func pickUnitFromMouse(filter *ecs.Filter3[components.WorldPos, components.Unit,
 			}
 		}
 	}
+	if best != (ecs.Entity{}) {
+		return best, true
+	}
+	// Airframes are picked in SCREEN space, and only once the ground pool has
+	// declined. The ground-plane snap every other pick uses cannot reach them:
+	// the ray lands under a helicopter's shadow, hundreds of metres from the
+	// airframe itself. Ground wins ties on purpose — a hull under an airframe
+	// at nap-of-the-earth is the harder of the two to click otherwise.
+	return pickAircraftOnScreen(airFilter, localCursor, viewW, viewH)
+}
+
+// airPickRadiusPx — the airframe's click target, in pixels rather than metres
+// because its distance from the camera is unrelated to the terrain the cursor
+// is over.
+const airPickRadiusPx float32 = 18.0
+
+func pickAircraftOnScreen(airFilter *ecs.Filter2[components.WorldPos, components.Aircraft],
+	localCursor rl.Vector2, viewW, viewH int32) (ecs.Entity, bool) {
+	if airFilter == nil {
+		return ecs.Entity{}, false
+	}
+	var best ecs.Entity
+	bestDSq := airPickRadiusPx * airPickRadiusPx
+	q := airFilter.Query()
+	for q.Next() {
+		pos, _ := q.Get()
+		render := pos.ToRenderSpace(systems.CurrentOriginChunk)
+		if !inFrontOfCamera(render) {
+			continue
+		}
+		screen := rl.GetWorldToScreenEx(render, systems.CurrentCamera, viewW, viewH)
+		dx := screen.X - localCursor.X
+		dy := screen.Y - localCursor.Y
+		if dSq := dx*dx + dy*dy; dSq < bestDSq {
+			bestDSq = dSq
+			best = q.Entity()
+		}
+	}
 	return best, best != (ecs.Entity{})
+}
+
+// inFrontOfCamera guards the screen projection: raylib happily projects points
+// behind the camera to plausible-looking coordinates, and an airframe on the
+// far side of the viewer would otherwise be clickable through the back of the
+// screen.
+func inFrontOfCamera(p rl.Vector3) bool {
+	cam := systems.CurrentCamera
+	fx := cam.Target.X - cam.Position.X
+	fy := cam.Target.Y - cam.Position.Y
+	fz := cam.Target.Z - cam.Position.Z
+	return (p.X-cam.Position.X)*fx+(p.Y-cam.Position.Y)*fy+(p.Z-cam.Position.Z)*fz > 0
 }
 
 // hoverUnitFromMouse is the silent twin of pickUnitFromMouse - no click.
 func hoverUnitFromMouse(filter *ecs.Filter3[components.WorldPos, components.Unit, components.Stance],
 	vehFilter *ecs.Filter2[components.WorldPos, components.Vehicle],
+	airFilter *ecs.Filter2[components.WorldPos, components.Aircraft],
 	anchor components.WorldPos, localCursor rl.Vector2, viewW, viewH int32) (ecs.Entity, bool) {
-	return pickUnitFromMouse(filter, vehFilter, anchor, localCursor, viewW, viewH)
+	return pickUnitFromMouse(filter, vehFilter, airFilter, anchor, localCursor, viewW, viewH)
 }
 
 // collectUnitsInRect - marquee selection over units + vehicles. minX/Y/maxX/Y
 // are panel-local coords.
 func collectUnitsInRect(filter *ecs.Filter3[components.WorldPos, components.Unit, components.Stance],
 	vehFilter *ecs.Filter2[components.WorldPos, components.Vehicle],
+	airFilter *ecs.Filter2[components.WorldPos, components.Aircraft],
 	minX, maxX, minY, maxY float32, viewW, viewH int32) []ecs.Entity {
 	var out []ecs.Entity
 	inRect := func(pos *components.WorldPos) bool {
-		screen := rl.GetWorldToScreenEx(pos.ToRenderSpace(systems.CurrentOriginChunk),
-			systems.CurrentCamera, viewW, viewH)
+		render := pos.ToRenderSpace(systems.CurrentOriginChunk)
+		if !inFrontOfCamera(render) {
+			return false
+		}
+		screen := rl.GetWorldToScreenEx(render, systems.CurrentCamera, viewW, viewH)
 		return screen.X >= minX && screen.X <= maxX && screen.Y >= minY && screen.Y <= maxY
 	}
 	q := filter.Query()
@@ -83,6 +141,15 @@ func collectUnitsInRect(filter *ecs.Filter3[components.WorldPos, components.Unit
 			pos, _ := qv.Get()
 			if inRect(pos) {
 				out = append(out, qv.Entity())
+			}
+		}
+	}
+	if airFilter != nil {
+		qa := airFilter.Query()
+		for qa.Next() {
+			pos, _ := qa.Get()
+			if inRect(pos) {
+				out = append(out, qa.Entity())
 			}
 		}
 	}
@@ -282,4 +349,19 @@ func stepAlongPath(anchorPos *components.WorldPos, path []components.WorldPos, s
 		}
 	}
 	return path
+}
+
+// groundAt is the terrain sample the UI needs to state an altitude as AGL.
+// Injected rather than imported (ui must not depend on systems), and it goes
+// through the LIVE heightmap sampler rather than the procedural height: the
+// driver resolves AGL that way, and on ground the player has cratered the two
+// answers differ — a panel that disagrees with the airframe about its own
+// altitude is worse than no readout.
+func (g *Game) groundAt(p components.WorldPos) float32 {
+	wx := float32(p.Chunk.X)*components.ChunkSize + p.Local.X
+	wz := float32(p.Chunk.Z)*components.ChunkSize + p.Local.Z
+	if g.Ctx.LOS != nil && g.Ctx.LOS.sampler != nil {
+		return g.Ctx.LOS.sampler.Sample(wx, wz)
+	}
+	return systems.GroundHeight(wx, wz)
 }

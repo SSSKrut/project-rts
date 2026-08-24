@@ -16,7 +16,7 @@ func (g *Game) updateHover() {
 	g.Sel.Hovered = ecs.Entity{}
 	switch g.Frame.Focused {
 	case ui.Panel3D:
-		if hit, ok := hoverUnitFromMouse(g.Filt.UnitRender, g.Filt.VehicleRender, *g.Frame.AnchorPos, g.Frame.Panel3DLocal, g.Frame.Panel3DW, g.Frame.Panel3DH); ok {
+		if hit, ok := hoverUnitFromMouse(g.Filt.UnitRender, g.Filt.VehicleRender, g.Filt.AircraftRender, *g.Frame.AnchorPos, g.Frame.Panel3DLocal, g.Frame.Panel3DW, g.Frame.Panel3DH); ok {
 			g.Sel.Hovered = hit
 		}
 	case ui.PanelMap:

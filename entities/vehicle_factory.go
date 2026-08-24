@@ -72,6 +72,16 @@ func vehicleSensors(spec *components.VehicleSpec) components.Sensors {
 		DetectMask:  components.DimAll,
 	}
 	s.Count = 1
+	if spec.ESMRangeM > 0 {
+		s.Channels[s.Count] = components.SensorChannel{
+			Kind:        components.SensorESM,
+			BaseRangeM:  spec.ESMRangeM,
+			FalloffKind: components.FalloffStep,
+			Facing:      components.OmniProfile,
+			DetectMask:  components.DimAll,
+		}
+		s.Count++
+	}
 	return s
 }
 

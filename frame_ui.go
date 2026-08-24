@@ -157,6 +157,7 @@ func (g *Game) mapPickCtx() ui.MapRenderCtx {
 		FactionMap:     g.Maps.Faction,
 		UnitFilter:     g.Filt.UnitRender,
 		VehicleFilter:  g.Filt.VehicleRender,
+		AircraftFilter: g.Filt.AircraftRender,
 		Clusters:       &g.Frame.MapClusters,
 	}
 }
@@ -633,6 +634,7 @@ func (g *Game) renderFloatingWidget(id ui.PanelID, content rl.Rectangle,
 			VehicleMap:       g.Maps.Vehicle,
 			UnitFilter:       g.Filt.UnitRender,
 			VehicleFilter:    g.Filt.VehicleRender,
+			AircraftFilter:   g.Filt.AircraftRender,
 			FactionMap:       g.Maps.Faction,
 			SquadOverrideMap: g.Maps.SquadOverride,
 			Font:             font,
@@ -661,6 +663,8 @@ func (g *Game) renderFloatingWidget(id ui.PanelID, content rl.Rectangle,
 			Scroll:        g.floatScroll(),
 			SquadColor:    g.squadColor,
 			RoadGraph:     &g.Res.RoadGraph,
+			GroundAt:      g.groundAt,
+			Shift:         g.Frame.Shift,
 		})
 	case ui.PanelBehavior:
 		ui.DrawBehaviorPanel(syn("Behavior"), g.behaviorCtx(font, cursor, lmbPress, true,

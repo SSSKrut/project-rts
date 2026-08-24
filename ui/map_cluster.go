@@ -43,11 +43,24 @@ type ContactCluster struct {
 type ContactClusterSet struct {
 	Clusters []ContactCluster
 	Members  []ClusterMember
+	// Bearings are the tracks with a direction and no range. They are kept
+	// apart from Members because everything downstream of a cluster assumes a
+	// position, and these have only where the listener stood.
+	Bearings []BearingTrack
 
 	raw    []ClusterMember
 	specs  []components.SymbolSpec
 	parent []int
 	slot   []int
+}
+
+// BearingTrack is one ESM intercept as the map has to draw it: a ray from the
+// receiver, running off into an unknown range.
+type BearingTrack struct {
+	Entity  ecs.Entity
+	From    components.WorldPos
+	Bearing float32
+	Alpha   float32
 }
 
 func (s *ContactClusterSet) members(c ContactCluster) []ClusterMember {
@@ -80,6 +93,7 @@ func (s *ContactClusterSet) Rebuild(world *ecs.World,
 	overrideMap *ecs.Map[components.ContactSymbolOverride], clock float32) {
 	s.Clusters = s.Clusters[:0]
 	s.Members = s.Members[:0]
+	s.Bearings = s.Bearings[:0]
 	s.raw = s.raw[:0]
 	s.specs = s.specs[:0]
 	s.parent = s.parent[:0]
@@ -91,6 +105,19 @@ func (s *ContactClusterSet) Rebuild(world *ecs.World,
 	q := filter.Query()
 	for q.Next() {
 		c := q.Get()
+		if c.BearingOnly {
+			// A bearing has no position. Clustering it would put a hostile
+			// symbol on top of the RECEIVER — EstimatedPos is where the
+			// listener stood — and picking it would hand the player a track
+			// that is a lie. drawBearingLines renders these instead.
+			s.Bearings = append(s.Bearings, BearingTrack{
+				Entity:  q.Entity(),
+				From:    c.EstimatedPos,
+				Bearing: c.Bearing,
+				Alpha:   components.ContactAgeAlpha(c.LastSeenTime, clock),
+			})
+			continue
+		}
 		ent := q.Entity()
 		spec := DefaultSpecForDimension(c.PerceivedAffil, c.PerceivedDim)
 		if overrideMap != nil {

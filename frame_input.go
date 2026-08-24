@@ -299,7 +299,7 @@ func (g *Game) handleInput() {
 		if g.UI.MarqueeOrigin == ui.Panel3D {
 			if dragDist < marqueeClickThreshold {
 				localEnd := rl.Vector2{X: end.X - g.Frame.Panel3DContent.X, Y: end.Y - g.Frame.Panel3DContent.Y}
-				if hit, ok := pickUnitFromMouse(g.Filt.UnitRender, g.Filt.VehicleRender, *g.Frame.AnchorPos, localEnd, g.Frame.Panel3DW, g.Frame.Panel3DH); ok && g.isControllable(hit) {
+				if hit, ok := pickUnitFromMouse(g.Filt.UnitRender, g.Filt.VehicleRender, g.Filt.AircraftRender, *g.Frame.AnchorPos, localEnd, g.Frame.Panel3DW, g.Frame.Panel3DH); ok && g.isControllable(hit) {
 					if g.Frame.Shift {
 						g.toggleSelected(hit)
 					} else {
@@ -327,7 +327,7 @@ func (g *Game) handleInput() {
 				if maxY < minY {
 					minY, maxY = maxY, minY
 				}
-				hits := collectUnitsInRect(g.Filt.UnitRender, g.Filt.VehicleRender, minX, maxX, minY, maxY, g.Frame.Panel3DW, g.Frame.Panel3DH)
+				hits := collectUnitsInRect(g.Filt.UnitRender, g.Filt.VehicleRender, g.Filt.AircraftRender, minX, maxX, minY, maxY, g.Frame.Panel3DW, g.Frame.Panel3DH)
 				own := hits[:0]
 				for _, h := range hits {
 					if g.isControllable(h) {

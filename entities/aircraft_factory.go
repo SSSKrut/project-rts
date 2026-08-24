@@ -53,6 +53,9 @@ func NewAircraftFactory(world *ecs.World, posMap *ecs.Map[components.WorldPos]) 
 	}
 }
 
+// aircraftSensors builds the channel set. The radar arrives SWITCHED OFF: an
+// emitter that has to be turned on is a decision, and a decision the player
+// never made is not one he can be blamed for (P4).
 func aircraftSensors(spec *components.AircraftSpec) components.Sensors {
 	var s components.Sensors
 	s.Channels[0] = components.SensorChannel{
@@ -63,6 +66,28 @@ func aircraftSensors(spec *components.AircraftSpec) components.Sensors {
 		DetectMask:  components.DimAll,
 	}
 	s.Count = 1
+	if spec.RadarRangeM > 0 {
+		s.Channels[s.Count] = components.SensorChannel{
+			Kind:        components.SensorRadar,
+			BaseRangeM:  spec.RadarRangeM,
+			EmitRangeM:  spec.RadarEmitM,
+			FalloffKind: components.FalloffLinear,
+			Facing:      components.OmniProfile,
+			DetectMask:  components.DimVehicle | components.DimAir | components.DimNaval,
+		}
+		s.SetChannel(s.Count, false)
+		s.Count++
+	}
+	if spec.ESMRangeM > 0 {
+		s.Channels[s.Count] = components.SensorChannel{
+			Kind:        components.SensorESM,
+			BaseRangeM:  spec.ESMRangeM,
+			FalloffKind: components.FalloffStep,
+			Facing:      components.OmniProfile,
+			DetectMask:  components.DimAll,
+		}
+		s.Count++
+	}
 	return s
 }
 

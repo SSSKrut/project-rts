@@ -361,10 +361,7 @@ func drawAircraftBox(pos rl.Vector3, yaw float32, kind components.AircraftKind, 
 // tells them apart.
 func (g *Game) drawAircraftShadow(pos components.WorldPos, renderPos rl.Vector3,
 	kind components.AircraftKind) {
-	wx := float32(pos.Chunk.X)*components.ChunkSize + pos.Local.X
-	wz := float32(pos.Chunk.Z)*components.ChunkSize + pos.Local.Z
-	ground := systems.GroundHeight(wx, wz)
-	agl := pos.Local.Y - ground
+	agl := pos.Local.Y - g.groundAt(pos)
 	if agl < 0.5 {
 		return
 	}
@@ -438,4 +435,24 @@ func drawSquadConnections(center rl.Vector3, members []rl.Vector3, col rl.Color)
 	for _, m := range members {
 		rl.DrawLine3D(center, m, col)
 	}
+}
+
+// drawAircraftSelection marks a selected airframe. A ring at the hull alone is
+// not enough: at any useful camera distance six metres of radius is a few
+// pixels of nothing, and the player has no idea WHERE over the ground the
+// thing is. The tether to the ground point is the actual information — height
+// and map position in one mark.
+func (g *Game) drawAircraftSelection(pos components.WorldPos, renderPos rl.Vector3,
+	kind components.AircraftKind, c rl.Color) {
+	spec := components.SpecForAircraft(kind)
+	rl.DrawCircle3D(renderPos, spec.ColliderR, rl.Vector3{X: 1, Y: 0, Z: 0}, 90, c)
+	agl := pos.Local.Y - g.groundAt(pos)
+	if agl < 1 {
+		return
+	}
+	foot := rl.Vector3{X: renderPos.X, Y: renderPos.Y - agl + 0.2, Z: renderPos.Z}
+	faint := c
+	faint.A = 120
+	rl.DrawLine3D(renderPos, foot, faint)
+	rl.DrawCircle3D(foot, spec.ColliderR*0.7, rl.Vector3{X: 1}, 90, c)
 }

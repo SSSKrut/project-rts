@@ -28,6 +28,7 @@ type ReplayHasher struct {
 	orderFilter   *ecs.Filter1[components.OrderState]
 	planFilter    *ecs.Filter2[components.Squad, components.SquadPlan]
 	contactFilter *ecs.Filter1[components.Contact]
+	sensorsMap    *ecs.Map[components.Sensors]
 	stanceMap     *ecs.Map[components.Stance]
 	hpMap         *ecs.Map[components.HP]
 	threatMap     *ecs.Map[components.Threat]
@@ -55,6 +56,7 @@ func NewReplayHasher(w *ecs.World) *ReplayHasher {
 		orderFilter:   ecs.NewFilter1[components.OrderState](w),
 		planFilter:    ecs.NewFilter2[components.Squad, components.SquadPlan](w),
 		contactFilter: ecs.NewFilter1[components.Contact](w),
+		sensorsMap:    ecs.NewMap[components.Sensors](w),
 		stanceMap:     ecs.NewMap[components.Stance](w),
 		hpMap:         ecs.NewMap[components.HP](w),
 		threatMap:     ecs.NewMap[components.Threat](w),
@@ -214,6 +216,12 @@ func (r *ReplayHasher) Hash() uint64 {
 		if hp := r.hpMap.Get(ent); hp != nil {
 			f32(hp.Current)
 		}
+		// Emissions control is a player input that steers detection, so it is
+		// hashed at the source rather than left to show up later as a contact
+		// that one run made and the other did not.
+		if sn := r.sensorsMap.Get(ent); sn != nil {
+			u8(sn.OffMask)
+		}
 		if aq := r.queueMap.Get(ent); aq != nil {
 			u8(aq.Head)
 			u8(aq.Count)
@@ -273,6 +281,12 @@ func (r *ReplayHasher) Hash() uint64 {
 		u8(uint8(c.PerceivedAffil))
 		u8(uint8(c.PerceivedDim))
 		u8(uint8(c.Source))
+		if c.BearingOnly {
+			u8(1)
+			f32(c.Bearing)
+		} else {
+			u8(0)
+		}
 		take(qc.Entity())
 	}
 	fold()

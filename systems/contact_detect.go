@@ -77,22 +77,16 @@ func (sys *ContactSystem) runDetectPass(dt float32) {
 			ent: ent, pos: *pos, chunk: pos.Chunk,
 			x: wx, z: wz, targetY: pos.Local.Y + spec.TargetCenterY,
 			faction: faction.ID, dimMask: components.DimInfantry,
-			concealment: conceal, audioRadius: audio,
+			concealment: conceal, audioRadius: audio, emitRange: sensors.EmitRangeM(),
 			meter: meter, det: det,
 		})
-		maxR := float32(0)
-		for i := uint8(0); i < sensors.Count; i++ {
-			if r := sensors.Channels[i].BaseRangeM; r > maxR {
-				maxR = r
-			}
-		}
 		sys.seersBuf = append(sys.seersBuf, contactSeer{
 			ent: ent, pos: *pos,
 			x: wx, z: wz, eyeY: pos.Local.Y + spec.EyeHeight,
 			fwdX: float32(math.Sin(float64(mot.Yaw))),
 			fwdZ: float32(math.Cos(float64(mot.Yaw))),
 			yaw:  mot.Yaw, faction: faction.ID,
-			sensors: sensors, aware: aware, maxRange: maxR,
+			sensors: sensors, aware: aware, maxRange: passiveMaxRange(sensors),
 		})
 	}
 	q.Close()
@@ -121,21 +115,16 @@ func (sys *ContactSystem) runDetectPass(dt float32) {
 			x: wx, z: wz, targetY: pos.Local.Y + vspec.BoxHgt*0.6,
 			faction: faction.ID, dimMask: components.DimVehicle,
 			concealment: vspec.DetectMul * sys.smokeMulAt(wx, wz), audioRadius: audio,
-			meter: meter, det: det,
+			emitRange: sensors.EmitRangeM(),
+			meter:     meter, det: det,
 		})
-		maxR := float32(0)
-		for i := uint8(0); i < sensors.Count; i++ {
-			if r := sensors.Channels[i].BaseRangeM; r > maxR {
-				maxR = r
-			}
-		}
 		sys.seersBuf = append(sys.seersBuf, contactSeer{
 			ent: ent, pos: *pos,
 			x: wx, z: wz, eyeY: pos.Local.Y + vspec.BoxHgt,
 			fwdX: float32(math.Sin(float64(mot.Yaw))),
 			fwdZ: float32(math.Cos(float64(mot.Yaw))),
 			yaw:  mot.Yaw, faction: faction.ID,
-			sensors: sensors, aware: aware, maxRange: maxR,
+			sensors: sensors, aware: aware, maxRange: passiveMaxRange(sensors),
 		})
 	}
 	qV.Close()
@@ -153,6 +142,7 @@ func (sys *ContactSystem) runDetectPass(dt float32) {
 	qW.Close()
 
 	snapshotHeightmaps(sys.indexRes.Get(), sys.hmMap, sys.heightmaps)
+	sys.snapshotAircraft()
 	sys.buildDetectGroups()
 
 	units := sys.unitsBuf
@@ -251,6 +241,98 @@ func (sys *ContactSystem) applyDetectMeters(dt float32) {
 	}
 }
 
+// Altitude shapes an airframe's signature in opposite directions, which is the
+// whole point of flying low. Down among the clutter it is hard to pick out and
+// deafening; up in clear air it is conspicuous and only a distant drone.
+func airConcealMul(band components.AltBand) float32 {
+	switch band {
+	case components.AltBandNOE:
+		return 0.55
+	case components.AltBandLow:
+		return 1.0
+	case components.AltBandMedium:
+		return 1.25
+	}
+	return 1.4
+}
+
+func airNoiseMul(band components.AltBand) float32 {
+	switch band {
+	case components.AltBandNOE:
+		return 1.0
+	case components.AltBandLow:
+		return 0.6
+	}
+	return 0.35
+}
+
+// snapshotAircraft adds every airframe to both pools. Runs after the heightmap
+// snapshot because the altitude band — which drives both signature halves — is
+// AGL, and AGL needs the ground under the airframe.
+func (sys *ContactSystem) snapshotAircraft() {
+	q := sys.airFilter.Query()
+	for q.Next() {
+		ent := q.Entity()
+		ac, pos, mot, sensors, aware, faction := q.Get()
+		spec := components.SpecForAircraft(ac.Kind)
+		wx := float32(pos.Chunk.X)*components.ChunkSize + pos.Local.X
+		wz := float32(pos.Chunk.Z)*components.ChunkSize + pos.Local.Z
+		band := components.AltBandOf(pos.Local.Y - terrainHeightAt(sys.heightmaps, wx, wz))
+		det := sys.dtMap.Get(ent)
+		meter := [components.FactionCount]float32{1, 1, 1, 1}
+		if det != nil {
+			meter = det.Meter
+		}
+		sys.unitsBuf = append(sys.unitsBuf, contactUnit{
+			ent: ent, pos: *pos, chunk: pos.Chunk,
+			x: wx, z: wz, targetY: pos.Local.Y,
+			faction: faction.ID, dimMask: components.DimAir,
+			concealment: spec.DetectMul * airConcealMul(band) * sys.smokeMulAt(wx, wz),
+			audioRadius: spec.NoiseRadiusM * airNoiseMul(band),
+			emitRange:   sensors.EmitRangeM(),
+			meter:       meter, det: det,
+		})
+		sys.seersBuf = append(sys.seersBuf, contactSeer{
+			ent: ent, pos: *pos,
+			x: wx, z: wz, eyeY: pos.Local.Y,
+			fwdX: float32(math.Sin(float64(mot.Yaw))),
+			fwdZ: float32(math.Cos(float64(mot.Yaw))),
+			yaw:  mot.Yaw, faction: faction.ID,
+			sensors: sensors, aware: aware, maxRange: passiveMaxRange(sensors),
+		})
+	}
+	q.Close()
+}
+
+// PassiveSensorProfile is the IMAGING reach of a sensor set: the longest LIVE
+// non-ESM channel, plus its curve. ESM is excluded because it detects
+// emissions, not bodies — letting its kilometres count would drag every
+// candidate on the map through a raycast the optics could never make, and
+// would draw the hold-V fan a visibility arc the hull does not have.
+//
+// Exported because the LOS preview promises "the same predicates as
+// ContactSystem" and can only keep that promise by asking the same function.
+func PassiveSensorProfile(s *components.Sensors) (float32, components.FalloffKind) {
+	best := float32(0)
+	falloff := components.FalloffLinear
+	for i := uint8(0); i < s.Count; i++ {
+		c := &s.Channels[i]
+		if c.Kind == components.SensorESM || !s.ChannelOn(i) {
+			continue
+		}
+		if c.BaseRangeM > best {
+			best = c.BaseRangeM
+			falloff = c.FalloffKind
+		}
+	}
+	return best, falloff
+}
+
+func passiveMaxRange(s *components.Sensors) float32 {
+	r, _ := PassiveSensorProfile(s)
+	return r
+}
+
 // buildDetectGroups groups seers by squad (solo unit = its own group), in
 // seer order so processing stays deterministic.
 func (sys *ContactSystem) buildDetectGroups() {
@@ -275,6 +357,17 @@ func (sys *ContactSystem) buildDetectGroups() {
 		g := &sys.groupsBuf[gi]
 		g.members = append(g.members, int32(i))
 	}
+	// The cull gate has to clear the loudest thing on the field, not just the
+	// sharpest pair of eyes. Audio ignores range and facing, so a candidate
+	// culled before the audio test is a candidate that cannot be heard at all —
+	// which silently deleted a helicopter's whole signature (400 m of rotor
+	// noise against a 64 m gate) and had already been eating most of a hull's.
+	loudest := float32(0)
+	for i := range sys.unitsBuf {
+		if r := sys.unitsBuf[i].audioRadius; r > loudest {
+			loudest = r
+		}
+	}
 	for gi := range sys.groupsBuf {
 		g := &sys.groupsBuf[gi]
 		var sx, sz float32
@@ -295,7 +388,11 @@ func (sys *ContactSystem) buildDetectGroups() {
 		inv := 1 / float32(len(g.members))
 		g.cx = sx * inv
 		g.cz = sz * inv
-		reach := visionMaxRange // audio bubbles are clamped to this
+		reach := loudest
+		if reach < visionMaxRange {
+			reach = visionMaxRange
+		}
+		visual := float32(0)
 		spreadSq := float32(0)
 		for _, mi := range g.members {
 			s := &seers[mi]
@@ -307,6 +404,21 @@ func (sys *ContactSystem) buildDetectGroups() {
 			if s.maxRange > reach {
 				reach = s.maxRange
 			}
+			if s.maxRange > visual {
+				visual = s.maxRange
+			}
+		}
+		// The wall window and the per-pair chunk gate are ONE number, because
+		// a pair may only be tested against walls that were gathered. Fixed at
+		// one chunk it was a silent ceiling on range itself: everything in the
+		// game saw 40-65 m, so a 64 m window never bit, and the first sensor
+		// that outreached it (a 420 m radar) was quietly clipped to 76 m.
+		// Sized from the VISUAL reach only — audio needs no walls, and letting
+		// a helicopter's 400 m of noise set this would widen the window for
+		// every rifle squad on the map.
+		g.span = int32(math.Ceil(float64(visual / components.ChunkSize)))
+		if g.span < 1 {
+			g.span = 1
 		}
 		g.cullR = float32(math.Sqrt(float64(spreadSq))) + reach
 	}
@@ -328,8 +440,8 @@ func processDetectGroup(
 	meterOut *[]meterEvent,
 ) []contactRec {
 	var localWalls []losWall
-	for cz := g.minCZ - 1; cz <= g.maxCZ+1; cz++ {
-		for cx := g.minCX - 1; cx <= g.maxCX+1; cx++ {
+	for cz := g.minCZ - g.span; cz <= g.maxCZ+g.span; cz++ {
+		for cx := g.minCX - g.span; cx <= g.maxCX+g.span; cx++ {
 			localWalls = append(localWalls, wallsByChunk[components.ChunkCoord{X: cx, Z: cz}]...)
 		}
 	}
@@ -374,7 +486,7 @@ func processDetectGroup(
 			}
 			dcx := cand.chunk.X - s.pos.Chunk.X
 			dcz := cand.chunk.Z - s.pos.Chunk.Z
-			if dcx < -1 || dcx > 1 || dcz < -1 || dcz > 1 {
+			if dcx < -g.span || dcx > g.span || dcz < -g.span || dcz > g.span {
 				continue
 			}
 			dx := cand.x - s.x
@@ -451,6 +563,10 @@ func visualMagnitude(s *contactSeer, cand *contactUnit, walls []losWall, hm map[
 	best := float32(0)
 	for i := uint8(0); i < s.sensors.Count; i++ {
 		c := &s.sensors.Channels[i]
+		// ESM hears emissions, not bodies — it has its own pass.
+		if c.Kind == components.SensorESM || !s.sensors.ChannelOn(i) {
+			continue
+		}
 		if c.DetectMask&cand.dimMask == 0 {
 			continue
 		}
@@ -470,7 +586,13 @@ func visualMagnitude(s *contactSeer, cand *contactUnit, walls []losWall, hm map[
 	if best > 1 {
 		best = 1
 	}
-	if anyLosWallBlocks(walls, s.x, s.z, cand.x, cand.z) {
+	// Walls are XZ segments with no top. Once the pair is separated vertically
+	// by more than any building is tall, one of the two is looking over them.
+	dy := cand.targetY - s.eyeY
+	if dy < 0 {
+		dy = -dy
+	}
+	if dy <= airWallClearM && anyLosWallBlocks(walls, s.x, s.z, cand.x, cand.z) {
 		return 0, false
 	}
 	if terrainBlocksLOS(hm, s.x, s.z, s.eyeY, cand.x, cand.z, cand.targetY) {
@@ -524,6 +646,9 @@ func (sys *ContactSystem) applyContactUpsert() {
 			}
 			c.EstimatedPos = rec.pos
 			c.LastSeenTime = sys.elapsed
+			// The second source ESM was waiting for: a direction becomes a
+			// point, and stays one.
+			c.BearingOnly = false
 			sys.promoteOnRefresh(ent, c, rec)
 			continue
 		}

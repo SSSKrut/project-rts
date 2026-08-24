@@ -229,12 +229,11 @@ func (g *Game) drawScene3D() {
 		// on a 3D view from above, altitude reads as nothing at all.
 		g.drawAircraftShadow(*pos, renderPos, ac.Kind)
 		if g.isSelected(ent) >= 0 || g.Sel.Hovered == ent {
-			spec := components.SpecForAircraft(ac.Kind)
 			c := rl.Color{R: 0, G: 220, B: 220, A: 255}
 			if g.Sel.Hovered == ent {
 				c = rl.Color{R: 240, G: 240, B: 120, A: 255}
 			}
-			rl.DrawCircle3D(renderPos, spec.ColliderR, rl.Vector3{X: 1, Y: 0, Z: 0}, 90, c)
+			g.drawAircraftSelection(*pos, renderPos, ac.Kind, c)
 		}
 	}
 

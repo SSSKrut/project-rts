@@ -111,6 +111,13 @@ func (sys *UtilityEvaluatorSystem) awarenessHasUsableTarget(seer ecs.Entity, awa
 		if f == nil || f.ID == ownFaction {
 			continue
 		}
+		// "Usable" is the load-bearing word. An airframe enters Awareness like
+		// anything else seen (Phase 20 M1) but nothing on the ground can reach
+		// it yet, and a rifle squad that switches to Engaging over a passing
+		// helicopter has stopped doing its job for a target it cannot hit.
+		if sys.aircraftMap.Has(slot.Target) {
+			continue
+		}
 		tpos := sys.posMap.Get(slot.Target)
 		if tpos == nil {
 			continue

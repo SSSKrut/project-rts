@@ -44,6 +44,7 @@ type WeaponSystem struct {
 	doorMap     *ecs.Map[components.Door]
 	colliderMap *ecs.Map[components.Collider]
 	vehicleMap  *ecs.Map[components.Vehicle]
+	aircraftMap *ecs.Map[components.Aircraft]
 	turretMap   *ecs.Map[components.Turret]
 	// shouldFire walks SquadMember → Squad → EngagementRules / order flags.
 	squadMemberMap             *ecs.Map[components.SquadMember]
@@ -262,6 +263,7 @@ func (sys *WeaponSystem) InitUI(w *ecs.World) {
 	sys.doorMap = ecs.NewMap[components.Door](w)
 	sys.colliderMap = ecs.NewMap[components.Collider](w)
 	sys.vehicleMap = ecs.NewMap[components.Vehicle](w)
+	sys.aircraftMap = ecs.NewMap[components.Aircraft](w)
 	sys.turretMap = ecs.NewMap[components.Turret](w)
 	sys.squadMemberMap = ecs.NewMap[components.SquadMember](w)
 	sys.engagementRulesMap = ecs.NewMap[components.EngagementRules](w)

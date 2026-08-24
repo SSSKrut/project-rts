@@ -50,6 +50,11 @@ type VehicleSpec struct {
 	ReflexKind      VehicleReflexKind
 	WeaponCount     uint8
 	WeaponKinds     [2]WeaponKind
+
+	// Passive receiver (Phase 20 M1). A hull with a warning set hears an
+	// airborne radar far beyond anything it can see; a truck has no such kit
+	// and 0 means the channel is not fitted at all.
+	ESMRangeM float32
 }
 
 // VehicleSpecs — canonical table indexed by VehicleKind. Numbers are rough
@@ -73,6 +78,7 @@ var VehicleSpecs = [VehicleKindCount]VehicleSpec{
 		SensorRangeM: 60, DetectMul: 1.5, NoiseRadiusM: 110,
 		Class: ArmorClassLight, ReflexKind: VehicleReflexSmokeAndReverse,
 		WeaponCount: 1, WeaponKinds: [2]WeaponKind{WeaponKPVT},
+		ESMRangeM: 700,
 	},
 	VehicleBMP: {
 		Kind: VehicleBMP, Name: "BMP", HP: 260,
@@ -83,6 +89,7 @@ var VehicleSpecs = [VehicleKindCount]VehicleSpec{
 		SensorRangeM: 60, DetectMul: 1.5, NoiseRadiusM: 130,
 		Class: ArmorClassLight, ReflexKind: VehicleReflexSmokeAndReverse,
 		WeaponCount: 1, WeaponKinds: [2]WeaponKind{WeaponAutocannon30},
+		ESMRangeM: 700,
 	},
 	VehicleTank: {
 		Kind: VehicleTank, Name: "Tank", HP: 500,
@@ -93,6 +100,7 @@ var VehicleSpecs = [VehicleKindCount]VehicleSpec{
 		SensorRangeM: 55, DetectMul: 1.7, NoiseRadiusM: 150,
 		Class: ArmorClassHeavy, ReflexKind: VehicleReflexFaceThreat,
 		WeaponCount: 2, WeaponKinds: [2]WeaponKind{WeaponCannon125, WeaponPKM},
+		ESMRangeM: 800,
 	},
 	VehicleATCarrier: {
 		Kind: VehicleATCarrier, Name: "AT Carrier", HP: 180,
@@ -103,6 +111,7 @@ var VehicleSpecs = [VehicleKindCount]VehicleSpec{
 		SensorRangeM: 65, DetectMul: 1.4, NoiseRadiusM: 100,
 		Class: ArmorClassLight, ReflexKind: VehicleReflexSmokeAndReverse,
 		WeaponCount: 1, WeaponKinds: [2]WeaponKind{WeaponATGM},
+		ESMRangeM: 900,
 	},
 	// Protected patrol vehicle: fast on a road, poor off it, a ring-mounted MG
 	// and armour that stops rifle fire and nothing heavier.

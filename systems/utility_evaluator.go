@@ -29,6 +29,7 @@ type UtilityEvaluatorSystem struct {
 	squadMemberMap *ecs.Map[components.SquadMember]
 	orderQueueMap  *ecs.Map[components.OrderQueueHead]
 	factionMap     *ecs.Map[components.Faction]
+	aircraftMap    *ecs.Map[components.Aircraft]
 
 	clock float32
 }
@@ -49,6 +50,7 @@ func (sys *UtilityEvaluatorSystem) InitUI(w *ecs.World) {
 	sys.squadMemberMap = ecs.NewMap[components.SquadMember](w)
 	sys.orderQueueMap = ecs.NewMap[components.OrderQueueHead](w)
 	sys.factionMap = ecs.NewMap[components.Faction](w)
+	sys.aircraftMap = ecs.NewMap[components.Aircraft](w)
 }
 
 func (UtilityEvaluatorSystem) Name() string { return "utility_evaluator" }

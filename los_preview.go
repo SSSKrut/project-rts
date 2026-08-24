@@ -103,12 +103,8 @@ func (lp *losPreviewState) update(world *ecs.World, held, targetOK bool, target 
 	sensorR := float32(0)
 	falloff := components.FalloffLinear
 	if profile != (ecs.Entity{}) {
-		sn := lp.sensorsMap.Get(profile)
-		for i := uint8(0); i < sn.Count; i++ {
-			if c := &sn.Channels[i]; c.BaseRangeM > sensorR {
-				sensorR = c.BaseRangeM
-				falloff = c.FalloffKind
-			}
+		if sn := lp.sensorsMap.Get(profile); sn != nil {
+			sensorR, falloff = systems.PassiveSensorProfile(sn)
 		}
 	}
 	if sensorR <= 0 {

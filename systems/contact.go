@@ -42,6 +42,7 @@ const contactCap = 128
 type ContactSystem struct {
 	unitFilter    *ecs.Filter6[components.Unit, components.WorldPos, components.Motion, components.Sensors, components.Awareness, components.Faction]
 	vehFilter     *ecs.Filter6[components.Vehicle, components.WorldPos, components.Motion, components.Sensors, components.Awareness, components.Faction]
+	airFilter     *ecs.Filter6[components.Aircraft, components.WorldPos, components.Motion, components.Sensors, components.Awareness, components.Faction]
 	wallFilter    *ecs.Filter2[components.WorldPos, components.WallSegment]
 	contactFilter *ecs.Filter1[components.Contact]
 	threatFilter  *ecs.Filter2[components.ThreatSource, components.WorldPos]
@@ -75,6 +76,7 @@ type ContactSystem struct {
 	groupsBuf    []detectGroup
 	groupIdx     map[ecs.Entity]int32
 	contactsBuf  []contactRec
+	emitBuf      []emitterRec
 	// Per-worker collectors (indexed by ParallelForIndexed chunkIdx),
 	// drained in worker order → deterministic contactsBuf ordering.
 	workerContacts [][]contactRec
@@ -107,9 +109,17 @@ type contactUnit struct {
 	dimMask     components.DimensionMask
 	concealment float32 // stance × motion, lower = harder to spot
 	audioRadius float32
+	emitRange   float32 // how far an ESM receiver hears this one radiating
 	meter       [components.FactionCount]float32
 	det         *components.Detectability // serial apply target; nil = instant
 }
+
+// airWallClearM is the vertical separation past which wall segments stop
+// occluding. losWall is a 2D XZ record with no height, so the alternative to a
+// threshold is walls that block the sky. Set above the tallest building the
+// generators produce (5 storeys), which is why a man on an upper floor still
+// shoots through windows and a helicopter at 30 m is still masked by a facade.
+const airWallClearM float32 = 20.0
 
 // meterEvent: one group's best observation of a target this tick; serial
 // apply takes the max fill per (target, faction) and fires the sighting on
@@ -143,6 +153,7 @@ type contactSeer struct {
 type detectGroup struct {
 	members                    []int32 // indices into seersBuf
 	cx, cz, cullR              float32
+	span                       int32 // chunk radius shared by the wall window and the pair gate
 	minCX, maxCX, minCZ, maxCZ int32 // member chunk bounds for the wall window
 }
 
@@ -182,6 +193,7 @@ func (sys *ContactSystem) InitUI(w *ecs.World) {
 	sys.worldRef = w
 	sys.unitFilter = ecs.NewFilter6[components.Unit, components.WorldPos, components.Motion, components.Sensors, components.Awareness, components.Faction](w)
 	sys.vehFilter = ecs.NewFilter6[components.Vehicle, components.WorldPos, components.Motion, components.Sensors, components.Awareness, components.Faction](w)
+	sys.airFilter = ecs.NewFilter6[components.Aircraft, components.WorldPos, components.Motion, components.Sensors, components.Awareness, components.Faction](w)
 	sys.wallFilter = ecs.NewFilter2[components.WorldPos, components.WallSegment](w)
 	sys.contactFilter = ecs.NewFilter1[components.Contact](w)
 	sys.threatFilter = ecs.NewFilter2[components.ThreatSource, components.WorldPos](w)
@@ -218,6 +230,8 @@ func (ContactSystem) LODPolicy() core.LODPolicy {
 func (sys *ContactSystem) Update(ctx core.UpdateContext) {
 	sys.elapsed = float32(ctx.SimNow)
 	sys.runDetectPass(float32(ctx.Delta.Seconds()))
+	sys.runEmitterPass()
 	sys.applyContactUpsert()
+	sys.applyEmitterUpsert()
 	sys.applyCombatEvidence()
 }

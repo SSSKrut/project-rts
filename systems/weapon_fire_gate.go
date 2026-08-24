@@ -141,11 +141,16 @@ func (sys *WeaponSystem) pickTarget(
 		if f == nil || f.ID == ownFaction {
 			continue
 		}
-		class := components.ArmorClassSoft
-		if tv := sys.vehicleMap.Get(e.Target); tv != nil {
-			class = components.SpecForVehicle(tv.Kind).Class
+		var mul float32
+		if sys.aircraftMap.Has(e.Target) {
+			mul = wspec.VsAir
+		} else {
+			class := components.ArmorClassSoft
+			if tv := sys.vehicleMap.Get(e.Target); tv != nil {
+				class = components.SpecForVehicle(tv.Kind).Class
+			}
+			mul = components.VsClassMul(wspec, class)
 		}
-		mul := components.VsClassMul(wspec, class)
 		if mul < 0.05 {
 			continue
 		}

@@ -45,6 +45,8 @@ type InspectorMaps struct {
 	ContactMap            *ecs.Map[components.Contact]
 	ContactOverrideMap    *ecs.Map[components.ContactSymbolOverride]
 	VehicleMap            *ecs.Map[components.Vehicle]
+	AircraftMap           *ecs.Map[components.Aircraft]
+	SensorsMap            *ecs.Map[components.Sensors]
 	RoadFollowerMap       *ecs.Map[components.RoadFollower]
 	WeaponMap             *ecs.Map[components.Weapon]
 	VehicleOverrideMap    *ecs.Map[components.VehicleOverride]
@@ -84,6 +86,8 @@ func NewInspectorMaps(world *ecs.World) InspectorMaps {
 		ContactMap:            ecs.NewMap[components.Contact](world),
 		ContactOverrideMap:    ecs.NewMap[components.ContactSymbolOverride](world),
 		VehicleMap:            ecs.NewMap[components.Vehicle](world),
+		AircraftMap:           ecs.NewMap[components.Aircraft](world),
+		SensorsMap:            ecs.NewMap[components.Sensors](world),
 		RoadFollowerMap:       ecs.NewMap[components.RoadFollower](world),
 		WeaponMap:             ecs.NewMap[components.Weapon](world),
 		VehicleOverrideMap:    ecs.NewMap[components.VehicleOverride](world),
@@ -117,6 +121,12 @@ type InspectorCtx struct {
 	SquadColor func(ent ecs.Entity) rl.Color
 	// RoadGraph resolves RoadFollower.Edge into a kind label.
 	RoadGraph *components.RoadGraph
+	// GroundAt samples terrain height, injected for the same reason as
+	// SquadColor: the height field lives in systems and ui must not import it.
+	// Nil is fine — the airframe panel then reads AGL as absolute altitude.
+	GroundAt func(components.WorldPos) float32
+	// Shift is the coarse-step modifier for the airframe dials.
+	Shift bool
 
 	// Widget palette and pointer state, filled by DrawInspector and carried
 	// down by value so section functions don't rebuild them per call.
@@ -177,6 +187,8 @@ func DrawInspector(panel Panel, ctx InspectorCtx) {
 		endY = drawInspectorUnit(ctx, ctx.Selected[0], x, y, usableWidth)
 	case selSingleVehicle:
 		endY = drawInspectorVehicle(ctx, ctx.Selected[0], x, y, usableWidth)
+	case selSingleAircraft:
+		endY = drawInspectorAircraft(ctx, ctx.Selected[0], x, y, usableWidth)
 	case selSingleSquad:
 		if sm := ctx.SquadMemberMap.Get(ctx.Selected[0]); sm != nil {
 			endY = drawInspectorSquad(ctx, sm.Squad, x, y, usableWidth)
@@ -200,6 +212,7 @@ const (
 	selEmpty selectionKind = iota
 	selSingleUnit
 	selSingleVehicle
+	selSingleAircraft
 	selSingleSquad
 	selSingleContact
 	selMulti
@@ -217,6 +230,11 @@ func describeSelection(ctx InspectorCtx) selectionKind {
 	if len(ctx.Selected) == 1 && ctx.VehicleMap != nil {
 		if ctx.VehicleMap.Has(ctx.Selected[0]) {
 			return selSingleVehicle
+		}
+	}
+	if len(ctx.Selected) == 1 && ctx.AircraftMap != nil {
+		if ctx.AircraftMap.Has(ctx.Selected[0]) {
+			return selSingleAircraft
 		}
 	}
 	commonSquad, homo := groupSelectedHelper(ctx.Selected, ctx.SquadMemberMap)

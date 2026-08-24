@@ -26,6 +26,12 @@ type WeaponSpec struct {
 	VsSoft  float32
 	VsLight float32
 	VsHeavy float32
+	// VsAir is the anti-air multiplier and is zero for every weapon in the
+	// roster today, which is the point: an airframe entered Awareness in Phase
+	// 20 M1 and would otherwise read as a soft target, so a hull would empty
+	// its belt at a helicopter it cannot touch. M2 fills this in for the AA
+	// gun and the MANPADS; until then the zero IS the gate.
+	VsAir float32
 }
 
 const WeaponKindCount WeaponKind = WeaponATGM + 1

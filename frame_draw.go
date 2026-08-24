@@ -46,6 +46,7 @@ func (g *Game) drawUI() {
 		VehicleMap:       g.Maps.Vehicle,
 		UnitFilter:       g.Filt.UnitRender,
 		VehicleFilter:    g.Filt.VehicleRender,
+		AircraftFilter:   g.Filt.AircraftRender,
 		FactionMap:       g.Maps.Faction,
 		SquadOverrideMap: g.Maps.SquadOverride,
 		Font:             g.hudFont,
@@ -79,6 +80,8 @@ func (g *Game) drawUI() {
 		Scroll:        inspectorScroll,
 		SquadColor:    g.squadColor,
 		RoadGraph:     &g.Res.RoadGraph,
+		GroundAt:      g.groundAt,
+		Shift:         g.Frame.Shift,
 	})
 	// Scrollbar overlay drawn AFTER DrawInspector so EndScissorMode has released its clip.
 	if inspectorScroll != nil {

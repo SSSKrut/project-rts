@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"math"
 
 	rl "github.com/gen2brain/raylib-go/raylib"
 	"github.com/mlange-42/ark/ecs"
@@ -57,9 +58,18 @@ func drawInspectorContact(ctx InspectorCtx, ent ecs.Entity, x, y, width int32) i
 		TextRowClipped(&col, &ctx.st,
 			fmt.Sprintf("Last seen: %.1fs ago", ctx.Now-c.LastSeenTime), ctx.st.TextDim)
 	}
-	TextRowClipped(&col, &ctx.st, fmt.Sprintf("Position:  chunk (%d, %d) local (%.1f, %.1f)",
-		c.EstimatedPos.Chunk.X, c.EstimatedPos.Chunk.Z,
-		c.EstimatedPos.Local.X, c.EstimatedPos.Local.Z), ctx.st.TextDim)
+	if c.BearingOnly {
+		// Say what is and is not known, in that order. A passive intercept
+		// gives a line, and reporting the receiver's coordinates as "position"
+		// would read as a fix that was never made.
+		TextRowClipped(&col, &ctx.st, fmt.Sprintf("Bearing:   %.0f deg from the receiver",
+			normalizeDeg(c.Bearing*180/math.Pi)), inspectorHighlight)
+		TextRowClipped(&col, &ctx.st, "Range:     unknown (emitter, not seen)", ctx.st.TextDim)
+	} else {
+		TextRowClipped(&col, &ctx.st, fmt.Sprintf("Position:  chunk (%d, %d) local (%.1f, %.1f)",
+			c.EstimatedPos.Chunk.X, c.EstimatedPos.Chunk.Z,
+			c.EstimatedPos.Local.X, c.EstimatedPos.Local.Z), ctx.st.TextDim)
+	}
 	col.Skip(ctx.st.RowH)
 
 	// Delete is destructive, so it gets its own palette rather than the
@@ -117,4 +127,16 @@ func sourceLabel(s components.ClassificationSource) string {
 		return "Player classified"
 	}
 	return "Sensor"
+}
+
+// normalizeDeg folds a bearing into 0..360 for display. The map ruler already
+// calls north -Z and counts clockwise; this matches it.
+func normalizeDeg(d float32) float32 {
+	for d < 0 {
+		d += 360
+	}
+	for d >= 360 {
+		d -= 360
+	}
+	return d
 }

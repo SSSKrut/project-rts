@@ -22,12 +22,19 @@ var (
 	shotScrollFlag = flag.Float64("shot-scroll", 0, "dev: scroll offset applied to every scrollable panel for -shot")
 	shotPanelFlag  = flag.String("shot-panel", "", "dev: show this widget kind in the Inspector leaf for -shot (e.g. behavior)")
 	shotVehFlag    = flag.Int("shot-select-veh", 0, "dev: also preselect N vehicles (squad bar / vehicle panels)")
+	shotAirFlag    = flag.Int("shot-select-air", 0, "dev: also preselect N aircraft (airframe dial panel)")
 	shotLiftFlag   = flag.Float64("shot-lift", 0, "dev: starting camera ViewLift in metres for -shot")
 )
 
 // applyShotSelection preselects units for a capture — inspector panels are
 // mostly empty without a selection, which is the half worth looking at.
+//
+// Called every frame of a shot run, not once at boot: an entity that arrives
+// on a schedule does not exist yet when initUI runs, and an airframe released
+// at t=2 was silently unselectable and therefore uncapturable. Idempotent —
+// the selection is rebuilt from scratch, since nothing else owns it here.
 func (g *Game) applyShotSelection() {
+	g.Sel.Units = g.Sel.Units[:0]
 	// A widget that isn't in the default layout can't be captured otherwise.
 	// The swap is never persisted: shutdownUI skips saveLayout during a shot.
 	if *shotPanelFlag != "" {
@@ -69,6 +76,21 @@ func (g *Game) applyShotSelection() {
 				break
 			}
 			ent := qv.Entity()
+			if g.isControllable(ent) {
+				g.Sel.Units = append(g.Sel.Units, ent)
+				picked++
+			}
+		}
+	}
+	if *shotAirFlag > 0 {
+		picked := 0
+		qa := g.Filt.AircraftRender.Query()
+		for qa.Next() {
+			if picked >= *shotAirFlag {
+				qa.Close()
+				break
+			}
+			ent := qa.Entity()
 			if g.isControllable(ent) {
 				g.Sel.Units = append(g.Sel.Units, ent)
 				picked++

@@ -66,6 +66,14 @@ type Contact struct {
 	PerceivedAffil Affiliation
 	PerceivedDim   Dimension
 	Source         ClassificationSource
+
+	// Bearing-only track (Phase 20 M1). An ESM receiver hears an emitter but
+	// cannot range it, so EstimatedPos holds the RECEIVER's position and
+	// Bearing the direction from it. Nothing may draw a symbol at that point —
+	// it is where the listener stood, not where the emitter is. A second
+	// source clears BearingOnly and the contact becomes an ordinary track.
+	Bearing     float32
+	BearingOnly bool
 }
 
 // ContactPlayerSet marks a contact whose affiliation was set by the player

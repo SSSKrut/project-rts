@@ -211,3 +211,34 @@ func unitAffiliation(ctx MapRenderCtx, ent ecs.Entity) components.Affiliation {
 	}
 	return components.AffilFriend
 }
+
+// drawOwnAircraft mirrors drawOwnVehicles for airframes. The map is the
+// command surface for anything that operates over kilometres, so an aircraft
+// that only exists in the 3D view is an aircraft the player cannot command
+// once it leaves the camera.
+func drawOwnAircraft(content rl.Rectangle, ctx MapRenderCtx) {
+	if ctx.AircraftFilter == nil {
+		return
+	}
+	q := ctx.AircraftFilter.Query()
+	for q.Next() {
+		pos, _ := q.Get()
+		ent := q.Entity()
+		if unitAffiliation(ctx, ent) != components.AffilFriend {
+			continue
+		}
+		p := MapWorldToPanel(*pos, ctx.Cam, content)
+		spec := components.SymbolSpec{
+			Affiliation: components.AffilFriend,
+			Dimension:   components.DimAirClass,
+		}
+		DrawSymbol(spec, p, vehicleSymbolHalf, 1.0)
+		bounds := SymbolBounds(spec.Affiliation, p, vehicleSymbolHalf)
+		if isSelectedEntity(ctx.Selected, ent) {
+			rl.DrawRectangleLinesEx(InflateRect(bounds, 2), 1.5, mapSelectionRing)
+		}
+		if ctx.Hovered == ent {
+			rl.DrawRectangleLinesEx(InflateRect(bounds, 4), 1.5, mapHoverRing)
+		}
+	}
+}

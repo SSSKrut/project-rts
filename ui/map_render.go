@@ -34,6 +34,7 @@ type MapRenderCtx struct {
 	// Nil → squad symbols only.
 	UnitFilter       *ecs.Filter3[components.WorldPos, components.Unit, components.Stance]
 	VehicleFilter    *ecs.Filter2[components.WorldPos, components.Vehicle]
+	AircraftFilter   *ecs.Filter2[components.WorldPos, components.Aircraft]
 	FactionMap       *ecs.Map[components.Faction]
 	SquadOverrideMap *ecs.Map[components.SquadSymbolOverride]
 	Font             rl.Font
@@ -91,8 +92,10 @@ func DrawMap(panel Panel, ctx MapRenderCtx) {
 	drawMapPings(content, ctx)
 	drawSquadMarkers(content, ctx)
 	drawOwnVehicles(content, ctx)
+	drawOwnAircraft(content, ctx)
 	drawSoloistUnits(content, ctx)
 	drawMapContacts(content, ctx)
+	drawBearingLines(content, ctx)
 	drawAnchorMarker(content, ctx)
 }
 
@@ -463,4 +466,37 @@ func roadColor(k components.RoadKind) rl.Color {
 func worldPosCenterXZ(wp components.WorldPos) (float32, float32) {
 	return float32(wp.Chunk.X)*components.ChunkSize + wp.Local.X,
 		float32(wp.Chunk.Z)*components.ChunkSize + wp.Local.Z
+}
+
+// bearingRayM is how far the drawn ray runs. It is not a range estimate and
+// must not look like one: the line leaves the panel, which is the honest
+// picture of a track that has a direction and nothing else.
+const bearingRayM float32 = 4000
+
+// drawBearingLines renders ESM intercepts. Dashes rather than a solid line,
+// because on this surface a solid line is what an order or a route looks like,
+// and this is neither — it is the one thing on the map with no destination.
+func drawBearingLines(content rl.Rectangle, ctx MapRenderCtx) {
+	if ctx.Clusters == nil {
+		return
+	}
+	for i := range ctx.Clusters.Bearings {
+		b := &ctx.Clusters.Bearings[i]
+		far := b.From.Add(rl.Vector3{
+			X: float32(math.Sin(float64(b.Bearing))) * bearingRayM,
+			Z: float32(math.Cos(float64(b.Bearing))) * bearingRayM,
+		})
+		a := MapWorldToPanel(b.From, ctx.Cam, content)
+		z := MapWorldToPanel(far, ctx.Cam, content)
+		col := rl.Color{R: 240, G: 190, B: 90, A: uint8(60 + 140*b.Alpha)}
+		const dashes = 48
+		for d := 0; d < dashes; d += 2 {
+			t0 := float32(d) / dashes
+			t1 := float32(d+1) / dashes
+			rl.DrawLineV(
+				rl.Vector2{X: a.X + (z.X-a.X)*t0, Y: a.Y + (z.Y-a.Y)*t0},
+				rl.Vector2{X: a.X + (z.X-a.X)*t1, Y: a.Y + (z.Y-a.Y)*t1}, col)
+		}
+		rl.DrawCircleLines(int32(a.X), int32(a.Y), 3, col)
+	}
 }

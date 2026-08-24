@@ -63,6 +63,9 @@ func (g *Game) RunFrame() bool {
 
 	g.handleChrome()
 	g.updateTestScenes()
+	if *shotPathFlag != "" {
+		g.applyShotSelection()
+	}
 	// Before input: the bar must own its rect while clicks are being routed.
 	g.layoutSquadBar()
 	g.handleInput()

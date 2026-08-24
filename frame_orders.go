@@ -193,19 +193,26 @@ func (g *Game) handleOrders() {
 	// mixed infantry+vehicle (future) snapshot positions into
 	// FormationCustomSlots + lock OrientNorth.
 	if rl.IsKeyPressed(rl.KeyT) && len(g.Sel.Units) >= 2 {
-		mixed := containsVehicle(g.Sel.Units, g.App.World)
+		// An airframe never joins a ground squad (P12: flights are their own
+		// problem, deferred). A slot would put FormationSystem in charge of its
+		// position, which means ground waypoints for something that flies.
+		members := withoutAircraft(g.Sel.Units, g.App.World)
+		mixed := containsVehicle(members, g.App.World)
 		kind := components.FormationLoose
 		if mixed {
 			kind = components.FormationLine
 		}
 		// Snapshot BEFORE create (CreateFromUnits may despawn old squads).
-		snapshots := make(map[ecs.Entity]components.WorldPos, len(g.Sel.Units))
-		for _, e := range g.Sel.Units {
+		snapshots := make(map[ecs.Entity]components.WorldPos, len(members))
+		for _, e := range members {
 			if p := g.Maps.Pos.Get(e); p != nil {
 				snapshots[e] = *p
 			}
 		}
-		newSquad := g.Svc.Squad.CreateFromUnits(g.Sel.Units, kind)
+		newSquad := ecs.Entity{}
+		if len(members) >= 2 {
+			newSquad = g.Svc.Squad.CreateFromUnits(members, kind)
+		}
 		if newSquad != (ecs.Entity{}) && g.App.World.Alive(newSquad) {
 			if r := g.Maps.Roster.Get(newSquad); r != nil {
 				if mixed {
@@ -421,6 +428,17 @@ func (g *Game) handleOrders() {
 			fmt.Printf("quickload: no quicksave at %s\n", quicksavePath())
 		}
 	}
+}
+
+func withoutAircraft(units []ecs.Entity, world *ecs.World) []ecs.Entity {
+	airMap := ecs.NewMap[components.Aircraft](world)
+	out := make([]ecs.Entity, 0, len(units))
+	for _, u := range units {
+		if u != (ecs.Entity{}) && world.Alive(u) && !airMap.Has(u) {
+			out = append(out, u)
+		}
+	}
+	return out
 }
 
 func containsVehicle(units []ecs.Entity, world *ecs.World) bool {
