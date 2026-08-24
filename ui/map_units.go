@@ -183,6 +183,17 @@ func PickOwnEntityAt(screenPos rl.Vector2, ctx MapRenderCtx, panel Panel,
 			test(MapWorldToPanel(*pos, ctx.Cam, content), ent)
 		}
 	}
+	if ctx.AircraftFilter != nil {
+		q := ctx.AircraftFilter.Query()
+		for q.Next() {
+			pos, _ := q.Get()
+			ent := q.Entity()
+			if unitAffiliation(ctx, ent) != components.AffilFriend {
+				continue
+			}
+			test(MapWorldToPanel(*pos, ctx.Cam, content), ent)
+		}
+	}
 	if ctx.UnitFilter != nil && ctx.SquadMemberMap != nil {
 		q := ctx.UnitFilter.Query()
 		for q.Next() {
@@ -228,10 +239,11 @@ func drawOwnAircraft(content rl.Rectangle, ctx MapRenderCtx) {
 			continue
 		}
 		p := MapWorldToPanel(*pos, ctx.Cam, content)
-		spec := components.SymbolSpec{
-			Affiliation: components.AffilFriend,
-			Dimension:   components.DimAirClass,
-		}
+		// Same builder the contact layer uses, so an airframe of one's own and
+		// a detected one wear the same glyph. Hand-building the spec here left
+		// Icon at zero and drew a featureless friendly rectangle — present on
+		// the map and indistinguishable from everything else on it.
+		spec := DefaultSpecForDimension(components.AffilFriend, components.DimAirClass)
 		DrawSymbol(spec, p, vehicleSymbolHalf, 1.0)
 		bounds := SymbolBounds(spec.Affiliation, p, vehicleSymbolHalf)
 		if isSelectedEntity(ctx.Selected, ent) {

@@ -365,3 +365,18 @@ func (g *Game) groundAt(p components.WorldPos) float32 {
 	}
 	return systems.GroundHeight(wx, wz)
 }
+
+// flyAnchorTo centres the camera on a world position without inheriting its
+// height. The anchor is ground-stuck, so copying an airframe's WorldPos whole
+// would put the focus 120 m up for one frame before GroundStick snapped it
+// back — a visible pop on every click that targets something airborne, and a
+// bearing contact's EstimatedPos is an airframe's position too.
+func (g *Game) flyAnchorTo(p components.WorldPos) {
+	a := g.Maps.Pos.Get(g.anchor)
+	if a == nil {
+		return
+	}
+	y := a.Local.Y
+	*a = p
+	a.Local.Y = y
+}

@@ -90,7 +90,7 @@ func (g *Game) drawUI() {
 	}
 	// Consume Inspector button requests (Phase 18.5).
 	if ui.CameraFocusRequest.Active {
-		*g.Maps.Pos.Get(g.anchor) = ui.CameraFocusRequest.Pos
+		g.flyAnchorTo(ui.CameraFocusRequest.Pos)
 		ui.CameraFocusRequest.Active = false
 	}
 	if ui.DeleteContactRequest.Active {

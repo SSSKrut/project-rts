@@ -244,7 +244,7 @@ func (g *Game) handleInput() {
 				// Second consecutive click on the same contact within window → camera focus.
 				if cHit == g.Sel.LastMapClickEnt && now-g.Sel.LastMapClickTime <= doubleClickWindow {
 					if c := g.Maps.Contact.Get(cHit); c != nil {
-						*g.Maps.Pos.Get(g.anchor) = c.EstimatedPos
+						g.flyAnchorTo(c.EstimatedPos)
 					}
 				} else {
 					if g.Frame.Shift {
@@ -262,7 +262,7 @@ func (g *Game) handleInput() {
 				// gesture the contact layer already uses.
 				if own == g.Sel.LastMapClickEnt && now-g.Sel.LastMapClickTime <= doubleClickWindow {
 					if p := g.Maps.Pos.Get(own); p != nil {
-						*g.Maps.Pos.Get(g.anchor) = *p
+						g.flyAnchorTo(*p)
 					}
 				} else if g.Frame.Shift {
 					g.toggleSelected(own)
