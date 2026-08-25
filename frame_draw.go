@@ -135,26 +135,6 @@ func (g *Game) drawUI() {
 		g.flyTo(ui.EventFocusRequest.Pos)
 		ui.EventFocusRequest.Active = false
 	}
-	if ui.AttentionCycleRequest.Active {
-		g.UI.Attention.Matrix.Cycle(ui.AttentionCycleRequest.Kind)
-		g.persistLayout()
-		ui.AttentionCycleRequest.Active = false
-	}
-	if ui.SpecCardRequest.Active {
-		g.UI.SpecSubject = ui.SpecCardRequest.Subject
-		// Re-point an open card rather than stacking a second one.
-		if g.UI.PanelMgr.LeafFor(ui.PanelSpecCard) == nil &&
-			g.UI.Floating.Get("float:"+string(ui.PanelSpecCard)) == nil {
-			g.floatSpawn(ui.PanelSpecCard, ui.WidgetTitle(ui.PanelSpecCard),
-				rl.Rectangle{X: g.Frame.Cursor.X, Y: g.Frame.Cursor.Y, Width: 320, Height: 420})
-		}
-		ui.SpecCardRequest.Active = false
-	}
-	if ui.AttentionMuteRequest.Active {
-		g.UI.Cues.Muted = !g.UI.Cues.Muted
-		g.persistLayout()
-		ui.AttentionMuteRequest.Active = false
-	}
 	if ui.OpenWidgetRequest.Active {
 		id := ui.OpenWidgetRequest.Panel
 		// Already on screen as a workspace leaf? Then the click has nothing
@@ -165,89 +145,15 @@ func (g *Game) drawUI() {
 		}
 		ui.OpenWidgetRequest.Active = false
 	}
-	if ui.SymbolApplyRequest.Active {
-		if tgt := g.symbolApplyTarget(); tgt != (ecs.Entity{}) {
-			if g.App.World.Alive(tgt) {
-				if g.Maps.Roster.Has(tgt) {
-					// Whole-squad selection → the marker on the map.
-					if ov := g.Maps.SquadOverride.Get(tgt); ov != nil {
-						ov.Spec = ui.SymbolApplyRequest.Spec
-					} else {
-						g.Maps.SquadOverride.Add(tgt, &components.SquadSymbolOverride{Spec: ui.SymbolApplyRequest.Spec})
-					}
-				} else if g.Maps.Contact.Has(tgt) {
-					if ov := g.Maps.ContactOverride.Get(tgt); ov != nil {
-						ov.Spec = ui.SymbolApplyRequest.Spec
-					} else {
-						g.Maps.ContactOverride.Add(tgt, &components.ContactSymbolOverride{Spec: ui.SymbolApplyRequest.Spec})
-					}
-					// Player-set classification → freeze auto-promote.
-					if !g.Maps.ContactPlayerSet.Has(tgt) {
-						g.Maps.ContactPlayerSet.Add(tgt, &components.ContactPlayerSet{})
-					}
-					if c := g.Maps.Contact.Get(tgt); c != nil {
-						c.PerceivedAffil = ui.SymbolApplyRequest.Spec.Affiliation
-						c.PerceivedDim = ui.SymbolApplyRequest.Spec.Dimension
-						c.Source = components.SourcePlayerClassified
-					}
-				} else if ov := g.Maps.UnitOverride.Get(tgt); ov != nil {
-					ov.Spec = ui.SymbolApplyRequest.Spec
-				} else {
-					g.Maps.UnitOverride.Add(tgt, &components.UnitSymbolOverride{Spec: ui.SymbolApplyRequest.Spec})
-				}
-			}
-		}
-		ui.SymbolApplyRequest.Active = false
-	}
 
-	seEnabled := g.symbolApplyTarget() != (ecs.Entity{})
-	_, feHomo := groupSelected(g.Sel.Units, g.Maps.SquadMember)
-	feEnabled := feHomo && len(g.Sel.Units) > 0
-	seActive := g.UI.PanelMgr.LeafFor(ui.PanelSymbology) != nil ||
-		g.UI.Floating.Get("float:"+string(ui.PanelSymbology)) != nil
-	feActive := g.UI.PanelMgr.LeafFor(ui.PanelFormation) != nil ||
-		g.UI.Floating.Get("float:"+string(ui.PanelFormation)) != nil
 	g.UI.TopBarHits = ui.DrawTopBar(
 		g.UI.PanelMgr.Get(ui.PanelTopBar), g.hudFont, ui.TimeDisplay{
 			Scale:     g.App.TimeScale,
 			Elapsed:   float32(g.App.Elapsed().Seconds()),
 			Throttled: g.App.Throttled(),
 		},
-		ui.TopBarToolCtx{
-			SEActive: seActive, SEEnabled: seEnabled,
-			FEActive: feActive, FEEnabled: feEnabled,
-			SettingsOn: false, SettingsCan: true,
-		},
+		ui.TopBarToolCtx{SettingsOn: false, SettingsCan: true},
 		g.Frame.Cursor)
-
-	g.UI.TimelineData = g.buildTimelineData(g.simNow())
-	if g.UI.PanelMgr.LeafFor(ui.PanelTimeline) != nil {
-		key := string(ui.PanelTimeline)
-		ui.DrawTimelinePanel(g.UI.PanelMgr.Get(ui.PanelTimeline), g.hudFont, g.UI.TimelineData,
-			g.timelineLeafView(), g.Frame.Cursor,
-			g.UI.TimelineDragKey == key && g.UI.TimelineDragKind == timelineDragLabel)
-	}
-
-	if leaf := g.UI.PanelMgr.LeafFor(ui.PanelFormation); leaf != nil {
-		formationLMB := !g.chromeBusy() && !g.scrollDragging() &&
-			g.UI.PanelMgr.FocusedAt(g.Frame.Cursor) == ui.PanelFormation &&
-			rl.IsMouseButtonPressed(rl.MouseButtonLeft)
-		g.UI.FormationEditor.DrawPanel(g.UI.PanelMgr.Get(ui.PanelFormation),
-			g.hudFont, g.Frame.Cursor, formationLMB)
-	}
-
-	if g.UI.PanelMgr.LeafFor(ui.PanelSymbology) != nil {
-		symPanel := g.UI.PanelMgr.Get(ui.PanelSymbology)
-		symScroll := g.UI.PanelMgr.ScrollByID(ui.PanelSymbology)
-		symFocused := g.UI.PanelMgr.FocusedAt(g.Frame.Cursor) == ui.PanelSymbology
-		symLMB := symFocused && !g.chromeBusy() && !g.scrollDragging() &&
-			rl.IsMouseButtonPressed(rl.MouseButtonLeft)
-		g.UI.SymbolEditor.DrawPanel(symPanel, g.hudFont, g.Frame.Cursor,
-			symLMB, symFocused, symScroll)
-		// After DrawPanel so its scissor has been released.
-		ui.ClampScrollOffset(symPanel, symScroll)
-		ui.DrawScrollbar(symPanel, symScroll)
-	}
 
 	if g.UI.PanelMgr.LeafFor(ui.PanelBehavior) != nil {
 		behPanel := g.UI.PanelMgr.Get(ui.PanelBehavior)
@@ -260,29 +166,6 @@ func (g *Game) drawUI() {
 		// After the panel released its scissor.
 		ui.ClampScrollOffset(behPanel, behScroll)
 		ui.DrawScrollbar(behPanel, behScroll)
-	}
-
-	if g.UI.PanelMgr.LeafFor(ui.PanelEvents) != nil {
-		evPanel := g.UI.PanelMgr.Get(ui.PanelEvents)
-		evScroll := g.UI.PanelMgr.ScrollByID(ui.PanelEvents)
-		evFocused := g.UI.PanelMgr.FocusedAt(g.Frame.Cursor) == ui.PanelEvents
-		evLMB := evFocused && !g.chromeBusy() && !g.scrollDragging() &&
-			rl.IsMouseButtonPressed(rl.MouseButtonLeft)
-		ui.DrawEventsPanel(evPanel, g.eventsCtx(g.hudFont, g.Frame.Cursor, evLMB, evFocused, evScroll))
-		// After the panel released its scissor.
-		ui.ClampScrollOffset(evPanel, evScroll)
-		ui.DrawScrollbar(evPanel, evScroll)
-	}
-
-	if g.UI.PanelMgr.LeafFor(ui.PanelSpecCard) != nil {
-		scPanel := g.UI.PanelMgr.Get(ui.PanelSpecCard)
-		scScroll := g.UI.PanelMgr.ScrollByID(ui.PanelSpecCard)
-		scFocused := g.UI.PanelMgr.FocusedAt(g.Frame.Cursor) == ui.PanelSpecCard
-		scLMB := scFocused && !g.chromeBusy() && !g.scrollDragging() &&
-			rl.IsMouseButtonPressed(rl.MouseButtonLeft)
-		ui.DrawSpecCard(scPanel, g.specCardCtx(g.hudFont, g.Frame.Cursor, scLMB, scFocused, scScroll))
-		ui.ClampScrollOffset(scPanel, scScroll)
-		ui.DrawScrollbar(scPanel, scScroll)
 	}
 
 	if leaf := g.UI.PanelMgr.LeafFor(ui.PanelDebug); leaf != nil {
@@ -389,9 +272,6 @@ func (g *Game) drawUI() {
 
 	// After the floaters: the hovered block may belong to one of them, and a
 	// tooltip drawn earlier would be painted over by its own panel.
-	if g.UI.TimelineHoverOK && g.UI.TimelineHoverHit.HitOrder {
-		ui.DrawTimelineTooltip(g.hudFont, g.Frame.Cursor, g.UI.TimelineHoverBlk)
-	}
 
 	g.UI.CtxMenu.Draw(g.hudFont, g.Frame.Cursor)
 
@@ -417,13 +297,6 @@ func (g *Game) drawUI() {
 					c.PerceivedDim = res.Item.ContactSpec.Dimension
 					c.Source = components.SourcePlayerClassified
 				}
-			case ui.ContactMenuTagOpenBuilder:
-				if c := g.Maps.Contact.Get(g.UI.ContactMenuTarget); c != nil {
-					g.UI.SymbolEditor.InProgress = ui.DefaultSpecForDimension(c.PerceivedAffil, c.PerceivedDim)
-				}
-				g.Sel.Units = append(g.Sel.Units[:0], g.UI.ContactMenuTarget)
-				g.floatSpawn(ui.PanelSymbology, "Symbology",
-					rl.Rectangle{X: g.Frame.Cursor.X, Y: g.Frame.Cursor.Y, Width: 420, Height: 380})
 			case ui.ContactMenuTagResetToAuto:
 				if g.Maps.ContactOverride.Has(g.UI.ContactMenuTarget) {
 					g.Maps.ContactOverride.Remove(g.UI.ContactMenuTarget)
@@ -511,50 +384,6 @@ func (g *Game) drawUI() {
 	handleTraceHotkeys(g.App)
 }
 
-// buildTimelineData flattens the player's squads into rows: finished orders
-// from OrderHistory first, then the live queue. Queued blocks stack right after
-// the head's estimated end so the timeline reads left-to-right. AI squads are
-// skipped — the panel is the player's command surface, not an omniscient
-// overlay on enemy plans.
-func (g *Game) buildTimelineData(nowT float32) ui.TimelineData {
-	data := ui.TimelineData{NowT: nowT}
-	past := g.timelineHistoryBySquad()
-
-	// Commanders, not squads: a lone vehicle or airframe owns an order queue
-	// too, and a plan the player cannot see on the timeline is a plan they
-	// have to hold in their head.
-	q := g.Filt.Commander.Query()
-	for q.Next() {
-		cmd := q.Entity()
-		roster, head := q.Get()
-		if c := g.Maps.Controller.Get(cmd); c == nil || c.Owner != components.ControllerLocal {
-			continue
-		}
-		center, _ := systems.SquadCenter(g.App.World, roster, g.Maps.Pos)
-
-		live := 0
-		for i := uint8(0); i < roster.Count; i++ {
-			if m := roster.Members[i]; m != (ecs.Entity{}) && g.App.World.Alive(m) {
-				live++
-			}
-		}
-		row := ui.TimelineSquadRow{
-			Squad:   cmd,
-			Color:   g.squadColor(cmd),
-			Members: live,
-			Orders:  past[cmd],
-		}
-		if !g.Maps.SquadMarker.Has(cmd) {
-			row.Solo = true
-			row.Name = g.soloCommanderName(cmd)
-		}
-		g.appendPlannedOrders(&row, head.First, center, nowT)
-		data.Rows = append(data.Rows, row)
-	}
-	q.Close()
-	return data
-}
-
 // soloCommanderName labels a one-body row. "Squad #A3" would be a lie and
 // "#A3" tells the player nothing about which of their three trucks it is.
 func (g *Game) soloCommanderName(ent ecs.Entity) string {
@@ -566,103 +395,4 @@ func (g *Game) soloCommanderName(ent ecs.Entity) string {
 		return fmt.Sprintf("%s #%X", components.SpecForVehicle(v.Kind).Name, id)
 	}
 	return fmt.Sprintf("Unit #%X", id)
-}
-
-// timelineHistoryBySquad buckets the tombstone ring into per-squad blocks,
-// oldest first. Records whose squad is gone have no row to land in and are
-// dropped (ghost rows for dead squads are a separate job).
-func (g *Game) timelineHistoryBySquad() map[ecs.Entity][]ui.TimelineOrderBlock {
-	out := make(map[ecs.Entity][]ui.TimelineOrderBlock, len(g.UI.TimelineData.Rows)+1)
-	if g.Res.OrderHistory == nil {
-		return out
-	}
-	g.Res.OrderHistory.Each(func(r components.OrderRecord) {
-		out[r.Commander] = append(out[r.Commander], ui.HistoryBlock(r))
-	})
-	return out
-}
-
-// appendPlannedOrders walks the live chain from `first`, laying queued blocks
-// end to end after the head.
-func (g *Game) appendPlannedOrders(row *ui.TimelineSquadRow, first ecs.Entity,
-	center components.WorldPos, nowT float32) {
-	lastEnd := float32(0)
-	isHead := true
-	cur := first
-	for cur != (ecs.Entity{}) && g.App.World.Alive(cur) {
-		kind := g.Maps.OrderKind.Get(cur)
-		state := g.Maps.OrderState.Get(cur)
-		target := g.Maps.OrderTarget.Get(cur)
-		if kind == nil || state == nil || target == nil {
-			return
-		}
-		startT := nowT
-		if iss := g.Maps.OrderIssuedAt.Get(cur); iss != nil {
-			startT = iss.Time
-		}
-		if !isHead && startT < lastEnd {
-			startT = lastEnd
-		}
-		endT := startT + estimateOrderDuration(kind.Code, center, target.Pos)
-		// An order that outlived its estimate is still running: letting the
-		// block end left of the now-line reads as "finished".
-		if isHead && endT < nowT {
-			endT = nowT
-		}
-		prog := float32(0)
-		if pr := g.Maps.OrderProgress.Get(cur); pr != nil {
-			prog = pr.Value
-		}
-		row.Orders = append(row.Orders, ui.TimelineOrderBlock{
-			Order:     cur,
-			Target:    target.Pos,
-			KindCode:  kind.Code,
-			StateCode: state.Code,
-			StartT:    startT,
-			EndT:      endT,
-			Progress:  prog,
-			IsHead:    isHead,
-		})
-		lastEnd = endT
-		ch := g.Maps.OrderChain.Get(cur)
-		if ch == nil {
-			return
-		}
-		cur = ch.Next
-		isHead = false
-	}
-}
-
-// estimateOrderDuration is a heuristic display-only duration per order kind.
-func estimateOrderDuration(kind components.OrderKindCode, from, to components.WorldPos) float32 {
-	var moveTime float32
-	switch kind {
-	case components.OrderKindMoveTo, components.OrderKindGarrison,
-		components.OrderKindOccupyBuilding, components.OrderKindClearBuilding,
-		components.OrderKindOccupyTrench:
-		moveTime = components.Distance(from, to) / ui.TimelineMoveSpeedMps
-	}
-	var est float32
-	switch kind {
-	case components.OrderKindMoveTo:
-		est = moveTime
-	case components.OrderKindGarrison, components.OrderKindOccupyBuilding, components.OrderKindClearBuilding:
-		est = moveTime + ui.TimelineGarrisonDurationSec
-	case components.OrderKindOccupyTrench:
-		est = moveTime + ui.TimelineDefendDurationSec
-	case components.OrderKindDefendPosition:
-		est = ui.TimelineDefendDurationSec
-	case components.OrderKindPatrol:
-		est = ui.TimelinePatrolDurationSec
-	case components.OrderKindAttackTarget:
-		est = ui.TimelineAttackDurationSec
-	case components.OrderKindSuppressFire:
-		est = ui.TimelineSuppressDurationSec
-	default:
-		est = ui.TimelineUnknownDurationSec
-	}
-	if est < ui.TimelineMinBlockDurationSec {
-		est = ui.TimelineMinBlockDurationSec
-	}
-	return est
 }

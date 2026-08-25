@@ -259,21 +259,6 @@ func (g *Game) handleOrders() {
 		}
 	}
 
-	// E -> toggle formation editor floating panel.
-	if rl.IsKeyPressed(rl.KeyE) {
-		if g.UI.Floating.IsOpen("formation-editor") {
-			g.UI.Floating.Close("formation-editor")
-		} else {
-			g.UI.Floating.Open(&ui.FloatingPanel{
-				ID:        "formation-editor",
-				Title:     ui.WidgetTitle(ui.PanelFormation),
-				Bounds:    rl.Rectangle{X: 220, Y: 80, Width: 360, Height: 400},
-				PanelID:   ui.PanelFormation,
-				RenderFor: g.makeFloatingRender,
-			})
-		}
-	}
-
 	// O -> toggle behavior panel floating (Q lifts the camera on this branch).
 	// Uses the floatSpawn ID convention so the panel shares its scroll state
 	// with the workspace flavour.

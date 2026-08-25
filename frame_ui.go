@@ -29,7 +29,7 @@ func (g *Game) initUI() {
 	// Defaults first: a layout file with no attention block leaves them alone.
 	g.UI.Attention.Matrix = ui.DefaultAttentionMatrix()
 	// Restore split ratios from disk before the first Recompute.
-	loadLayout(g.UI.PanelMgr, g.timelineLeafView(), &g.UI.Attention.Matrix, &g.UI.Cues.Muted)
+	loadLayout(g.UI.PanelMgr, &g.UI.Attention.Matrix, &g.UI.Cues.Muted)
 	g.UI.PanelMgr.Recompute(g.UI.ScreenW, g.UI.ScreenH)
 	g.UI.Scene3DRT = ui.NewScene3DRT(g.UI.PanelMgr.Get(ui.Panel3D))
 	g.Ctx.Clouds = newCloudRenderer()
@@ -54,32 +54,6 @@ func (g *Game) initUI() {
 	g.UI.Floating = ui.NewFloatingState()
 	g.UI.SquadBar = ui.NewSquadBarState()
 	g.UI.SmoothedSquadPos = make(map[ecs.Entity]components.WorldPos, 8)
-
-	// Floating and workspace forms share this pointer so zoom / kind / custom
-	// slots survive a re-dock; SelectionFn keeps it bound to the selected squad.
-	formationEditorCtx := ui.FormationEditorCtx{
-		World:          g.App.World,
-		RosterMap:      g.Maps.Roster,
-		FormationMap:   g.Maps.FormationData,
-		OrientMap:      g.Maps.FormationOrient,
-		CustomSlotsMap: g.Maps.FormationCustomSlots,
-		RoleMap:        g.Maps.Role,
-		PosMap:         g.Maps.Pos,
-		SquadColor:     g.squadColor,
-		Presets:        &g.Res.FormationPresets,
-		SelectionFn: func() ecs.Entity {
-			if cs, homo := groupSelected(g.Sel.Units, g.Maps.SquadMember); homo {
-				return cs
-			}
-			return ecs.Entity{}
-		},
-	}
-	g.UI.FormationEditor = ui.NewFormationEditor(ecs.Entity{}, formationEditorCtx)
-
-	// Symbol Editor (Phase 18.5.D). Singleton shared between workspace leaf
-	// and any future floating instance. Apply targets whatever
-	// symbolApplyTarget resolves to.
-	g.UI.SymbolEditor = ui.NewSymbolEditor(g.symbolApplyTarget)
 
 	g.initAudioCues()
 
@@ -129,20 +103,6 @@ func (g *Game) chromeDragging() bool {
 		g.UI.Floating.IsResizing() || g.UI.Floating.SwitchMenuOpen()
 }
 
-// symbolApplyTarget is what the Symbol Editor's [Apply to selection] writes
-// onto: a lone unit / contact, or the squad behind a whole-squad selection.
-// Zero entity = nothing applicable, which disables the button.
-func (g *Game) symbolApplyTarget() ecs.Entity {
-	if len(g.Sel.Units) == 1 {
-		return g.Sel.Units[0]
-	}
-	if squad, homo := groupSelected(g.Sel.Units, g.Maps.SquadMember); homo &&
-		squad != (ecs.Entity{}) && g.App.World.Alive(squad) {
-		return squad
-	}
-	return ecs.Entity{}
-}
-
 // mapPickCtx is the slice of MapRenderCtx the map's hit-tests need. One
 // builder so hover / click / RMB can never disagree about what is drawn.
 func (g *Game) mapPickCtx() ui.MapRenderCtx {
@@ -174,8 +134,7 @@ func (g *Game) isSelected(e ecs.Entity) int {
 
 // scrollablePanels get wheel + thumb-drag handling. A widget only reports how
 // tall its content came out; everything else is here.
-var scrollablePanels = [...]ui.PanelID{ui.PanelInspect, ui.PanelSymbology,
-	ui.PanelBehavior, ui.PanelEvents, ui.PanelSpecCard}
+var scrollablePanels = [...]ui.PanelID{ui.PanelInspect, ui.PanelBehavior}
 
 func (g *Game) scrollDragging() bool { return g.UI.ScrollDragKey != "" }
 
@@ -275,76 +234,6 @@ func (g *Game) handlePanelScroll() {
 	}
 }
 
-// timelineDragKind names what a timeline drag is moving; the surface it acts
-// on is TimelineDragKey.
-type timelineDragKind uint8
-
-const (
-	timelineDragNone timelineDragKind = iota
-	timelineDragLabel
-	timelineDragH
-	timelineDragV
-)
-
-// timelineSurface is one instance of the timeline widget on screen. Like
-// scrollSurface, state is per-surface: a leaf and a floater showing the same
-// panel have different widths, so they cannot share a time offset.
-type timelineSurface struct {
-	key     string
-	panel   ui.Panel
-	view    *ui.TimelineViewState
-	focused bool
-}
-
-// timelineView lazily creates a surface's view. A zero TimelineViewState has
-// PixelsPerSec 0, which is not a usable scale, so every surface starts from
-// NewTimelineView.
-func (g *Game) timelineView(key string) *ui.TimelineViewState {
-	if g.UI.TimelineViews == nil {
-		g.UI.TimelineViews = map[string]*ui.TimelineViewState{}
-	}
-	if v, ok := g.UI.TimelineViews[key]; ok {
-		return v
-	}
-	v := ui.NewTimelineView()
-	g.UI.TimelineViews[key] = &v
-	return &v
-}
-
-// timelineLeafView is the workspace leaf's view — the one that persists.
-func (g *Game) timelineLeafView() *ui.TimelineViewState {
-	return g.timelineView(string(ui.PanelTimeline))
-}
-
-// timelineSurfaces enumerates every timeline on screen this frame. Focus
-// mirrors scrollSurfaces: a leaf under a floater is vetoed explicitly, since
-// Frame.Focused only knows the workspace tree.
-func (g *Game) timelineSurfaces() []timelineSurface {
-	out := g.UI.TimelineSurf[:0]
-	top := g.UI.Floating.HitTest(g.Frame.Cursor)
-	if g.UI.PanelMgr.LeafFor(ui.PanelTimeline) != nil {
-		out = append(out, timelineSurface{
-			key:     string(ui.PanelTimeline),
-			panel:   g.UI.PanelMgr.Get(ui.PanelTimeline),
-			view:    g.timelineLeafView(),
-			focused: g.Frame.Focused == ui.PanelTimeline && top == nil,
-		})
-	}
-	for _, p := range g.UI.Floating.Panels {
-		if p.PanelID != ui.PanelTimeline {
-			continue
-		}
-		out = append(out, timelineSurface{
-			key:     p.ID,
-			panel:   p.AsPanel(),
-			view:    g.timelineView(p.ID),
-			focused: p == top,
-		})
-	}
-	g.UI.TimelineSurf = out
-	return out
-}
-
 // squadBarCtx bundles what the bar reads; the Inspector's handles cover it.
 func (g *Game) squadBarCtx() ui.SquadBarCtx {
 	return ui.SquadBarCtx{
@@ -407,34 +296,6 @@ func (g *Game) behaviorCtx(font rl.Font, cursor rl.Vector2, lmbPress, focused bo
 // simNow is the canonical UI clock: sim seconds, the same one systems stamp
 // into components (Contact.LastSeenTime, OrderIssuedAt).
 func (g *Game) simNow() float32 { return float32(g.App.Elapsed().Seconds()) }
-
-func (g *Game) specCardCtx(font rl.Font, cursor rl.Vector2, lmb, focused bool,
-	scroll *ui.ScrollState) ui.SpecCardCtx {
-	return ui.SpecCardCtx{
-		Subject:      g.UI.SpecSubject,
-		Font:         font,
-		Cursor:       cursor,
-		LMBPressed:   lmb,
-		PanelFocused: focused,
-		Scroll:       scroll,
-	}
-}
-
-// eventsCtx bundles the Events widget's inputs; the matrix travels by value
-// because edits go back through AttentionCycleRequest, not through the panel.
-func (g *Game) eventsCtx(font rl.Font, cursor rl.Vector2, lmb, focused bool,
-	scroll *ui.ScrollState) ui.EventsCtx {
-	return ui.EventsCtx{
-		Log:          g.Res.EventLog,
-		Matrix:       g.UI.Attention.Matrix,
-		Muted:        g.UI.Cues.Muted,
-		Font:         font,
-		Cursor:       cursor,
-		LMBPressed:   lmb,
-		PanelFocused: focused,
-		Scroll:       scroll,
-	}
-}
 
 // floatScroll is the scroll state of the floater being rendered. Valid only
 // inside renderFloatingWidget — and keyed off the live floater rather than the
@@ -609,11 +470,6 @@ func (g *Game) renderFloatingWidget(id ui.PanelID, content rl.Rectangle,
 	cursor rl.Vector2, font rl.Font, lmbPress bool) bool {
 	syn := func(title string) ui.Panel { return ui.ContentToPanel(content, title, id) }
 	switch id {
-	case ui.PanelFormation:
-		g.UI.FormationEditor.DrawPanel(syn("Formation"), font, cursor, lmbPress)
-	case ui.PanelSymbology:
-		g.UI.SymbolEditor.DrawPanel(syn("Symbology"), font, cursor, lmbPress, true,
-			g.floatScroll())
 	case ui.PanelMap:
 		ui.DrawMap(syn("Map"), ui.MapRenderCtx{
 			World:            g.App.World,
@@ -679,16 +535,6 @@ func (g *Game) renderFloatingWidget(id ui.PanelID, content rl.Rectangle,
 	case ui.PanelBehavior:
 		ui.DrawBehaviorPanel(syn("Behavior"), g.behaviorCtx(font, cursor, lmbPress, true,
 			g.floatScroll()))
-	case ui.PanelEvents:
-		ui.DrawEventsPanel(syn("Events"), g.eventsCtx(font, cursor, lmbPress, true,
-			g.floatScroll()))
-	case ui.PanelSpecCard:
-		ui.DrawSpecCard(syn(ui.SpecCardTitle(g.UI.SpecSubject)),
-			g.specCardCtx(font, cursor, lmbPress, true, g.floatScroll()))
-	case ui.PanelTimeline:
-		key := g.floatSurfaceKey(ui.PanelTimeline)
-		ui.DrawTimelinePanel(syn("Timeline"), font, g.UI.TimelineData, g.timelineView(key),
-			cursor, g.UI.TimelineDragKey == key && g.UI.TimelineDragKind == timelineDragLabel)
 	case ui.PanelDebug:
 		g.drawDebugWidget(syn("Debug"), font, cursor, lmbPress)
 	case ui.Panel3D:

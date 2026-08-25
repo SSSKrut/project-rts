@@ -15,10 +15,9 @@ import (
 
 const layoutSavePath = "./save/layout.json"
 
-// Unchanged by the timeline block: an older file simply has no "timeline" key,
-// which reads as absent and leaves the constructor defaults in place. Bumping
-// would throw away the player's saved workspace tree for no reason.
-const layoutFileVersion uint16 = 3
+// Bumped by the lite cut: a version-3 file can name widgets that no longer
+// exist, and a tree of dead leaves is worse than the default layout.
+const layoutFileVersion uint16 = 4
 
 type nodeJSON struct {
 	Kind     string     `json:"kind"`             // "leaf" | "split"
@@ -27,15 +26,6 @@ type nodeJSON struct {
 	Orient   string     `json:"orient,omitempty"` // split only: "v" | "h"
 	Ratio    float32    `json:"ratio,omitempty"`
 	Children []nodeJSON `json:"children,omitempty"`
-}
-
-// timelineJSON is the part of the timeline view worth surviving a restart:
-// how the player sized and scaled the panel. OffsetT / ScrollY are where they
-// happened to be looking and are rebuilt by Follow on the next frame.
-type timelineJSON struct {
-	LabelW       float32 `json:"label_w"`
-	PixelsPerSec float32 `json:"px_per_sec"`
-	Follow       bool    `json:"follow"`
 }
 
 // attentionJSON is a pointer field in layoutFile so an older file (no key)
@@ -50,7 +40,6 @@ type layoutFile struct {
 	Version   uint16         `json:"version"`
 	Preset    uint8          `json:"layout_preset"`
 	Tree      nodeJSON       `json:"tree"`
-	Timeline  timelineJSON   `json:"timeline"`
 	Attention *attentionJSON `json:"attention,omitempty"`
 }
 
@@ -83,7 +72,13 @@ func encodeNode(n *ui.LayoutNode) nodeJSON {
 func decodeNode(j nodeJSON) *ui.LayoutNode {
 	switch j.Kind {
 	case "leaf":
-		return ui.NewLeaf(ui.PanelID(j.Panel), j.Title)
+		// A leaf naming a widget this build no longer has would render
+		// nothing at all; the inspector is the safe universal fallback.
+		id := ui.PanelID(j.Panel)
+		if !ui.KnownPanelKind(id) {
+			return ui.NewLeaf(ui.PanelInspect, ui.WidgetTitle(ui.PanelInspect))
+		}
+		return ui.NewLeaf(id, j.Title)
 	case "split":
 		if len(j.Children) != 2 {
 			return nil
@@ -105,7 +100,7 @@ func decodeNode(j nodeJSON) *ui.LayoutNode {
 // loadLayout installs the persisted tree on the PanelManager BEFORE the
 // first Recompute, and restores the timeline leaf's view. Missing /
 // parse-fail / wrong version ⇒ defaults stay.
-func loadLayout(panelMgr *ui.PanelManager, tl *ui.TimelineViewState,
+func loadLayout(panelMgr *ui.PanelManager,
 	att *ui.AttentionMatrix, muted *bool) {
 	if panelMgr == nil {
 		return
@@ -134,14 +129,6 @@ func loadLayout(panelMgr *ui.PanelManager, tl *ui.TimelineViewState,
 	}
 	panelMgr.SetWorkspace(root)
 	panelMgr.Layout = ui.LayoutPreset(lf.Preset)
-	// A pre-timeline file leaves the block zeroed; PixelsPerSec is never zero
-	// once written, so it doubles as "this file has a timeline section".
-	if tl != nil && lf.Timeline.PixelsPerSec > 0 {
-		tl.LabelW = lf.Timeline.LabelW
-		tl.PixelsPerSec = lf.Timeline.PixelsPerSec
-		tl.Follow = lf.Timeline.Follow
-		tl.Normalize()
-	}
 	// A file written by an older build has no attention block; the caller's
 	// defaults stand. A shorter list (new event kinds since) fills as far as
 	// it reaches and leaves the rest at their default.
@@ -164,12 +151,12 @@ func loadLayout(panelMgr *ui.PanelManager, tl *ui.TimelineViewState,
 // persistLayout is the single call site shape: every surface that can change
 // the saved layout goes through here rather than assembling the argument list.
 func (g *Game) persistLayout() {
-	saveLayout(g.UI.PanelMgr, g.timelineLeafView(), &g.UI.Attention.Matrix, &g.UI.Cues.Muted)
+	saveLayout(g.UI.PanelMgr, &g.UI.Attention.Matrix, &g.UI.Cues.Muted)
 }
 
 // saveLayout marshals the current workspace tree + active preset into
 // layout.json. Atomic via .tmp + os.Rename. Errors are logged.
-func saveLayout(panelMgr *ui.PanelManager, tl *ui.TimelineViewState,
+func saveLayout(panelMgr *ui.PanelManager,
 	att *ui.AttentionMatrix, muted *bool) {
 	if panelMgr == nil {
 		return
@@ -183,13 +170,6 @@ func saveLayout(panelMgr *ui.PanelManager, tl *ui.TimelineViewState,
 		Version: layoutFileVersion,
 		Preset:  uint8(panelMgr.Layout),
 		Tree:    encodeNode(panelMgr.Workspace),
-	}
-	if tl != nil {
-		lf.Timeline = timelineJSON{
-			LabelW:       ui.TimelineLabelWidth(*tl),
-			PixelsPerSec: tl.PixelsPerSec,
-			Follow:       tl.Follow,
-		}
 	}
 	if att != nil {
 		kinds := make([]uint8, len(att))

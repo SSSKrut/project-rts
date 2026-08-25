@@ -26,18 +26,13 @@ const (
 type PanelID string
 
 const (
-	Panel3D        PanelID = "3d"
-	PanelMap       PanelID = "map"
-	PanelInspect   PanelID = "inspector"
-	PanelTopBar    PanelID = "topbar"
-	PanelTimeline  PanelID = "timeline"
-	PanelFormation PanelID = "formation"
-	PanelSymbology PanelID = "symbology"
-	PanelBehavior  PanelID = "behavior"
-	PanelEvents    PanelID = "events"
-	PanelSpecCard  PanelID = "spec"
-	PanelDebug     PanelID = "debug"
-	PanelNone      PanelID = ""
+	Panel3D       PanelID = "3d"
+	PanelMap      PanelID = "map"
+	PanelInspect  PanelID = "inspector"
+	PanelTopBar   PanelID = "topbar"
+	PanelBehavior PanelID = "behavior"
+	PanelDebug    PanelID = "debug"
+	PanelNone     PanelID = ""
 )
 
 type Panel struct {

@@ -74,23 +74,6 @@ func DebugStyle(font rl.Font) Style {
 	}
 }
 
-func SymbologyStyle(font rl.Font) Style {
-	return Style{
-		Font:       font,
-		FontSize:   seLabelFont,
-		RowH:       seRowH,
-		Gap:        seBtnGap,
-		Text:       seRowText,
-		TextDim:    seRowDim,
-		Header:     seRowDim,
-		Fill:       seBtnIdle,
-		FillActive: seBtnSel,
-		FillHover:  seBtnHover,
-		Border:     rl.Color{R: 10, G: 14, B: 24, A: 230},
-		Disabled:   seBtnDis,
-	}
-}
-
 func TopBarStyle(font rl.Font) Style {
 	return Style{
 		Font:       font,

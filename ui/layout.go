@@ -18,29 +18,26 @@ const (
 	PresetCommand                     // Map in the big slot, 3D in the side
 )
 
+// Three surfaces and no more (lite pivot): the field to act in, the map to
+// command from, the inspector to read. Everything else was a widget the player
+// had to learn before it told him anything.
 func presetFieldTree() *LayoutNode {
-	return NewSplit(SplitHorizontal, 1-DefaultTimelineRatio,
-		NewSplit(SplitVertical, 1-DefaultRightColRatio,
-			NewLeaf(Panel3D, "Field"),
-			NewSplit(SplitHorizontal, DefaultInspectorRatio,
-				NewLeaf(PanelInspect, "Inspector"),
-				NewLeaf(PanelMap, "Map"),
-			),
+	return NewSplit(SplitVertical, 1-DefaultRightColRatio,
+		NewLeaf(Panel3D, "Field"),
+		NewSplit(SplitHorizontal, DefaultInspectorRatio,
+			NewLeaf(PanelInspect, "Inspector"),
+			NewLeaf(PanelMap, "Map"),
 		),
-		NewLeaf(PanelTimeline, "Timeline"),
 	)
 }
 
 func presetCommandTree() *LayoutNode {
-	return NewSplit(SplitHorizontal, 1-DefaultTimelineRatio,
-		NewSplit(SplitVertical, 1-DefaultRightColRatio,
-			NewLeaf(PanelMap, "Map"),
-			NewSplit(SplitHorizontal, DefaultInspectorRatio,
-				NewLeaf(PanelInspect, "Inspector"),
-				NewLeaf(Panel3D, "Field"),
-			),
+	return NewSplit(SplitVertical, 1-DefaultRightColRatio,
+		NewLeaf(PanelMap, "Map"),
+		NewSplit(SplitHorizontal, DefaultInspectorRatio,
+			NewLeaf(PanelInspect, "Inspector"),
+			NewLeaf(Panel3D, "Field"),
 		),
-		NewLeaf(PanelTimeline, "Timeline"),
 	)
 }
 
@@ -75,24 +72,28 @@ func WidgetTitle(id PanelID) string {
 		return "Map"
 	case PanelInspect:
 		return "Inspector"
-	case PanelTimeline:
-		return "Timeline"
-	case PanelFormation:
-		return "Formation"
-	case PanelSymbology:
-		return "Symbology"
 	case PanelBehavior:
 		return "Behavior"
-	case PanelEvents:
-		return "Events"
-	case PanelSpecCard:
-		return "Spec"
 	case PanelDebug:
 		return "Debug"
 	}
 	return string(id)
 }
 
-// WorkspacePanelKinds enumerates what the chevron menu can switch a leaf
-// to. TopBar is excluded — it's not a workspace widget.
-var WorkspacePanelKinds = [...]PanelID{Panel3D, PanelMap, PanelInspect, PanelTimeline, PanelFormation, PanelSymbology, PanelBehavior, PanelEvents, PanelSpecCard, PanelDebug}
+// WorkspacePanelKinds enumerates what the chevron menu can switch a leaf to.
+// TopBar is excluded — it's not a workspace widget. Behavior stays out of the
+// three-surface cut on purpose: standing rules are what keeps working when the
+// radio net drops, so the lite game needs them reachable. Debug is a dev tool,
+// not player UI.
+var WorkspacePanelKinds = [...]PanelID{Panel3D, PanelMap, PanelInspect, PanelBehavior, PanelDebug}
+
+// KnownPanelKind guards a layout loaded from disk: a saved leaf naming a widget
+// that no longer exists must fall back, not render nothing.
+func KnownPanelKind(id PanelID) bool {
+	for _, k := range WorkspacePanelKinds {
+		if k == id {
+			return true
+		}
+	}
+	return false
+}

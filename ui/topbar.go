@@ -33,9 +33,7 @@ const (
 	TopBarHitPlayPause
 	TopBarHitSpeedDown
 	TopBarHitSpeedUp
-	TopBarHitToolSE       // Symbol Editor
-	TopBarHitToolFE       // Formation Editor
-	TopBarHitToolSettings // Settings panel (placeholder for Phase 18.5.E follow-up)
+	TopBarHitToolSettings // Settings panel (placeholder)
 )
 
 // TopBarHits bundles the click-targetable regions DrawTopBar painted on the
@@ -44,20 +42,12 @@ type TopBarHits struct {
 	PlayPause    rl.Rectangle
 	SpeedDown    rl.Rectangle
 	SpeedUp      rl.Rectangle
-	ToolSE       rl.Rectangle
-	ToolFE       rl.Rectangle
 	ToolSettings rl.Rectangle
 }
 
 // TopBarToolCtx flags the disabled / active state of each toolbar button.
-// Disabled buttons render dimmed and ignore clicks. Active = the widget is
-// already on-screen somewhere (workspace or floating); button gets a subtle
-// underline.
+// Disabled buttons render dimmed and ignore clicks.
 type TopBarToolCtx struct {
-	SEActive    bool
-	SEEnabled   bool // Enabled when a single Unit / Contact is selected.
-	FEActive    bool
-	FEEnabled   bool // Enabled when a squad is selected.
 	SettingsOn  bool
 	SettingsCan bool
 }
@@ -83,16 +73,6 @@ func DrawTopBar(panel Panel, font rl.Font, d TimeDisplay, tools TopBarToolCtx,
 	toolY := r.Y + (r.Height-toolW)*0.5
 	tx := r.X + 8
 	hits := TopBarHits{}
-	hits.ToolSE = rl.Rectangle{X: tx, Y: toolY, Width: toolW, Height: toolW}
-	drawTopBarToolButton(hits.ToolSE, "SE", font, tools.SEEnabled, tools.SEActive,
-		"Symbol Editor (select unit/contact)", cursor)
-	tx += toolW + toolGap
-
-	hits.ToolFE = rl.Rectangle{X: tx, Y: toolY, Width: toolW, Height: toolW}
-	drawTopBarToolButton(hits.ToolFE, "FE", font, tools.FEEnabled, tools.FEActive,
-		"Formation Editor (select squad)", cursor)
-	tx += toolW + toolGap
-
 	hits.ToolSettings = rl.Rectangle{X: tx, Y: toolY, Width: toolW, Height: toolW}
 	drawTopBarToolButton(hits.ToolSettings, "⚙", font, tools.SettingsCan, tools.SettingsOn,
 		"Settings (placeholder)", cursor)
@@ -146,12 +126,6 @@ func DrawTopBar(panel Panel, font rl.Font, d TimeDisplay, tools TopBarToolCtx,
 
 // TopBarHitTest uses the rects returned from DrawTopBar last frame.
 func TopBarHitTest(cursor rl.Vector2, hits TopBarHits) TopBarHitKind {
-	if pointInRect(cursor, hits.ToolSE) {
-		return TopBarHitToolSE
-	}
-	if pointInRect(cursor, hits.ToolFE) {
-		return TopBarHitToolFE
-	}
 	if pointInRect(cursor, hits.ToolSettings) {
 		return TopBarHitToolSettings
 	}

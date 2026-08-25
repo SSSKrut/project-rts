@@ -93,9 +93,8 @@ func drawPrimaryWeaponRow(ctx InspectorCtx, col *Column, eq *components.Equipmen
 		return
 	}
 	spec := components.SpecForWeapon(wc.Kind)
-	specLinkRow(col, &ctx.st, ctx.in,
-		fmt.Sprintf("Primary:   %-8s ammo %d", spec.Name, wc.Ammo),
-		WeaponSubject(wc.Kind))
+	TextRowClipped(col, &ctx.st,
+		fmt.Sprintf("Primary:   %-8s ammo %d", spec.Name, wc.Ammo), ctx.st.Text)
 }
 
 // drawRoleChip paints the role's colour swatch with its short label, then the

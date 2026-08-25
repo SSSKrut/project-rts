@@ -22,9 +22,8 @@ func drawInspectorVehicle(ctx InspectorCtx, ent ecs.Entity, x, y, width int32) i
 		return int32(col.Y)
 	}
 	spec := components.SpecForVehicle(veh.Kind)
-	specLinkRow(&col, &ctx.st, ctx.in,
-		fmt.Sprintf("Vehicle #%X  %s", ent.ID()&0xFFFF, spec.Name),
-		VehicleSubject(veh.Kind))
+	TextRowClipped(&col, &ctx.st,
+		fmt.Sprintf("Vehicle #%X  %s", ent.ID()&0xFFFF, spec.Name), ctx.st.Text)
 	col.Skip(ctx.st.RowH)
 
 	if hp := ctx.HPMap.Get(ent); hp != nil && hp.Max > 0 {
@@ -54,9 +53,8 @@ func drawInspectorVehicle(ctx InspectorCtx, ent ecs.Entity, x, y, width int32) i
 				continue
 			}
 			if wc := ctx.WeaponMap.Get(w); wc != nil {
-				specLinkRow(&col, &ctx.st, ctx.in, fmt.Sprintf("Weapon:    %-8s ammo %d",
-					components.SpecForWeapon(wc.Kind).Name, wc.Ammo),
-					WeaponSubject(wc.Kind))
+				TextRowClipped(&col, &ctx.st, fmt.Sprintf("Weapon:    %-8s ammo %d",
+					components.SpecForWeapon(wc.Kind).Name, wc.Ammo), ctx.st.Text)
 			}
 		}
 	}

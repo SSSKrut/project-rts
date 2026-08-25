@@ -271,24 +271,9 @@ type uiState struct {
 	MarqueeActive bool
 	MarqueeOrigin ui.PanelID
 
-	// One view per surface: the same widget open as a leaf and as a floater
-	// has two widths, so it needs two offsets, two zooms and two gutters.
-	// Keyed like ScrollDragKey — PanelID for a leaf, floater ID otherwise.
-	TimelineViews map[string]*ui.TimelineViewState
-	TimelineSurf  []timelineSurface
-	TimelineData  ui.TimelineData
-	// Hover belongs to whichever surface the cursor is over — only one can be.
-	TimelineHoverHit ui.TimelineHit
-	TimelineHoverOK  bool
-	TimelineHoverBlk ui.TimelineOrderBlock
-	TimelineDragKey  string
-	TimelineDragKind timelineDragKind
-	TimelineDragOff  float32
-	TopBarHits       ui.TopBarHits
+	TopBarHits ui.TopBarHits
 
-	FormationEditor *ui.FormationEditor
-	SymbolEditor    *ui.SymbolEditor
-	BuildingWidget  *ui.BuildingWidgetLayout
+	BuildingWidget *ui.BuildingWidgetLayout
 
 	SmoothedSquadPos map[ecs.Entity]components.WorldPos
 	ExpandedHUD      bool
@@ -298,9 +283,6 @@ type uiState struct {
 	// frame-side state and never enters a world snapshot.
 	Attention attentionState
 	Cues      audioCues
-	// SpecSubject is what the spec card currently shows; the card is a view
-	// on the spec tables, so one subject serves every surface showing it.
-	SpecSubject ui.SpecSubject
 }
 
 // rmbSession bundles RMB-hold state. Active is set on press and cleared on
@@ -351,7 +333,6 @@ const (
 	rmbDoubleWindow  float32 = 0.30
 	wheelScrollSpeed float32 = 30
 	// One notch scrolls two squad rows in the timeline's list.
-	timelineWheelRows     float32 = 64
 	marqueeClickThreshold float32 = 5
 )
 
