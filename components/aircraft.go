@@ -1,5 +1,7 @@
 package components
 
+import "github.com/mlange-42/ark/ecs"
+
 // AircraftKind indexes AircraftSpecs. Phase 20 flies rotary wing only; fixed
 // wing arrives with off-map sortie requests, which need a different control
 // surface (no loiter, no hover, a run-in geometry instead of a route).
@@ -90,6 +92,10 @@ type Aircraft struct {
 // Schedule and pad are meant to be two SOURCES of one release, not two
 // subsystems: both end at AircraftFactory.Spawn. Keeping that seam is the
 // whole reason the arrival is data rather than a branch in a spawner.
+// Loadout and Rules are decided here, before the airframe exists (P9): the
+// arrival IS the task order. Zero Rules means HoldFire — an airframe arrives
+// weapons-tight for the same reason its radar arrives off, and the player
+// opens fire by naming a target or loosening the rule.
 type AirArrival struct {
 	At         float32
 	Kind       AircraftKind
@@ -100,4 +106,19 @@ type AirArrival struct {
 	AltSet     float32
 	AltRef     AltRef
 	SpeedSet   float32
+	Loadout    uint8
+	Rules      EngagementRules
+}
+
+// AirEngagement is what the gunner found, read by the driver one tick later —
+// the same seam VehicleOverride uses (reflex writes at 15b, driver reads at
+// 12b). Two fields carry both air verbs: Hold stops the approach at weapons
+// range so the airframe fights from a station instead of overflying, and
+// UnmaskAGL is the height it must borrow ON TOP of the dial to see over the
+// ridge in front of it. The dial itself is never touched.
+type AirEngagement struct {
+	Target    ecs.Entity
+	Until     float32
+	UnmaskAGL float32
+	Hold      bool
 }

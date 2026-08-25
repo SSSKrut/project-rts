@@ -87,7 +87,7 @@ func aiAirManpadsSpawn(world *ecs.World, unitFactory aiUnitSpawn,
 
 	entry := wp(manEntryX, 0, manAltDial)
 	aircraftFactory.Arrival(components.AirArrival{
-		At:         2.4,
+		At:         2.6,
 		Kind:       components.AircraftHeliAttack,
 		FactionID:  components.FactionPlayer,
 		Controller: components.ControllerLocal,

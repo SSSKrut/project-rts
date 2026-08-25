@@ -88,8 +88,15 @@ func aiAirReconSpawn(world *ecs.World, aircraftFactory *entities.AircraftFactory
 	})
 
 	emitPos := wp(reconEmitX, 0, 60)
-	emitter := aircraftFactory.Spawn(emitPos, emitPos, components.AircraftHeliAttack,
-		components.AltAGL, 60, 0, components.FactionEnemyRed, components.ControllerAI)
+	emitter := aircraftFactory.Spawn(components.AirArrival{
+		Kind:       components.AircraftHeliAttack,
+		FactionID:  components.FactionEnemyRed,
+		Controller: components.ControllerAI,
+		Entry:      emitPos,
+		Exit:       emitPos,
+		AltRef:     components.AltAGL,
+		AltSet:     60,
+	})
 	hull := vehicleFactory.Spawn(wp(reconGroundX, reconGroundZ, 0), components.VehicleBTR,
 		components.FactionEnemyRed, components.ControllerAI)
 

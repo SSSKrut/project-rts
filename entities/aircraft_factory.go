@@ -33,6 +33,11 @@ type AircraftFactory struct {
 	ThreatMap      *ecs.Map[components.Threat]
 	DangerMap      *ecs.Map[components.DangerBuffer]
 	OverrideMap    *ecs.Map[components.AircraftOverride]
+	EquipmentMap   *ecs.Map[components.Equipment]
+	RulesMap       *ecs.Map[components.EngagementRules]
+	EngageMap      *ecs.Map[components.AirEngagement]
+	WeaponMap      *ecs.Map[components.Weapon]
+	OwnedByMap     *ecs.Map[components.OwnedBy]
 }
 
 func NewAircraftFactory(world *ecs.World, posMap *ecs.Map[components.WorldPos]) *AircraftFactory {
@@ -52,6 +57,11 @@ func NewAircraftFactory(world *ecs.World, posMap *ecs.Map[components.WorldPos]) 
 		ThreatMap:      ecs.NewMap[components.Threat](world),
 		DangerMap:      ecs.NewMap[components.DangerBuffer](world),
 		OverrideMap:    ecs.NewMap[components.AircraftOverride](world),
+		EquipmentMap:   ecs.NewMap[components.Equipment](world),
+		RulesMap:       ecs.NewMap[components.EngagementRules](world),
+		EngageMap:      ecs.NewMap[components.AirEngagement](world),
+		WeaponMap:      ecs.NewMap[components.Weapon](world),
+		OwnedByMap:     ecs.NewMap[components.OwnedBy](world),
 	}
 }
 
@@ -103,12 +113,13 @@ func (f *AircraftFactory) Arrival(a components.AirArrival) ecs.Entity {
 	return ent
 }
 
-// Spawn releases an airframe into the world at `pos`, heading for `exit` when
-// its work is done.
-func (f *AircraftFactory) Spawn(pos, exit components.WorldPos, kind components.AircraftKind,
-	altRef components.AltRef, altSet, speedSet float32,
-	factionID, controller uint8) ecs.Entity {
-	spec := components.SpecForAircraft(kind)
+// Spawn releases an airframe into the world. It takes the arrival whole
+// because the arrival IS the release: entry, exit, dials, loadout and rules
+// were all decided when the task was set, and a pad filing the same record
+// reaches this seam with nothing extra to learn (P9).
+func (f *AircraftFactory) Spawn(a components.AirArrival) ecs.Entity {
+	spec := components.SpecForAircraft(a.Kind)
+	altSet, speedSet := a.AltSet, a.SpeedSet
 	if altSet <= 0 {
 		altSet = spec.DefaultAltAGL
 	}
@@ -116,21 +127,21 @@ func (f *AircraftFactory) Spawn(pos, exit components.WorldPos, kind components.A
 		speedSet = spec.CruiseSpeed
 	}
 	ent := f.world.NewEntity()
-	wp := pos
+	wp := a.Entry
 	f.posMap.Add(ent, &wp)
 	f.AircraftMap.Add(ent, &components.Aircraft{
-		Kind:     kind,
-		AltRef:   altRef,
+		Kind:     a.Kind,
+		AltRef:   a.AltRef,
 		AltSet:   altSet,
 		SpeedSet: speedSet,
 		Fuel:     spec.FuelSec,
-		Exit:     exit,
+		Exit:     a.Exit,
 	})
 	f.ActionQueueMap.Add(ent, &components.ActionQueue{})
 	f.MotionMap.Add(ent, &components.Motion{})
 	f.HPMap.Add(ent, &components.HP{Current: spec.HP, Max: spec.HP})
-	f.FactionMap.Add(ent, &components.Faction{ID: factionID})
-	f.ControllerMap.Add(ent, &components.Controller{Owner: controller})
+	f.FactionMap.Add(ent, &components.Faction{ID: a.FactionID})
+	f.ControllerMap.Add(ent, &components.Controller{Owner: a.Controller})
 	sensors := aircraftSensors(spec)
 	f.SensorsMap.Add(ent, &sensors)
 	f.AwarenessMap.Add(ent, &components.Awareness{})
@@ -138,5 +149,34 @@ func (f *AircraftFactory) Spawn(pos, exit components.WorldPos, kind components.A
 	f.ThreatMap.Add(ent, &components.Threat{})
 	f.DangerMap.Add(ent, &components.DangerBuffer{})
 	f.OverrideMap.Add(ent, &components.AircraftOverride{})
+	rules := a.Rules
+	f.RulesMap.Add(ent, &rules)
+	f.EngageMap.Add(ent, &components.AirEngagement{})
+	f.EquipmentMap.Add(ent, f.armFrom(ent, wp, components.LoadoutFor(spec, a.Loadout)))
 	return ent
+}
+
+// armFrom spawns the loadout's barrels as their own entities (OwnedBy +
+// WorldPos), the same shape infantry and vehicles use.
+func (f *AircraftFactory) armFrom(owner ecs.Entity, pos components.WorldPos,
+	loadout components.AircraftLoadout) *components.Equipment {
+	eq := &components.Equipment{}
+	for i := uint8(0); i < loadout.WeaponCount && int(i) < len(loadout.WeaponKinds); i++ {
+		wspec := components.SpecForWeapon(loadout.WeaponKinds[i])
+		w := f.world.NewEntity()
+		wp := pos
+		f.posMap.Add(w, &wp)
+		f.WeaponMap.Add(w, &components.Weapon{
+			Kind: wspec.Kind, Ammo: wspec.Ammo, RangeM: wspec.RangeM,
+			RoF: wspec.RoF, Damage: wspec.Damage, Dispersion: wspec.Dispersion,
+		})
+		f.OwnedByMap.Add(w, &components.OwnedBy{Owner: owner})
+		if i == 0 {
+			eq.Primary = w
+			eq.Active = w
+		} else {
+			eq.Secondary = w
+		}
+	}
+	return eq
 }

@@ -1,6 +1,11 @@
 package main
 
-import "rts-go/systems"
+import (
+	"github.com/mlange-42/ark/ecs"
+
+	"rts-go/components"
+	"rts-go/systems"
+)
 
 // registerSystems constructs every sim system, runs its InitUI (Filters/Maps
 // need a live world), and adds it to the app in per-tick pipeline order.
@@ -154,15 +159,18 @@ func (g *Game) registerSystems() {
 	cameraSys := &systems.CameraSystem{}
 	cameraSys.InitUI(app.World)
 
-	// Phase 20 M2 systems register LAST on purpose: their InitUI is the first
-	// registration of Missile / AircraftOverride, and a mid-order component ID
-	// would reshuffle every existing archetype (M0 finding #1). Pipeline
-	// position comes from the AddSystem block below, not from this order.
+	// Phase 20 M2/M3 registrations come LAST on purpose: this is the first
+	// registration of Missile / AircraftOverride / AirEngagement, and a
+	// mid-order component ID would reshuffle every existing archetype (M0
+	// finding #1). Pipeline position comes from the AddSystem block below.
 	missileSys := systems.NewMissileSystem(damageService)
 	missileSys.InitUI(app.World)
 	airReflexSys := systems.NewAirReflexSystem()
 	airReflexSys.InitUI(app.World)
 	weaponSys.SetMissileMap(missileSys.MissileMap())
+	airEngageMap := ecs.NewMap[components.AirEngagement](app.World)
+	weaponSys.SetAirEngageMap(airEngageMap)
+	airDriverSys.SetEngageMap(airEngageMap)
 
 	app.AddSystem(terrainStreamingSys)
 	app.AddSystem(terrainLoadSys)

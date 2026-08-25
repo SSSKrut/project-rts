@@ -19,6 +19,11 @@ const (
 	// a Missile entity instead of a hitscan shot.
 	WeaponZU23
 	WeaponIgla
+	// Air-to-ground (Phase 20 M3). Vikhr is a Missile entity — the only way a
+	// 1200 m weapon can exist while the raycast pipeline tops out at 192 m;
+	// S8 is an ordinary rocket salvo through that same pipeline.
+	WeaponVikhr
+	WeaponS8
 )
 
 // Weapon - per-instance state for a weapon entity. Lives on its own entity

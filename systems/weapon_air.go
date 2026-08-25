@@ -150,6 +150,26 @@ type pendingMissile struct {
 // the registration tail — see MissileSystem.MissileMap).
 func (sys *WeaponSystem) SetMissileMap(m *ecs.Map[components.Missile]) { sys.missileMap = m }
 
+// SetAirEngageMap hands the gunner the AirEngagement handle, built in the same
+// tail for the same reason.
+func (sys *WeaponSystem) SetAirEngageMap(m *ecs.Map[components.AirEngagement]) {
+	sys.airEngageMap = m
+}
+
+// missileDamageMul resolves the class multiplier at LAUNCH — the target class
+// is fixed the moment the round leaves. Sector armour is not: that depends on
+// the approach, and a missile knows its own at impact (MissileSystem).
+func (sys *WeaponSystem) missileDamageMul(target ecs.Entity, wspec *components.WeaponSpec) float32 {
+	if sys.aircraftMap.Has(target) {
+		return wspec.VsAir
+	}
+	class := components.ArmorClassSoft
+	if tv := sys.vehicleMap.Get(target); tv != nil {
+		class = components.SpecForVehicle(tv.Kind).Class
+	}
+	return components.VsClassMul(wspec, class)
+}
+
 func (sys *WeaponSystem) queueMissile(target ecs.Entity, shooterPos components.WorldPos,
 	muzzle rl.Vector3, targetPos components.WorldPos, wspec *components.WeaponSpec) {
 	tx := worldXYZ(targetPos, 0)
@@ -171,7 +191,7 @@ func (sys *WeaponSystem) queueMissile(target ecs.Entity, shooterPos components.W
 			Speed:   wspec.MissileSpeedM,
 			TurnRad: wspec.MissileTurnDps * float32(math.Pi) / 180,
 			Fuel:    wspec.MissileFuelS,
-			Damage:  float32(wspec.Damage) * wspec.VsAir,
+			Damage:  float32(wspec.Damage) * sys.missileDamageMul(target, wspec),
 			AimX:    tx.X, AimY: tx.Y, AimZ: tx.Z,
 		},
 	})

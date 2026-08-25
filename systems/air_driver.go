@@ -32,7 +32,10 @@ type AirDriverSystem struct {
 	filter      *ecs.Filter3[components.Aircraft, components.WorldPos, components.Motion]
 	queueMap    *ecs.Map[components.ActionQueue]
 	overrideMap *ecs.Map[components.AircraftOverride]
+	posMap      *ecs.Map[components.WorldPos]
+	engageMap   *ecs.Map[components.AirEngagement]
 	sampler     *HeightSampler
+	worldRef    *ecs.World
 }
 
 const (
@@ -66,7 +69,15 @@ func (sys *AirDriverSystem) InitUI(w *ecs.World) {
 	sys.filter = ecs.NewFilter3[components.Aircraft, components.WorldPos, components.Motion](w)
 	sys.queueMap = ecs.NewMap[components.ActionQueue](w)
 	sys.overrideMap = ecs.NewMap[components.AircraftOverride](w)
+	sys.posMap = ecs.NewMap[components.WorldPos](w)
 	sys.sampler = NewHeightSampler(w)
+	sys.worldRef = w
+}
+
+// SetEngageMap injects the AirEngagement handle from the registration tail —
+// the component must not take a mid-order ID (M0 finding 1).
+func (sys *AirDriverSystem) SetEngageMap(m *ecs.Map[components.AirEngagement]) {
+	sys.engageMap = m
 }
 
 func (AirDriverSystem) Name() string { return "air_driver" }
@@ -129,9 +140,48 @@ func (sys *AirDriverSystem) step(ent ecs.Entity, ac *components.Aircraft, pos *c
 		return
 	}
 
+	aim := sys.engagement(ent, pos, now)
 	for i := 0; i < n; i++ {
-		sys.substep(ac, spec, pos, mot, aq, sub)
+		sys.substep(ac, spec, pos, mot, aq, sub, aim)
 	}
+}
+
+// airAim is what the gunner decided, resolved into the three things the driver
+// can act on. It is read once per tick: at a station the airframe barely moves,
+// and re-deriving a bearing eight times inside one tick buys nothing.
+type airAim struct {
+	hasTarget bool
+	hold      bool
+	yaw       float32
+	unmask    float32
+}
+
+func (sys *AirDriverSystem) engagement(ent ecs.Entity, pos *components.WorldPos, now float32) airAim {
+	if sys.engageMap == nil {
+		return airAim{}
+	}
+	eng := sys.engageMap.Get(ent)
+	if eng == nil {
+		return airAim{}
+	}
+	// Borrowed altitude is honoured even after the engagement lapses — that
+	// decay IS the descent back onto the dial.
+	out := airAim{unmask: eng.UnmaskAGL}
+	if eng.Target == (ecs.Entity{}) || now >= eng.Until || !sys.worldRef.Alive(eng.Target) {
+		return out
+	}
+	tp := sys.posMap.Get(eng.Target)
+	if tp == nil {
+		return out
+	}
+	d := tp.Sub(*pos)
+	if d.X*d.X+d.Z*d.Z < 1 {
+		return out
+	}
+	out.hasTarget = true
+	out.hold = eng.Hold
+	out.yaw = float32(math.Atan2(float64(d.X), float64(d.Z)))
+	return out
 }
 
 // stepEvade: hard turn away from the threat bearing, full throttle, down
@@ -193,14 +243,27 @@ func (sys *AirDriverSystem) subSteps(speed, dt float32) int {
 }
 
 func (sys *AirDriverSystem) substep(ac *components.Aircraft, spec *components.AircraftSpec,
-	pos *components.WorldPos, mot *components.Motion, aq *components.ActionQueue, dt float32) {
+	pos *components.WorldPos, mot *components.Motion, aq *components.ActionQueue,
+	dt float32, aim airAim) {
+	// Battle position: inside weapons range the airframe stops closing, puts
+	// its nose on the target (there is no turret — the nose IS the aim) and
+	// holds whatever height it had to borrow to see. The waypoint stays in the
+	// queue: when the target is gone the approach resumes by itself.
+	if aim.hold && aim.hasTarget {
+		sys.steerYaw(spec, mot, aim.yaw, dt)
+		sys.brake(mot, spec, dt)
+		sys.advanceXZ(pos, mot, dt)
+		sys.holdAltitude(ac, spec, pos, dt, aim.unmask)
+		return
+	}
+
 	target, hasTarget := sys.aim(ac, aq)
 	if !hasTarget {
 		// No waypoint: a rotary airframe holds station. The dials still run —
 		// altitude is held, so a hover over a rising slope climbs with it.
 		sys.brake(mot, spec, dt)
 		sys.advanceXZ(pos, mot, dt)
-		sys.holdAltitude(ac, spec, pos, dt)
+		sys.holdAltitude(ac, spec, pos, dt, aim.unmask)
 		return
 	}
 
@@ -209,7 +272,7 @@ func (sys *AirDriverSystem) substep(ac *components.Aircraft, spec *components.Ai
 		sys.arrive(ac, aq)
 		sys.brake(mot, spec, dt)
 		sys.advanceXZ(pos, mot, dt)
-		sys.holdAltitude(ac, spec, pos, dt)
+		sys.holdAltitude(ac, spec, pos, dt, aim.unmask)
 		return
 	}
 
@@ -253,25 +316,30 @@ func (sys *AirDriverSystem) substep(ac *components.Aircraft, spec *components.Ai
 		}
 	}
 
-	// Yaw authority is the sum of the cruise turn rate and the hover pivot:
-	// a radius says nothing at zero airspeed, and a gunship swinging its nose
-	// while stationary is a real manoeuvre, not an artefact.
+	sys.steerYaw(spec, mot, desiredYaw, dt)
+	sys.advanceXZ(pos, mot, dt)
+	sys.holdAltitude(ac, spec, pos, dt, aim.unmask)
+}
+
+// steerYaw turns toward `want` under this airframe's authority: the cruise
+// turn rate plus the hover pivot, because a radius says nothing at zero
+// airspeed and a gunship swinging its nose while stationary is a real
+// manoeuvre, not an artefact.
+func (sys *AirDriverSystem) steerYaw(spec *components.AircraftSpec,
+	mot *components.Motion, want, dt float32) {
 	speedAbs := mot.Speed
 	if speedAbs < 0 {
 		speedAbs = -speedAbs
 	}
 	pivot := spec.PivotDps * float32(math.Pi) / 180
 	maxYawDelta := (speedAbs/spec.TurnRadiusM + pivot) * dt
-	steer := yawErr
+	steer := wrapAngle(want - mot.Yaw)
 	if steer > maxYawDelta {
 		steer = maxYawDelta
 	} else if steer < -maxYawDelta {
 		steer = -maxYawDelta
 	}
 	mot.Yaw = wrapAngle(mot.Yaw + steer)
-
-	sys.advanceXZ(pos, mot, dt)
-	sys.holdAltitude(ac, spec, pos, dt)
 }
 
 // aim returns the point the airframe is flying at: the head MoveTo, or the
@@ -336,15 +404,17 @@ func (sys *AirDriverSystem) advanceXZ(pos *components.WorldPos, mot *components.
 // holdAltitude drives Y toward the dial at the spec climb rate. AGL resolves
 // against the live heightmap every sub-step, which is what makes nap-of-the-
 // earth flight follow the ground instead of pretending to.
+// `extra` is altitude BORROWED for an unmask — added on top of the dial, never
+// written into it: the reflex borrows the airframe, it does not reconfigure it.
 func (sys *AirDriverSystem) holdAltitude(ac *components.Aircraft, spec *components.AircraftSpec,
-	pos *components.WorldPos, dt float32) {
+	pos *components.WorldPos, dt, extra float32) {
 	wx := float32(pos.Chunk.X)*components.ChunkSize + pos.Local.X
 	wz := float32(pos.Chunk.Z)*components.ChunkSize + pos.Local.Z
 	ground := sys.sampler.Sample(wx, wz)
 
-	want := ac.AltSet
+	want := ac.AltSet + extra
 	if ac.AltRef == components.AltAGL {
-		want = ground + ac.AltSet
+		want = ground + ac.AltSet + extra
 	}
 	if floor := ground + airMinClearance; want < floor {
 		want = floor

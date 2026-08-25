@@ -42,20 +42,20 @@ func (sys *WeaponSystem) shouldFire(shooter ecs.Entity, motionSpeed float32,
 	overridesHoldFire := false
 	returnFireOK := false
 
-	if sm := sys.squadMemberMap.Get(shooter); sm != nil && sm.Squad != (ecs.Entity{}) {
-		if r := sys.engagementRulesMap.Get(sm.Squad); r != nil {
+	if cmd := sys.commanderOf(shooter); cmd != (ecs.Entity{}) {
+		if r := sys.engagementRulesMap.Get(cmd); r != nil {
 			rules = *r
 		}
 		// BehaviorRules.AllowReturnFire: under a HoldFire doctrine the unit
 		// may still answer fire it is actually taking (suppression / injury
 		// live on its own Threat).
-		if br := sys.behaviorRulesMap.Get(sm.Squad); br != nil && br.AllowReturnFire {
+		if br := sys.behaviorRulesMap.Get(cmd); br != nil && br.AllowReturnFire {
 			if t := sys.threatMap.Get(shooter); t != nil &&
 				t.Suppression+t.Injury >= weaponReturnFireThreshold {
 				returnFireOK = true
 			}
 		}
-		if head := sys.orderQueueMap.Get(sm.Squad); head != nil && head.First != (ecs.Entity{}) {
+		if head := sys.orderQueueMap.Get(cmd); head != nil && head.First != (ecs.Entity{}) {
 			if sys.orderAttackMoveMap.Has(head.First) {
 				attackMoveOn = true
 			}
@@ -196,14 +196,25 @@ func (sys *WeaponSystem) pickTarget(
 	return bestEnt, bestPos, true
 }
 
-// focusTarget is the enemy the squad's head AttackTarget order names. Zero
+// commanderOf is whoever answers for this shooter's rules and orders: its
+// squad, or itself. A soloist under orders owns an OrderQueueHead of its own
+// (Phase 20.7 L0), and an airframe carries its own EngagementRules — asking
+// only SquadMember left both of them on the hardcoded fallback.
+func (sys *WeaponSystem) commanderOf(shooter ecs.Entity) ecs.Entity {
+	if sm := sys.squadMemberMap.Get(shooter); sm != nil && sm.Squad != (ecs.Entity{}) {
+		return sm.Squad
+	}
+	return shooter
+}
+
+// focusTarget is the enemy the commander's head AttackTarget order names. Zero
 // when there is no such order — the shooter then picks freely.
 func (sys *WeaponSystem) focusTarget(shooter ecs.Entity) ecs.Entity {
-	sm := sys.squadMemberMap.Get(shooter)
-	if sm == nil || sm.Squad == (ecs.Entity{}) {
+	cmd := sys.commanderOf(shooter)
+	if cmd == (ecs.Entity{}) {
 		return ecs.Entity{}
 	}
-	head := sys.orderQueueMap.Get(sm.Squad)
+	head := sys.orderQueueMap.Get(cmd)
 	if head == nil || head.First == (ecs.Entity{}) || !sys.worldRef.Alive(head.First) {
 		return ecs.Entity{}
 	}

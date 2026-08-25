@@ -42,7 +42,7 @@ type WeaponSpec struct {
 	MissileFuelS   float32
 }
 
-const WeaponKindCount WeaponKind = WeaponIgla + 1
+const WeaponKindCount WeaponKind = WeaponS8 + 1
 
 // WeaponSpecs - canonical table indexed by WeaponKind. Numbers are rough
 // placeholders sized for 4-vs-8 firefights ending in 30-45 s at ~50 m.
@@ -133,6 +133,26 @@ var WeaponSpecs = [WeaponKindCount]WeaponSpec{
 		TracerColor: rl.Color{R: 255, G: 240, B: 200, A: 255},
 		VsAir:       1.0,
 		MissileSpeedM: 180, MissileTurnDps: 120, MissileFuelS: 7,
+	},
+	// Air-to-ground (Phase 20 M3). Vikhr reaches 1200 m because a missile
+	// entity needs no LOS window; S8 states 190 m because a raycast weapon
+	// cannot exceed weaponMaxRange, and a spec card that claims otherwise is
+	// the silent ceiling all over again. That gap IS the loadout trade: stand
+	// off with eight rounds, or come inside the ZU-23 with forty.
+	WeaponVikhr: {
+		Kind: WeaponVikhr, Name: "Vikhr",
+		Ammo: 8, RangeM: 1200, RoF: 0.15, Damage: 500, Dispersion: 0,
+		TracerColor: rl.Color{R: 255, G: 150, B: 110, A: 255},
+		VsSoft:      0.4, VsLight: 1.5, VsHeavy: 1.3,
+		MissileSpeedM: 300, MissileTurnDps: 55, MissileFuelS: 6,
+	},
+	WeaponS8: {
+		Kind: WeaponS8, Name: "S-8 rockets",
+		Ammo: 40, RangeM: 190, RoF: 2.5, Damage: 90, Dispersion: 0.05,
+		TracerColor:   rl.Color{R: 255, G: 180, B: 90, A: 255},
+		SplashRadius:  5.0,
+		SplashFalloff: 1.5,
+		VsSoft:        1.0, VsLight: 0.9, VsHeavy: 0.3,
 	},
 }
 

@@ -32,9 +32,7 @@ type AirTrafficSystem struct {
 // interface rather than the concrete factory keeps systems/ from importing
 // entities/ (which imports components/ and would close a cycle).
 type airSpawner interface {
-	Spawn(pos, exit components.WorldPos, kind components.AircraftKind,
-		altRef components.AltRef, altSet, speedSet float32,
-		factionID, controller uint8) ecs.Entity
+	Spawn(a components.AirArrival) ecs.Entity
 }
 
 func NewAirTrafficSystem() *AirTrafficSystem { return &AirTrafficSystem{} }
@@ -124,8 +122,7 @@ func (sys *AirTrafficSystem) release() {
 		}
 		rec := *a
 		sys.world.RemoveEntity(ent)
-		sys.factory.Spawn(rec.Entry, rec.Exit, rec.Kind, rec.AltRef,
-			rec.AltSet, rec.SpeedSet, rec.FactionID, rec.Controller)
+		sys.factory.Spawn(rec)
 	}
 }
 

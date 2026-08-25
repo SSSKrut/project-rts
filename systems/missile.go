@@ -20,6 +20,8 @@ type MissileSystem struct {
 	posMap      *ecs.Map[components.WorldPos]
 	missileMap  *ecs.Map[components.Missile]
 	overrideMap *ecs.Map[components.AircraftOverride]
+	vehicleMap  *ecs.Map[components.Vehicle]
+	motionMap   *ecs.Map[components.Motion]
 	sampler     *HeightSampler
 	damage      *DamageService
 	worldRef    *ecs.World
@@ -48,6 +50,8 @@ func (sys *MissileSystem) InitUI(w *ecs.World) {
 	sys.posMap = ecs.NewMap[components.WorldPos](w)
 	sys.missileMap = ecs.NewMap[components.Missile](w)
 	sys.overrideMap = ecs.NewMap[components.AircraftOverride](w)
+	sys.vehicleMap = ecs.NewMap[components.Vehicle](w)
+	sys.motionMap = ecs.NewMap[components.Motion](w)
 	sys.sampler = NewHeightSampler(w)
 	sys.worldRef = w
 }
@@ -98,7 +102,10 @@ func (sys *MissileSystem) Update(ctx core.UpdateContext) {
 			if tp := sys.posMap.Get(m.Target); tp != nil {
 				m.AimX = float32(tp.Chunk.X)*components.ChunkSize + tp.Local.X
 				m.AimZ = float32(tp.Chunk.Z)*components.ChunkSize + tp.Local.Z
-				m.AimY = tp.Local.Y
+				// A hull's WorldPos is its footprint; aiming there flies the
+				// round along the dirt for the last hundred metres of a shallow
+				// approach and buries it short.
+				m.AimY = tp.Local.Y + sys.aimOffsetY(m.Target)
 			} else {
 				chasing = false
 			}
@@ -128,7 +135,10 @@ func (sys *MissileSystem) Update(ctx core.UpdateContext) {
 		if chasing &&
 			segPointDistSq(px, py, pz, stepX, stepY, stepZ, m.AimX, m.AimY, m.AimZ) <
 				missileKillR*missileKillR {
-			sys.kills = append(sys.kills, missileKill{target: m.Target, amount: m.Damage})
+			sys.kills = append(sys.kills, missileKill{
+				target: m.Target,
+				amount: m.Damage * sys.sectorMul(m.Target, m.VelX, m.VelZ),
+			})
 			sys.dead = append(sys.dead, ent)
 			continue
 		}
@@ -146,6 +156,43 @@ func (sys *MissileSystem) Update(ctx core.UpdateContext) {
 			sys.worldRef.RemoveEntity(ent)
 		}
 	}
+}
+
+// aimOffsetY lifts the aim point to hull centre for a vehicle; anything else
+// is aimed at where it stands.
+func (sys *MissileSystem) aimOffsetY(target ecs.Entity) float32 {
+	if v := sys.vehicleMap.Get(target); v != nil {
+		return components.SpecForVehicle(v.Kind).BoxHgt * 0.5
+	}
+	return 0
+}
+
+// sectorMul is the armour face the round actually struck. Unlike a hitscan
+// shot, which has to reconstruct the direction from the muzzle, a missile
+// carries its approach in its own velocity.
+func (sys *MissileSystem) sectorMul(target ecs.Entity, velX, velZ float32) float32 {
+	v := sys.vehicleMap.Get(target)
+	if v == nil {
+		return 1
+	}
+	spec := components.SpecForVehicle(v.Kind)
+	yaw := float32(0)
+	if m := sys.motionMap.Get(target); m != nil {
+		yaw = m.Yaw
+	}
+	l := float32(math.Sqrt(float64(velX*velX + velZ*velZ)))
+	if l <= 0 {
+		return spec.ArmorSide
+	}
+	fx := float32(math.Sin(float64(yaw)))
+	fz := float32(math.Cos(float64(yaw)))
+	switch c := (velX*fx + velZ*fz) / l; {
+	case c < -0.5:
+		return spec.ArmorFront
+	case c > 0.5:
+		return spec.ArmorRear
+	}
+	return spec.ArmorSide
 }
 
 // steerMissile bends the velocity toward the aim under the turn limit.

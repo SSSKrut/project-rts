@@ -253,6 +253,12 @@ const (
 	// armed while the round was still flying, an honest resolution (decoyed
 	// or damage landed), and the abort rule holding at the HP floor.
 	aiSceneAirManpads = "ai_air_manpads"
+
+	// _air_cas (Phase 20 M3): a weapons-tight gunship is NAMED a hull to kill.
+	// PASS demands radar-range acquisition, a launch from past anything a
+	// hitscan weapon could reach, an approach that stops instead of overflying,
+	// borrowed altitude that comes back, and a dead hull.
+	aiSceneAirCAS = "ai_air_cas"
 )
 
 // aiSceneMapName lets a scene demand a specific map manifest ("" = default).
@@ -278,6 +284,10 @@ func aiSceneMapName() string {
 		// Flat: the claims are about ranges and gates; a masking ridge would
 		// turn either into a coin toss.
 		return "flat"
+	case aiSceneAirCAS:
+		// Relief IS a claim here: without a ridge in the way there is nothing
+		// for the pop-up to unmask from.
+		return "hills"
 	case aiSceneCoverNone:
 		return "flat"
 	case aiSceneCoverDefilade:
@@ -432,7 +442,7 @@ func aiSceneAnchorPos() components.WorldPos {
 	case aiSceneVehConvoyRoad:
 		return components.WorldPos{}.Add(rl.Vector3{X: 10, Z: -12})
 	case aiSceneAirTransit, aiSceneAirRecon, aiSceneSoloOrders, aiSceneAirAAGun,
-		aiSceneAirManpads:
+		aiSceneAirManpads, aiSceneAirCAS:
 		return components.WorldPos{}.Add(rl.Vector3{X: 0, Z: 0})
 	}
 	return components.WorldPos{}
@@ -1710,6 +1720,9 @@ func aiSceneSpawn(
 	if aiSceneID() == aiSceneAirManpads {
 		return aiAirManpadsSpawn(world, unitFactory, aircraftFactory, posMap)
 	}
+	if aiSceneID() == aiSceneAirCAS {
+		return aiAirCASSpawn(world, squadService, vehicleFactory, aircraftFactory, posMap)
+	}
 	if aiSceneID() == aiSceneSoloOrders {
 		return aiSoloOrderSceneSpawn(world, squadService, vehicleFactory, posMap)
 	}
@@ -2170,6 +2183,25 @@ type aiTestState struct {
 	AirOvMap       *ecs.Map[components.AircraftOverride]
 	MissileF       *ecs.Filter2[components.Missile, components.WorldPos]
 
+	// Set for ai_air_cas (Phase 20 M3). See test_scene_air_cas.go.
+	casActive    bool
+	casHull      ecs.Entity
+	casScout     ecs.Entity
+	casTube      ecs.Entity
+	casOrdered   bool
+	casAmmoStart uint16
+	casAmmoNow   uint16
+	casAcquireD  float32
+	casLaunchD   float32
+	casMinD      float32
+	casMaxUnmask float32
+	casHullHP0   float32
+	casHullHP    float32
+	casKillAt    float32
+	casSankAt    float32
+	casRidgeUp   bool
+	casStamper   *systems.Stamper
+
 	// Set for ai_vehicle_combat: two sides duel, verdict = enemy side dead.
 	vehCombatActive bool
 	vehFoes         []ecs.Entity
@@ -2490,6 +2522,10 @@ func (s *aiTestState) Update(elapsed float32) {
 	}
 	if s.manActive {
 		s.updateAirManpads(elapsed)
+		return
+	}
+	if s.casActive {
+		s.updateAirCAS(elapsed)
 		return
 	}
 	if s.soloActive {

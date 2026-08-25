@@ -38,6 +38,19 @@ type AircraftSpec struct {
 	RadarRangeM float32
 	RadarEmitM  float32
 	ESMRangeM   float32
+
+	// Loadouts are chosen when the task is set, before the airframe exists
+	// (P9) — AirArrival.Loadout indexes this. A class with none flies unarmed.
+	Loadouts     [3]AircraftLoadout
+	LoadoutCount uint8
+}
+
+// AircraftLoadout is one armament option: up to two barrels, same shape as
+// VehicleSpec.WeaponKinds. Slot 0 becomes Equipment.Primary + Active.
+type AircraftLoadout struct {
+	Name        string
+	WeaponKinds [2]WeaponKind
+	WeaponCount uint8
 }
 
 // AircraftSpecs — canonical table indexed by AircraftKind. Cold-War rotary
@@ -52,6 +65,15 @@ var AircraftSpecs = [AircraftKindCount]AircraftSpec{
 		SensorRangeM: 140, DetectMul: 2.2, NoiseRadiusM: 400,
 		Class:       ArmorClassLight,
 		RadarRangeM: 420, RadarEmitM: 1100, ESMRangeM: 1400,
+		LoadoutCount: 3,
+		Loadouts: [3]AircraftLoadout{
+			{Name: "ATGM", WeaponCount: 2,
+				WeaponKinds: [2]WeaponKind{WeaponVikhr, WeaponAutocannon30}},
+			{Name: "Rockets", WeaponCount: 2,
+				WeaponKinds: [2]WeaponKind{WeaponS8, WeaponAutocannon30}},
+			{Name: "Guns", WeaponCount: 1,
+				WeaponKinds: [2]WeaponKind{WeaponAutocannon30}},
+		},
 	},
 	AircraftHeliTransport: {
 		Kind: AircraftHeliTransport, Name: "Transport Heli", HP: 260,
@@ -67,6 +89,18 @@ var AircraftSpecs = [AircraftKindCount]AircraftSpec{
 
 // Compile-time exhaustiveness: adding an AircraftKind without a row fails here.
 var _ = [AircraftKindCount]AircraftSpec(AircraftSpecs)
+
+// LoadoutFor clamps an arrival's loadout index to what the class actually
+// carries; an unarmed class returns the zero loadout and spawns no barrels.
+func LoadoutFor(spec *AircraftSpec, idx uint8) AircraftLoadout {
+	if spec == nil || spec.LoadoutCount == 0 {
+		return AircraftLoadout{}
+	}
+	if idx >= spec.LoadoutCount {
+		idx = 0
+	}
+	return spec.Loadouts[idx]
+}
 
 func SpecForAircraft(kind AircraftKind) *AircraftSpec {
 	if kind >= AircraftKindCount {

@@ -31,6 +31,7 @@ type WeaponSystem struct {
 
 	seerFilter    *ecs.Filter6[components.Unit, components.WorldPos, components.Motion, components.Equipment, components.Awareness, components.Faction]
 	vehSeerFilter *ecs.Filter6[components.Vehicle, components.WorldPos, components.Motion, components.Equipment, components.Awareness, components.Faction]
+	airSeerFilter *ecs.Filter5[components.Aircraft, components.WorldPos, components.Equipment, components.Awareness, components.Faction]
 	targetFilter  *ecs.Filter4[components.Unit, components.WorldPos, components.Stance, components.Faction]
 	vehTargetsF   *ecs.Filter3[components.Vehicle, components.WorldPos, components.Faction]
 	wallFilter    *ecs.Filter2[components.WorldPos, components.WallSegment]
@@ -46,6 +47,7 @@ type WeaponSystem struct {
 	vehicleMap  *ecs.Map[components.Vehicle]
 	aircraftMap *ecs.Map[components.Aircraft]
 	turretMap   *ecs.Map[components.Turret]
+	sensorsMap  *ecs.Map[components.Sensors]
 	// shouldFire walks SquadMember → Squad → EngagementRules / order flags.
 	squadMemberMap             *ecs.Map[components.SquadMember]
 	engagementRulesMap         *ecs.Map[components.EngagementRules]
@@ -62,9 +64,10 @@ type WeaponSystem struct {
 	shotsBuf       []shotWork
 	airDangerBuf   []airDangerEvent
 	missilePending []pendingMissile
-	// missileMap arrives by setter from MissileSystem's tail registration —
-	// building it in InitUI here would hand Missile a mid-order component ID.
+	// missileMap and airEngageMap arrive by setter from the registration tail —
+	// building them in InitUI here would hand a new component a mid-order ID.
 	missileMap     *ecs.Map[components.Missile]
+	airEngageMap   *ecs.Map[components.AirEngagement]
 	wallsByChunk   map[components.ChunkCoord][]losWall
 	targetsByChunk map[components.ChunkCoord][]int32
 
@@ -255,6 +258,7 @@ func NewWeaponSystem(pool *core.WorkerPool, damage *DamageService, particles *Sp
 func (sys *WeaponSystem) InitUI(w *ecs.World) {
 	sys.seerFilter = ecs.NewFilter6[components.Unit, components.WorldPos, components.Motion, components.Equipment, components.Awareness, components.Faction](w)
 	sys.vehSeerFilter = ecs.NewFilter6[components.Vehicle, components.WorldPos, components.Motion, components.Equipment, components.Awareness, components.Faction](w)
+	sys.airSeerFilter = ecs.NewFilter5[components.Aircraft, components.WorldPos, components.Equipment, components.Awareness, components.Faction](w)
 	sys.targetFilter = ecs.NewFilter4[components.Unit, components.WorldPos, components.Stance, components.Faction](w)
 	sys.vehTargetsF = ecs.NewFilter3[components.Vehicle, components.WorldPos, components.Faction](w)
 	sys.wallFilter = ecs.NewFilter2[components.WorldPos, components.WallSegment](w)
@@ -270,6 +274,7 @@ func (sys *WeaponSystem) InitUI(w *ecs.World) {
 	sys.vehicleMap = ecs.NewMap[components.Vehicle](w)
 	sys.aircraftMap = ecs.NewMap[components.Aircraft](w)
 	sys.turretMap = ecs.NewMap[components.Turret](w)
+	sys.sensorsMap = ecs.NewMap[components.Sensors](w)
 	sys.squadMemberMap = ecs.NewMap[components.SquadMember](w)
 	sys.engagementRulesMap = ecs.NewMap[components.EngagementRules](w)
 	sys.behaviorRulesMap = ecs.NewMap[components.BehaviorRules](w)
@@ -340,6 +345,7 @@ func (sys *WeaponSystem) Update(ctx core.UpdateContext) {
 	snapshotHeightmaps(sys.indexRes.Get(), sys.hmMap, sys.heightmaps)
 	sys.snapshotShots(now)
 	sys.snapshotVehicleShots(now, float32(ctx.Delta.Seconds()))
+	sys.snapshotAirShots(now, float32(ctx.Delta.Seconds()))
 
 	if len(sys.shotsBuf) > 0 {
 		sys.runParallelResolve(now)
@@ -436,11 +442,11 @@ func (sys *WeaponSystem) snapshotShots(now float32) {
 			continue
 		}
 		// MANPADS: the shot is a Missile entity, not a ray (Phase 20 M2, P6).
-		// LOS is checked before the round is committed.
+		// LOS is checked before the round is committed. No target-class guard:
+		// the zero VsSoft/Light/Heavy already keep pickTarget off the ground,
+		// and a second copy of that rule would now be wrong — Phase 20 M3 flies
+		// missiles at hulls.
 		if wspec.MissileSpeedM > 0 {
-			if !sys.aircraftMap.Has(target) {
-				continue
-			}
 			muzzle := worldXYZ(*pos, weaponEyeHeight)
 			if sys.airShotBlocked(muzzle, targetPos) {
 				continue
