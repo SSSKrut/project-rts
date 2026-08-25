@@ -406,6 +406,11 @@ func (s *SquadService) ensureCommandable(ent ecs.Entity) bool {
 		s.rosterMap.Add(ent, &r)
 	}
 	s.orderQueueMap.Add(ent, &components.OrderQueueHead{})
+	// Commandable implies a net to be commanded over; without this a soloist
+	// would be the one thing on the field immune to the core mechanic.
+	if !s.commsMap.Has(ent) {
+		s.commsMap.Add(ent, &components.CommsState{})
+	}
 	return true
 }
 

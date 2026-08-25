@@ -92,11 +92,7 @@ func (s *SquadService) CreateFromUnits(units []ecs.Entity, kind components.Forma
 		Spacing: spacing,
 	})
 	s.macroPathMap.Add(squad, &components.MacroPath{})
-	s.radioMap.Add(squad, &components.RadioNetwork{
-		Frequency:   0,
-		HasRadioman: s.hasRadiomanInRoster(prepared),
-		HQReachable: false,
-	})
+	s.commsMap.Add(squad, &components.CommsState{})
 	s.orderQueueMap.Add(squad, &components.OrderQueueHead{})
 	s.alwaysActiveMap.Add(squad, &components.AlwaysActive{})
 

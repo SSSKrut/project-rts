@@ -149,7 +149,7 @@ func (s *RoleService) spawnSecondary(unit ecs.Entity, role components.UnitRoleKi
 
 	switch role {
 	case components.RoleRadioOperator:
-		s.radioMap.Add(ent, &components.Radio{})
+		s.radioMap.Add(ent, &components.Radio{On: true, EmitRangeM: components.RadioEmitDefaultM})
 	case components.RoleMedic:
 		s.medkitMap.Add(ent, &components.Medkit{})
 	case components.RoleEngineer, components.RoleDemoMan:

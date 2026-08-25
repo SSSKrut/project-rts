@@ -38,6 +38,7 @@ type AircraftFactory struct {
 	EngageMap      *ecs.Map[components.AirEngagement]
 	WeaponMap      *ecs.Map[components.Weapon]
 	OwnedByMap     *ecs.Map[components.OwnedBy]
+	RadioMap       *ecs.Map[components.Radio]
 }
 
 func NewAircraftFactory(world *ecs.World, posMap *ecs.Map[components.WorldPos]) *AircraftFactory {
@@ -62,6 +63,7 @@ func NewAircraftFactory(world *ecs.World, posMap *ecs.Map[components.WorldPos]) 
 		EngageMap:      ecs.NewMap[components.AirEngagement](world),
 		WeaponMap:      ecs.NewMap[components.Weapon](world),
 		OwnedByMap:     ecs.NewMap[components.OwnedBy](world),
+		RadioMap:       ecs.NewMap[components.Radio](world),
 	}
 }
 
@@ -149,6 +151,7 @@ func (f *AircraftFactory) Spawn(a components.AirArrival) ecs.Entity {
 	f.ThreatMap.Add(ent, &components.Threat{})
 	f.DangerMap.Add(ent, &components.DangerBuffer{})
 	f.OverrideMap.Add(ent, &components.AircraftOverride{})
+	f.RadioMap.Add(ent, &components.Radio{On: true, EmitRangeM: components.RadioEmitDefaultM})
 	rules := a.Rules
 	f.RulesMap.Add(ent, &rules)
 	f.EngageMap.Add(ent, &components.AirEngagement{})

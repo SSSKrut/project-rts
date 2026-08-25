@@ -42,6 +42,7 @@ var VehicleAssetName = [VehicleKindCount][AssetSideCount]string{
 	VehicleATCarrier: {SideWest: "ferret", SideEast: "brdm"},
 	VehicleCar:       {SideWest: "mrap_2", SideEast: "btr40"},
 	VehicleAAGun:     {SideWest: "aa_gun_w", SideEast: "aa_gun_e"},
+	VehicleCommand:   {}, // no model yet — the renderer draws its box
 }
 
 // RotateYawXZ turns a model-space offset (forward +Z, up +Y, left +X) into a

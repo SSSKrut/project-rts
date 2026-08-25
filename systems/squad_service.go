@@ -25,7 +25,7 @@ type SquadService struct {
 	rosterMap       *ecs.Map[components.CommandRoster]
 	formationMap    *ecs.Map[components.FormationData]
 	macroPathMap    *ecs.Map[components.MacroPath]
-	radioMap        *ecs.Map[components.RadioNetwork]
+	commsMap        *ecs.Map[components.CommsState]
 	memberMap       *ecs.Map[components.SquadMember]
 	alwaysActiveMap *ecs.Map[components.AlwaysActive]
 	// SquadService is the only path that issues / cancels orders.
@@ -85,7 +85,7 @@ func NewSquadService(w *ecs.World) *SquadService {
 		rosterMap:                  ecs.NewMap[components.CommandRoster](w),
 		formationMap:               ecs.NewMap[components.FormationData](w),
 		macroPathMap:               ecs.NewMap[components.MacroPath](w),
-		radioMap:                   ecs.NewMap[components.RadioNetwork](w),
+		commsMap:                   ecs.NewMap[components.CommsState](w),
 		memberMap:                  ecs.NewMap[components.SquadMember](w),
 		alwaysActiveMap:            ecs.NewMap[components.AlwaysActive](w),
 		orderQueueMap:              ecs.NewMap[components.OrderQueueHead](w),

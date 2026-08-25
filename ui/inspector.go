@@ -20,6 +20,7 @@ type InspectorMaps struct {
 	EquipmentMap          *ecs.Map[components.Equipment]
 	SquadMemberMap        *ecs.Map[components.SquadMember]
 	RosterMap             *ecs.Map[components.CommandRoster]
+	CommsMap              *ecs.Map[components.CommsState]
 	FormationDataMap      *ecs.Map[components.FormationData]
 	MacroPathMap          *ecs.Map[components.MacroPath]
 	SquadFilter           *ecs.Filter2[components.Squad, components.CommandRoster]
@@ -61,6 +62,7 @@ func NewInspectorMaps(world *ecs.World) InspectorMaps {
 		EquipmentMap:          ecs.NewMap[components.Equipment](world),
 		SquadMemberMap:        ecs.NewMap[components.SquadMember](world),
 		RosterMap:             ecs.NewMap[components.CommandRoster](world),
+		CommsMap:              ecs.NewMap[components.CommsState](world),
 		FormationDataMap:      ecs.NewMap[components.FormationData](world),
 		MacroPathMap:          ecs.NewMap[components.MacroPath](world),
 		SquadFilter:           ecs.NewFilter2[components.Squad, components.CommandRoster](world),

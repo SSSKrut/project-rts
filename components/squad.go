@@ -8,7 +8,7 @@ import (
 // Squad is a marker on an abstract squad entity. The squad lives without a
 // WorldPos - its center is computed on the fly from member positions.
 // Archetype: Squad + CommandRoster + FormationData + MacroPath +
-// RadioNetwork + AlwaysActive.
+// CommsState + AlwaysActive.
 type Squad struct{}
 
 // SquadRosterSize is the maximum members per squad. 8 fits Cold War squad
@@ -69,13 +69,6 @@ type MacroPath struct {
 	WaitingForStragglers bool
 	StragglerCaughtUp    uint8
 	StragglerTotal       uint8
-}
-
-// RadioNetwork - structural scaffold. Real readers land in the Comms phase.
-type RadioNetwork struct {
-	Frequency   uint8
-	HasRadioman bool
-	HQReachable bool
 }
 
 // SquadMember - back-reference on each rostered unit. Invariant: for every

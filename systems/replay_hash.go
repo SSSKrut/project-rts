@@ -27,6 +27,7 @@ type ReplayHasher struct {
 	arrivalFilter *ecs.Filter1[components.AirArrival]
 	orderFilter   *ecs.Filter1[components.OrderState]
 	planFilter    *ecs.Filter2[components.Squad, components.SquadPlan]
+	commsFilter   *ecs.Filter1[components.CommsState]
 	contactFilter *ecs.Filter1[components.Contact]
 	sensorsMap    *ecs.Map[components.Sensors]
 	stanceMap     *ecs.Map[components.Stance]
@@ -55,6 +56,7 @@ func NewReplayHasher(w *ecs.World) *ReplayHasher {
 		vehFilter:     ecs.NewFilter4[components.Vehicle, components.WorldPos, components.Motion, components.ActionQueue](w),
 		orderFilter:   ecs.NewFilter1[components.OrderState](w),
 		planFilter:    ecs.NewFilter2[components.Squad, components.SquadPlan](w),
+		commsFilter:   ecs.NewFilter1[components.CommsState](w),
 		contactFilter: ecs.NewFilter1[components.Contact](w),
 		sensorsMap:    ecs.NewMap[components.Sensors](w),
 		stanceMap:     ecs.NewMap[components.Stance](w),
@@ -270,6 +272,18 @@ func (r *ReplayHasher) Hash() uint64 {
 		f32(plan.CalmSince)
 		pos(plan.Anchor)
 		take(qp.Entity())
+	}
+	fold()
+
+	// Comms decides which orders arrive at all (block A M1), so a run that
+	// diverges only in quality would diverge in behaviour one order later.
+	qcm := r.commsFilter.Query()
+	for qcm.Next() {
+		cs := qcm.Get()
+		f32(cs.Quality)
+		u8(uint8(cs.Band))
+		pos(cs.Anchor)
+		take(qcm.Entity())
 	}
 	fold()
 

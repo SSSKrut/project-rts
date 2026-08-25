@@ -60,6 +60,8 @@ type VehicleSpec struct {
 	// emit range must exceed the seeing range or the dilemma collapses (P4).
 	RadarRangeM float32
 	RadarEmitM  float32
+	// RelayRangeM > 0 makes this class a node of the radio net (block A).
+	RelayRangeM float32
 }
 
 // VehicleSpecs — canonical table indexed by VehicleKind. Numbers are rough
@@ -144,6 +146,16 @@ var VehicleSpecs = [VehicleKindCount]VehicleSpec{
 		Class: ArmorClassSoft, ReflexKind: VehicleReflexGoDark,
 		WeaponCount: 1, WeaponKinds: [2]WeaponKind{WeaponZU23},
 		ESMRangeM: 900, RadarRangeM: 520, RadarEmitM: 1300,
+	},
+	VehicleCommand: {
+		Kind: VehicleCommand, Name: "Command", HP: 160,
+		MaxSpeedRoad: 20, MaxSpeedOffroad: 8, MaxSpeedReverse: 4, TurnRadiusM: 7,
+		SeatCount: 4, ArmorFront: 0.8, ArmorSide: 0.9, ArmorRear: 1.0,
+		TurretSlewDps: 0, Locomotion: LocomotionWheeled, ColliderR: 3.2,
+		BoxLen: 6.8, BoxWid: 2.6, BoxHgt: 2.8,
+		SensorRangeM: 70, DetectMul: 1.5, NoiseRadiusM: 100,
+		Class: ArmorClassSoft, ReflexKind: VehicleReflexFlee,
+		ESMRangeM: 700, RelayRangeM: RelayRangeCommandM,
 	},
 }
 

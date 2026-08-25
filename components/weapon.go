@@ -43,9 +43,14 @@ type Weapon struct {
 	Dispersion  float32 // radians; 0 = perfect aim
 }
 
-// Radio is the marker placed on the Equipment.Secondary entity of a
-// RadioOperator. Read by RadioNetwork.HasRadioman gating.
-type Radio struct{}
+// Radio sits on a radioman's Equipment.Secondary entity, or directly on a
+// hull / airframe that carries a built-in set. On is the player's dial: a
+// working radio is an EMITTER and hands enemy ESM a bearing, so going quiet is
+// a decision — the same bargain the radar offers, with the same two numbers.
+type Radio struct {
+	On         bool
+	EmitRangeM float32
+}
 
 type Medkit struct{}
 

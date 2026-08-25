@@ -34,9 +34,9 @@ func drawInspectorSquad(ctx InspectorCtx, squad ecs.Entity, x, y, width int32) i
 	TextRowClipped(&col, &ctx.st, fmt.Sprintf("Members: %d / %d",
 		roster.Count, components.SquadRosterSize), ctx.st.Text)
 
-	if fd := ctx.FormationDataMap.Get(squad); fd != nil {
-		TextRowClipped(&col, &ctx.st, fmt.Sprintf("Formation: %s  spacing %.1f m",
-			formationLabel(fd.Type), fd.Spacing), ctx.st.Text)
+	if cs := ctx.CommsMap.Get(squad); cs != nil {
+		TextRowClipped(&col, &ctx.st, fmt.Sprintf("Radio:     %-9s %.0f%%",
+			cs.Band.String(), cs.Quality*100), CommsBandColor(cs.Band, &ctx.st))
 	}
 	if mp := ctx.MacroPathMap.Get(squad); mp != nil {
 		TextRowClipped(&col, &ctx.st, macroPathLabel(mp), ctx.st.Text)
@@ -205,4 +205,18 @@ func isSelected(selected []ecs.Entity, e ecs.Entity) bool {
 		}
 	}
 	return false
+}
+
+// CommsBandColor: green reads as normal text so a working net is quiet, and
+// only degradation draws the eye.
+func CommsBandColor(b components.CommsBand, st *Style) rl.Color {
+	switch b {
+	case components.CommsAmber:
+		return rl.Color{R: 235, G: 190, B: 90, A: 255}
+	case components.CommsRed:
+		return rl.Color{R: 235, G: 120, B: 80, A: 255}
+	case components.CommsDark:
+		return rl.Color{R: 190, G: 90, B: 90, A: 255}
+	}
+	return st.Text
 }

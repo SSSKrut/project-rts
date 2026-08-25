@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"strings"
 
 	rl "github.com/gen2brain/raylib-go/raylib"
 	"github.com/mlange-42/ark/ecs"
@@ -259,6 +260,11 @@ const (
 	// hitscan weapon could reach, an approach that stops instead of overflying,
 	// borrowed altitude that comes back, and a dead hull.
 	aiSceneAirCAS = "ai_air_cas"
+
+	// _comms (lite block A M0): a squad marches away from its relay and the
+	// radio quality follows it down through every band; killing the radioman
+	// halves the strength from the same spot.
+	aiSceneComms = "lite_comms_range"
 )
 
 // aiSceneMapName lets a scene demand a specific map manifest ("" = default).
@@ -288,6 +294,10 @@ func aiSceneMapName() string {
 		// Relief IS a claim here: without a ridge in the way there is nothing
 		// for the pop-up to unmask from.
 		return "hills"
+	case aiSceneComms:
+		// The claims are distances; a hill that slows the march only stretches
+		// the clock and tells us nothing.
+		return "flat"
 	case aiSceneCoverNone:
 		return "flat"
 	case aiSceneCoverDefilade:
@@ -348,7 +358,9 @@ func isAIScene() bool {
 		return false
 	}
 	v := *sceneFlag
-	return len(v) >= 3 && v[:3] == "ai_"
+	// "lite_" is the pivot's namespace; it goes through the same harness —
+	// headless run, pristine SaveDir, verdict line, replay hash.
+	return strings.HasPrefix(v, "ai_") || strings.HasPrefix(v, "lite_")
 }
 func aiSceneID() string {
 	if !isAIScene() {
@@ -442,7 +454,7 @@ func aiSceneAnchorPos() components.WorldPos {
 	case aiSceneVehConvoyRoad:
 		return components.WorldPos{}.Add(rl.Vector3{X: 10, Z: -12})
 	case aiSceneAirTransit, aiSceneAirRecon, aiSceneSoloOrders, aiSceneAirAAGun,
-		aiSceneAirManpads, aiSceneAirCAS:
+		aiSceneAirManpads, aiSceneAirCAS, aiSceneComms:
 		return components.WorldPos{}.Add(rl.Vector3{X: 0, Z: 0})
 	}
 	return components.WorldPos{}
@@ -1699,6 +1711,7 @@ func aiSceneSpawn(
 	unitFactory aiUnitSpawn,
 	vehicleFactory *entities.VehicleFactory,
 	aircraftFactory *entities.AircraftFactory,
+	damageService *systems.DamageService,
 	playerFaction components.Faction,
 	posMap *ecs.Map[components.WorldPos],
 	rosterMap *ecs.Map[components.CommandRoster],
@@ -1722,6 +1735,10 @@ func aiSceneSpawn(
 	}
 	if aiSceneID() == aiSceneAirCAS {
 		return aiAirCASSpawn(world, squadService, vehicleFactory, aircraftFactory, posMap)
+	}
+	if aiSceneID() == aiSceneComms {
+		return aiCommsSpawn(world, squadService, roleService, unitFactory, damageService,
+			playerFaction.ID, posMap, rosterMap)
 	}
 	if aiSceneID() == aiSceneSoloOrders {
 		return aiSoloOrderSceneSpawn(world, squadService, vehicleFactory, posMap)
@@ -2199,8 +2216,15 @@ type aiTestState struct {
 	casHullHP    float32
 	casKillAt    float32
 	casSankAt    float32
-	casRidgeUp   bool
-	casStamper   *systems.Stamper
+
+	// Set for lite_comms_range (block A M0). See test_scene_comms.go.
+	commsActive bool
+	commsKilled bool
+	commsProbes []commsProbe
+	Damage      *systems.DamageService
+	CommsMap    *ecs.Map[components.CommsState]
+	casRidgeUp  bool
+	casStamper  *systems.Stamper
 
 	// Set for ai_vehicle_combat: two sides duel, verdict = enemy side dead.
 	vehCombatActive bool
@@ -2526,6 +2550,10 @@ func (s *aiTestState) Update(elapsed float32) {
 	}
 	if s.casActive {
 		s.updateAirCAS(elapsed)
+		return
+	}
+	if s.commsActive {
+		s.updateComms(elapsed)
 		return
 	}
 	if s.soloActive {

@@ -223,7 +223,7 @@ func (g *Game) spawnScene() {
 		// Snapshot restores all entities; scene / default spawns skipped.
 	} else if isAIScene() {
 		g.Scene.AI = aiSceneSpawn(g.App.World, g.Svc.Squad, g.Svc.Role, g.unitFactory,
-			g.Svc.VehicleFactory, g.Svc.AircraftFactory, playerFaction,
+			g.Svc.VehicleFactory, g.Svc.AircraftFactory, g.Svc.Damage, playerFaction,
 			g.Maps.Pos, g.Maps.Roster, g.Maps.Building)
 	} else if isDoorScene() {
 		testSquad := g.Svc.Squad.CreateFromTemplate(
