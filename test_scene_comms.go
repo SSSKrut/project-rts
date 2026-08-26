@@ -7,6 +7,7 @@ import (
 	"github.com/mlange-42/ark/ecs"
 
 	"rts-go/components"
+	"rts-go/entities"
 	"rts-go/systems"
 )
 
@@ -429,4 +430,197 @@ func (s *aiTestState) commsOrdersVerdict(elapsed float32) {
 		instant, delayed, blocked, rescued, elapsed)
 	fmt.Println("============================================================")
 	s.verdictDone = true
+}
+
+// lite_comms_autonomy — block A M2. What a squad does when the net is gone.
+//
+// The stimulus is the one that actually happens in a game: the command vehicle
+// carrying the relay is destroyed, and everyone downstream goes dark mid-order.
+//
+//	carries   the delivered order keeps running — losing the net does not
+//	          cancel what the squad was already told to do
+//	fights    it still shoots back; being off the net is not being asleep
+//	holds     it does not drift off the ground it was left on, however many
+//	          times cover looks better somewhere else
+//	stale     its own marker on the map stops being refreshed
+//
+// The bound is CommsDark's 60 m of self-action plus formation spread. Measured
+// 2026-08-26 by A/B on the leash flag: drift is 13 m either way, i.e. today the
+// squad already holds on its own — FormationSystem pulls men back to their
+// slots and a cover hop is at most 18 m. The bound is insurance, and this
+// number is what says so.
+const (
+	commsAutVerdictAt float32 = 30.0
+	commsAutOrderAt   float32 = 1.0
+	commsAutKillAt    float32 = 5.0
+	commsAutMarchM    float32 = 70
+	// CommsDark's 60 m of self-action from the frozen anchor, plus room for
+	// the squad's own spread.
+	commsAutDriftM float32 = 75
+)
+
+func aiCommsAutonomySpawn(world *ecs.World, squadService *systems.SquadService,
+	roleService *systems.RoleService, unitFactory aiUnitSpawn,
+	vehicleFactory *entities.VehicleFactory, damageService *systems.DamageService,
+	playerFaction uint8, posMap *ecs.Map[components.WorldPos],
+	rosterMap *ecs.Map[components.CommandRoster]) *aiTestState {
+	if squadService == nil || roleService == nil || vehicleFactory == nil ||
+		damageService == nil {
+		fmt.Printf("[ai-test %s] NO SERVICE — aborting\n", aiSceneID())
+		return nil
+	}
+	wp := func(x, z float32) components.WorldPos {
+		p := components.WorldPos{}.Add(rl.Vector3{X: x, Z: z})
+		p.Local.Y = systems.GroundHeight(x, z)
+		return p
+	}
+	// The net is ONE command vehicle, and it is the thing the scene kills.
+	hq := vehicleFactory.Spawn(wp(0, 0), components.VehicleCommand,
+		playerFaction, components.ControllerLocal)
+
+	squad := squadService.CreateFromTemplate(systems.TmplMotorRifle, wp(30, 0),
+		components.FormationLine, components.Faction{ID: playerFaction},
+		components.Controller{Owner: components.ControllerLocal}, roleService, unitFactory)
+	if squad == (ecs.Entity{}) {
+		fmt.Printf("[ai-test %s] FAILED TO SPAWN SQUAD — aborting\n", aiSceneID())
+		return nil
+	}
+	// A shooter beside the march goal: the squad must still answer fire while
+	// off the net, and it must not chase him past the leash afterwards.
+	foe := aiSpawnGunner(world, roleService, unitFactory,
+		wp(30+commsAutMarchM+16, 8), 20000, 4000)
+	// Suppression, not slaughter: the claim is that a cut-off squad keeps
+	// fighting and stays put under fire, and it cannot show either if it is
+	// dead inside ten seconds.
+	if eq := ecs.NewMap[components.Equipment](world).Get(foe); eq != nil {
+		if w := ecs.NewMap[components.Weapon](world).Get(eq.Active); w != nil {
+			w.Damage = 4
+		}
+	}
+
+	return &aiTestState{
+		sceneID:      aiSceneID(),
+		autSquad:     squad,
+		autHQ:        hq,
+		autFoe:       foe,
+		autGoal:      wp(30+commsAutMarchM, 0),
+		World:        world,
+		SquadService: squadService,
+		Damage:       damageService,
+		PosMap:       posMap,
+		RosterMap:    rosterMap,
+		HPMap:        ecs.NewMap[components.HP](world),
+		CommsMap:     ecs.NewMap[components.CommsState](world),
+		WeaponMap:    ecs.NewMap[components.Weapon](world),
+		EquipMap:     ecs.NewMap[components.Equipment](world),
+		markerRes:    ecs.NewResource[components.MapMarkerCache](world),
+		verdictAt:    commsAutVerdictAt,
+		orderAt:      commsAutOrderAt,
+		nextSampleAt: commsAutOrderAt + 3,
+	}
+}
+
+// markerCache is the render-side squad marker store the scene checks for
+// staleness — the same one the map draws from.
+func (s *aiTestState) markerCache() *components.MapMarkerCache {
+	return s.markerRes.Get()
+}
+
+func (s *aiTestState) updateCommsAutonomy(elapsed float32) {
+	if s.verdictDone {
+		return
+	}
+	if !s.orderFired {
+		if elapsed < s.orderAt {
+			return
+		}
+		s.orderFired = true
+		s.SquadService.IssueOrder(s.autSquad, components.OrderKindMoveTo,
+			s.autGoal, ecs.Entity{}, false, systems.OrderParams{})
+		fmt.Printf("[ai-test %s] t=%.1fs ORDER: march %.0f m, net still up\n",
+			s.sceneID, elapsed, commsAutMarchM)
+		return
+	}
+	if elapsed >= commsAutKillAt && !s.autHQDown {
+		s.autHQDown = true
+		s.Damage.ApplyDeath(s.autHQ)
+		fmt.Printf("[ai-test %s] t=%.1fs HQ DESTROYED — the net is gone\n",
+			s.sceneID, elapsed)
+	}
+
+	roster := s.RosterMap.Get(s.autSquad)
+	if roster == nil {
+		return
+	}
+	center, ok := systems.SquadAnchorPos(s.World, roster, s.PosMap)
+	if !ok {
+		return
+	}
+	if s.autHQDown {
+		if d := balXZ(center, s.autGoal); d < s.autBestToGoal || s.autBestToGoal == 0 {
+			s.autBestToGoal = d
+		}
+		if d := balXZ(center, s.autGoal); d > s.autDrift && s.autArrived > 0 {
+			s.autDrift = d
+		}
+	}
+	if s.autArrived == 0 && balXZ(center, s.autGoal) < 8 {
+		s.autArrived = elapsed
+		fmt.Printf("[ai-test %s] t=%.1fs ARRIVED off the net\n", s.sceneID, elapsed)
+	}
+	// "Still fighting" is ammo actually leaving the squad's barrels.
+	s.autShots = 0
+	for i := uint8(0); i < roster.Count; i++ {
+		mem := roster.Members[i]
+		if mem == (ecs.Entity{}) || !s.World.Alive(mem) {
+			continue
+		}
+		eq := s.EquipMap.Get(mem)
+		if eq == nil || eq.Active == (ecs.Entity{}) || !s.World.Alive(eq.Active) {
+			continue
+		}
+		if w := s.WeaponMap.Get(eq.Active); w != nil && w.LastFiredAt > 0 {
+			s.autShots++
+		}
+	}
+	if cache := s.markerCache(); cache != nil {
+		if _, stale := cache.StaleSince[s.autSquad]; stale {
+			s.autStale = true
+		}
+	}
+
+	if elapsed >= s.nextSampleAt && elapsed < s.verdictAt {
+		s.nextSampleAt = elapsed + aiSampleEvery
+		band := components.CommsGreen
+		if cs := s.CommsMap.Get(s.autSquad); cs != nil {
+			band = cs.Band
+		}
+		fmt.Printf("[ai-test %s] t=%.1fs band=%-8s toGoal=%.0fm arrived=%.1f shooters=%d stale=%v drift=%.0fm\n",
+			s.sceneID, elapsed, band, balXZ(center, s.autGoal), s.autArrived,
+			s.autShots, s.autStale, s.autDrift)
+	}
+	if elapsed >= s.verdictAt {
+		s.commsAutonomyVerdict(elapsed)
+	}
+}
+
+func (s *aiTestState) commsAutonomyVerdict(elapsed float32) {
+	s.verdictDone = true
+	band := components.CommsGreen
+	if cs := s.CommsMap.Get(s.autSquad); cs != nil {
+		band = cs.Band
+	}
+	carries := s.autArrived > commsAutKillAt
+	fights := s.autShots > 0
+	holds := s.autDrift <= commsAutDriftM
+	pass := carries && fights && holds && s.autStale && band != components.CommsGreen
+	verdict := "FAIL"
+	if pass {
+		verdict = "PASS"
+	}
+	fmt.Println("============================================================")
+	fmt.Printf("== VERDICT [%s]: %s  (band=%s arrived=%.1fs drift=%.0f/%.0fm shooters=%d | carries=%v fights=%v holds=%v stale=%v t=%.1fs)\n",
+		s.sceneID, verdict, band, s.autArrived, s.autDrift, commsAutDriftM,
+		s.autShots, carries, fights, holds, s.autStale, elapsed)
+	fmt.Println("============================================================")
 }

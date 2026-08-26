@@ -271,6 +271,11 @@ const (
 	// back. See test_scene_comms.go.
 	aiSceneCommsOrders = "lite_comms_orders"
 
+	// _comms_autonomy (lite block A M2): the command vehicle carrying the net
+	// is destroyed mid-order; the squad carries on, shoots back, holds the
+	// ground it was left on, and its own marker stops being refreshed.
+	aiSceneCommsAut = "lite_comms_autonomy"
+
 	// _balance_* (lite, 2026-08-26): the balance statement is the PAIR of the
 	// first two — armour breaks a squad caught in the open, the same squad
 	// lying in wait breaks armour. _eyes fires no shot and asserts the ORDER
@@ -311,7 +316,7 @@ func aiSceneMapName() string {
 		// The claims are distances; a hill that slows the march only stretches
 		// the clock and tells us nothing.
 		return "flat"
-	case aiSceneCommsOrders, aiSceneBalOpen, aiSceneBalAmbush, aiSceneBalEyes:
+	case aiSceneCommsOrders, aiSceneCommsAut, aiSceneBalOpen, aiSceneBalAmbush, aiSceneBalEyes:
 		// Balance is a number, and terrain is the loudest way to hide one:
 		// a ridge that masks half the squad turns a measurement into a story.
 		return "flat"
@@ -1776,6 +1781,10 @@ func aiSceneSpawn(
 		return aiCommsOrdersSpawn(world, squadService, roleService, unitFactory,
 			playerFaction.ID, posMap, rosterMap)
 	}
+	if aiSceneID() == aiSceneCommsAut {
+		return aiCommsAutonomySpawn(world, squadService, roleService, unitFactory,
+			vehicleFactory, damageService, playerFaction.ID, posMap, rosterMap)
+	}
 	switch aiSceneID() {
 	case aiSceneBalOpen, aiSceneBalAmbush, aiSceneBalEyes:
 		mode := balanceOpen
@@ -2271,10 +2280,23 @@ type aiTestState struct {
 	commsProbes  []commsProbe
 	commsOrders  []commsOrderProbe
 	playerFac    uint8
-	Damage       *systems.DamageService
-	CommsMap     *ecs.Map[components.CommsState]
-	casRidgeUp   bool
-	casStamper   *systems.Stamper
+
+	// lite_comms_autonomy (block A M2).
+	autSquad      ecs.Entity
+	autHQ         ecs.Entity
+	autFoe        ecs.Entity
+	autGoal       components.WorldPos
+	autHQDown     bool
+	autArrived    float32
+	autDrift      float32
+	autBestToGoal float32
+	autShots      int
+	autStale      bool
+	markerRes     ecs.Resource[components.MapMarkerCache]
+	Damage        *systems.DamageService
+	CommsMap      *ecs.Map[components.CommsState]
+	casRidgeUp    bool
+	casStamper    *systems.Stamper
 
 	// Set for lite_balance_* (2026-08-26). See test_scene_balance.go.
 	balanceActive      bool
@@ -2634,6 +2656,10 @@ func (s *aiTestState) Update(elapsed float32) {
 	}
 	if len(s.commsOrders) > 0 {
 		s.updateCommsOrders(elapsed)
+		return
+	}
+	if s.autSquad != (ecs.Entity{}) {
+		s.updateCommsAutonomy(elapsed)
 		return
 	}
 	if s.balanceActive {
