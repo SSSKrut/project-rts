@@ -21,6 +21,7 @@ type orderMarkerCtx struct {
 	orderTargetMap *ecs.Map[components.OrderTarget]
 	orderChainMap  *ecs.Map[components.OrderChain]
 	orderFacingMap *ecs.Map[components.OrderParamFacing]
+	commsMap       *ecs.Map[components.CommsState]
 	squadColor     func(ecs.Entity) rl.Color
 }
 
@@ -51,7 +52,8 @@ func drawOrderMarkers3D(ctx orderMarkerCtx, selected []ecs.Entity) {
 			continue
 		}
 		head := ctx.orderQueueMap.Get(squad)
-		if head == nil || head.First == (ecs.Entity{}) {
+		waiting := undeliveredOrder(ctx, squad)
+		if (head == nil || head.First == (ecs.Entity{})) && waiting == (ecs.Entity{}) {
 			continue
 		}
 		roster := ctx.rosterMap.Get(squad)
@@ -68,8 +70,28 @@ func drawOrderMarkers3D(ctx orderMarkerCtx, selected []ecs.Entity) {
 		if ctx.squadColor != nil {
 			col = ctx.squadColor(squad)
 		}
-		drawOrderChainMarkers(ctx, head.First, startRender, col)
+		if head != nil && head.First != (ecs.Entity{}) {
+			drawOrderChainMarkers(ctx, head.First, startRender, col)
+		}
+		// A plan the net has not carried yet still draws — the player made it
+		// and can cancel it. Washed out, because nothing is executing it.
+		if waiting != (ecs.Entity{}) {
+			pale := col
+			pale.A = 90
+			drawOrderChainMarkers(ctx, waiting, startRender, pale)
+		}
 	}
+}
+
+func undeliveredOrder(ctx orderMarkerCtx, squad ecs.Entity) ecs.Entity {
+	if ctx.commsMap == nil {
+		return ecs.Entity{}
+	}
+	cs := ctx.commsMap.Get(squad)
+	if cs == nil || cs.Undelivered == (ecs.Entity{}) || !ctx.world.Alive(cs.Undelivered) {
+		return ecs.Entity{}
+	}
+	return cs.Undelivered
 }
 
 func drawOrderChainMarkers(ctx orderMarkerCtx, ord ecs.Entity, prevRender rl.Vector3, col rl.Color) {

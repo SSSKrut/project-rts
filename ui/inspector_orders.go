@@ -20,17 +20,37 @@ func drawInspectorOrderSection(ctx InspectorCtx, squad ecs.Entity, x, y, width i
 		return int32(col.Y)
 	}
 	head := ctx.OrderQueueMap.Get(squad)
-	if head == nil || head.First == (ecs.Entity{}) {
-		TextRow(&col, &ctx.st, "  No order", ctx.st.TextDim)
-		return int32(col.Y)
-	}
-
 	// HoldFire silently blocks AttackMove; the per-row pill flags it.
 	eMode := components.HoldFire
 	if ctx.EngagementRulesMap != nil {
 		if er := ctx.EngagementRulesMap.Get(squad); er != nil {
 			eMode = er.Mode
 		}
+	}
+
+	// A plan the net has not carried yet is a real order that is simply not in
+	// the queue — it goes ABOVE the running one, because it is what the player
+	// most recently asked for and the thing they are waiting on.
+	waiting := ecs.Entity{}
+	if ctx.CommsMap != nil {
+		if cs := ctx.CommsMap.Get(squad); cs != nil && cs.Undelivered != (ecs.Entity{}) &&
+			ctx.World.Alive(cs.Undelivered) {
+			waiting = cs.Undelivered
+			drawOrderRow(ctx, &col, waiting, false, eMode)
+			eta := ""
+			if cs.DeliverAt > ctx.Now {
+				eta = fmt.Sprintf(" (%.0fs)", cs.DeliverAt-ctx.Now)
+			}
+			TextRowClipped(&col, &ctx.st, "    not delivered"+eta,
+				CommsBandColor(cs.Band, &ctx.st))
+		}
+	}
+
+	if head == nil || head.First == (ecs.Entity{}) {
+		if waiting == (ecs.Entity{}) {
+			TextRow(&col, &ctx.st, "  No order", ctx.st.TextDim)
+		}
+		return int32(col.Y)
 	}
 
 	cur := head.First

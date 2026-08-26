@@ -39,6 +39,7 @@ func (g *Game) drawUI() {
 		Buildings:        &g.Res.BuildingPlans,
 		ShowDebugLayers:  g.UI.ShowMapDebugLy,
 		OrderQueueMap:    g.Maps.OrderQueue,
+		CommsMap:         g.Ctx.Inspector.CommsMap,
 		OrderKindMap:     g.Maps.OrderKind,
 		OrderTargetMap:   g.Maps.OrderTarget,
 		OrderChainMap:    g.Maps.OrderChain,

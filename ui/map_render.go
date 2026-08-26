@@ -49,6 +49,7 @@ type MapRenderCtx struct {
 	Buildings       *components.BuildingPlanList
 	ShowDebugLayers bool
 	OrderQueueMap   *ecs.Map[components.OrderQueueHead]
+	CommsMap        *ecs.Map[components.CommsState]
 	OrderKindMap    *ecs.Map[components.OrderKind]
 	OrderTargetMap  *ecs.Map[components.OrderTarget]
 	OrderChainMap   *ecs.Map[components.OrderChain]
@@ -166,14 +167,6 @@ func drawOrderMarkers(content rl.Rectangle, ctx MapRenderCtx) {
 	for q.Next() {
 		roster, head := q.Get()
 		squad := q.Entity()
-		if head.First == (ecs.Entity{}) || !ctx.World.Alive(head.First) {
-			continue
-		}
-		kind := ctx.OrderKindMap.Get(head.First)
-		target := ctx.OrderTargetMap.Get(head.First)
-		if kind == nil || target == nil {
-			continue
-		}
 		center, ok := lookupSquadCenter(ctx, squad, roster)
 		if !ok {
 			continue
@@ -181,6 +174,29 @@ func drawOrderMarkers(content rl.Rectangle, ctx MapRenderCtx) {
 		col := rl.Color{R: 230, G: 230, B: 230, A: 220}
 		if ctx.SquadColor != nil {
 			col = ctx.SquadColor(squad)
+		}
+		// The map is the command surface, so a plan the net has not carried is
+		// drawn here too — washed out, and unmistakably not a running order.
+		if ctx.CommsMap != nil {
+			if cs := ctx.CommsMap.Get(squad); cs != nil && cs.Undelivered != (ecs.Entity{}) &&
+				ctx.World.Alive(cs.Undelivered) {
+				if k := ctx.OrderKindMap.Get(cs.Undelivered); k != nil {
+					if t := ctx.OrderTargetMap.Get(cs.Undelivered); t != nil {
+						pale := rl.Color{R: col.R, G: col.G, B: col.B, A: 70}
+						pt := MapWorldToPanel(t.Pos, ctx.Cam, content)
+						rl.DrawLineEx(MapWorldToPanel(center, ctx.Cam, content), pt, 1.0, pale)
+						drawOrderIcon(pt, k.Code, pale)
+					}
+				}
+			}
+		}
+		if head.First == (ecs.Entity{}) || !ctx.World.Alive(head.First) {
+			continue
+		}
+		kind := ctx.OrderKindMap.Get(head.First)
+		target := ctx.OrderTargetMap.Get(head.First)
+		if kind == nil || target == nil {
+			continue
 		}
 		from := MapWorldToPanel(center, ctx.Cam, content)
 		to := MapWorldToPanel(target.Pos, ctx.Cam, content)

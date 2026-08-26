@@ -500,6 +500,7 @@ func (g *Game) initRenderHandles() {
 		orderTargetMap: g.Maps.OrderTarget,
 		orderChainMap:  g.Maps.OrderChain,
 		orderFacingMap: ecs.NewMap[components.OrderParamFacing](g.App.World),
+		commsMap:       ecs.NewMap[components.CommsState](g.App.World),
 		squadColor:     g.squadColor,
 	}
 
