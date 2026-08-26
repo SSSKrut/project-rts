@@ -186,6 +186,7 @@ var saveComponents = map[string]saveEntry{
 	"components.Missile":          saveReg[components.Missile](SaveMemcpy),
 	"components.AircraftOverride": saveReg[components.AircraftOverride](SaveMemcpy),
 	"components.AirEngagement":    saveReg[components.AirEngagement](SaveMemcpy),
+	"components.BotAssignment":    saveReg[components.BotAssignment](SaveMemcpy),
 }
 
 func savePolicyFor(t reflect.Type) (SavePolicy, error) {
