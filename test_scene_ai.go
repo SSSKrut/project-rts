@@ -531,6 +531,19 @@ func aiSceneBuildings() []components.BuildingPlan {
 		aiSceneCoverTrench, aiSceneCoverHull, aiSceneCoverDefilade, aiSceneCoverNone,
 		aiSceneBounding, aiSceneFocusFire, aiSceneMass:
 		return nil
+	case aiSceneCapture:
+		// One house on the fourth lane: a building is an ownership object like
+		// a point, so the scene that measures points measures it too.
+		pos := components.WorldPos{}.Add(rl.Vector3{X: 0, Z: capLaneZ * 3})
+		pos.Local.Y = systems.GroundHeight(0, capLaneZ*3)
+		plan := buildings.GenerateHouse(0xB4, buildings.HouseParams{
+			Stories:   1,
+			SizeX:     14,
+			SizeZ:     10,
+			DoorSides: []uint8{0},
+			Interior:  true,
+		}, pos, components.BuildingHouse)
+		return []components.BuildingPlan{*plan}
 	case aiSceneClearBld:
 		pos := components.WorldPos{}.Add(rl.Vector3{X: 32, Z: 32})
 		pos.Local.Y = systems.GroundHeight(32, 32)
@@ -1507,9 +1520,14 @@ func aiVehicleConvoySpawn(world *ecs.World, squadService *systems.SquadService,
 			mergeOK = false
 		}
 	}
+	spacing := float32(0)
+	if fd := ecs.NewMap[components.FormationData](world).Get(squad); fd != nil {
+		spacing = fd.Spacing
+	}
 	return &aiTestState{
 		sceneID:       aiSceneID(),
 		convoyActive:  true,
+		convoySpacing: spacing,
 		convoySquad:   squad,
 		convoyGoal:    wp(125, -24),
 		convoyMergeOK: mergeOK,
@@ -1521,7 +1539,6 @@ func aiVehicleConvoySpawn(world *ecs.World, squadService *systems.SquadService,
 		MotionMap:     ecs.NewMap[components.Motion](world),
 		VehQueueMap:   aqMap,
 		FdMap:         ecs.NewMap[components.FormationData](world),
-		CSMap:         ecs.NewMap[components.FormationCustomSlots](world),
 		orderAt:       aiOrderAt,
 		verdictAt:     90,
 		nextSampleAt:  aiOrderAt + 3,
@@ -2338,6 +2355,10 @@ type aiTestState struct {
 	capBandAfter         components.CommsBand
 	capSpawnMan          func(x, z float32, faction uint8) ecs.Entity
 	PointMap             *ecs.Map[components.ControlPoint]
+	BldCtlMap            *ecs.Map[components.BuildingControl]
+	BldFilter            *ecs.Filter2[components.Building, components.BuildingControl]
+	capBldOwned          bool
+	capBldContested      bool
 	Damage               *systems.DamageService
 	CommsMap             *ecs.Map[components.CommsState]
 	casRidgeUp           bool
@@ -2517,7 +2538,7 @@ type aiTestState struct {
 	convoyMarchAt   float32
 	convoyMergeOK   bool
 	convoyReformOK  bool
-	CSMap           *ecs.Map[components.FormationCustomSlots]
+	convoySpacing   float32
 
 	// Set for ai_vehicle_reflex (M4): each vehicle runs its class reflex
 	// under synthetic fire from reflexSource.
@@ -4951,16 +4972,11 @@ func (s *aiTestState) updateConvoy(elapsed float32) {
 		fmt.Println("============================================================")
 		fmt.Printf("== AI VEHICLE CONVOY SCENE: %s  members=%d\n", s.sceneID, len(s.vehEnts))
 		fmt.Println("============================================================")
-		var cs components.FormationCustomSlots
-		cs.Slots[0] = rl.Vector2{X: 0, Y: 0}
-		cs.Slots[1] = rl.Vector2{X: -24, Y: 0}
-		cs.Slots[2] = rl.Vector2{X: 24, Y: 0}
-		if s.CSMap.Has(s.convoySquad) {
-			*s.CSMap.Get(s.convoySquad) = cs
-		} else {
-			s.CSMap.Add(s.convoySquad, &cs)
-		}
+		// Block C: no custom slots any more. What ReformPending still has to
+		// carry is a live layout change, and the one left is spacing — open the
+		// column right out, then close it again before the march.
 		if fd := s.FdMap.Get(s.convoySquad); fd != nil {
+			fd.Spacing = 40
 			fd.ReformPending = true
 		}
 		s.convoyPhase = 1
@@ -5002,7 +5018,7 @@ func (s *aiTestState) updateConvoy(elapsed float32) {
 	arrived := 0
 	for _, p := range pts {
 		dx, dz := p.x-gx, p.z-gz
-		if dx*dx+dz*dz < 625 { // 25 m: column depth behind the parked leader
+		if dx*dx+dz*dz < 1024 { // 32 m: hull spacing depth + the driver's own parking radius
 			arrived++
 		}
 	}
@@ -5040,14 +5056,23 @@ func (s *aiTestState) updateConvoy(elapsed float32) {
 			d01 := dist2Dxz(pts[0].x, pts[0].z, pts[1].x, pts[1].z)
 			d02 := dist2Dxz(pts[0].x, pts[0].z, pts[2].x, pts[2].z)
 			d12 := dist2Dxz(pts[1].x, pts[1].z, pts[2].x, pts[2].z)
-			if d12 > 32 && d01 > 15 && d02 > 15 {
+			// Block C: the editor that dictated exact slots is gone, so the
+			// claim is what survives it — a live layout change moves the
+			// column measurably past the spacing the merge chose (~7 m/hull,
+			// i.e. ~14 m of depth).
+			if d12 > 20 && d01 > 9 && d02 > 9 {
 				s.convoyReformOK = true
 				fmt.Printf("[ai-test %s] t=%.1fs REFORM OK (d12=%.1f)\n", s.sceneID, elapsed, d12)
 			}
 		}
 		if elapsed >= s.orderAt+10 {
-			if s.CSMap.Has(s.convoySquad) {
-				s.CSMap.Remove(s.convoySquad)
+			// Back to the column the composition would have chosen: the march
+			// half of the scene measures the convoy, not the spread.
+			// Exactly what dropping the custom slots used to do: back to the
+			// layout CreateFromUnits chose.
+			if fd := s.FdMap.Get(s.convoySquad); fd != nil {
+				fd.Spacing = s.convoySpacing
+				fd.ReformPending = true
 			}
 			s.SquadService.OrderMoveTo(s.convoySquad, s.convoyGoal)
 			s.convoyPhase = 2

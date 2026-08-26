@@ -94,6 +94,10 @@ func aiCaptureSpawn(world *ecs.World, squadService *systems.SquadService,
 		components.Faction{ID: playerFaction},
 		components.Controller{Owner: components.ControllerLocal}, roleService, unitFactory)
 
+	// Lane 4 — a house. One player rifleman inside holds it; the enemy that
+	// walks in at the contest mark makes it contested.
+	man(0, capLaneZ*3, playerFaction)
+
 	return &aiTestState{
 		sceneID: aiSceneID(),
 		capProbes: []capProbe{
@@ -108,6 +112,8 @@ func aiCaptureSpawn(world *ecs.World, squadService *systems.SquadService,
 		RosterMap:    rosterMap,
 		CommsMap:     ecs.NewMap[components.CommsState](world),
 		PointMap:     ecs.NewMap[components.ControlPoint](world),
+		BldCtlMap:    ecs.NewMap[components.BuildingControl](world),
+		BldFilter:    ecs.NewFilter2[components.Building, components.BuildingControl](world),
 		capSpawnMan:  man,
 		verdictAt:    capVerdictAt,
 		orderAt:      capStartAt,
@@ -134,6 +140,7 @@ func (s *aiTestState) updateCapture(elapsed float32) {
 	if elapsed >= capContestAt && !s.capContested {
 		s.capContested = true
 		s.capSpawnMan(0, capLaneZ*2+2, components.FactionEnemyRed)
+		s.capSpawnMan(0, capLaneZ*3, components.FactionEnemyRed)
 		if cp := s.PointMap.Get(s.capNetPoint); cp != nil {
 			s.capProgressAtContest = cp.Progress
 		}
@@ -159,6 +166,18 @@ func (s *aiTestState) updateCapture(elapsed float32) {
 			if cs.Band > s.capBandAfter {
 				s.capBandAfter = cs.Band
 			}
+		}
+	}
+
+	// The house: owned by whoever is inside, contested when both are.
+	qb := s.BldFilter.Query()
+	for qb.Next() {
+		_, bc := qb.Get()
+		if bc.Owner == components.FactionPlayer && !bc.Contested {
+			s.capBldOwned = true
+		}
+		if bc.Contested {
+			s.capBldContested = true
 		}
 	}
 
@@ -193,14 +212,15 @@ func (s *aiTestState) captureVerdict(elapsed float32) {
 	frozen := s.capFrozenSeen && !s.capProgressMoved
 	netDrop := s.capBandBefore == components.CommsGreen &&
 		s.capBandAfter > s.capBandBefore
-	pass := soloOK && threeOK && frozen && netDrop
+	pass := soloOK && threeOK && frozen && netDrop &&
+		s.capBldOwned && s.capBldContested
 	verdict := "FAIL"
 	if pass {
 		verdict = "PASS"
 	}
 	fmt.Println("============================================================")
-	fmt.Printf("== VERDICT [%s]: %s  (solo=%.1fs three=%.1fs band %s->%s | solo=%v three=%v frozen=%v netDrop=%v t=%.1fs)\n",
+	fmt.Printf("== VERDICT [%s]: %s  (solo=%.1fs three=%.1fs band %s->%s | solo=%v three=%v frozen=%v netDrop=%v bldOwned=%v bldContested=%v t=%.1fs)\n",
 		s.sceneID, verdict, solo, three, s.capBandBefore, s.capBandAfter,
-		soloOK, threeOK, frozen, netDrop, elapsed)
+		soloOK, threeOK, frozen, netDrop, s.capBldOwned, s.capBldContested, elapsed)
 	fmt.Println("============================================================")
 }
