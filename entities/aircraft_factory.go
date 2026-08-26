@@ -39,6 +39,7 @@ type AircraftFactory struct {
 	WeaponMap      *ecs.Map[components.Weapon]
 	OwnedByMap     *ecs.Map[components.OwnedBy]
 	RadioMap       *ecs.Map[components.Radio]
+	CommsMap       *ecs.Map[components.CommsState]
 }
 
 func NewAircraftFactory(world *ecs.World, posMap *ecs.Map[components.WorldPos]) *AircraftFactory {
@@ -64,6 +65,7 @@ func NewAircraftFactory(world *ecs.World, posMap *ecs.Map[components.WorldPos]) 
 		WeaponMap:      ecs.NewMap[components.Weapon](world),
 		OwnedByMap:     ecs.NewMap[components.OwnedBy](world),
 		RadioMap:       ecs.NewMap[components.Radio](world),
+		CommsMap:       ecs.NewMap[components.CommsState](world),
 	}
 }
 
@@ -152,6 +154,9 @@ func (f *AircraftFactory) Spawn(a components.AirArrival) ecs.Entity {
 	f.DangerMap.Add(ent, &components.DangerBuffer{})
 	f.OverrideMap.Add(ent, &components.AircraftOverride{})
 	f.RadioMap.Add(ent, &components.Radio{On: true, EmitRangeM: components.RadioEmitDefaultM})
+	// Comms state rides with the radio: a hull is answerable the moment it
+	// exists, not only once an order has made it commandable.
+	f.CommsMap.Add(ent, &components.CommsState{})
 	rules := a.Rules
 	f.RulesMap.Add(ent, &rules)
 	f.EngageMap.Add(ent, &components.AirEngagement{})

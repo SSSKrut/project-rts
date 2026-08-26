@@ -66,8 +66,15 @@ func drawInspectorVehicle(ctx InspectorCtx, ent ecs.Entity, x, y, width int32) i
 	if sm := ctx.SquadMemberMap.Get(ent); sm != nil && sm.Squad != (ecs.Entity{}) {
 		TextRowClipped(&col, &ctx.st, fmt.Sprintf("Squad:     #%X slot %d",
 			sm.Squad.ID()&0xFFF, sm.SlotIndex), ctx.st.Text)
+		// A member answers over its squad's net, not its own set.
+		if cs := ctx.CommsMap.Get(sm.Squad); cs != nil {
+			vehicleRadioRow(&col, &ctx, cs)
+		}
 	} else {
 		TextRowClipped(&col, &ctx.st, "Squad:     - (soloist)", ctx.st.TextDim)
+		if cs := ctx.CommsMap.Get(ent); cs != nil {
+			vehicleRadioRow(&col, &ctx, cs)
+		}
 	}
 	return int32(col.Y)
 }
@@ -94,4 +101,9 @@ func roadStatusLabel(ctx InspectorCtx, ent ecs.Entity) string {
 		}
 	}
 	return fmt.Sprintf("%s (edge %d, %.0f%%)", kind, f.Edge, f.T*100)
+}
+
+func vehicleRadioRow(col *Column, ctx *InspectorCtx, cs *components.CommsState) {
+	TextRowClipped(col, &ctx.st, fmt.Sprintf("Radio:     %-9s %.0f%%",
+		cs.Band.String(), cs.Quality*100), CommsBandColor(cs.Band, &ctx.st))
 }

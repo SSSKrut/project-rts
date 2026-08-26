@@ -259,6 +259,10 @@ func (g *Game) spawnScene() {
 			RosterMap:    g.Maps.Roster,
 		}
 	} else {
+		// A base relay, or every squad in the playground reads Silent and the
+		// core mechanic looks broken before it has done anything.
+		systems.SpawnRelay(g.App.World, components.WorldPos{}, playerFaction.ID,
+			components.RelayRangeSpawnM)
 		// Squads spawn OUTSIDE buildings so formation slots don't land on
 		// wall-rasterised surface cells (which would block path planning).
 		g.Svc.Squad.CreateFromTemplate(

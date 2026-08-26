@@ -29,6 +29,7 @@ type VehicleFactory struct {
 	DetectMap       *ecs.Map[components.Detectability]
 	OnGroundMap     *ecs.Map[components.OnGround]
 	RadioMap        *ecs.Map[components.Radio]
+	CommsMap        *ecs.Map[components.CommsState]
 	RelayMap        *ecs.Map[components.Relay]
 	WeaponMap       *ecs.Map[components.Weapon]
 	OwnedByMap      *ecs.Map[components.OwnedBy]
@@ -57,6 +58,7 @@ func NewVehicleFactory(world *ecs.World, posMap *ecs.Map[components.WorldPos]) *
 		DetectMap:       ecs.NewMap[components.Detectability](world),
 		OnGroundMap:     ecs.NewMap[components.OnGround](world),
 		RadioMap:        ecs.NewMap[components.Radio](world),
+		CommsMap:        ecs.NewMap[components.CommsState](world),
 		RelayMap:        ecs.NewMap[components.Relay](world),
 		WeaponMap:       ecs.NewMap[components.Weapon](world),
 		OwnedByMap:      ecs.NewMap[components.OwnedBy](world),
@@ -142,6 +144,9 @@ func (f *VehicleFactory) Spawn(pos components.WorldPos, kind components.VehicleK
 	// Every hull carries a built-in set; the player switches it off to go
 	// quiet, exactly as with the radar.
 	f.RadioMap.Add(ent, &components.Radio{On: true, EmitRangeM: components.RadioEmitDefaultM})
+	// Comms state rides with the radio: a hull is answerable the moment it
+	// exists, not only once an order has made it commandable.
+	f.CommsMap.Add(ent, &components.CommsState{})
 	if spec.RelayRangeM > 0 {
 		f.RelayMap.Add(ent, &components.Relay{RangeM: spec.RelayRangeM, Active: true})
 	}
