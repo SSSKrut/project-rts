@@ -100,7 +100,7 @@ func drawOwnVehicles(content rl.Rectangle, ctx MapRenderCtx) {
 		spec := components.SymbolSpec{
 			Affiliation: components.AffilFriend,
 			Dimension:   components.DimVehicleClass,
-			Icon:        vehicleIcon(veh.Kind),
+			Icon:        VehicleIcon(veh.Kind),
 		}
 		DrawSymbol(spec, p, vehicleSymbolHalf, 1.0)
 		bounds := SymbolBounds(spec.Affiliation, p, vehicleSymbolHalf)
@@ -113,8 +113,10 @@ func drawOwnVehicles(content rl.Rectangle, ctx MapRenderCtx) {
 	}
 }
 
-// vehicleIcon: a truck hauls, everything else in the current roster fights.
-func vehicleIcon(k components.VehicleKind) components.IconKind {
+// VehicleIcon: a truck hauls, everything else in the current roster fights.
+// Exported so the field marks a hull with the same glyph as the map — two
+// answers to "what is that machine" is one answer too many.
+func VehicleIcon(k components.VehicleKind) components.IconKind {
 	if k == components.VehicleTruck {
 		return components.IconSupply
 	}

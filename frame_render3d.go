@@ -125,26 +125,10 @@ func (g *Game) drawScene3D() {
 			role = r.Kind
 		}
 		// Phase 18.5.G FoW: non-PlayerFaction units render only when a
-		// recent sensor refresh covers them. 2 sec tail with linear
-		// alpha fade after LOS loss.
-		alpha := float32(1.0)
-		if f := g.Maps.Faction.Get(ent); f != nil && f.ID != components.FactionPlayer {
-			contactEnt, ok := g.Res.ContactRegistry.Tracked[ent]
-			if !ok || !g.App.World.Alive(contactEnt) {
-				continue
-			}
-			c := g.Maps.Contact.Get(contactEnt)
-			if c == nil {
-				continue
-			}
-			age := fowNow - c.LastSeenTime
-			const tailSec float32 = 2.0
-			if age >= tailSec {
-				continue
-			}
-			if age > 0 {
-				alpha = 1.0 - age/tailSec
-			}
+		// recent sensor refresh covers them, then fade over the tail.
+		alpha, visible := g.bodyAlpha(ent, fowNow)
+		if !visible {
+			continue
 		}
 		if alpha >= 0.999 {
 			drawUnitCube(renderPos, *st, role)

@@ -408,66 +408,229 @@ func (g *Game) drawAircraftSelection(pos components.WorldPos, renderPos rl.Vecto
 	rl.DrawCircle3D(foot, spec.ColliderR*0.7, rl.Vector3{X: 1}, 90, c)
 }
 
-// fieldSymbolHalf keeps the over-head symbol small: it is an identifier, not a
-// panel. Half the map's size reads at a glance without covering the men.
-const fieldSymbolHalf float32 = 9
+const (
+	// fieldSymbolHalf keeps the over-head symbol small: it is an identifier,
+	// not a panel. Half the map's size reads at a glance without covering
+	// the men.
+	fieldSymbolHalf float32 = 9
+	// A hull is the heaviest single thing on the field and reads as such —
+	// the same step up the map takes from a squad marker to a vehicle one.
+	fieldVehicleHalf float32 = 10
+	fieldSquadLiftM  float32 = 3.2
+	fieldHullLiftM   float32 = 1.6
+	fieldTintH       float32 = 2
+)
 
-// drawFieldSymbols puts ONE map symbol over each squad instead of a role letter
-// over each man. The letters were the complaint: eight of them over eight
-// bodies is noise, and "R" next to "MG" tells the player nothing they can act
-// on. A squad is the thing orders are given to, so a squad is the thing that
-// gets a mark — the same mark, from the same code, as on the map.
+// fieldProjector turns a world point into a panel point, or reports it off
+// screen.
+type fieldProjector struct {
+	panel rl.Rectangle
+	w, h  int32
+}
+
+func (p fieldProjector) at(pos components.WorldPos, lift float32) (rl.Vector2, bool) {
+	rp := pos.ToRenderSpace(systems.CurrentOriginChunk)
+	rp.Y += lift
+	sp := rl.GetWorldToScreenEx(rp, systems.CurrentCamera, p.w, p.h)
+	if sp.X < 0 || sp.Y < 0 || sp.X > p.panel.Width || sp.Y > p.panel.Height {
+		return rl.Vector2{}, false
+	}
+	return rl.Vector2{X: p.panel.X + sp.X, Y: p.panel.Y + sp.Y}, true
+}
+
+// drawFieldSymbols puts map symbols over the field: one per squad, one per
+// hull, one per airframe. The letters were the complaint — eight R/MG tags over
+// eight bodies is noise, and a squad is the thing orders are given to. A
+// machine keeps its own mark even inside a squad: one machine, one marker, the
+// same rule the map plays by, because a hull is never interchangeable with the
+// men around it.
+//
+// A marker rides a BODY and never decides visibility for itself. That is what
+// stops a squad the sensors have not found from leaking a symbol over empty
+// grass, which is exactly what it used to do.
 func (g *Game) drawFieldSymbols() {
 	panel := g.Frame.Panel3DContent
-	w, h := int32(panel.Width), int32(panel.Height)
-	if w < 1 || h < 1 {
+	proj := fieldProjector{panel: panel, w: int32(panel.Width), h: int32(panel.Height)}
+	if proj.w < 1 || proj.h < 1 {
 		return
 	}
-	project := func(p components.WorldPos, lift float32) (rl.Vector2, bool) {
-		rp := p.ToRenderSpace(systems.CurrentOriginChunk)
-		rp.Y += lift
-		sp := rl.GetWorldToScreenEx(rp, systems.CurrentCamera, w, h)
-		if sp.X < 0 || sp.Y < 0 || sp.X > panel.Width || sp.Y > panel.Height {
-			return rl.Vector2{}, false
-		}
-		return rl.Vector2{X: panel.X + sp.X, Y: panel.Y + sp.Y}, true
-	}
 	symCtx := ui.MapRenderCtx{
-		World:      g.App.World,
-		RoleMap:    g.Maps.Role,
-		VehicleMap: g.Maps.Vehicle,
-		FactionMap: g.Maps.Faction,
+		World:            g.App.World,
+		RoleMap:          g.Maps.Role,
+		VehicleMap:       g.Maps.Vehicle,
+		FactionMap:       g.Maps.Faction,
+		SquadOverrideMap: g.Maps.SquadOverride,
 	}
+	now := g.Svc.Squad.Clock()
+	g.fieldSquadSymbols(proj, symCtx, now)
+	g.fieldVehicleSymbols(proj)
+	g.fieldAircraftSymbols(proj)
+}
 
+func (g *Game) fieldSquadSymbols(proj fieldProjector, symCtx ui.MapRenderCtx, now float32) {
 	q := g.Filt.Squad.Query()
 	for q.Next() {
 		_, roster := q.Get()
 		squad := q.Entity()
-		if roster.Count == 0 {
-			continue
-		}
-		centre, ok := systems.SquadCenter(g.App.World, roster, g.Maps.Pos)
+		centre, alpha, ok := g.visibleRosterCentre(roster, now)
 		if !ok {
 			continue
 		}
-		screen, on := project(centre, 3.2)
+		screen, on := proj.at(centre, fieldSquadLiftM)
 		if !on {
 			continue
 		}
-		ui.DrawSymbol(ui.SquadSymbolSpec(symCtx, squad, roster), screen, fieldSymbolHalf, 1.0)
-		if col := g.squadColor(squad); col.A > 0 {
-			b := ui.SymbolBounds(ui.AffiliationForFaction(squadFactionID(g, squad)),
-				screen, fieldSymbolHalf)
-			rl.DrawRectangleRec(rl.Rectangle{
-				X: b.X, Y: b.Y + b.Height + 1, Width: b.Width, Height: 2,
-			}, col)
-		}
+		spec := ui.SquadSymbolSpec(symCtx, squad, roster)
+		ui.DrawSymbol(spec, screen, fieldSymbolHalf, alpha)
+		g.drawFieldTint(spec, screen, fieldSymbolHalf, squad, alpha)
 	}
 }
 
-func squadFactionID(g *Game, squad ecs.Entity) uint8 {
-	if f := g.Maps.Faction.Get(squad); f != nil {
+func (g *Game) fieldVehicleSymbols(proj fieldProjector) {
+	q := g.Filt.VehicleRender.Query()
+	for q.Next() {
+		pos, veh := q.Get()
+		ent := q.Entity()
+		vspec := components.SpecForVehicle(veh.Kind)
+		screen, on := proj.at(*pos, vspec.BoxHgt+fieldHullLiftM)
+		if !on {
+			continue
+		}
+		spec := components.SymbolSpec{
+			Affiliation: ui.AffiliationForFaction(g.factionOf(ent)),
+			Dimension:   components.DimVehicleClass,
+			Icon:        ui.VehicleIcon(veh.Kind),
+		}
+		ui.DrawSymbol(spec, screen, fieldVehicleHalf, 1)
+		g.drawFieldTint(spec, screen, fieldVehicleHalf, g.commanderOf(ent), 1)
+	}
+}
+
+func (g *Game) fieldAircraftSymbols(proj fieldProjector) {
+	q := g.Filt.AircraftRender.Query()
+	for q.Next() {
+		pos, ac := q.Get()
+		ent := q.Entity()
+		screen, on := proj.at(*pos, components.SpecForAircraft(ac.Kind).BoxHgt+fieldHullLiftM)
+		if !on {
+			continue
+		}
+		spec := ui.DefaultSpecForDimension(ui.AffiliationForFaction(g.factionOf(ent)),
+			components.DimAirClass)
+		ui.DrawSymbol(spec, screen, fieldVehicleHalf, 1)
+		g.drawFieldTint(spec, screen, fieldVehicleHalf, g.commanderOf(ent), 1)
+	}
+}
+
+// drawFieldTint rides the squad's palette colour under the frame. It is
+// own-force organisation — which group this thing answers to — so a hostile
+// mark gets none.
+func (g *Game) drawFieldTint(spec components.SymbolSpec, screen rl.Vector2,
+	half float32, cmd ecs.Entity, alpha float32) {
+	if spec.Affiliation != components.AffilFriend {
+		return
+	}
+	col := g.squadColor(cmd)
+	if col.A == 0 {
+		return
+	}
+	col.A = uint8(float32(col.A) * alpha)
+	b := ui.SymbolBounds(spec.Affiliation, screen, half)
+	rl.DrawRectangleRec(rl.Rectangle{
+		X: b.X, Y: b.Y + b.Height + 1, Width: b.Width, Height: fieldTintH,
+	}, col)
+}
+
+// visibleRosterCentre averages the members the 3D pass actually drew, and
+// reports the freshest of their alphas. Averaging the whole roster instead
+// would put the mark where the undetected half of a squad is standing.
+func (g *Game) visibleRosterCentre(roster *components.CommandRoster,
+	now float32) (components.WorldPos, float32, bool) {
+	var ref components.WorldPos
+	var sum rl.Vector3
+	var n, best float32
+	found := false
+	for i := uint8(0); i < roster.Count; i++ {
+		mem := roster.Members[i]
+		if mem == (ecs.Entity{}) || !g.App.World.Alive(mem) {
+			continue
+		}
+		alpha, visible := g.bodyAlpha(mem, now)
+		if !visible {
+			continue
+		}
+		pos := g.Maps.Pos.Get(mem)
+		if pos == nil {
+			continue
+		}
+		if !found {
+			ref, found = *pos, true
+		}
+		d := pos.Sub(ref)
+		sum.X += d.X
+		sum.Y += d.Y
+		sum.Z += d.Z
+		n++
+		if alpha > best {
+			best = alpha
+		}
+	}
+	if !found {
+		return components.WorldPos{}, 0, false
+	}
+	return ref.Add(rl.Vector3{X: sum.X / n, Y: sum.Y / n, Z: sum.Z / n}), best, true
+}
+
+// fowTailSec is how long a body lingers, fading, after the sensors lose it.
+const fowTailSec float32 = 2.0
+
+// bodyAlpha answers what the 3D pass draws this entity at: own force solid,
+// anything else riding its contact and fading over the tail. Shared by the
+// bodies and by the marker layer above them so the two cannot disagree.
+func (g *Game) bodyAlpha(ent ecs.Entity, now float32) (float32, bool) {
+	// Only men are fogged today — the hull and airframe passes draw every
+	// machine regardless of contact, so a mark over one has to as well.
+	if g.Maps.Vehicle.Has(ent) || g.Maps.Aircraft.Has(ent) {
+		return 1, true
+	}
+	if f := g.Maps.Faction.Get(ent); f == nil || f.ID == components.FactionPlayer {
+		return 1, true
+	}
+	contact, ok := g.Res.ContactRegistry.Tracked[ent]
+	if !ok || !g.App.World.Alive(contact) {
+		return 0, false
+	}
+	c := g.Maps.Contact.Get(contact)
+	// A bearing is not a position. An ESM intercept holds the RECEIVER's
+	// coordinates, so honouring it here drew the emitter's body at its true
+	// place — a radio switched on revealed the man carrying it. Every other
+	// consumer already filters these out; this pass reached past them into
+	// the registry.
+	if c == nil || c.BearingOnly {
+		return 0, false
+	}
+	age := now - c.LastSeenTime
+	if age >= fowTailSec {
+		return 0, false
+	}
+	if age <= 0 {
+		return 1, true
+	}
+	return 1 - age/fowTailSec, true
+}
+
+func (g *Game) factionOf(ent ecs.Entity) uint8 {
+	if f := g.Maps.Faction.Get(ent); f != nil {
 		return f.ID
 	}
 	return components.FactionPlayer
+}
+
+// commanderOf: a machine in a squad wears that squad's colour, a soloist its
+// own — the same colour its route line is drawn in either way.
+func (g *Game) commanderOf(ent ecs.Entity) ecs.Entity {
+	if sm := g.Maps.SquadMember.Get(ent); sm != nil && sm.Squad != (ecs.Entity{}) {
+		return sm.Squad
+	}
+	return ent
 }
