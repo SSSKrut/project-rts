@@ -18,7 +18,7 @@ import (
 //
 //	esm      a passive receiver hears a live radar far beyond anything that
 //	         images it, and the track it makes is a BEARING with no range
-//	silent   switch the radar off and the intercept stops — the emitter, not
+//	silent   switch the emitters off and the intercept stops — the emitter, not
 //	         the airframe, is what was ever detectable
 //	radar    switching one's OWN radar on buys acquisition well past optical
 //	audio    a helicopter is HEARD long before it is seen, which is the whole
@@ -122,6 +122,7 @@ func aiAirReconSpawn(world *ecs.World, aircraftFactory *entities.AircraftFactory
 		VehQueueMap:   ecs.NewMap[components.ActionQueue](world),
 		AircraftMap:   ecs.NewMap[components.Aircraft](world),
 		SensorsMap:    sensorsMap,
+		RadioMap:      ecs.NewMap[components.Radio](world),
 		AwarenessMap:  ecs.NewMap[components.Awareness](world),
 		ContactMap:    ecs.NewMap[components.Contact](world),
 		regRes:        ecs.NewResource[components.ContactRegistry](world),
@@ -271,10 +272,17 @@ func (s *aiTestState) driveEmissionsScript(elapsed float32) {
 		if sn := s.SensorsMap.Get(s.reconEmitter); sn != nil {
 			if i := sn.FindChannel(components.SensorRadar); i >= 0 {
 				sn.SetChannel(uint8(i), false)
+				// Since block A M3 the radar is not the only voice: a hull's
+				// radio radiates 900 m on its own, so "going silent" means
+				// every emitter, not just the loud one.
+				if r := s.RadioMap.Get(s.reconEmitter); r != nil {
+					r.On = false
+				}
 				s.reconSilenced = true
 				s.reconSilencedAt = elapsed
 				s.reconInterceptAtHush = s.reconLastIntercept
-				fmt.Printf("[ai-test %s] t=%.1fs EMITTER WENT SILENT\n", s.sceneID, elapsed)
+				fmt.Printf("[ai-test %s] t=%.1fs EMITTER WENT SILENT (radar + radio)\n",
+					s.sceneID, elapsed)
 			}
 		}
 	}

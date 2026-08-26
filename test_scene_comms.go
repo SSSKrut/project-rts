@@ -624,3 +624,199 @@ func (s *aiTestState) commsAutonomyVerdict(elapsed float32) {
 		s.autShots, carries, fights, holds, s.autStale, elapsed)
 	fmt.Println("============================================================")
 }
+
+// lite_comms_esm — block A M3. Both halves of the emissions trade in one run.
+//
+// A player BMP listens on ESM; an enemy squad two hundred metres from its own
+// relay talks on the radio. The set is what makes the squad commandable and
+// what puts a bearing on the map — the same set, the same tick.
+//
+//	heard   the working net is intercepted: a BEARING contact, no position
+//	mute    with the set switched off the squad stops taking orders
+//	dark    and the bearing stops being refreshed in the same moment
+const (
+	commsESMVerdictAt float32 = 20.0
+	commsESMDarkAt    float32 = 8.0
+	commsESMOrderAt   float32 = 12.0
+	// 200 m from its own 800 m relay: q = 0.75 with the set, 0.375 without —
+	// Green becomes Cut, so the same switch that hides the squad also mutes it.
+	commsESMRelayX float32 = 500
+	commsESMSquadX float32 = 300
+)
+
+func aiCommsESMSpawn(world *ecs.World, squadService *systems.SquadService,
+	roleService *systems.RoleService, unitFactory aiUnitSpawn,
+	vehicleFactory *entities.VehicleFactory, playerFaction uint8,
+	posMap *ecs.Map[components.WorldPos],
+	rosterMap *ecs.Map[components.CommandRoster]) *aiTestState {
+	if squadService == nil || roleService == nil || vehicleFactory == nil {
+		fmt.Printf("[ai-test %s] NO SERVICE — aborting\n", aiSceneID())
+		return nil
+	}
+	wp := func(x, z float32) components.WorldPos {
+		p := components.WorldPos{}.Add(rl.Vector3{X: x, Z: z})
+		p.Local.Y = systems.GroundHeight(x, z)
+		return p
+	}
+	// The listener. Weapons tight: the scene is about hearing, and a dead
+	// emitter emits nothing.
+	esm := vehicleFactory.Spawn(wp(0, 0), components.VehicleBMP,
+		playerFaction, components.ControllerLocal)
+	ecs.NewMap[components.EngagementRules](world).Add(esm,
+		&components.EngagementRules{Mode: components.HoldFire})
+
+	systems.SpawnRelay(world, wp(commsESMRelayX, 0), components.FactionEnemyRed,
+		components.RelayRangeSpawnM)
+	foe := squadService.CreateFromTemplate(systems.TmplMotorRifle,
+		wp(commsESMSquadX, 0), components.FormationLine,
+		components.Faction{ID: components.FactionEnemyRed},
+		components.Controller{Owner: components.ControllerAI}, roleService, unitFactory)
+	if foe == (ecs.Entity{}) {
+		fmt.Printf("[ai-test %s] FAILED TO SPAWN SQUAD — aborting\n", aiSceneID())
+		return nil
+	}
+	if r := ecs.NewMap[components.EngagementRules](world).Get(foe); r != nil {
+		r.Mode = components.HoldFire
+	}
+
+	return &aiTestState{
+		sceneID:      aiSceneID(),
+		esmListener:  esm,
+		esmFoe:       foe,
+		World:        world,
+		SquadService: squadService,
+		PosMap:       posMap,
+		RosterMap:    rosterMap,
+		CommsMap:     ecs.NewMap[components.CommsState](world),
+		StateMap:     ecs.NewMap[components.OrderState](world),
+		RadioMap:     ecs.NewMap[components.Radio](world),
+		EquipMap:     ecs.NewMap[components.Equipment](world),
+		ContactMap:   ecs.NewMap[components.Contact](world),
+		RegistryRes:  ecs.NewResource[components.ContactRegistry](world),
+		verdictAt:    commsESMVerdictAt,
+		orderAt:      0,
+		nextSampleAt: 2,
+	}
+}
+
+// esmBearing returns the live bearing track on any member of the foe squad:
+// the contact entity and its last refresh time.
+func (s *aiTestState) esmBearing() (ecs.Entity, float32) {
+	reg := s.RegistryRes.Get()
+	roster := s.RosterMap.Get(s.esmFoe)
+	if reg == nil || reg.Tracked == nil || roster == nil {
+		return ecs.Entity{}, 0
+	}
+	for i := uint8(0); i < roster.Count; i++ {
+		mem := roster.Members[i]
+		if mem == (ecs.Entity{}) {
+			continue
+		}
+		ent, ok := reg.Tracked[mem]
+		if !ok || !s.World.Alive(ent) {
+			continue
+		}
+		if c := s.ContactMap.Get(ent); c != nil && c.BearingOnly {
+			return ent, c.LastSeenTime
+		}
+	}
+	return ecs.Entity{}, 0
+}
+
+func (s *aiTestState) updateCommsESM(elapsed float32) {
+	if s.verdictDone {
+		return
+	}
+	_, seen := s.esmBearing()
+	if seen > 0 {
+		s.esmLastSeen = seen
+		if s.esmHeardAt == 0 {
+			s.esmHeardAt = elapsed
+			fmt.Printf("[ai-test %s] t=%.1fs BEARING on the enemy net\n", s.sceneID, elapsed)
+		}
+	}
+
+	if elapsed >= commsESMDarkAt && !s.esmWentDark {
+		s.esmWentDark = true
+		s.esmSeenAtDark = s.esmLastSeen
+		roster := s.RosterMap.Get(s.esmFoe)
+		for i := uint8(0); roster != nil && i < roster.Count; i++ {
+			mem := roster.Members[i]
+			if mem == (ecs.Entity{}) || !s.World.Alive(mem) {
+				continue
+			}
+			// The set is a SECONDARY ITEM owned by the radioman, not a
+			// component on the man — the same two places CommsSystem looks.
+			if r := s.RadioMap.Get(mem); r != nil {
+				r.On = false
+				s.esmSets++
+			}
+			eq := s.EquipMap.Get(mem)
+			if eq == nil {
+				continue
+			}
+			for _, item := range [3]ecs.Entity{eq.Secondary, eq.Primary, eq.Active} {
+				if item == (ecs.Entity{}) || !s.World.Alive(item) {
+					continue
+				}
+				if r := s.RadioMap.Get(item); r != nil {
+					r.On = false
+					s.esmSets++
+				}
+			}
+		}
+		fmt.Printf("[ai-test %s] t=%.1fs RADIO OFF x%d (last intercept t=%.1fs)\n",
+			s.sceneID, elapsed, s.esmSets, s.esmSeenAtDark)
+	}
+
+	if elapsed >= commsESMOrderAt && !s.orderFired {
+		s.orderFired = true
+		goal := components.WorldPos{}.Add(rl.Vector3{X: commsESMSquadX, Z: 60})
+		goal.Local.Y = systems.GroundHeight(commsESMSquadX, 60)
+		s.esmOrder = s.SquadService.IssueOrder(s.esmFoe, components.OrderKindMoveTo,
+			goal, ecs.Entity{}, false, systems.OrderParams{})
+		band := components.CommsGreen
+		if cs := s.CommsMap.Get(s.esmFoe); cs != nil {
+			band = cs.Band
+		}
+		fmt.Printf("[ai-test %s] t=%.1fs ORDER to the dark squad (band=%s)\n",
+			s.sceneID, elapsed, band)
+	}
+
+	if elapsed >= s.nextSampleAt && elapsed < s.verdictAt {
+		s.nextSampleAt = elapsed + aiSampleEvery
+		band := components.CommsGreen
+		q := float32(0)
+		if cs := s.CommsMap.Get(s.esmFoe); cs != nil {
+			band, q = cs.Band, cs.Quality
+		}
+		fmt.Printf("[ai-test %s] t=%.1fs foe band=%-8s q=%.2f lastIntercept=%.1fs\n",
+			s.sceneID, elapsed, band, q, s.esmLastSeen)
+	}
+	if elapsed >= s.verdictAt {
+		s.commsESMVerdict(elapsed)
+	}
+}
+
+func (s *aiTestState) commsESMVerdict(elapsed float32) {
+	s.verdictDone = true
+	heard := s.esmHeardAt > 0 && s.esmHeardAt < commsESMDarkAt
+	// The intercept must not have been refreshed since the switch was thrown.
+	dark := s.esmWentDark && s.esmLastSeen <= s.esmSeenAtDark+0.5
+	mute := false
+	if s.esmOrder != (ecs.Entity{}) && s.World.Alive(s.esmOrder) {
+		if st := s.StateMap.Get(s.esmOrder); st != nil {
+			mute = st.Code == components.OrderStateBlocked
+		}
+	}
+	pass := heard && dark && mute
+	verdict := "FAIL"
+	if pass {
+		verdict = "PASS"
+	}
+	fmt.Println("============================================================")
+	fmt.Printf("== VERDICT [%s]: %s  (heardAt=%.1fs lastIntercept=%.1fs (off at %.1fs) | heard=%v dark=%v mute=%v t=%.1fs)\n",
+		s.sceneID, verdict, s.esmHeardAt, s.esmLastSeen, s.esmSeenAtDark,
+		heard, dark, mute, elapsed)
+	fmt.Println("============================================================")
+}

@@ -276,6 +276,11 @@ const (
 	// ground it was left on, and its own marker stops being refreshed.
 	aiSceneCommsAut = "lite_comms_autonomy"
 
+	// _comms_esm (lite block A M3): a working set is both what makes a squad
+	// commandable and what puts a bearing on the enemy's map. One switch,
+	// both halves.
+	aiSceneCommsESM = "lite_comms_esm"
+
 	// _balance_* (lite, 2026-08-26): the balance statement is the PAIR of the
 	// first two — armour breaks a squad caught in the open, the same squad
 	// lying in wait breaks armour. _eyes fires no shot and asserts the ORDER
@@ -316,7 +321,7 @@ func aiSceneMapName() string {
 		// The claims are distances; a hill that slows the march only stretches
 		// the clock and tells us nothing.
 		return "flat"
-	case aiSceneCommsOrders, aiSceneCommsAut, aiSceneBalOpen, aiSceneBalAmbush, aiSceneBalEyes:
+	case aiSceneCommsOrders, aiSceneCommsAut, aiSceneCommsESM, aiSceneBalOpen, aiSceneBalAmbush, aiSceneBalEyes:
 		// Balance is a number, and terrain is the loudest way to hide one:
 		// a ridge that masks half the squad turns a measurement into a story.
 		return "flat"
@@ -1781,6 +1786,10 @@ func aiSceneSpawn(
 		return aiCommsOrdersSpawn(world, squadService, roleService, unitFactory,
 			playerFaction.ID, posMap, rosterMap)
 	}
+	if aiSceneID() == aiSceneCommsESM {
+		return aiCommsESMSpawn(world, squadService, roleService, unitFactory,
+			vehicleFactory, playerFaction.ID, posMap, rosterMap)
+	}
 	if aiSceneID() == aiSceneCommsAut {
 		return aiCommsAutonomySpawn(world, squadService, roleService, unitFactory,
 			vehicleFactory, damageService, playerFaction.ID, posMap, rosterMap)
@@ -2293,6 +2302,18 @@ type aiTestState struct {
 	autShots      int
 	autStale      bool
 	markerRes     ecs.Resource[components.MapMarkerCache]
+
+	// lite_comms_esm (block A M3).
+	esmListener   ecs.Entity
+	esmFoe        ecs.Entity
+	esmOrder      ecs.Entity
+	esmHeardAt    float32
+	esmLastSeen   float32
+	esmSeenAtDark float32
+	esmWentDark   bool
+	esmSets       int
+	RadioMap      *ecs.Map[components.Radio]
+	RegistryRes   ecs.Resource[components.ContactRegistry]
 	Damage        *systems.DamageService
 	CommsMap      *ecs.Map[components.CommsState]
 	casRidgeUp    bool
@@ -2660,6 +2681,10 @@ func (s *aiTestState) Update(elapsed float32) {
 	}
 	if s.autSquad != (ecs.Entity{}) {
 		s.updateCommsAutonomy(elapsed)
+		return
+	}
+	if s.esmFoe != (ecs.Entity{}) {
+		s.updateCommsESM(elapsed)
 		return
 	}
 	if s.balanceActive {
