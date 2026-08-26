@@ -281,6 +281,11 @@ const (
 	// both halves.
 	aiSceneCommsESM = "lite_comms_esm"
 
+	// _capture (lite block B): capture by presence, and the join with block A —
+	// losing a point kills its relay and drops the net beside it in the same
+	// tick. See test_scene_capture.go.
+	aiSceneCapture = "lite_capture"
+
 	// _balance_* (lite, 2026-08-26): the balance statement is the PAIR of the
 	// first two — armour breaks a squad caught in the open, the same squad
 	// lying in wait breaks armour. _eyes fires no shot and asserts the ORDER
@@ -321,7 +326,8 @@ func aiSceneMapName() string {
 		// The claims are distances; a hill that slows the march only stretches
 		// the clock and tells us nothing.
 		return "flat"
-	case aiSceneCommsOrders, aiSceneCommsAut, aiSceneCommsESM, aiSceneBalOpen, aiSceneBalAmbush, aiSceneBalEyes:
+	case aiSceneCommsOrders, aiSceneCommsAut, aiSceneCommsESM, aiSceneCapture,
+		aiSceneBalOpen, aiSceneBalAmbush, aiSceneBalEyes:
 		// Balance is a number, and terrain is the loudest way to hide one:
 		// a ridge that masks half the squad turns a measurement into a story.
 		return "flat"
@@ -1786,6 +1792,10 @@ func aiSceneSpawn(
 		return aiCommsOrdersSpawn(world, squadService, roleService, unitFactory,
 			playerFaction.ID, posMap, rosterMap)
 	}
+	if aiSceneID() == aiSceneCapture {
+		return aiCaptureSpawn(world, squadService, roleService, unitFactory,
+			playerFaction.ID, posMap, rosterMap)
+	}
 	if aiSceneID() == aiSceneCommsESM {
 		return aiCommsESMSpawn(world, squadService, roleService, unitFactory,
 			vehicleFactory, playerFaction.ID, posMap, rosterMap)
@@ -2314,10 +2324,24 @@ type aiTestState struct {
 	esmSets       int
 	RadioMap      *ecs.Map[components.Radio]
 	RegistryRes   ecs.Resource[components.ContactRegistry]
-	Damage        *systems.DamageService
-	CommsMap      *ecs.Map[components.CommsState]
-	casRidgeUp    bool
-	casStamper    *systems.Stamper
+
+	// lite_capture (block B).
+	capProbes            []capProbe
+	capNetPoint          ecs.Entity
+	capNetSquad          ecs.Entity
+	capContested         bool
+	capFrozenSeen        bool
+	capProgressMoved     bool
+	capProgressAtContest float32
+	capLostAt            float32
+	capBandBefore        components.CommsBand
+	capBandAfter         components.CommsBand
+	capSpawnMan          func(x, z float32, faction uint8) ecs.Entity
+	PointMap             *ecs.Map[components.ControlPoint]
+	Damage               *systems.DamageService
+	CommsMap             *ecs.Map[components.CommsState]
+	casRidgeUp           bool
+	casStamper           *systems.Stamper
 
 	// Set for lite_balance_* (2026-08-26). See test_scene_balance.go.
 	balanceActive      bool
@@ -2685,6 +2709,10 @@ func (s *aiTestState) Update(elapsed float32) {
 	}
 	if s.esmFoe != (ecs.Entity{}) {
 		s.updateCommsESM(elapsed)
+		return
+	}
+	if len(s.capProbes) > 0 {
+		s.updateCapture(elapsed)
 		return
 	}
 	if s.balanceActive {
