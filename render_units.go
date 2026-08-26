@@ -8,6 +8,7 @@ import (
 
 	"rts-go/components"
 	"rts-go/systems"
+	"rts-go/ui"
 )
 
 // drawUnitCube draws a placeholder soldier as an olive cube sitting on the
@@ -39,56 +40,6 @@ func drawUnitCubeAlpha(pos rl.Vector3, st components.Stance, role components.Uni
 	rl.DrawCubeWiresV(capPos, rl.Vector3{X: 0.55, Y: capHeight, Z: 0.55}, scale(rl.Color{R: 20, G: 20, B: 20, A: 220}))
 }
 
-// drawUnitRoleLabel projects the unit's head-above-cap point into the 3D
-// panel's content rect and draws the role ShortLabel as a small floating
-// pill. Called from the 2D pass (after the 3D RT has been composited) so the
-// label sits on top of the scene without depth fighting.
-func drawUnitRoleLabel(renderPos rl.Vector3, st components.Stance, role components.UnitRoleKind,
-	font rl.Font, panel3DContent rl.Rectangle) {
-	height := unitStanceHeight(st.Code)
-	capHeight := float32(0.15)
-	if role == components.RoleLeader {
-		capHeight = 0.30
-	}
-	headPos := rl.Vector3{
-		X: renderPos.X,
-		Y: renderPos.Y + height + capHeight + 0.6,
-		Z: renderPos.Z,
-	}
-	w := int32(panel3DContent.Width)
-	h := int32(panel3DContent.Height)
-	if w < 1 || h < 1 {
-		return
-	}
-	sp := rl.GetWorldToScreenEx(headPos, systems.CurrentCamera, w, h)
-	if sp.X < 0 || sp.Y < 0 || sp.X > panel3DContent.Width || sp.Y > panel3DContent.Height {
-		return
-	}
-	label := role.ShortLabel()
-	const fontSize float32 = 14
-	size := rl.MeasureTextEx(font, label, fontSize, 1)
-	screenX := panel3DContent.X + sp.X - size.X*0.5
-	screenY := panel3DContent.Y + sp.Y - size.Y*0.5
-
-	bg := components.RoleColor(role)
-	bg.A = 200
-	const padX float32 = 3
-	const padY float32 = 1
-	rect := rl.Rectangle{
-		X: screenX - padX, Y: screenY - padY,
-		Width: size.X + 2*padX, Height: size.Y + 2*padY,
-	}
-	rl.DrawRectangleRec(rect, bg)
-	rl.DrawRectangleLinesEx(rect, 1, rl.Color{R: 20, G: 20, B: 20, A: 220})
-
-	// White / black text by background luminance.
-	lum := 0.299*float32(bg.R) + 0.587*float32(bg.G) + 0.114*float32(bg.B)
-	textColor := rl.Color{R: 0, G: 0, B: 0, A: 255}
-	if lum < 140 {
-		textColor = rl.Color{R: 255, G: 255, B: 255, A: 255}
-	}
-	rl.DrawTextEx(font, label, rl.Vector2{X: screenX, Y: screenY}, fontSize, 1, textColor)
-}
 
 // drawUnitStaminaBar draws a horizontal Stamina bar above the cap, only when
 // ratio < 0.8. Green / yellow / red by ratio zone (>=0.5 / >=0.2 / below).
@@ -455,4 +406,68 @@ func (g *Game) drawAircraftSelection(pos components.WorldPos, renderPos rl.Vecto
 	faint.A = 120
 	rl.DrawLine3D(renderPos, foot, faint)
 	rl.DrawCircle3D(foot, spec.ColliderR*0.7, rl.Vector3{X: 1}, 90, c)
+}
+
+// fieldSymbolHalf keeps the over-head symbol small: it is an identifier, not a
+// panel. Half the map's size reads at a glance without covering the men.
+const fieldSymbolHalf float32 = 9
+
+// drawFieldSymbols puts ONE map symbol over each squad instead of a role letter
+// over each man. The letters were the complaint: eight of them over eight
+// bodies is noise, and "R" next to "MG" tells the player nothing they can act
+// on. A squad is the thing orders are given to, so a squad is the thing that
+// gets a mark — the same mark, from the same code, as on the map.
+func (g *Game) drawFieldSymbols() {
+	panel := g.Frame.Panel3DContent
+	w, h := int32(panel.Width), int32(panel.Height)
+	if w < 1 || h < 1 {
+		return
+	}
+	project := func(p components.WorldPos, lift float32) (rl.Vector2, bool) {
+		rp := p.ToRenderSpace(systems.CurrentOriginChunk)
+		rp.Y += lift
+		sp := rl.GetWorldToScreenEx(rp, systems.CurrentCamera, w, h)
+		if sp.X < 0 || sp.Y < 0 || sp.X > panel.Width || sp.Y > panel.Height {
+			return rl.Vector2{}, false
+		}
+		return rl.Vector2{X: panel.X + sp.X, Y: panel.Y + sp.Y}, true
+	}
+	symCtx := ui.MapRenderCtx{
+		World:      g.App.World,
+		RoleMap:    g.Maps.Role,
+		VehicleMap: g.Maps.Vehicle,
+		FactionMap: g.Maps.Faction,
+	}
+
+	q := g.Filt.Squad.Query()
+	for q.Next() {
+		_, roster := q.Get()
+		squad := q.Entity()
+		if roster.Count == 0 {
+			continue
+		}
+		centre, ok := systems.SquadCenter(g.App.World, roster, g.Maps.Pos)
+		if !ok {
+			continue
+		}
+		screen, on := project(centre, 3.2)
+		if !on {
+			continue
+		}
+		ui.DrawSymbol(ui.SquadSymbolSpec(symCtx, squad, roster), screen, fieldSymbolHalf, 1.0)
+		if col := g.squadColor(squad); col.A > 0 {
+			b := ui.SymbolBounds(ui.AffiliationForFaction(squadFactionID(g, squad)),
+				screen, fieldSymbolHalf)
+			rl.DrawRectangleRec(rl.Rectangle{
+				X: b.X, Y: b.Y + b.Height + 1, Width: b.Width, Height: 2,
+			}, col)
+		}
+	}
+}
+
+func squadFactionID(g *Game, squad ecs.Entity) uint8 {
+	if f := g.Maps.Faction.Get(squad); f != nil {
+		return f.ID
+	}
+	return components.FactionPlayer
 }
