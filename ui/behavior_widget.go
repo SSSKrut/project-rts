@@ -30,6 +30,10 @@ type BehaviorMaps struct {
 	ActiveDoctrineMap    *ecs.Map[components.ActiveDoctrine]
 	ActiveAutonomyMap    *ecs.Map[components.ActiveAutonomy]
 	StaminaMap           *ecs.Map[components.Stamina]
+	RadioMap             *ecs.Map[components.Radio]
+	EquipmentMap         *ecs.Map[components.Equipment]
+	CommsMap             *ecs.Map[components.CommsState]
+	SensorsMap           *ecs.Map[components.Sensors]
 }
 
 func NewBehaviorMaps(world *ecs.World) BehaviorMaps {
@@ -40,6 +44,10 @@ func NewBehaviorMaps(world *ecs.World) BehaviorMaps {
 		EngagementRulesMap:   ecs.NewMap[components.EngagementRules](world),
 		BehaviorRulesMap:     ecs.NewMap[components.BehaviorRules](world),
 		BehaviorRulesEditMap: ecs.NewMap[components.BehaviorRulesEdit](world),
+		RadioMap:             ecs.NewMap[components.Radio](world),
+		EquipmentMap:         ecs.NewMap[components.Equipment](world),
+		CommsMap:             ecs.NewMap[components.CommsState](world),
+		SensorsMap:           ecs.NewMap[components.Sensors](world),
 		ActiveDoctrineMap:    ecs.NewMap[components.ActiveDoctrine](world),
 		ActiveAutonomyMap:    ecs.NewMap[components.ActiveAutonomy](world),
 		StaminaMap:           ecs.NewMap[components.Stamina](world),
@@ -171,6 +179,9 @@ func drawStandingRulesSections(ctx BehaviorCtx, squad ecs.Entity, x, y, width in
 
 	col := Column{X: float32(x), Y: float32(y), W: float32(width)}
 
+	drawRadioSection(ctx, &col, squad)
+	col.Skip(srSectionGap)
+
 	// Doctrine must run before the section chips so the highlights reflect
 	// the freshly-applied fields.
 	if mp != nil && er != nil && br != nil && ctx.ActiveDoctrineMap != nil {
@@ -195,6 +206,81 @@ func drawStandingRulesSections(ctx BehaviorCtx, squad ecs.Entity, x, y, width in
 		col.Skip(srSectionGap)
 	}
 	return int32(col.Y)
+}
+
+// drawRadioSection is the emissions trade, both halves on one line: what the
+// net buys and what it costs. A player who cannot see the cost is not making a
+// choice (Phase 20 P1), and the airframe panel already states it this way.
+func drawRadioSection(ctx BehaviorCtx, col *Column, squad ecs.Entity) {
+	sets := squadRadios(ctx, squad)
+	if len(sets) == 0 {
+		Header(col, &ctx.st, "Radio")
+		TextRowClipped(col, &ctx.st, "  no set in the squad — voice only", ctx.st.TextDim)
+		return
+	}
+	Header(col, &ctx.st, "Radio")
+
+	on := false
+	emit := float32(0)
+	for _, set := range sets {
+		r := ctx.RadioMap.Get(set)
+		if r == nil || !r.On {
+			continue
+		}
+		on = true
+		if r.EmitRangeM > emit {
+			emit = r.EmitRangeM
+		}
+	}
+	band := components.CommsGreen
+	quality := float32(0)
+	if cs := ctx.CommsMap.Get(squad); cs != nil {
+		band, quality = cs.Band, cs.Quality
+	}
+
+	label := fmt.Sprintf("%-9s %3.0f%% / heard %.0f", band.String(), quality*100, emit)
+	if !on {
+		label = fmt.Sprintf("%-9s %3.0f%% / silent", band.String(), quality*100)
+	}
+	row := col.Band(srChipH)
+	col.Skip(srRowGap)
+	if Toggle(ctx.in, &ctx.st, row, label, on) {
+		for _, set := range sets {
+			if r := ctx.RadioMap.Get(set); r != nil {
+				r.On = !on
+			}
+		}
+	}
+}
+
+// squadRadios collects every set the roster carries — on the man or in his
+// equipment, the same two places CommsSystem looks.
+func squadRadios(ctx BehaviorCtx, squad ecs.Entity) []ecs.Entity {
+	roster := ctx.RosterMap.Get(squad)
+	if roster == nil || ctx.RadioMap == nil {
+		return nil
+	}
+	var out []ecs.Entity
+	for i := uint8(0); i < roster.Count; i++ {
+		mem := roster.Members[i]
+		if mem == (ecs.Entity{}) || !ctx.World.Alive(mem) {
+			continue
+		}
+		if ctx.RadioMap.Has(mem) {
+			out = append(out, mem)
+		}
+		if eq := ctx.EquipmentMap.Get(mem); eq != nil {
+			for _, item := range [3]ecs.Entity{eq.Secondary, eq.Primary, eq.Active} {
+				if item == (ecs.Entity{}) || !ctx.World.Alive(item) {
+					continue
+				}
+				if ctx.RadioMap.Has(item) {
+					out = append(out, item)
+				}
+			}
+		}
+	}
+	return out
 }
 
 // drawAutonomySection: click applies AutonomySpec to br (skipping dirty

@@ -77,7 +77,7 @@ func (sys *ContactSystem) runDetectPass(dt float32) {
 			ent: ent, pos: *pos, chunk: pos.Chunk,
 			x: wx, z: wz, targetY: pos.Local.Y + spec.TargetCenterY,
 			faction: faction.ID, dimMask: components.DimInfantry,
-			concealment: conceal, audioRadius: audio, emitRange: sensors.EmitRangeM(),
+			concealment: conceal, audioRadius: audio, emitRange: sys.emitRangeOf(ent, sensors),
 			shotHeardM: sys.gunshotReach(ent),
 			meter:      meter, det: det,
 		})
@@ -117,7 +117,7 @@ func (sys *ContactSystem) runDetectPass(dt float32) {
 			x: wx, z: wz, targetY: pos.Local.Y + vspec.BoxHgt*0.6,
 			faction: faction.ID, dimMask: components.DimVehicle,
 			concealment: vspec.DetectMul * sys.smokeMulAt(wx, wz), audioRadius: audio,
-			emitRange:  sensors.EmitRangeM(),
+			emitRange:  sys.emitRangeOf(ent, sensors),
 			shotHeardM: sys.gunshotReach(ent),
 			meter:      meter, det: det,
 		})
@@ -296,7 +296,7 @@ func (sys *ContactSystem) snapshotAircraft() {
 			faction: faction.ID, dimMask: components.DimAir,
 			concealment: spec.DetectMul * airConcealMul(band) * sys.smokeMulAt(wx, wz),
 			audioRadius: spec.NoiseRadiusM * airNoiseMul(band),
-			emitRange:   sensors.EmitRangeM(),
+			emitRange:   sys.emitRangeOf(ent, sensors),
 			shotHeardM:  sys.gunshotReach(ent),
 			meter:       meter, det: det,
 		})
@@ -867,6 +867,30 @@ func (sys *ContactSystem) netOK(ent ecs.Entity) bool {
 	}
 	cs := sys.commsMap.Get(cmd)
 	return cs == nil || cs.Band == components.CommsGreen
+}
+
+// emitRangeOf: how far this body gives itself away on someone else's passive
+// receiver. A radio is an emitter exactly like a radar (P7) — same pass, same
+// bearing, no new predicate. Switched ON is the whole gate: a set with nobody
+// left to talk to still radiates, and that is precisely what makes switching it
+// off a decision instead of an automatic reward for already being cut off.
+func (sys *ContactSystem) emitRangeOf(ent ecs.Entity, sensors *components.Sensors) float32 {
+	best := sensors.EmitRangeM()
+	if r := sys.radioMap.Get(ent); r != nil && r.On && r.EmitRangeM > best {
+		best = r.EmitRangeM
+	}
+	// A rifleman gives away his radioman's set the same way he carries it.
+	if eq := sys.equipMap.Get(ent); eq != nil {
+		for _, item := range [3]ecs.Entity{eq.Secondary, eq.Primary, eq.Active} {
+			if item == (ecs.Entity{}) || !sys.worldRef.Alive(item) {
+				continue
+			}
+			if r := sys.radioMap.Get(item); r != nil && r.On && r.EmitRangeM > best {
+				best = r.EmitRangeM
+			}
+		}
+	}
+	return best
 }
 
 func inVoice(a, b *contactSeer) bool {

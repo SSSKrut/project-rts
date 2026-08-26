@@ -56,6 +56,7 @@ type ContactSystem struct {
 	contactPlayerSet   *ecs.Map[components.ContactPlayerSet]
 	squadMemberMap     *ecs.Map[components.SquadMember]
 	commsMap           *ecs.Map[components.CommsState]
+	radioMap           *ecs.Map[components.Radio]
 	movementProfileMap *ecs.Map[components.MovementProfile]
 	weaponMap          *ecs.Map[components.Weapon]
 	equipMap           *ecs.Map[components.Equipment]
@@ -211,6 +212,7 @@ func (sys *ContactSystem) InitUI(w *ecs.World) {
 	sys.posMap = ecs.NewMap[components.WorldPos](w)
 	sys.contactMap = ecs.NewMap[components.Contact](w)
 	sys.commsMap = ecs.NewMap[components.CommsState](w)
+	sys.radioMap = ecs.NewMap[components.Radio](w)
 	sys.contactPlayerSet = ecs.NewMap[components.ContactPlayerSet](w)
 	sys.squadMemberMap = ecs.NewMap[components.SquadMember](w)
 	sys.movementProfileMap = ecs.NewMap[components.MovementProfile](w)
