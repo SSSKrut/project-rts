@@ -55,6 +55,7 @@ type ContactSystem struct {
 	contactMap         *ecs.Map[components.Contact]
 	contactPlayerSet   *ecs.Map[components.ContactPlayerSet]
 	squadMemberMap     *ecs.Map[components.SquadMember]
+	commsMap           *ecs.Map[components.CommsState]
 	movementProfileMap *ecs.Map[components.MovementProfile]
 	weaponMap          *ecs.Map[components.Weapon]
 	equipMap           *ecs.Map[components.Equipment]
@@ -147,6 +148,10 @@ type contactSeer struct {
 	sensors    *components.Sensors
 	aware      *components.Awareness
 	maxRange   float32 // max BaseRange across channels — used for cull
+	// netOK: this seer's commander is on a working net, so a squadmate's
+	// sighting reaches it. Snapshotted once per pass — the detect loop must not
+	// walk the roster per candidate.
+	netOK bool
 }
 
 // detectGroup is one squad (or one solo unit) processed as a unit: one cull
@@ -205,6 +210,7 @@ func (sys *ContactSystem) InitUI(w *ecs.World) {
 	sys.factionMap = ecs.NewMap[components.Faction](w)
 	sys.posMap = ecs.NewMap[components.WorldPos](w)
 	sys.contactMap = ecs.NewMap[components.Contact](w)
+	sys.commsMap = ecs.NewMap[components.CommsState](w)
 	sys.contactPlayerSet = ecs.NewMap[components.ContactPlayerSet](w)
 	sys.squadMemberMap = ecs.NewMap[components.SquadMember](w)
 	sys.movementProfileMap = ecs.NewMap[components.MovementProfile](w)

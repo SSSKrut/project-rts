@@ -347,6 +347,17 @@ func drawSquadMarkers(content rl.Rectangle, ctx MapRenderCtx) {
 		if ctx.SquadColor != nil {
 			col = ctx.SquadColor(ent)
 		}
+		// A marker nobody is reporting fades exactly like an enemy contact —
+		// same curve, because it is the same kind of fact: a last known place.
+		alpha := float32(1)
+		if ctx.MapMarkerCache != nil {
+			if since, stale := ctx.MapMarkerCache.StaleSince[ent]; stale {
+				alpha = components.ContactAgeAlpha(since, ctx.Clock)
+			}
+		}
+		if alpha < 1 {
+			col.A = uint8(float32(col.A) * alpha)
+		}
 		spec := SquadSymbolSpec(ctx, ent, roster)
 		// Own soldiers only: a hostile squad's real map presence is its
 		// contacts, and drawing its members here would hand the player
@@ -354,7 +365,7 @@ func drawSquadMarkers(content rl.Rectangle, ctx MapRenderCtx) {
 		if spec.Affiliation == components.AffilFriend {
 			drawSquadMemberDots(content, ctx, roster, screen, col)
 		}
-		DrawSymbol(spec, screen, squadSymbolHalf, 1.0)
+		DrawSymbol(spec, screen, squadSymbolHalf, alpha)
 		// The APP-6 frame carries affiliation only, so the squad's palette
 		// colour rides as a strip below it — as an outline it would vanish
 		// against a friend frame of the same blue.

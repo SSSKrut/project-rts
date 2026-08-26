@@ -22,6 +22,7 @@ type VehicleReflexSystem struct {
 	posMap       *ecs.Map[components.WorldPos]
 	smokeMap     *ecs.Map[components.SmokeField]
 	awareMap     *ecs.Map[components.Awareness]
+	commsMap     *ecs.Map[components.CommsState]
 	factionMap   *ecs.Map[components.Faction]
 	worldRef     *ecs.World
 	smokePending []components.WorldPos
@@ -67,6 +68,7 @@ func (sys *VehicleReflexSystem) InitUI(w *ecs.World) {
 	sys.posMap = ecs.NewMap[components.WorldPos](w)
 	sys.smokeMap = ecs.NewMap[components.SmokeField](w)
 	sys.awareMap = ecs.NewMap[components.Awareness](w)
+	sys.commsMap = ecs.NewMap[components.CommsState](w)
 	sys.factionMap = ecs.NewMap[components.Faction](w)
 	sys.squadMemberMap = ecs.NewMap[components.SquadMember](w)
 	sys.formationMap = ecs.NewMap[components.FormationData](w)
@@ -126,10 +128,7 @@ func (sys *VehicleReflexSystem) tickActive(ent ecs.Entity, pos *components.World
 	if tx*tx+tz*tz > 1e-4 {
 		ov.ThreatYaw = float32(math.Atan2(float64(tx), float64(tz)))
 		if ov.Kind == components.VehicleReflexFlee {
-			ov.Retreat = pos.Add(rl.Vector3{
-				X: threat.ThreatDir.X * fleeAwayDist,
-				Z: threat.ThreatDir.Z * fleeAwayDist,
-			})
+			ov.Retreat = sys.fleeTarget(ent, pos, threat)
 		}
 	}
 	released := now >= ov.Until
@@ -238,11 +237,31 @@ func (sys *VehicleReflexSystem) tryTrigger(ent ecs.Entity, veh *components.Vehic
 		// (P8-f). Pushing it into the ActionQueue destroyed the player's
 		// order, and for a squad member FormationSystem overwrote it anyway.
 		ov.Until = now + fleeDuration
-		ov.Retreat = pos.Add(rl.Vector3{
-			X: threat.ThreatDir.X * fleeAwayDist,
-			Z: threat.ThreatDir.Z * fleeAwayDist,
-		})
+		ov.Retreat = sys.fleeTarget(ent, pos, threat)
 	}
+}
+
+// fleeTarget is the retreat point, shortened so the hull stays on the ground it
+// was left holding. Off the net, running is still allowed — running AWAY is
+// not: each flee is 40 m and nothing caps how many.
+func (sys *VehicleReflexSystem) fleeTarget(ent ecs.Entity, pos *components.WorldPos,
+	threat *components.Threat) components.WorldPos {
+	away := fleeAwayDist
+	if anchor, r, leashed := LeashFor(sys.commsMap.Get(ent)); leashed {
+		ax, az := worldXZ(anchor)
+		px, pz := worldXZ(*pos)
+		room := r - float32(math.Sqrt(float64((px-ax)*(px-ax)+(pz-az)*(pz-az))))
+		if room < away {
+			away = room
+		}
+		if away < 0 {
+			away = 0
+		}
+	}
+	return pos.Add(rl.Vector3{
+		X: threat.ThreatDir.X * away,
+		Z: threat.ThreatDir.Z * away,
+	})
 }
 
 // engaging reports whether the vehicle has a recent, live hostile in its

@@ -27,6 +27,7 @@ type CommsSystem struct {
 	relayFilter *ecs.Filter3[components.Relay, components.WorldPos, components.Faction]
 
 	rosterMap    *ecs.Map[components.CommandRoster]
+	orderHeadMap *ecs.Map[components.OrderQueueHead]
 	posMap       *ecs.Map[components.WorldPos]
 	equipmentMap *ecs.Map[components.Equipment]
 	radioMap     *ecs.Map[components.Radio]
@@ -57,6 +58,7 @@ func (sys *CommsSystem) InitUI(w *ecs.World) {
 	sys.commsFilter = ecs.NewFilter1[components.CommsState](w)
 	sys.relayFilter = ecs.NewFilter3[components.Relay, components.WorldPos, components.Faction](w)
 	sys.rosterMap = ecs.NewMap[components.CommandRoster](w)
+	sys.orderHeadMap = ecs.NewMap[components.OrderQueueHead](w)
 	sys.posMap = ecs.NewMap[components.WorldPos](w)
 	sys.equipmentMap = ecs.NewMap[components.Equipment](w)
 	sys.radioMap = ecs.NewMap[components.Radio](w)
@@ -100,7 +102,42 @@ func (sys *CommsSystem) Update(ctx core.UpdateContext) {
 		}
 		cs.Quality = sys.quality(ent, &pos, fac)
 		cs.Band = components.BandFor(cs.Quality, cs.Band)
+		sys.updateAnchor(ent, cs, pos)
 	}
+}
+
+// updateAnchor keeps the self-action centre under the commander while it is
+// either reachable or still busy, and FREEZES it the moment it is neither.
+//
+// The freeze is the whole mechanism (P5). An anchor that tracks the live
+// position bounds nothing — it travels with the body. An anchor pinned to the
+// last order's target bounds the wrong thing: a squad three hundred metres into
+// a delivered march would be forbidden from taking cover, because cover is not
+// near the destination. What a cut-off squad with nothing left to do should do
+// is hold THIS ground, and that is what freezing says.
+func (sys *CommsSystem) updateAnchor(cmd ecs.Entity, cs *components.CommsState,
+	pos components.WorldPos) {
+	if cs.Band.LeashM() <= 0 {
+		cs.Anchor = pos
+		return
+	}
+	if head := sys.orderHeadMap.Get(cmd); head != nil && head.First != (ecs.Entity{}) &&
+		sys.world.Alive(head.First) {
+		cs.Anchor = pos
+	}
+}
+
+// LeashFor is the ground a commander may act on by itself: centre and radius,
+// ok=false when the net still reaches it and nothing is bounded.
+func LeashFor(cs *components.CommsState) (components.WorldPos, float32, bool) {
+	if cs == nil {
+		return components.WorldPos{}, 0, false
+	}
+	r := cs.Band.LeashM()
+	if r <= 0 {
+		return components.WorldPos{}, 0, false
+	}
+	return cs.Anchor, r, true
 }
 
 // snapshotRelays flattens every active relay to XZ + range once per tick. The

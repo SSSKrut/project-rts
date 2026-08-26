@@ -88,6 +88,7 @@ func (sys *ContactSystem) runDetectPass(dt float32) {
 			fwdZ: float32(math.Cos(float64(mot.Yaw))),
 			yaw:  mot.Yaw, faction: faction.ID,
 			sensors: sensors, aware: aware, maxRange: passiveMaxRange(sensors),
+			netOK: sys.netOK(ent),
 		})
 	}
 	q.Close()
@@ -127,6 +128,7 @@ func (sys *ContactSystem) runDetectPass(dt float32) {
 			fwdZ: float32(math.Cos(float64(mot.Yaw))),
 			yaw:  mot.Yaw, faction: faction.ID,
 			sensors: sensors, aware: aware, maxRange: passiveMaxRange(sensors),
+			netOK: sys.netOK(ent),
 		})
 	}
 	qV.Close()
@@ -227,6 +229,9 @@ func (sys *ContactSystem) applyDetectMeters(dt float32) {
 							if mi == ev.spotter || seers[mi].ent == units[i].ent {
 								continue
 							}
+							if !seers[mi].netOK && !inVoice(sp, &seers[mi]) {
+								continue
+							}
 							recordSighting(seers[mi].aware, units[i].ent, units[i].pos, sys.elapsed, 0)
 						}
 					}
@@ -302,6 +307,7 @@ func (sys *ContactSystem) snapshotAircraft() {
 			fwdZ: float32(math.Cos(float64(mot.Yaw))),
 			yaw:  mot.Yaw, faction: faction.ID,
 			sensors: sensors, aware: aware, maxRange: passiveMaxRange(sensors),
+			netOK: sys.netOK(ent),
 		})
 	}
 	q.Close()
@@ -535,7 +541,13 @@ func processDetectGroup(
 						continue
 					}
 					s := &seers[mi]
+					// A sighting somebody else made travels by RADIO, or by
+					// shouting if he is close enough. Off the net a strung-out
+					// squad loses the shared picture; a tight one keeps it.
 					if s.ent == cand.ent {
+						continue
+					}
+					if !s.netOK && !inVoice(sp, s) {
 						continue
 					}
 					recordSighting(s.aware, cand.ent, cand.pos, elapsed, 0)
@@ -839,6 +851,29 @@ func clamp32(v, lo, hi float32) float32 {
 // recordSighting refreshes the FIFO entry for `target`, evicting the oldest
 // slot for new targets. A Direct flag never downgrades to Shared within the
 // same timestamp.
+// voiceShareM is how far a sighting carries without any radio at all. Without
+// it the gate below is a cliff: a squad whose radioman dies is capped at half
+// quality, which is under Green at ANY distance from a relay, so one casualty
+// would blind the squad permanently. "Только голосом" is the model's own phrase
+// for what is left — this is that phrase as a number.
+const voiceShareM float32 = 25.0
+
+// netOK: shared sightings ride the radio, so they need one. Green only —
+// a degraded net carries orders late but not a live picture (MODEL.md 1).
+func (sys *ContactSystem) netOK(ent ecs.Entity) bool {
+	cmd := ent
+	if m := sys.squadMemberMap.Get(ent); m != nil && m.Squad != (ecs.Entity{}) {
+		cmd = m.Squad
+	}
+	cs := sys.commsMap.Get(cmd)
+	return cs == nil || cs.Band == components.CommsGreen
+}
+
+func inVoice(a, b *contactSeer) bool {
+	dx, dz := a.x-b.x, a.z-b.z
+	return dx*dx+dz*dz <= voiceShareM*voiceShareM
+}
+
 func recordSighting(aware *components.Awareness, target ecs.Entity, pos components.WorldPos, t float32, flags uint8) {
 	for i := range aware.LastSeen {
 		if aware.LastSeen[i].Time != 0 && aware.LastSeen[i].Target == target {

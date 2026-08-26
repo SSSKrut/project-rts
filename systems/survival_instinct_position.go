@@ -227,6 +227,13 @@ func (sys *SurvivalInstinctSystem) pickPosition(
 		if sys.zoneAt(c.x, c.z) >= 0 {
 			continue
 		}
+		// Nor is a place outside the ground a cut-off squad is holding. Cover
+		// hops are 18 m each and there is no limit on how many; without this
+		// a squad under sustained fire walks off the map one good rock at a
+		// time, with nobody able to call it back.
+		if !sys.withinLeash(c.x, c.z) {
+			continue
+		}
 		claim := uint8(0)
 		if c.ent != (ecs.Entity{}) {
 			claim = sys.occupancyClaim[c.ent]
@@ -453,6 +460,7 @@ func (sys *SurvivalInstinctSystem) planPosition(unit ecs.Entity, pos *components
 	threat *components.Threat, fallbackDir rl.Vector3, inZone bool,
 	claimed map[ecs.Entity]ecs.Entity) (siAcquireOp, bool) {
 	dirX, dirZ := leadBearing(threat, fallbackDir)
+	sys.setLeash(unit)
 	slot, slotPos, found := sys.pickPosition(unit, pos, threat, fallbackDir, claimed)
 	if found {
 		reason := components.TacticalOverrideUnderFire
@@ -476,8 +484,37 @@ func (sys *SurvivalInstinctSystem) planPosition(unit ecs.Entity, pos *components
 	if !ok {
 		return siAcquireOp{}, false
 	}
+	if !sys.withinLeash(worldXZ(relocPos)) {
+		return siAcquireOp{}, false
+	}
 	return siAcquireOp{unit: unit, pos: relocPos,
 		reason: components.TacticalOverrideNoCover, dirX: dirX, dirZ: dirZ}, true
+}
+
+// setLeash reads the unit's commander's self-action bound once per plan.
+// Leaving a beaten zone is exempt: an anchor is ground to hold, not ground to
+// die on, and the evacuation primitive is the one move that must always be
+// available.
+func (sys *SurvivalInstinctSystem) setLeash(unit ecs.Entity) {
+	sys.leashR = 0
+	cmd := unit
+	if m := sys.memberMap.Get(unit); m != nil && m.Squad != (ecs.Entity{}) {
+		cmd = m.Squad
+	}
+	anchor, r, ok := LeashFor(sys.commsMap.Get(cmd))
+	if !ok {
+		return
+	}
+	sys.leashX, sys.leashZ = worldXZ(anchor)
+	sys.leashR = r
+}
+
+func (sys *SurvivalInstinctSystem) withinLeash(x, z float32) bool {
+	if sys.leashR <= 0 {
+		return true
+	}
+	dx, dz := x-sys.leashX, z-sys.leashZ
+	return dx*dx+dz*dz <= sys.leashR*sys.leashR
 }
 
 // leadBearing is the dominant threat direction (source → unit).

@@ -55,6 +55,7 @@ type SurvivalInstinctSystem struct {
 	posMap        *ecs.Map[components.WorldPos]
 	blackboardMap *ecs.Map[components.LocalBlackboard]
 	orderQueueMap *ecs.Map[components.OrderQueueHead]
+	commsMap      *ecs.Map[components.CommsState]
 	issuedAtMap   *ecs.Map[components.OrderIssuedAt]
 	eventLogRes   ecs.Resource[components.EventLog]
 
@@ -73,6 +74,9 @@ type SurvivalInstinctSystem struct {
 	// holding it. pickCover uses it to penalise full slots without hard
 	// rejecting them.
 	occupancyClaim map[ecs.Entity]uint8
+
+	// Self-action bound for the unit currently being planned; radius 0 = none.
+	leashX, leashZ, leashR float32
 }
 
 // PostLoad repopulates the occupancy ledger from live TacticalOverride
@@ -197,6 +201,7 @@ func (sys *SurvivalInstinctSystem) InitUI(w *ecs.World) {
 	sys.queueMap = ecs.NewMap[components.ActionQueue](w)
 	sys.overrideMap = ecs.NewMap[components.TacticalOverride](w)
 	sys.memberMap = ecs.NewMap[components.SquadMember](w)
+	sys.commsMap = ecs.NewMap[components.CommsState](w)
 	sys.behaviorMap = ecs.NewMap[components.BehaviorRules](w)
 	sys.threatMap = ecs.NewMap[components.Threat](w)
 	sys.squadStateMap = ecs.NewMap[components.SquadState](w)
