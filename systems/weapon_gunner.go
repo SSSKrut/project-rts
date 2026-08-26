@@ -38,12 +38,19 @@ func (sys *WeaponSystem) snapshotVehicleShots(now, dt float32) {
 				continue
 			}
 			wspec := components.SpecForWeapon(weapon.Kind)
-			target, targetPos, ok := sys.pickTarget(shooter, fac.ID, pos, aware, weapon, wspec, now)
+			// Same two questions as the infantry path: a named place first,
+			// the awareness FIFO second.
+			var target ecs.Entity
+			targetPos, ok := sys.orderedAim(shooter, fac.ID, pos, weapon, wspec, now)
+			if !ok {
+				target, targetPos, ok = sys.pickTarget(shooter, fac.ID, pos, aware, weapon, wspec, now)
+			}
 			if !ok {
 				continue
 			}
-			targetIsAir := sys.aircraftMap.Has(target)
-			if !sys.shouldFire(shooter, 0, pos, targetPos, sys.vehicleMap.Has(target), targetIsAir) {
+			targetIsAir := sys.targetIsAircraft(target)
+			if !sys.shouldFire(shooter, 0, pos, targetPos,
+				sys.targetIsVehicle(target), targetIsAir) {
 				continue
 			}
 
@@ -82,23 +89,20 @@ func (sys *WeaponSystem) snapshotVehicleShots(now, dt float32) {
 				}
 				weapon.LastFiredAt = now
 				weapon.Ammo--
-				velX, velZ := targetVelXZ(sys.motionMap.Get(target))
+				velX, velZ := targetVelXZ(sys.targetMotionOf(target))
 				sys.resolveAirShotSerial(muzzle, *pos, target, targetPos, velX, velZ,
 					weapon, wspec, now,
 					uint64(shooter.ID())^uint64(now*1000.0)^uint64(slot)<<32)
 				continue
 			}
 
-			targetStance := components.StanceStand
-			if st := sys.stanceMap.Get(target); st != nil {
-				targetStance = st.Code
-			}
+			targetStance := sys.targetStanceOf(target)
 			dispersion := weapon.Dispersion
 			if motion.Speed > vehMovingSpeed || motion.Speed < -vehMovingSpeed {
 				dispersion *= 1 + vehMoveDispersionMul
 			}
 			targetY := components.SpecForStance(targetStance).TargetCenterY
-			if tv := sys.vehicleMap.Get(target); tv != nil {
+			if tv := sys.targetVehicleOf(target); tv != nil {
 				targetY = components.SpecForVehicle(tv.Kind).BoxHgt * 0.5
 			}
 

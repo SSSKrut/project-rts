@@ -31,6 +31,12 @@ const (
 	// at-least-one-friendly-inside; OrderResolverSystem auto-chains an
 	// OccupyBuilding onto the same building entity on Done.
 	OrderKindClearBuilding
+	// OrderKindMissileStrike: put ONE player-released round on a named point.
+	// Not a third layer of control (GAME.md, 2026-08-27) — an ordinary order
+	// whose only peculiarity is that WeaponSpec.Release decides which barrel
+	// answers it. Appended last: an enum value inserted mid-list would shift
+	// every saved order code.
+	OrderKindMissileStrike
 )
 
 // OrderKind on the order entity. Wraps the code so the filter-target is one

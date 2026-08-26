@@ -72,7 +72,7 @@ type OrderKindSpec struct {
 
 // OrderKindCount is the count of enum values. Update when a new OrderKindCode
 // is appended; the compile-time guard below catches misses.
-const OrderKindCount OrderKindCode = OrderKindClearBuilding + 1
+const OrderKindCount OrderKindCode = OrderKindMissileStrike + 1
 
 var OrderKindSpecs = [OrderKindCount]OrderKindSpec{
 	OrderKindMoveTo: {
@@ -134,6 +134,16 @@ var OrderKindSpecs = [OrderKindCount]OrderKindSpec{
 		DrivesMacroPath:   true,
 		OverridesHoldFire: true, // hostiles inside must be engaged
 		Completion:        CompletionClearBuilding, ArrivalRadius: 4.0,
+	},
+	OrderKindMissileStrike: {
+		Code: OrderKindMissileStrike, Name: "Missile", MapIconGlyph: 'X',
+		NeedsTerrain:      true,
+		OverridesHoldFire: true,
+		DrivesMacroPath:   false,
+		Completion:        CompletionTimer,
+		// One round per order, and the weapon's own rate is what enforces it:
+		// an ATGM reloads in 14 s, so a 12 s window can never fit a second.
+		DurationSeconds: 12.0,
 	},
 }
 

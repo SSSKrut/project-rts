@@ -47,14 +47,21 @@ func (sys *WeaponSystem) snapshotAirShots(now, dt float32) {
 				continue
 			}
 			wspec := components.SpecForWeapon(weapon.Kind)
-			target, targetPos, ok := sys.pickTarget(shooter, fac.ID, pos, aware, weapon, wspec, now)
+			// Same two questions as the ground paths, so the day a rotary
+			// weapon is marked player-released it already has a way to fire.
+			var target ecs.Entity
+			targetPos, ok := sys.orderedAim(shooter, fac.ID, pos, weapon, wspec, now)
+			if !ok {
+				target, targetPos, ok = sys.pickTarget(shooter, fac.ID, pos, aware, weapon, wspec, now)
+			}
 			if !ok {
 				continue
 			}
-			targetIsAir := sys.aircraftMap.Has(target)
+			targetIsAir := sys.targetIsAircraft(target)
 			// motionSpeed 0: a helicopter that must stop to shoot is a rifleman
 			// wearing rotors. The vehicle gunner passes 0 for the same reason.
-			if !sys.shouldFire(shooter, 0, pos, targetPos, sys.vehicleMap.Has(target), targetIsAir) {
+			if !sys.shouldFire(shooter, 0, pos, targetPos,
+				sys.targetIsVehicle(target), targetIsAir) {
 				continue
 			}
 			// A hitscan barrel cannot reach past weaponMaxRange whatever its
@@ -90,12 +97,9 @@ func (sys *WeaponSystem) snapshotAirShots(now, dt float32) {
 				// an airframe being absent from the raycast target pool.
 				continue
 			}
-			targetStance := components.StanceStand
-			if st := sys.stanceMap.Get(target); st != nil {
-				targetStance = st.Code
-			}
+			targetStance := sys.targetStanceOf(target)
 			targetY := components.SpecForStance(targetStance).TargetCenterY
-			if tv := sys.vehicleMap.Get(target); tv != nil {
+			if tv := sys.targetVehicleOf(target); tv != nil {
 				targetY = components.SpecForVehicle(tv.Kind).BoxHgt * 0.5
 			}
 			weapon.LastFiredAt = now

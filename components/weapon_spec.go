@@ -5,8 +5,22 @@ import rl "github.com/gen2brain/raylib-go/raylib"
 // WeaponSpec collapses the per-WeaponKind tables that previously lived in
 // role_service.primaryStats and weapon.tracerColorFor, plus splash-damage
 // knobs (SplashRadius / SplashFalloff).
+// WeaponRelease says who pulls the trigger. The zero value MUST be Auto: the
+// day this field landed, every existing barrel had to keep firing on its own,
+// and a zero that meant "waits for the player" would have struck the whole
+// roster mute (the Sensors.OffMask lesson). A manual barrel is invisible to
+// pickTarget — no RoE check reaches it, which is what makes "hold fire" mean
+// "silence the AI's weapons" while the player's missile still works.
+type WeaponRelease uint8
+
+const (
+	ReleaseAuto WeaponRelease = iota
+	ReleaseManual
+)
+
 type WeaponSpec struct {
 	Kind        WeaponKind
+	Release     WeaponRelease
 	Name        string
 	Ammo        uint16  // default magazine capacity
 	RangeM      float32 // effective range in metres
@@ -146,14 +160,14 @@ var WeaponSpecs = [WeaponKindCount]WeaponSpec{
 	// the silent ceiling all over again. That gap IS the loadout trade: stand
 	// off with eight rounds, or come inside the ZU-23 with forty.
 	WeaponVikhr: {
-		Kind: WeaponVikhr, Name: "Vikhr",
+		Kind: WeaponVikhr, Name: "Vikhr", Release: ReleaseManual,
 		Ammo: 8, RangeM: 1200, RoF: 0.15, Damage: 500, Dispersion: 0,
 		TracerColor: rl.Color{R: 255, G: 150, B: 110, A: 255},
 		VsSoft:      0.4, VsLight: 1.5, VsHeavy: 1.3,
 		MissileSpeedM: 300, MissileTurnDps: 55, MissileFuelS: 6,
 	},
 	WeaponS8: {
-		Kind: WeaponS8, Name: "S-8 rockets",
+		Kind: WeaponS8, Name: "S-8 rockets", Release: ReleaseManual,
 		Ammo: 40, RangeM: 190, RoF: 2.5, Damage: 90, Dispersion: 0.05,
 		TracerColor:   rl.Color{R: 255, G: 180, B: 90, A: 255},
 		SplashRadius:  5.0,

@@ -57,6 +57,10 @@ type WeaponSystem struct {
 	orderKindMap               *ecs.Map[components.OrderKind]
 	orderTargetMap             *ecs.Map[components.OrderTarget]
 	orderEngagementOverrideMap *ecs.Map[components.OrderParamEngagementOverride]
+	// Safe to build here: SquadService registers OrderParamSuppress in
+	// initServices, which runs before registerSystems — so this handle cannot
+	// hand the component a new ID.
+	orderSuppressMap *ecs.Map[components.OrderParamSuppress]
 	// Utility Mode gate: Reloading and Suppressed silence the unit.
 	blackboardMap *ecs.Map[components.LocalBlackboard]
 
@@ -70,6 +74,9 @@ type WeaponSystem struct {
 	airEngageMap   *ecs.Map[components.AirEngagement]
 	wallsByChunk   map[components.ChunkCoord][]losWall
 	targetsByChunk map[components.ChunkCoord][]int32
+	// One ReturnFire answer per commander per tick — the question walks a
+	// roster and shouldFire asks it once per barrel.
+	underFireMemo map[ecs.Entity]bool
 
 	// Per-worker scratch.
 	workerDamage      [][]damageEvent
@@ -245,6 +252,7 @@ func NewWeaponSystem(pool *core.WorkerPool, damage *DamageService, particles *Sp
 		shotsBuf:          make([]shotWork, 0, 32),
 		wallsByChunk:      make(map[components.ChunkCoord][]losWall, 32),
 		targetsByChunk:    make(map[components.ChunkCoord][]int32, 32),
+		underFireMemo:     make(map[ecs.Entity]bool, 16),
 		heightmaps:        make(map[components.ChunkCoord][]float32, 64),
 		workerDamage:      make([][]damageEvent, workers),
 		workerTracer:      make([][]tracerSpec, workers),
@@ -283,6 +291,7 @@ func (sys *WeaponSystem) InitUI(w *ecs.World) {
 	sys.orderKindMap = ecs.NewMap[components.OrderKind](w)
 	sys.orderTargetMap = ecs.NewMap[components.OrderTarget](w)
 	sys.orderEngagementOverrideMap = ecs.NewMap[components.OrderParamEngagementOverride](w)
+	sys.orderSuppressMap = ecs.NewMap[components.OrderParamSuppress](w)
 	sys.blackboardMap = ecs.NewMap[components.LocalBlackboard](w)
 	sys.threatSourceMap = ecs.NewMap[components.ThreatSource](w)
 	sys.dangerBufMap = ecs.NewMap[components.DangerBuffer](w)
@@ -327,6 +336,7 @@ func (sys *WeaponSystem) Update(ctx core.UpdateContext) {
 	sys.missilePending = sys.missilePending[:0]
 	clear(sys.wallsByChunk)
 	clear(sys.targetsByChunk)
+	clear(sys.underFireMemo)
 	for i := range sys.workerDamage {
 		sys.workerDamage[i] = sys.workerDamage[i][:0]
 		sys.workerTracer[i] = sys.workerTracer[i][:0]
@@ -343,6 +353,7 @@ func (sys *WeaponSystem) Update(ctx core.UpdateContext) {
 
 	sys.snapshotTargetsAndWalls()
 	snapshotHeightmaps(sys.indexRes.Get(), sys.hmMap, sys.heightmaps)
+	sys.snapshotUnderFire()
 	sys.snapshotShots(now)
 	sys.snapshotVehicleShots(now, float32(ctx.Delta.Seconds()))
 	sys.snapshotAirShots(now, float32(ctx.Delta.Seconds()))
@@ -428,9 +439,16 @@ func (sys *WeaponSystem) snapshotShots(now float32) {
 			continue
 		}
 		wspec := components.SpecForWeapon(weapon.Kind)
-		// Pick a hostile target from awareness (most recent + alive + range;
-		// zero-multiplier classes are skipped — no ammo wasted on a tank).
-		target, targetPos, ok := sys.pickTarget(shooter, fac.ID, pos, aware, weapon, wspec, now)
+		// Two questions in order (block G P1): does the commander name a
+		// PLACE, and only then what does awareness offer. A place carries no
+		// entity, so nothing below may dereference the target without a guard.
+		var target ecs.Entity
+		targetPos, ok := sys.orderedAim(shooter, fac.ID, pos, weapon, wspec, now)
+		if !ok {
+			// Pick a hostile target from awareness (most recent + alive + range;
+			// zero-multiplier classes are skipped — no ammo wasted on a tank).
+			target, targetPos, ok = sys.pickTarget(shooter, fac.ID, pos, aware, weapon, wspec, now)
+		}
 		if !ok {
 			continue
 		}
@@ -438,7 +456,8 @@ func (sys *WeaponSystem) snapshotShots(now float32) {
 		// cooldown bump) so a HoldFire squad can resume fire the instant the
 		// player flips the rule.
 		if !sys.shouldFire(shooter, motion.Speed, pos, targetPos,
-			sys.vehicleMap.Has(target), sys.aircraftMap.Has(target)) {
+			sys.targetIsVehicle(target),
+			sys.targetIsAircraft(target)) {
 			continue
 		}
 		// MANPADS: the shot is a Missile entity, not a ray (Phase 20 M2, P6).
@@ -456,10 +475,7 @@ func (sys *WeaponSystem) snapshotShots(now float32) {
 			sys.queueMissile(target, *pos, muzzle, targetPos, wspec)
 			continue
 		}
-		targetStance := components.StanceStand
-		if st := sys.stanceMap.Get(target); st != nil {
-			targetStance = st.Code
-		}
+		targetStance := sys.targetStanceOf(target)
 
 		// Effective dispersion (PHASE-14.md cross-cut note):
 		//   eff = base * (1 + 0.3 * movingFactor + 0.5 * suppression)

@@ -17,7 +17,7 @@ ai_vehicle_yield ai_vehicle_group ai_vehicle_convoy ai_vehicle_convoy_road \
 ai_vehicle_flee ai_march_line ai_march_slope \
 ai_march_column ai_wall_glide ai_crowd_cross ai_vehicle_forest ai_vehicle_slope ai_vehicle_stuck ai_cover_side ai_shellfire ai_cover_trench ai_cover_hull ai_cover_defilade ai_cover_none ai_bounding ai_clear_building ai_focus_fire ai_mass \
 ai_air_transit ai_air_recon ai_solo_orders ai_air_aa_gun ai_air_manpads ai_air_cas lite_comms_range lite_comms_orders lite_comms_autonomy lite_comms_esm lite_capture \
-lite_balance_open lite_balance_ambush lite_balance_eyes"}
+lite_balance_open lite_balance_ambush lite_balance_eyes lite_roe_return lite_roe_suppress lite_roe_missile"}
 
 go build -o bin/rts . || exit 1
 mkdir -p /tmp/rts-replay

@@ -293,6 +293,18 @@ const (
 	aiSceneBalOpen   = "lite_balance_open"
 	aiSceneBalAmbush = "lite_balance_ambush"
 	aiSceneBalEyes   = "lite_balance_eyes"
+
+	// _roe_return (block G M1): the three fire modes as three different
+	// things. Two lanes, one on Return and one on Free, because silence on
+	// its own proves nothing. See test_scene_roe.go.
+	aiSceneROEReturn = "lite_roe_return"
+	// _roe_suppress (block G M2): rounds into a place nobody has seen. Lane B
+	// is the same squad without the order and must stay silent.
+	aiSceneROESuppress = "lite_roe_suppress"
+	// _roe_missile (block G M4): a player-released barrel stays cold under
+	// FreeFire with the target in plain sight, and fires exactly one round
+	// when the player names a point.
+	aiSceneROEMissile = "lite_roe_missile"
 )
 
 // aiSceneMapName lets a scene demand a specific map manifest ("" = default).
@@ -1832,6 +1844,18 @@ func aiSceneSpawn(
 		return aiBalanceSpawn(world, squadService, roleService, unitFactory,
 			vehicleFactory, mode, posMap, rosterMap)
 	}
+	if id := aiSceneID(); id == aiSceneROEReturn || id == aiSceneROESuppress ||
+		id == aiSceneROEMissile {
+		mode := roeModeReturn
+		switch id {
+		case aiSceneROESuppress:
+			mode = roeModeSuppress
+		case aiSceneROEMissile:
+			mode = roeModeMissile
+		}
+		return aiROESpawn(world, squadService, roleService, unitFactory,
+			vehicleFactory, aircraftFactory, mode, posMap, rosterMap)
+	}
 	if aiSceneID() == aiSceneSoloOrders {
 		return aiSoloOrderSceneSpawn(world, squadService, vehicleFactory, posMap)
 	}
@@ -2364,6 +2388,28 @@ type aiTestState struct {
 	casRidgeUp           bool
 	casStamper           *systems.Stamper
 
+	// Set for lite_roe_* (block G M1/M2). See test_scene_roe.go.
+	roeActive       bool
+	roeMode         roeMode
+	roeLanes        [2]roeLane
+	roeProvoked     bool
+	roeProvokeAt    float32
+	roeQuietA       int
+	roeQuietB       int
+	roeCarrier      ecs.Entity
+	roePod          ecs.Entity
+	roeGun          ecs.Entity
+	roeGunAmmo0     int
+	roeGunFired     int
+	roeAirFilter    *ecs.Filter2[components.Aircraft, components.WorldPos]
+	roeMissileFoe   ecs.Entity
+	roeMissileAmmo0 int
+	roeMissileFired int
+	roeCarrierSaw   bool
+	roeEquipMap     *ecs.Map[components.Equipment]
+	roeWeaponMap    *ecs.Map[components.Weapon]
+	roeBehaveMap    *ecs.Map[components.BehaviorRules]
+
 	// Set for lite_balance_* (2026-08-26). See test_scene_balance.go.
 	balanceActive      bool
 	balMode            balanceMode
@@ -2734,6 +2780,10 @@ func (s *aiTestState) Update(elapsed float32) {
 	}
 	if len(s.capProbes) > 0 {
 		s.updateCapture(elapsed)
+		return
+	}
+	if s.roeActive {
+		s.updateROE(elapsed)
 		return
 	}
 	if s.balanceActive {
