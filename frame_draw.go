@@ -37,7 +37,6 @@ func (g *Game) drawUI() {
 		RoadGraph:        &g.Res.RoadGraph,
 		Rivers:           &g.Res.Rivers,
 		Buildings:        &g.Res.BuildingPlans,
-		ShowDebugLayers:  g.UI.ShowMapDebugLy,
 		OrderQueueMap:    g.Maps.OrderQueue,
 		CommsMap:         g.Ctx.Inspector.CommsMap,
 		OrderKindMap:     g.Maps.OrderKind,
@@ -49,6 +48,8 @@ func (g *Game) drawUI() {
 		VehicleMap:       g.Maps.Vehicle,
 		UnitFilter:       g.Filt.UnitRender,
 		PointFilter:      g.Filt.ControlPoint,
+		EquipmentMap:     g.Ctx.Inspector.EquipmentMap,
+		WeaponMap:        g.Ctx.Inspector.WeaponMap,
 		VehicleFilter:    g.Filt.VehicleRender,
 		AircraftFilter:   g.Filt.AircraftRender,
 		FactionMap:       g.Maps.Faction,
@@ -203,7 +204,6 @@ func (g *Game) drawUI() {
 		if r := g.Maps.Role.Get(ent); r != nil {
 			role = r.Kind
 		}
-		drawUnitRoleLabel(renderPos, *st, role, g.hudFont, g.Frame.Panel3DContent)
 		if stam := g.Maps.Stamina.Get(ent); stam != nil {
 			drawUnitStaminaBar(renderPos, *st, role, stam.Current, stam.MaxLevel, g.Frame.Panel3DContent)
 		}
@@ -216,6 +216,7 @@ func (g *Game) drawUI() {
 			}
 		}
 	}
+	g.drawFieldSymbols()
 	rl.EndScissorMode()
 
 	// Squad bar over the composited scene: the layout was frozen before the

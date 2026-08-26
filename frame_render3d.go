@@ -446,13 +446,11 @@ func (g *Game) drawScene3D() {
 		drawBuildingOutline(g.Sel.Building, rl.Color{R: 90, G: 200, B: 240, A: 230})
 	}
 
-	// Hold-G (or the Debug-panel sticky toggle) also flips the map's
-	// road / river / building debug layer.
+	// Hold-G stays what it always was underneath: the road GRAPH wireframe.
+	// The map's roads, rivers and buildings are drawn unconditionally now —
+	// they are the map, not an overlay.
 	if rl.IsKeyDown(rl.KeyG) || debugOverlay.RoadGraph {
 		drawRoadGraphDebug(&g.Res.RoadGraph)
-		g.UI.ShowMapDebugLy = true
-	} else {
-		g.UI.ShowMapDebugLy = false
 	}
 
 	drawControlPoints3D(g.Ctx.Points)

@@ -276,7 +276,6 @@ type uiState struct {
 
 	SmoothedSquadPos map[ecs.Entity]components.WorldPos
 	ExpandedHUD      bool
-	ShowMapDebugLy   bool
 
 	// Attention holds the auto-reaction policy plus the live banner; it is
 	// frame-side state and never enters a world snapshot.

@@ -47,9 +47,10 @@ type MapRenderCtx struct {
 	RoadGraph       *components.RoadGraph
 	Rivers          *components.Rivers
 	Buildings       *components.BuildingPlanList
-	ShowDebugLayers bool
 	OrderQueueMap   *ecs.Map[components.OrderQueueHead]
 	CommsMap        *ecs.Map[components.CommsState]
+	EquipmentMap    *ecs.Map[components.Equipment]
+	WeaponMap       *ecs.Map[components.Weapon]
 	PointFilter     *ecs.Filter2[components.ControlPoint, components.WorldPos]
 	OrderKindMap    *ecs.Map[components.OrderKind]
 	OrderTargetMap  *ecs.Map[components.OrderTarget]
@@ -93,9 +94,7 @@ func DrawMap(panel Panel, ctx MapRenderCtx) {
 	defer rl.EndScissorMode()
 
 	drawUnderlay(content, ctx)
-	if ctx.ShowDebugLayers {
-		drawDebugLayers(content, ctx)
-	}
+	drawTerrainLayers(content, ctx)
 	drawMapCoverage(content, ctx)
 	drawLOSFan(content, ctx)
 	drawOrderMarkers(content, ctx)
@@ -105,6 +104,7 @@ func DrawMap(panel Panel, ctx MapRenderCtx) {
 	drawOwnVehicles(content, ctx)
 	drawOwnAircraft(content, ctx)
 	drawSoloistUnits(content, ctx)
+	drawMapFire(content, ctx)
 	drawMapContacts(content, ctx)
 	drawBearingLines(content, ctx)
 	drawAnchorMarker(content, ctx)
@@ -280,7 +280,10 @@ func drawUnderlay(content rl.Rectangle, ctx MapRenderCtx) {
 	rl.DrawTexturePro(u.Texture, src, dst, rl.Vector2{}, 0, rl.White)
 }
 
-func drawDebugLayers(content rl.Rectangle, ctx MapRenderCtx) {
+// drawTerrainLayers draws rivers, roads and buildings. These are not debug —
+// they are the map. Hiding them behind a held key made the command surface
+// blank exactly when the player needed to read the ground.
+func drawTerrainLayers(content rl.Rectangle, ctx MapRenderCtx) {
 	cam := ctx.Cam
 	if ctx.Rivers != nil {
 		for _, riv := range ctx.Rivers.Polylines {
@@ -314,6 +317,54 @@ func drawDebugLayers(content rl.Rectangle, ctx MapRenderCtx) {
 			b := MapWorldToPanel(br, cam, content)
 			rect := rl.Rectangle{X: a.X, Y: a.Y, Width: b.X - a.X, Height: b.Y - a.Y}
 			rl.DrawRectangleRec(rect, mapBuildingColor)
+		}
+	}
+}
+
+// mapFireWindow is how long a shot stays lit on the map. Long enough to see a
+// firefight as a firefight, short enough that the flashes track it moving.
+const mapFireWindow float32 = 0.8
+
+// drawMapFire marks where OUR weapons are going off. Fire is the loudest thing
+// happening on the field and the map used to show none of it; an enemy's fire
+// arrives as a contact instead (contact_gunfire.go), which is the honest
+// asymmetry — you know where your own men are shooting from.
+func drawMapFire(content rl.Rectangle, ctx MapRenderCtx) {
+	if ctx.EquipmentMap == nil || ctx.WeaponMap == nil || ctx.UnitFilter == nil {
+		return
+	}
+	flash := func(ent ecs.Entity, pos components.WorldPos) {
+		eq := ctx.EquipmentMap.Get(ent)
+		if eq == nil || eq.Active == (ecs.Entity{}) || !ctx.World.Alive(eq.Active) {
+			return
+		}
+		w := ctx.WeaponMap.Get(eq.Active)
+		if w == nil || w.LastFiredAt <= 0 || ctx.Clock-w.LastFiredAt > mapFireWindow {
+			return
+		}
+		age := (ctx.Clock - w.LastFiredAt) / mapFireWindow
+		screen := MapWorldToPanel(pos, ctx.Cam, content)
+		col := rl.Color{R: 255, G: 220, B: 120, A: uint8(230 * (1 - age))}
+		rl.DrawCircleV(screen, 3.5-2*age, col)
+	}
+	qU := ctx.UnitFilter.Query()
+	for qU.Next() {
+		pos, _, _ := qU.Get()
+		ent := qU.Entity()
+		if f := ctx.FactionMap.Get(ent); f != nil && f.ID != components.FactionPlayer {
+			continue
+		}
+		flash(ent, *pos)
+	}
+	if ctx.VehicleFilter != nil {
+		qV := ctx.VehicleFilter.Query()
+		for qV.Next() {
+			pos, _ := qV.Get()
+			ent := qV.Entity()
+			if f := ctx.FactionMap.Get(ent); f != nil && f.ID != components.FactionPlayer {
+				continue
+			}
+			flash(ent, *pos)
 		}
 	}
 }
