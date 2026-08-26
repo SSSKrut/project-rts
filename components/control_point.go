@@ -48,3 +48,14 @@ func CaptureRate(diff int) float32 {
 	}
 	return CaptureRatePerSec * d
 }
+
+// BuildingControl is the whole of "who holds this building" (MODEL.md 3). A
+// building is an object of OWNERSHIP, not a puzzle: whoever has live bodies
+// inside the footprint holds it, both sides inside contest it, and that is the
+// entire rule. Room-by-room clearing, window assignment and interior slot
+// priorities are what this replaces.
+type BuildingControl struct {
+	Owner     uint8
+	Count     [FactionCount]uint8
+	Contested bool
+}

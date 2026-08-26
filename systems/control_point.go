@@ -13,6 +13,7 @@ import (
 // radios are one mechanic rather than two.
 type ControlPointSystem struct {
 	pointFilter *ecs.Filter2[components.ControlPoint, components.WorldPos]
+	bldFilter   *ecs.Filter2[components.Building, components.BuildingControl]
 	unitFilter  *ecs.Filter3[components.Unit, components.WorldPos, components.Faction]
 	vehFilter   *ecs.Filter3[components.Vehicle, components.WorldPos, components.Faction]
 	hpMap       *ecs.Map[components.HP]
@@ -33,6 +34,7 @@ func NewControlPointSystem() *ControlPointSystem { return &ControlPointSystem{} 
 
 func (sys *ControlPointSystem) InitUI(w *ecs.World) {
 	sys.pointFilter = ecs.NewFilter2[components.ControlPoint, components.WorldPos](w)
+	sys.bldFilter = ecs.NewFilter2[components.Building, components.BuildingControl](w)
 	sys.unitFilter = ecs.NewFilter3[components.Unit, components.WorldPos, components.Faction](w)
 	sys.vehFilter = ecs.NewFilter3[components.Vehicle, components.WorldPos, components.Faction](w)
 	sys.hpMap = ecs.NewMap[components.HP](w)
@@ -66,6 +68,45 @@ func (sys *ControlPointSystem) Update(ctx core.UpdateContext) {
 	for q.Next() {
 		cp, pos := q.Get()
 		sys.step(q.Entity(), cp, pos, dt, float32(ctx.SimNow))
+	}
+	sys.stepBuildings()
+}
+
+// stepBuildings is the same question as a control point, asked of a footprint:
+// who is inside. No progress bar and no timer — a building is held the moment
+// somebody is in it and lost the moment they are not, because the cost of
+// taking one is the fight, not a clock.
+func (sys *ControlPointSystem) stepBuildings() {
+	q := sys.bldFilter.Query()
+	for q.Next() {
+		b, bc := q.Get()
+		fp := b.Footprint
+		bc.Count = [components.FactionCount]uint8{}
+		for i := range sys.bodies {
+			body := &sys.bodies[i]
+			if body.x < fp.MinX || body.x > fp.MaxX ||
+				body.z < fp.MinZ || body.z > fp.MaxZ {
+				continue
+			}
+			if int(body.faction) < len(bc.Count) && bc.Count[body.faction] < 255 {
+				bc.Count[body.faction]++
+			}
+		}
+		sides, owner := 0, components.FactionNone
+		for f, n := range bc.Count {
+			if n > 0 {
+				sides++
+				owner = uint8(f)
+			}
+		}
+		bc.Contested = sides > 1
+		switch {
+		case sides == 1:
+			bc.Owner = owner
+		case sides == 0:
+			// Empty keeps its last holder: walking out of a house does not hand
+			// it back, and "who was in there last" is the useful answer.
+		}
 	}
 }
 

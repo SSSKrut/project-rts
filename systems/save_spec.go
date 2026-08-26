@@ -77,12 +77,11 @@ var saveComponents = map[string]saveEntry{
 	"components.SquadPlan":            saveReg[components.SquadPlan](SaveMemcpy),
 	"components.CommandRoster":        saveReg[components.CommandRoster](SaveMemcpy),
 	"components.FormationData":        saveReg[components.FormationData](SaveMemcpy),
-	"components.FormationOrientation": saveReg[components.FormationOrientation](SaveMemcpy),
-	"components.FormationCustomSlots": saveReg[components.FormationCustomSlots](SaveMemcpy),
 	"components.MacroPath":            saveReg[components.MacroPath](SaveMemcpy),
 	"components.CommsState":           saveReg[components.CommsState](SaveMemcpy),
 	"components.Relay":                saveReg[components.Relay](SaveMemcpy),
 	"components.ControlPoint":         saveReg[components.ControlPoint](SaveMemcpy),
+	"components.BuildingControl":      saveReg[components.BuildingControl](SaveMemcpy),
 	"components.MovementProfile":      saveReg[components.MovementProfile](SaveMemcpy),
 	"components.EngagementRules":      saveReg[components.EngagementRules](SaveMemcpy),
 	"components.BehaviorRules":        saveReg[components.BehaviorRules](SaveMemcpy),
@@ -238,7 +237,6 @@ var resourceClasses = map[string]ResourceClass{
 
 	"components.EventLog":         ResCodec,
 	"components.OrderHistory":     ResCodec,
-	"components.FormationPresets": ResCodec,
 	"components.SymbologyPresets": ResCodec, // sidecar save/symbols.json (closes deferred 18.5)
 }
 

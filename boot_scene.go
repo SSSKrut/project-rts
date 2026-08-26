@@ -95,6 +95,10 @@ func (g *Game) spawnWorldRoots() {
 			Seed:      p.Seed,
 		})
 		g.Maps.AlwaysActive.Add(root, &components.AlwaysActive{})
+		// Ownership rides on the root from the start: ControlPointSystem only
+		// ever writes it, never adds it mid-query.
+		ecs.NewMap[components.BuildingControl](g.App.World).Add(root,
+			&components.BuildingControl{Owner: components.FactionNone})
 		g.Res.BuildingPlanIx.Plans[root] = p
 
 		// Level entities live for the building's whole life independent of
@@ -191,8 +195,6 @@ func (g *Game) initGameplayHandles() {
 	g.Maps.SquadMember = ecs.NewMap[components.SquadMember](g.App.World)
 	g.Maps.Roster = ecs.NewMap[components.CommandRoster](g.App.World)
 	g.Maps.FormationData = ecs.NewMap[components.FormationData](g.App.World)
-	g.Maps.FormationOrient = ecs.NewMap[components.FormationOrientation](g.App.World)
-	g.Maps.FormationCustomSlots = ecs.NewMap[components.FormationCustomSlots](g.App.World)
 	g.Maps.OrderQueue = ecs.NewMap[components.OrderQueueHead](g.App.World)
 	g.Maps.OrderKind = ecs.NewMap[components.OrderKind](g.App.World)
 	g.Maps.OrderTarget = ecs.NewMap[components.OrderTarget](g.App.World)

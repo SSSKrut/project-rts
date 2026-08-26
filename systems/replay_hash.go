@@ -29,6 +29,7 @@ type ReplayHasher struct {
 	planFilter    *ecs.Filter2[components.Squad, components.SquadPlan]
 	commsFilter   *ecs.Filter1[components.CommsState]
 	pointFilter   *ecs.Filter1[components.ControlPoint]
+	bldCtlFilter  *ecs.Filter1[components.BuildingControl]
 	contactFilter *ecs.Filter1[components.Contact]
 	sensorsMap    *ecs.Map[components.Sensors]
 	stanceMap     *ecs.Map[components.Stance]
@@ -59,6 +60,7 @@ func NewReplayHasher(w *ecs.World) *ReplayHasher {
 		planFilter:    ecs.NewFilter2[components.Squad, components.SquadPlan](w),
 		commsFilter:   ecs.NewFilter1[components.CommsState](w),
 		pointFilter:   ecs.NewFilter1[components.ControlPoint](w),
+		bldCtlFilter:  ecs.NewFilter1[components.BuildingControl](w),
 		contactFilter: ecs.NewFilter1[components.Contact](w),
 		sensorsMap:    ecs.NewMap[components.Sensors](w),
 		stanceMap:     ecs.NewMap[components.Stance](w),
@@ -303,6 +305,22 @@ func (r *ReplayHasher) Hash() uint64 {
 			u8(0)
 		}
 		take(qcp.Entity())
+	}
+	fold()
+
+	qbc := r.bldCtlFilter.Query()
+	for qbc.Next() {
+		bc := qbc.Get()
+		u8(bc.Owner)
+		if bc.Contested {
+			u8(1)
+		} else {
+			u8(0)
+		}
+		for _, n := range bc.Count {
+			u8(n)
+		}
+		take(qbc.Entity())
 	}
 	fold()
 
