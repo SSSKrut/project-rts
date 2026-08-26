@@ -44,34 +44,40 @@ type WeaponSpec struct {
 
 const WeaponKindCount WeaponKind = WeaponS8 + 1
 
-// WeaponSpecs - canonical table indexed by WeaponKind. Numbers are rough
-// placeholders sized for 4-vs-8 firefights ending in 30-45 s at ~50 m.
+// WeaponSpecs - canonical table indexed by WeaponKind.
+//
+// A rifle's VsLight is ZERO, not "small" (2026-08-26 balance pass). Eight
+// rifles at 4 rounds/s is 32 hits a second, and 0.1 of a rifle bullet times
+// that is 90 damage/s — a squad shredding a BMP with small arms. Zero is also
+// the target gate (pickTarget skips multipliers under 0.05), so riflemen now
+// ignore hulls entirely and armour is the AT gunner's job. Measured by
+// lite_balance_open / _ambush; change one, re-run both.
 var WeaponSpecs = [WeaponKindCount]WeaponSpec{
 	WeaponAK47: {
 		Kind: WeaponAK47, Name: "AK47",
 		Ammo: 30, RangeM: 300, RoF: 4.0, Damage: 28, Dispersion: 0.03,
 		TracerColor: rl.Color{R: 245, G: 245, B: 230, A: 255},
-		VsSoft:      1.0, VsLight: 0.1, VsHeavy: 0,
+		VsSoft:      1.0, VsLight: 0, VsHeavy: 0,
 	},
 	WeaponPKM: {
 		Kind: WeaponPKM, Name: "PKM",
 		Ammo: 100, RangeM: 500, RoF: 8.0, Damage: 30, Dispersion: 0.05,
 		TracerColor: rl.Color{R: 255, G: 220, B: 100, A: 255},
-		VsSoft:      1.0, VsLight: 0.15, VsHeavy: 0,
+		VsSoft:      1.0, VsLight: 0, VsHeavy: 0,
 	},
 	WeaponSVD: {
 		Kind: WeaponSVD, Name: "SVD",
 		Ammo: 10, RangeM: 600, RoF: 0.5, Damage: 70, Dispersion: 0.005,
 		TracerColor: rl.Color{R: 255, G: 90, B: 60, A: 255},
-		VsSoft:      1.0, VsLight: 0.1, VsHeavy: 0,
+		VsSoft:      1.0, VsLight: 0, VsHeavy: 0,
 	},
 	WeaponRPG7: {
 		Kind: WeaponRPG7, Name: "RPG7",
-		Ammo: 3, RangeM: 200, RoF: 0.1, Damage: 200, Dispersion: 0.02,
+		Ammo: 3, RangeM: 200, RoF: 0.2, Damage: 200, Dispersion: 0.02,
 		TracerColor:   rl.Color{R: 255, G: 130, B: 40, A: 255},
 		SplashRadius:  3.5,
 		SplashFalloff: 2.0,
-		VsSoft:        0.5, VsLight: 1.2, VsHeavy: 1.0,
+		VsSoft:        0.35, VsLight: 1.6, VsHeavy: 1.0,
 	},
 	WeaponGP25: {
 		Kind: WeaponGP25, Name: "GP25",

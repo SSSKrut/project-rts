@@ -64,6 +64,12 @@ func NewUnitFactory(world *ecs.World, posMap *ecs.Map[components.WorldPos]) *Uni
 // defaultInfantrySensors - single Optical channel matching the legacy Vision
 // values (range 40 m, ~120° forward cone). Linear falloff so detection half-
 // range = 20 m at high concealment, full 40 m at no concealment.
+//
+// 40 m measures as 24 m of ACTUAL first contact between two marching squads
+// (lite_balance_eyes) — knife range, and the open item behind "infantry opens
+// fire before you can see it". Raising it is a combat-RANGE pass, not a
+// number: at 80 m a defended building becomes unassaultable and the whole
+// suite has to be re-scenarioed. See .claude/lite/PLAYTEST.md.
 func defaultInfantrySensors() components.Sensors {
 	var s components.Sensors
 	s.Channels[0] = components.SensorChannel{

@@ -29,15 +29,19 @@ func TemplateRoster(t SquadTemplate) []components.UnitRoleKind {
 			components.RoleRifleman,
 		}
 	case TmplMotorRifle:
+		// The AT gunner and the radioman are not flavour: without the first
+		// the squad cannot answer armour at all, and without the second it
+		// carries a permanent halved-comms penalty (MODEL.md 4). The medic
+		// went because nothing heals.
 		return []components.UnitRoleKind{
 			components.RoleLeader,
 			components.RoleRifleman,
 			components.RoleRifleman,
 			components.RoleRifleman,
-			components.RoleRifleman,
 			components.RoleMachineGunner,
 			components.RoleGrenadier,
-			components.RoleMedic,
+			components.RoleATGunner,
+			components.RoleRadioOperator,
 		}
 	case TmplNATOInfantry:
 		return []components.UnitRoleKind{

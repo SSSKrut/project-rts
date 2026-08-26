@@ -71,9 +71,16 @@ const (
 	boundPhaseMax   float32 = 12.0
 
 	// Relocate: share of the roster standing in a beaten zone that pauses the
-	// march, and the clean window before it resumes.
-	relocateShare    float32 = 0.5
-	relocateCleanFor float32 = 5.0
+	// march, the share it has to fall BELOW to resume, and the clean window
+	// before it does. Entering at half the roster and leaving only at zero is
+	// an absorbing state — under sustained fire one man is always in a zone,
+	// and the squad relocates for the rest of the scenario instead of
+	// shooting. relocateMax is the same admission every other phase here makes:
+	// a step that has not worked by now is not going to.
+	relocateShare      float32 = 0.5
+	relocateClearShare float32 = 0.25
+	relocateCleanFor   float32 = 5.0
+	relocateMax        float32 = 20.0
 
 	// ClearSeq phase caps — a stalled step advances rather than deadlocking.
 	clearStackTimeout float32 = 10.0
@@ -359,7 +366,14 @@ func (sys *SquadBrainSystem) stepRelocate(squad ecs.Entity, roster *components.C
 	}
 	share := inZone / live
 	if plan.Mode == components.SquadPlanRelocate {
-		if share > 0 {
+		if now-plan.Since >= relocateMax {
+			sys.setMode(plan, components.SquadPlanNone, now)
+			if fd := sys.formationMap.Get(squad); fd != nil {
+				fd.ReformPending = true
+			}
+			return false
+		}
+		if share > relocateClearShare {
 			plan.CalmSince = 0
 			return true
 		}

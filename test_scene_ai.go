@@ -265,6 +265,14 @@ const (
 	// radio quality follows it down through every band; killing the radioman
 	// halves the strength from the same spot.
 	aiSceneComms = "lite_comms_range"
+
+	// _balance_* (lite, 2026-08-26): the balance statement is the PAIR of the
+	// first two — armour breaks a squad caught in the open, the same squad
+	// lying in wait breaks armour. _eyes fires no shot and asserts the ORDER
+	// of four first-contact ranges. See test_scene_balance.go.
+	aiSceneBalOpen   = "lite_balance_open"
+	aiSceneBalAmbush = "lite_balance_ambush"
+	aiSceneBalEyes   = "lite_balance_eyes"
 )
 
 // aiSceneMapName lets a scene demand a specific map manifest ("" = default).
@@ -297,6 +305,10 @@ func aiSceneMapName() string {
 	case aiSceneComms:
 		// The claims are distances; a hill that slows the march only stretches
 		// the clock and tells us nothing.
+		return "flat"
+	case aiSceneBalOpen, aiSceneBalAmbush, aiSceneBalEyes:
+		// Balance is a number, and terrain is the loudest way to hide one:
+		// a ridge that masks half the squad turns a measurement into a story.
 		return "flat"
 	case aiSceneCoverNone:
 		return "flat"
@@ -749,7 +761,10 @@ func aiMarchColumnSpawn(
 		},
 		// Turn responses legitimately churn (target sweeps with the Forward
 		// slew); the budget catches the storm class (43+/u/min pre-P7a).
-		marchReplanMax: 15,
+		// 18, not 15: the 2026-08-26 roster (AT gunner + radioman, both on the
+		// small stamina tank) stretches the column and reads 15.1 — the same
+		// class of churn, with the margin the budget is supposed to have.
+		marchReplanMax: 18,
 		World:          world,
 		SquadService:   squadService,
 		PosMap:         posMap,
@@ -1740,6 +1755,17 @@ func aiSceneSpawn(
 		return aiCommsSpawn(world, squadService, roleService, unitFactory, damageService,
 			playerFaction.ID, posMap, rosterMap)
 	}
+	switch aiSceneID() {
+	case aiSceneBalOpen, aiSceneBalAmbush, aiSceneBalEyes:
+		mode := balanceOpen
+		if aiSceneID() == aiSceneBalAmbush {
+			mode = balanceAmbush
+		} else if aiSceneID() == aiSceneBalEyes {
+			mode = balanceEyes
+		}
+		return aiBalanceSpawn(world, squadService, roleService, unitFactory,
+			vehicleFactory, mode, posMap, rosterMap)
+	}
 	if aiSceneID() == aiSceneSoloOrders {
 		return aiSoloOrderSceneSpawn(world, squadService, vehicleFactory, posMap)
 	}
@@ -2226,6 +2252,29 @@ type aiTestState struct {
 	casRidgeUp  bool
 	casStamper  *systems.Stamper
 
+	// Set for lite_balance_* (2026-08-26). See test_scene_balance.go.
+	balanceActive      bool
+	balMode            balanceMode
+	balHulls           []ecs.Entity
+	balSquad           ecs.Entity
+	balInf             []ecs.Entity
+	balTriggered       bool
+	balTriggerAt       float32
+	balTriggerM        float32
+	balWipeAt          float32
+	balFirstHullLossAt float32
+	balEyesVehFoe      ecs.Entity
+	balEyesVehFoeUnits []ecs.Entity
+	balEyesInfA        ecs.Entity
+	balEyesInfAUnits   []ecs.Entity
+	balEyesInfB        ecs.Entity
+	balEyesInfBUnits   []ecs.Entity
+	balEyesVehSees     float32
+	balEyesInfSeesVeh  float32
+	balEyesInfSeesInf  float32
+	AwareMap           *ecs.Map[components.Awareness]
+	RulesMap           *ecs.Map[components.EngagementRules]
+
 	// Set for ai_vehicle_combat: two sides duel, verdict = enemy side dead.
 	vehCombatActive bool
 	vehFoes         []ecs.Entity
@@ -2554,6 +2603,10 @@ func (s *aiTestState) Update(elapsed float32) {
 	}
 	if s.commsActive {
 		s.updateComms(elapsed)
+		return
+	}
+	if s.balanceActive {
+		s.updateBalance(elapsed)
 		return
 	}
 	if s.soloActive {
