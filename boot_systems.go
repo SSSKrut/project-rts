@@ -183,6 +183,11 @@ func (g *Game) registerSystems() {
 	g.Svc.ForceTraffic = forceTrafficSys
 	missionSys := systems.NewMissionSystem()
 	missionSys.InitUI(app.World)
+	// Block E: BotAssignment first registers here. The bot decides BEFORE the
+	// resolver so an order it issues this tick starts this tick, exactly like
+	// the player's — the whole point is that both go the same way.
+	botSys := systems.NewBotSystem(squadService)
+	botSys.InitUI(app.World)
 
 	app.AddSystem(terrainStreamingSys)
 	app.AddSystem(terrainLoadSys)
@@ -216,6 +221,7 @@ func (g *Game) registerSystems() {
 	app.AddSystem(forceTrafficSys)
 	app.AddSystem(controlPointSys)
 	app.AddSystem(commsSys)
+	app.AddSystem(botSys)
 	app.AddSystem(orderResolverSys)
 	app.AddSystem(squadBrainSys)
 	app.AddSystem(survivalSys)

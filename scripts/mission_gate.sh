@@ -5,7 +5,7 @@
 set -u
 cd "$(dirname "$0")/.."
 
-MISSIONS=${@:-"test_hold test_timeout crossroads"}
+MISSIONS=${@:-"test_hold test_timeout test_bot test_bot_dark crossroads ridge_hold"}
 D=/tmp/rts-mission
 
 go build -o bin/rts . || exit 1
