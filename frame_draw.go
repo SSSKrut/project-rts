@@ -48,6 +48,7 @@ func (g *Game) drawUI() {
 		RoleMap:          g.Maps.Role,
 		VehicleMap:       g.Maps.Vehicle,
 		UnitFilter:       g.Filt.UnitRender,
+		PointFilter:      g.Filt.ControlPoint,
 		VehicleFilter:    g.Filt.VehicleRender,
 		AircraftFilter:   g.Filt.AircraftRender,
 		FactionMap:       g.Maps.Faction,

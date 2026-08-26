@@ -455,6 +455,7 @@ func (g *Game) drawScene3D() {
 		g.UI.ShowMapDebugLy = false
 	}
 
+	drawControlPoints3D(g.Ctx.Points)
 	drawSelectionCoverage(g.Ctx.Coverage)
 	drawLOSPreview(g.Ctx.LOS)
 	if debugOverlay.NavGrid {

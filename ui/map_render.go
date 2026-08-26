@@ -50,6 +50,7 @@ type MapRenderCtx struct {
 	ShowDebugLayers bool
 	OrderQueueMap   *ecs.Map[components.OrderQueueHead]
 	CommsMap        *ecs.Map[components.CommsState]
+	PointFilter     *ecs.Filter2[components.ControlPoint, components.WorldPos]
 	OrderKindMap    *ecs.Map[components.OrderKind]
 	OrderTargetMap  *ecs.Map[components.OrderTarget]
 	OrderChainMap   *ecs.Map[components.OrderChain]
@@ -99,6 +100,7 @@ func DrawMap(panel Panel, ctx MapRenderCtx) {
 	drawLOSFan(content, ctx)
 	drawOrderMarkers(content, ctx)
 	drawMapPings(content, ctx)
+	drawControlPoints(content, ctx)
 	drawSquadMarkers(content, ctx)
 	drawOwnVehicles(content, ctx)
 	drawOwnAircraft(content, ctx)
@@ -312,6 +314,61 @@ func drawDebugLayers(content rl.Rectangle, ctx MapRenderCtx) {
 			b := MapWorldToPanel(br, cam, content)
 			rect := rl.Rectangle{X: a.X, Y: a.Y, Width: b.X - a.X, Height: b.Y - a.Y}
 			rl.DrawRectangleRec(rect, mapBuildingColor)
+		}
+	}
+}
+
+// ControlPointColor is the owner's colour for a point, on the map and in 3D.
+// Grey is nobody's — deliberately not neutral's colour, because "unclaimed" is
+// the absence of a side, not a third one.
+func ControlPointColor(owner uint8) rl.Color {
+	switch owner {
+	case components.FactionPlayer:
+		return rl.Color{R: 90, G: 160, B: 240, A: 255}
+	case components.FactionEnemyRed:
+		return rl.Color{R: 235, G: 90, B: 80, A: 255}
+	case components.FactionNeutral:
+		return rl.Color{R: 120, G: 210, B: 130, A: 255}
+	}
+	return rl.Color{R: 165, G: 170, B: 178, A: 255}
+}
+
+// drawControlPoints draws the ground the game is played over: the radius as it
+// really is (so the player can see where to stand), the owner as colour, and
+// capture as an arc filling toward whoever is pushing. Contested points pulse
+// on their outline — the state where nothing is moving has to look different
+// from the state where something is.
+func drawControlPoints(content rl.Rectangle, ctx MapRenderCtx) {
+	if ctx.PointFilter == nil {
+		return
+	}
+	q := ctx.PointFilter.Query()
+	for q.Next() {
+		cp, pos := q.Get()
+		screen := MapWorldToPanel(*pos, ctx.Cam, content)
+		if !rl.CheckCollisionPointRec(screen, content) {
+			continue
+		}
+		rPix := cp.Radius * ctx.Cam.Zoom
+		if rPix < 3 {
+			rPix = 3
+		}
+		col := ControlPointColor(cp.Owner)
+		fill := col
+		fill.A = 40
+		rl.DrawCircleV(screen, rPix, fill)
+		ring := col
+		if cp.Contested {
+			ring = ControlPointColor(cp.Challenger)
+		}
+		rl.DrawCircleLines(int32(screen.X), int32(screen.Y), rPix, ring)
+		if cp.Progress > 0 {
+			// One filled sector, from north, in the challenger's colour: the
+			// question a player asks is "how much longer", and an arc answers
+			// it without a legend.
+			ch := ControlPointColor(cp.Challenger)
+			ch.A = 170
+			rl.DrawCircleSector(screen, rPix*0.6, 0, cp.Progress*360, 24, ch)
 		}
 	}
 }

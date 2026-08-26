@@ -11,6 +11,12 @@ import (
 	"rts-go/ui"
 )
 
+// controlPointCtx is the render handle set for the point overlay.
+type controlPointCtx struct {
+	filter  *ecs.Filter2[components.ControlPoint, components.WorldPos]
+	sampler *systems.HeightSampler
+}
+
 type orderMarkerCtx struct {
 	world          *ecs.World
 	posMap         *ecs.Map[components.WorldPos]
@@ -484,6 +490,34 @@ const (
 	fanStepM float32 = 4.0
 	fanLiftM float32 = 0.3
 )
+
+// drawControlPoints3D draws each point's real radius on the ground: this is
+// where you have to STAND, so it has to be a place in the world and not only a
+// symbol on the map. Contested points take the challenger's colour on the ring
+// and a second, shrinking ring for progress.
+func drawControlPoints3D(ctx controlPointCtx) {
+	if ctx.filter == nil {
+		return
+	}
+	q := ctx.filter.Query()
+	for q.Next() {
+		cp, pos := q.Get()
+		base := pos.ToRenderSpace(systems.CurrentOriginChunk)
+		wx := float32(pos.Chunk.X)*components.ChunkSize + pos.Local.X
+		wz := float32(pos.Chunk.Z)*components.ChunkSize + pos.Local.Z
+		col := ui.ControlPointColor(cp.Owner)
+		if cp.Contested {
+			col = ui.ControlPointColor(cp.Challenger)
+		}
+		col.A = 220
+		drawTerrainRing(ctx.sampler, wx, wz, base, cp.Radius, col, cp.Contested)
+		if cp.Progress > 0 {
+			ch := ui.ControlPointColor(cp.Challenger)
+			ch.A = 190
+			drawTerrainRing(ctx.sampler, wx, wz, base, cp.Radius*cp.Progress, ch, false)
+		}
+	}
+}
 
 // drawVisFan draws terrain-following sector strips per visible run. Culling is
 // off for the pass so one winding reads from any camera side (the batch is
