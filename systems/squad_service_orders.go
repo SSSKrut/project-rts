@@ -122,6 +122,20 @@ func (s *SquadService) issueOrderRaw(
 		return ecs.Entity{}
 	}
 
+	// Block A M1. A net that cannot carry the order does not swallow it: the
+	// order is BUILT here — it exists, draws, and can be cancelled — and only
+	// the LINKING waits. Until it links, whatever the squad was already doing
+	// keeps running (P4), which is why the chain is not cancelled yet either.
+	delay, ok := s.deliveryDelay(squad)
+	if !ok || delay > 0 {
+		ord := s.buildOrder(squad, kind, target, entityTarget, params)
+		if st := s.orderStateMap.Get(ord); st != nil {
+			st.Code = components.OrderStateBlocked
+		}
+		s.parkOrder(squad, ord, appendToQueue, delay, ok)
+		return ord
+	}
+
 	if !appendToQueue {
 		s.cancelChain(head.First)
 		head.First = ecs.Entity{}
@@ -131,6 +145,21 @@ func (s *SquadService) issueOrderRaw(
 	// so members fall back to formation slot on the next tick.
 	s.clearTacticalOverrides(squad)
 
+	ord := s.buildOrder(squad, kind, target, entityTarget, params)
+	s.linkOrder(squad, head, ord)
+	return ord
+}
+
+// buildOrder materialises the order entity and nothing else — no queue, no
+// cancellation, no side effects on the squad. Split out of issueOrderRaw so a
+// blocked order can be a real order that simply is not linked yet.
+func (s *SquadService) buildOrder(
+	squad ecs.Entity,
+	kind components.OrderKindCode,
+	target components.WorldPos,
+	entityTarget ecs.Entity,
+	params OrderParams,
+) ecs.Entity {
 	ord := s.world.NewEntity()
 	s.orderMap.Add(ord, &components.Order{})
 	s.orderKindMap.Add(ord, &components.OrderKind{Code: kind})
@@ -182,7 +211,12 @@ func (s *SquadService) issueOrderRaw(
 		}
 		s.orderSuppressMap.Add(ord, &sp)
 	}
+	return ord
+}
 
+// linkOrder puts a built order into the commander's queue: head if the queue is
+// empty, tail otherwise.
+func (s *SquadService) linkOrder(squad ecs.Entity, head *components.OrderQueueHead, ord ecs.Entity) {
 	// MacroPath.ReplanAt = 0 makes SquadMacroPathSystem replan immediately
 	// instead of waiting for the 1 s throttle.
 	if head.First == (ecs.Entity{}) {
@@ -209,7 +243,99 @@ func (s *SquadService) issueOrderRaw(
 			ch.Next = ord
 		}
 	}
-	return ord
+}
+
+// deliveryDelay answers how long the net needs to carry a new order to this
+// commander: 0 = now, >0 = seconds, ok=false = not at all. A commander with no
+// CommsState at all is not "cut off", it is outside the mechanic.
+func (s *SquadService) deliveryDelay(cmd ecs.Entity) (float32, bool) {
+	cs := s.commsMap.Get(cmd)
+	if cs == nil {
+		return 0, true
+	}
+	d := components.DeliverDelay(cs.Band, cs.Quality)
+	if d < 0 {
+		return 0, false
+	}
+	return d, true
+}
+
+// parkOrder holds a built-but-unlinked order until the net can carry it. Only
+// one can be waiting: a second click while cut off is the player changing their
+// mind, and the newer intent wins.
+func (s *SquadService) parkOrder(cmd, ord ecs.Entity, appendToQueue bool, delay float32, reachable bool) {
+	cs := s.commsMap.Get(cmd)
+	if cs == nil {
+		return
+	}
+	if prev := cs.Undelivered; prev != (ecs.Entity{}) && prev != ord && s.world.Alive(prev) {
+		s.RecordOrderEnd(prev, components.OutcomeCancelled)
+		s.world.RemoveEntity(prev)
+	}
+	cs.Undelivered = ord
+	cs.Append = appendToQueue
+	if reachable {
+		cs.DeliverAt = s.clock + delay
+	} else {
+		// No arrival time to promise: Red and Silent re-test every tick, and
+		// the order goes through the moment the band recovers.
+		cs.DeliverAt = 0
+	}
+}
+
+// DeliverParked links a waiting order if the net has come back. Called by the
+// resolver AFTER its query closes — it cancels a chain, which despawns
+// entities. Returns true when something was delivered.
+func (s *SquadService) DeliverParked(cmd ecs.Entity) bool {
+	cs := s.commsMap.Get(cmd)
+	if cs == nil || cs.Undelivered == (ecs.Entity{}) {
+		return false
+	}
+	ord := cs.Undelivered
+	if !s.world.Alive(ord) {
+		cs.Undelivered = ecs.Entity{}
+		return false
+	}
+	delay, reachable := s.deliveryDelay(cmd)
+	if !reachable {
+		return false
+	}
+	if cs.DeliverAt == 0 {
+		// The band only just recovered; start the Amber clock now rather than
+		// paying a wait that was never counted.
+		cs.DeliverAt = s.clock + delay
+	}
+	if s.clock < cs.DeliverAt {
+		return false
+	}
+	head := s.orderQueueMap.Get(cmd)
+	if head == nil {
+		cs.Undelivered = ecs.Entity{}
+		return false
+	}
+	if !cs.Append {
+		s.cancelChain(head.First)
+		head.First = ecs.Entity{}
+	}
+	s.clearTacticalOverrides(cmd)
+	if st := s.orderStateMap.Get(ord); st != nil {
+		st.Code = components.OrderStateIssued
+	}
+	s.linkOrder(cmd, head, ord)
+	cs.Undelivered = ecs.Entity{}
+	cs.DeliverAt = 0
+	cs.Append = false
+	return true
+}
+
+// UndeliveredOrder is what the UI asks to draw "not delivered" on a plan the
+// player has made but the net has not carried.
+func (s *SquadService) UndeliveredOrder(cmd ecs.Entity) ecs.Entity {
+	cs := s.commsMap.Get(cmd)
+	if cs == nil || !s.world.Alive(cs.Undelivered) {
+		return ecs.Entity{}
+	}
+	return cs.Undelivered
 }
 
 // CancelAllOrders aborts the squad's full chain (head + every Next).
@@ -223,6 +349,17 @@ func (s *SquadService) CancelAllOrders(squad ecs.Entity) {
 	}
 	s.cancelChain(head.First)
 	head.First = ecs.Entity{}
+	// A waiting order is not in the chain, so cancelling everything has to
+	// reach it separately or Stop would leave a plan that arrives later.
+	if cs := s.commsMap.Get(squad); cs != nil && cs.Undelivered != (ecs.Entity{}) {
+		if s.world.Alive(cs.Undelivered) {
+			s.RecordOrderEnd(cs.Undelivered, components.OutcomeCancelled)
+			s.world.RemoveEntity(cs.Undelivered)
+		}
+		cs.Undelivered = ecs.Entity{}
+		cs.DeliverAt = 0
+		cs.Append = false
+	}
 	if mp := s.macroPathMap.Get(squad); mp != nil {
 		mp.HasGoal = false
 		mp.Head = 0

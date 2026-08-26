@@ -81,9 +81,15 @@ type CommsState struct {
 	// not to the body: a leash measured from the current position travels
 	// with it and constrains nothing.
 	Anchor WorldPos
-	// Undelivered / DeliverAt are block A M1; M0 leaves them zero.
+	// Undelivered is an order the player has issued that the net has not
+	// carried yet (block A M1). It is a REAL order entity — visible, in the
+	// timeline, cancellable — that simply has not been linked into the queue,
+	// so the last DELIVERED order keeps running underneath it (P4). Append
+	// records whether it was a Shift-click, because that decision was made at
+	// the click and has to survive until delivery.
 	Undelivered ecs.Entity
 	DeliverAt   float32
+	Append      bool
 }
 
 // Relay is a node of the net: a faction spawn, a captured control point
@@ -113,4 +119,29 @@ const (
 	RelayRangeSpawnM   float32 = 800
 	RelayRangePointM   float32 = 450
 	RelayRangeCommandM float32 = 600
+	// What a degraded net costs an order, in seconds, at the top and the bottom
+	// of the Amber band. Green is free; Red and Silent never carry it.
+	CommsDeliverFastS float32 = 3
+	CommsDeliverSlowS float32 = 8
 )
+
+// DeliverDelay is how long this net takes to carry a new order: 0 = at once,
+// negative = not at all. Inside Amber the cost slides with quality, so the
+// player watching the percentage can predict the wait instead of being
+// surprised by a step.
+func DeliverDelay(band CommsBand, q float32) float32 {
+	switch band {
+	case CommsGreen:
+		return 0
+	case CommsAmber:
+		span := commsBandFloor[CommsGreen] - commsBandFloor[CommsAmber]
+		t := (q - commsBandFloor[CommsAmber]) / span
+		if t < 0 {
+			t = 0
+		} else if t > 1 {
+			t = 1
+		}
+		return CommsDeliverSlowS - t*(CommsDeliverSlowS-CommsDeliverFastS)
+	}
+	return -1
+}

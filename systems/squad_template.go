@@ -22,11 +22,16 @@ const (
 func TemplateRoster(t SquadTemplate) []components.UnitRoleKind {
 	switch t {
 	case TmplLightInfantry:
+		// A radioman, not a fourth rifle: since block A M1 a squad without one
+		// runs at half quality, which reads as a broken game rather than as a
+		// characterisation the moment it costs seconds on every order.
+		// Specialist teams below (AT / MG) keep going without one on purpose —
+		// an attachment that has to stay near a node is a real trade.
 		return []components.UnitRoleKind{
 			components.RoleLeader,
 			components.RoleRifleman,
 			components.RoleRifleman,
-			components.RoleRifleman,
+			components.RoleRadioOperator,
 		}
 	case TmplMotorRifle:
 		// The AT gunner and the radioman are not flavour: without the first
@@ -69,7 +74,7 @@ func TemplateRoster(t SquadTemplate) []components.UnitRoleKind {
 			components.RoleEngineer,
 			components.RoleDemoMan,
 			components.RoleRifleman,
-			components.RoleRifleman,
+			components.RoleRadioOperator,
 		}
 	case TmplATTeam:
 		return []components.UnitRoleKind{

@@ -90,6 +90,9 @@ type OrderResolverSystem struct {
 	eventLogRes ecs.Resource[components.EventLog]
 
 	squadService *SquadService
+
+	// Per-tick scratch: commanders whose waiting order may be deliverable.
+	pendingDeliver []ecs.Entity
 }
 
 // NewOrderResolverSystem wires the system. SquadService owns the mutation
@@ -201,11 +204,19 @@ func (sys *OrderResolverSystem) Update(ctx core.UpdateContext) {
 	}
 	var advances []advance
 	var pendingLODAnchors []ecs.Entity
+	sys.pendingDeliver = sys.pendingDeliver[:0]
 
 	q := sys.squadFilter.Query()
 	for q.Next() {
 		_, head := q.Get()
 		squad := q.Entity()
+		// Block A M1: an order the net has not carried yet is not in the queue,
+		// so the head loop below never sees it. Delivery cancels a chain and
+		// therefore despawns entities — deferred like every other lifecycle
+		// mutation here.
+		if sys.squadService.UndeliveredOrder(squad) != (ecs.Entity{}) {
+			sys.pendingDeliver = append(sys.pendingDeliver, squad)
+		}
 		if head.First == (ecs.Entity{}) {
 			continue
 		}
@@ -311,6 +322,12 @@ func (sys *OrderResolverSystem) Update(ctx core.UpdateContext) {
 				adv.reissueEntity = target.Entity
 			}
 			advances = append(advances, adv)
+		}
+	}
+
+	for _, cmd := range sys.pendingDeliver {
+		if ctx.World.Alive(cmd) {
+			sys.squadService.DeliverParked(cmd)
 		}
 	}
 
