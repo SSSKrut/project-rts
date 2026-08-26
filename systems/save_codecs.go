@@ -41,12 +41,6 @@ func appendResourceSection(w *ecs.World, out *saveBuf) error {
 			return err
 		}
 	}
-	fpRes := ecs.NewResource[components.FormationPresets](w)
-	if fp := fpRes.Get(); fp != nil {
-		if err := add("FormationPresets", fp); err != nil {
-			return err
-		}
-	}
 	out.u16(uint16(len(blobs)))
 	for _, b := range blobs {
 		out.str(b.name)
@@ -74,8 +68,9 @@ func readResourceSection(w *ecs.World, r *saveReader) error {
 			res := ecs.NewResource[components.OrderHistory](w)
 			err = json.Unmarshal(data, res.Get())
 		case "FormationPresets":
-			res := ecs.NewResource[components.FormationPresets](w)
-			err = json.Unmarshal(data, res.Get())
+			// Block C removed the editor and its presets. A save written before
+			// that still carries the blob; skipping it keeps old saves loadable
+			// instead of failing on a resource nobody reads any more.
 		default:
 			err = fmt.Errorf("unknown resource codec %q", name)
 		}

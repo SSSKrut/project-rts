@@ -62,7 +62,6 @@ type worldRes struct {
 	CoverSlotIndex   systems.CoverSlotIndex
 	Transitions      components.TransitionRegistry
 	MapMarkerCache   components.MapMarkerCache
-	FormationPresets components.FormationPresets
 	UnitHash         *core.SpatialHash
 	VehicleHash      *core.VehicleSpatialHash
 	EventLog         *components.EventLog
@@ -115,8 +114,6 @@ type gameMaps struct {
 	SquadMember          *ecs.Map[components.SquadMember]
 	Roster               *ecs.Map[components.CommandRoster]
 	FormationData        *ecs.Map[components.FormationData]
-	FormationOrient      *ecs.Map[components.FormationOrientation]
-	FormationCustomSlots *ecs.Map[components.FormationCustomSlots]
 	OrderQueue           *ecs.Map[components.OrderQueueHead]
 	OrderKind            *ecs.Map[components.OrderKind]
 	OrderTarget          *ecs.Map[components.OrderTarget]

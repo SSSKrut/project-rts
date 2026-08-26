@@ -69,8 +69,6 @@ type FormationSystem struct {
 	// player-placed target. TacticalOverride still wins over this.
 	individualPosMap *ecs.Map[components.IndividualPosition]
 
-	orientMap      *ecs.Map[components.FormationOrientation]
-	customSlotsMap *ecs.Map[components.FormationCustomSlots]
 	// SquadBrain's plan changes HOW the slots are driven: bounding waves,
 	// a paused march during a relocation, the ClearSeq phase targets.
 	planMap *ecs.Map[components.SquadPlan]
@@ -113,8 +111,6 @@ func (sys *FormationSystem) InitUI(w *ecs.World) {
 	sys.vehicleOverrideMap = ecs.NewMap[components.VehicleOverride](w)
 	sys.individualPosMap = ecs.NewMap[components.IndividualPosition](w)
 	sys.microPathMap = ecs.NewMap[components.MicroPath](w)
-	sys.orientMap = ecs.NewMap[components.FormationOrientation](w)
-	sys.customSlotsMap = ecs.NewMap[components.FormationCustomSlots](w)
 	sys.blackboardMap = ecs.NewMap[components.LocalBlackboard](w)
 	sys.orderQueueMap = ecs.NewMap[components.OrderQueueHead](w)
 	sys.orderKindMap = ecs.NewMap[components.OrderKind](w)
@@ -371,16 +367,7 @@ func (sys *FormationSystem) processSquad(world *ecs.World, w formationWork, dt f
 	// formation chase its own reference point and drift (slot 0 is
 	// draggable in vehicle squads).
 	if reformHold {
-		fw := fd.Forward
-		if o := sys.orientMap.Get(w.squad); o != nil && o.Mode == components.OrientNorth {
-			fw = rl.Vector3{X: 0, Y: 0, Z: 1}
-		}
-		var offX0, offZ0 float32
-		if cs := sys.customSlotsMap.Get(w.squad); cs != nil {
-			offX0, offZ0 = customSlotWorld(cs.Slots[0], fw)
-		} else {
-			offX0, offZ0 = FormationOffset(fd.Type, 0, fd.Spacing, fw)
-		}
+		offX0, offZ0 := FormationOffset(fd.Type, 0, fd.Spacing, fd.Forward)
 		centerTarget = centerTarget.Add(rl.Vector3{X: -offX0, Y: 0, Z: -offZ0})
 	}
 
@@ -568,19 +555,7 @@ func (sys *FormationSystem) processSquad(world *ecs.World, w formationWork, dt f
 				target = centerTarget
 			}
 		} else {
-			// OrientNorth overrides the motion-derived forward with world +Z
-			// so the formation keeps compass alignment regardless of march
-			// direction.
-			forward := fd.Forward
-			if o := sys.orientMap.Get(w.squad); o != nil && o.Mode == components.OrientNorth {
-				forward = rl.Vector3{X: 0, Y: 0, Z: 1}
-			}
-			var offX, offZ float32
-			if cs := sys.customSlotsMap.Get(w.squad); cs != nil {
-				offX, offZ = customSlotWorld(cs.Slots[i], forward)
-			} else {
-				offX, offZ = FormationOffset(fd.Type, i, fd.Spacing, forward)
-			}
+			offX, offZ := FormationOffset(fd.Type, i, fd.Spacing, fd.Forward)
 			// Leader-wake bias: when the leader has a MicroPath in flight,
 			// slot i>0 anchors its target i metres along the leader's path
 			// polyline FROM THE LEADER'S LIVE POSITION (arc-length lerp).
@@ -600,7 +575,7 @@ func (sys *FormationSystem) processSquad(world *ecs.World, w formationWork, dt f
 				if leader != (ecs.Entity{}) && world.Alive(leader) {
 					if leaderMP := sys.microPathMap.Get(leader); leaderMP != nil && leaderMP.Count > leaderMP.Head {
 						if lp := sys.posMap.Get(leader); lp != nil {
-							fwx, fwz := forward.X, forward.Z
+							fwx, fwz := fd.Forward.X, fd.Forward.Z
 							if fwx*fwx+fwz*fwz < 1e-4 {
 								fwx, fwz = 0, 1
 							}
@@ -800,17 +775,6 @@ func wakeAnchor(leaderPos components.WorldPos, mp *components.MicroPath, dist fl
 	return prev, walked
 }
 
-// customSlotWorld projects a squad-local slot offset (X=right of forward,
-// Y=along forward) into world XZ using the same right/forward basis as
-// FormationOffset.
-func customSlotWorld(slot rl.Vector2, forward rl.Vector3) (float32, float32) {
-	fx, fz := forward.X, forward.Z
-	if fx*fx+fz*fz < 1e-4 {
-		fx, fz = 0, 1
-	}
-	rx, rz := fz, -fx
-	return slot.X*rx + slot.Y*fx, slot.X*rz + slot.Y*fz
-}
 
 // FormationOffset returns the XZ offset of `slot` from the squad center for
 // each formation kind. Slot 0 always sits on center (commander). Exported so

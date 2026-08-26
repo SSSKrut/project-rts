@@ -125,8 +125,6 @@ func (g *Game) initResources() {
 	ecs.AddResource(g.World, &r.Transitions)
 	r.MapMarkerCache = components.NewMapMarkerCache()
 	ecs.AddResource(g.World, &r.MapMarkerCache)
-	r.FormationPresets = components.FormationPresets{}
-	ecs.AddResource(g.World, &r.FormationPresets)
 	// SpatialHash for Unit XZ positions; rebuilt serially before UnitMovement
 	// so this tick's separation steering reads fresh positions. Consumers:
 	// UnitMovement.separation, WeaponSystem.resolveShot/propagateSuppression.

@@ -189,9 +189,8 @@ func (g *Game) handleOrders() {
 		}
 	}
 
-	// T -> form Squad. Infantry-only merges land in FormationLoose;
-	// mixed infantry+vehicle (future) snapshot positions into
-	// FormationCustomSlots + lock OrientNorth.
+	// T -> form Squad. Block C: the shape is chosen by COMPOSITION, not by the
+	// player — loose scatter for infantry, column for anything with a hull.
 	if rl.IsKeyPressed(rl.KeyT) && len(g.Sel.Units) >= 2 {
 		// An airframe never joins a ground squad (P12: flights are their own
 		// problem, deferred). A slot would put FormationSystem in charge of its
@@ -200,14 +199,7 @@ func (g *Game) handleOrders() {
 		mixed := containsVehicle(members, g.App.World)
 		kind := components.FormationLoose
 		if mixed {
-			kind = components.FormationLine
-		}
-		// Snapshot BEFORE create (CreateFromUnits may despawn old squads).
-		snapshots := make(map[ecs.Entity]components.WorldPos, len(members))
-		for _, e := range members {
-			if p := g.Maps.Pos.Get(e); p != nil {
-				snapshots[e] = *p
-			}
+			kind = components.FormationColumn
 		}
 		newSquad := ecs.Entity{}
 		if len(members) >= 2 {
@@ -215,10 +207,6 @@ func (g *Game) handleOrders() {
 		}
 		if newSquad != (ecs.Entity{}) && g.App.World.Alive(newSquad) {
 			if r := g.Maps.Roster.Get(newSquad); r != nil {
-				if mixed {
-					applyPreservedSlots(newSquad, r, snapshots,
-						g.Maps.FormationCustomSlots, g.Maps.FormationOrient)
-				}
 				g.Sel.Units = append(g.Sel.Units[:0], r.Members[:r.Count]...)
 			}
 		}
@@ -227,35 +215,6 @@ func (g *Game) handleOrders() {
 	if rl.IsKeyPressed(rl.KeyU) && len(g.Sel.Units) > 0 {
 		for _, e := range g.Sel.Units {
 			g.Svc.Squad.Leave(e)
-		}
-	}
-
-	// F1-F4 -> change formation.
-	if len(g.Sel.Units) > 0 {
-		if commonSquad, homo := groupSelected(g.Sel.Units, g.Maps.SquadMember); homo && commonSquad != (ecs.Entity{}) {
-			var newKind components.FormationKind
-			keyHit := false
-			switch {
-			case rl.IsKeyPressed(rl.KeyF1):
-				newKind = components.FormationLine
-				keyHit = true
-			case rl.IsKeyPressed(rl.KeyF2):
-				newKind = components.FormationColumn
-				keyHit = true
-			case rl.IsKeyPressed(rl.KeyF3):
-				newKind = components.FormationWedge
-				keyHit = true
-			case rl.IsKeyPressed(rl.KeyF4):
-				newKind = components.FormationLoose
-				keyHit = true
-			}
-			if keyHit && g.App.World.Alive(commonSquad) {
-				if fd := g.Maps.FormationData.Get(commonSquad); fd != nil {
-					fd.Type = newKind
-					fd.Spacing = systems.FormationSpacing(newKind)
-					fd.ReformPending = true
-				}
-			}
 		}
 	}
 
@@ -436,42 +395,3 @@ func containsVehicle(units []ecs.Entity, world *ecs.World) bool {
 	return false
 }
 
-// applyPreservedSlots snapshots each rostered member's pre-merge position
-// into FormationCustomSlots (north-relative: X = world +X, Y = world +Z),
-// then sets OrientNorth. Slot 0 (commander) is the anchor.
-func applyPreservedSlots(
-	squad ecs.Entity,
-	roster *components.CommandRoster,
-	snapshots map[ecs.Entity]components.WorldPos,
-	customSlotsMap *ecs.Map[components.FormationCustomSlots],
-	orientMap *ecs.Map[components.FormationOrientation],
-) {
-	if roster == nil || roster.Count == 0 {
-		return
-	}
-	commander := roster.Members[0]
-	center, ok := snapshots[commander]
-	if !ok {
-		return
-	}
-	var cs components.FormationCustomSlots
-	for i := uint8(0); i < roster.Count; i++ {
-		mem := roster.Members[i]
-		snap, ok := snapshots[mem]
-		if !ok {
-			continue
-		}
-		diff := snap.Sub(center)
-		cs.Slots[i] = rl.Vector2{X: diff.X, Y: diff.Z}
-	}
-	if customSlotsMap.Has(squad) {
-		*customSlotsMap.Get(squad) = cs
-	} else {
-		customSlotsMap.Add(squad, &cs)
-	}
-	if orientMap.Has(squad) {
-		orientMap.Get(squad).Mode = components.OrientNorth
-	} else {
-		orientMap.Add(squad, &components.FormationOrientation{Mode: components.OrientNorth})
-	}
-}

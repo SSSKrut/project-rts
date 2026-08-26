@@ -136,27 +136,6 @@ func TestSlotHash32IsDeterministicAndSpreads(t *testing.T) {
 	}
 }
 
-func TestCustomSlotWorldProjectsIntoForwardBasis(t *testing.T) {
-	// Slot (X=right, Y=along forward). With Forward = +Z, right = (1, 0).
-	x, z := customSlotWorld(rl.Vector2{X: 2, Y: 3}, forwardZ)
-	if !nearlyEqual(x, 2) || !nearlyEqual(z, 3) {
-		t.Errorf("offset = (%f, %f), want (2, 3) under Forward=+Z", x, z)
-	}
-	// Rotate Forward to +X: right becomes (0, -1), forward (1, 0).
-	x, z = customSlotWorld(rl.Vector2{X: 2, Y: 3}, rl.Vector3{X: 1})
-	if !nearlyEqual(x, 3) || !nearlyEqual(z, -2) {
-		t.Errorf("offset = (%f, %f), want (3, -2) under Forward=+X", x, z)
-	}
-}
-
-func TestCustomSlotWorldDegenerateForwardFallsBack(t *testing.T) {
-	x, z := customSlotWorld(rl.Vector2{X: 1, Y: 1}, rl.Vector3{})
-	fx, fz := customSlotWorld(rl.Vector2{X: 1, Y: 1}, forwardZ)
-	if !nearlyEqual(x, fx) || !nearlyEqual(z, fz) {
-		t.Errorf("degenerate forward gave (%f, %f), want the +Z fallback", x, z)
-	}
-}
-
 func wpAt(x, z float32) components.WorldPos {
 	return components.WorldPos{Local: rl.Vector3{X: x, Z: z}}
 }
