@@ -169,6 +169,12 @@ func drawOrderMarkers(content rl.Rectangle, ctx MapRenderCtx) {
 	for q.Next() {
 		roster, head := q.Get()
 		squad := q.Entity()
+		// An order is a plan, and an enemy's plan is not something sensors
+		// deliver. Same gate as the markers, same call, so the two cannot
+		// drift apart.
+		if SquadSymbolSpec(ctx, squad, roster).Affiliation != components.AffilFriend {
+			continue
+		}
 		center, ok := lookupSquadCenter(ctx, squad, roster)
 		if !ok {
 			continue
@@ -432,6 +438,14 @@ func drawSquadMarkers(content rl.Rectangle, ctx MapRenderCtx) {
 		if roster.Count == 0 {
 			continue
 		}
+		spec := SquadSymbolSpec(ctx, ent, roster)
+		// Own squads only. A hostile squad's real map presence is its
+		// contacts; a marker built straight off its roster reported a
+		// formation the sensors had never found. The member dots below were
+		// already gated on exactly this — the frame around them was not.
+		if spec.Affiliation != components.AffilFriend {
+			continue
+		}
 		center, ok := lookupSquadCenter(ctx, ent, roster)
 		if !ok {
 			continue
@@ -466,13 +480,7 @@ func drawSquadMarkers(content rl.Rectangle, ctx MapRenderCtx) {
 		if alpha < 1 {
 			col.A = uint8(float32(col.A) * alpha)
 		}
-		spec := SquadSymbolSpec(ctx, ent, roster)
-		// Own soldiers only: a hostile squad's real map presence is its
-		// contacts, and drawing its members here would hand the player
-		// positions the sensors never gave them.
-		if spec.Affiliation == components.AffilFriend {
-			drawSquadMemberDots(content, ctx, roster, screen, col)
-		}
+		drawSquadMemberDots(content, ctx, roster, screen, col)
 		DrawSymbol(spec, screen, squadSymbolHalf, alpha)
 		// The APP-6 frame carries affiliation only, so the squad's palette
 		// colour rides as a strip below it — as an outline it would vanish
@@ -517,6 +525,10 @@ func PickSquadAt(screenPos rl.Vector2, ctx MapRenderCtx, panel Panel,
 		_, roster := q.Get()
 		ent := q.Entity()
 		if roster.Count == 0 {
+			continue
+		}
+		// Offer only what drawSquadMarkers painted.
+		if SquadSymbolSpec(ctx, ent, roster).Affiliation != components.AffilFriend {
 			continue
 		}
 		center, ok := lookupSquadCenter(ctx, ent, roster)
