@@ -172,7 +172,13 @@ func (g *Game) drawUI() {
 		debugLMB := !g.chromeBusy() && !g.scrollDragging() &&
 			g.UI.PanelMgr.FocusedAt(g.Frame.Cursor) == ui.PanelDebug &&
 			rl.IsMouseButtonPressed(rl.MouseButtonLeft)
-		g.drawDebugWidget(g.UI.PanelMgr.Get(ui.PanelDebug), g.hudFont, g.Frame.Cursor, debugLMB)
+		debugPanel := g.UI.PanelMgr.Get(ui.PanelDebug)
+		debugScroll := g.UI.PanelMgr.ScrollByID(ui.PanelDebug)
+		g.drawDebugWidget(debugPanel, g.hudFont, g.Frame.Cursor, debugLMB, debugScroll)
+		if debugScroll != nil {
+			ui.ClampScrollOffset(debugPanel, debugScroll)
+			ui.DrawScrollbar(debugPanel, debugScroll)
+		}
 	}
 
 	if debugOverlay.Clouds && g.UI.Scene3DRT.DepthTex && g.Ctx.Clouds != nil && g.Ctx.Clouds.ok {

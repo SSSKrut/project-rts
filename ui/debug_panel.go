@@ -40,6 +40,10 @@ type DebugPanelCtx struct {
 	DumpLines []string
 
 	Footer string
+
+	// Scroll is the surface's offset store; nil = no scrolling (the panel then
+	// clips as before). The dev dump alone can outrun any float.
+	Scroll *ScrollState
 }
 
 var (
@@ -77,16 +81,17 @@ func DrawDebugPanel(panel Panel, font rl.Font, ctx DebugPanelCtx) (simClicked, s
 		return
 	}
 	rl.DrawRectangleRec(content, debugPanelBG)
-	rl.BeginScissorMode(int32(content.X), int32(content.Y),
-		int32(content.Width), int32(content.Height))
-	defer rl.EndScissorMode()
-
+	sc := BeginScroll(content, ctx.Scroll, debugPad, debugPad)
 	st := DebugStyle(font)
 	in := WidgetInput{Cursor: ctx.Cursor, Press: ctx.LMBPress, Enabled: true}
 
-	x := content.X + debugPad
-	y := content.Y + debugPad
-	rowW := content.Width - 2*debugPad
+	x := sc.Col.X
+	y := sc.Col.Y
+	rowW := sc.Col.W
+	defer func() {
+		sc.Col.Y = y
+		sc.End()
+	}()
 
 	section := func(title string) {
 		rl.DrawTextEx(font, title, rl.Vector2{X: x, Y: y},

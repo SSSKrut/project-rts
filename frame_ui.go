@@ -134,7 +134,7 @@ func (g *Game) isSelected(e ecs.Entity) int {
 
 // scrollablePanels get wheel + thumb-drag handling. A widget only reports how
 // tall its content came out; everything else is here.
-var scrollablePanels = [...]ui.PanelID{ui.PanelInspect, ui.PanelBehavior}
+var scrollablePanels = [...]ui.PanelID{ui.PanelInspect, ui.PanelBehavior, ui.PanelDebug}
 
 func (g *Game) scrollDragging() bool { return g.UI.ScrollDragKey != "" }
 
@@ -386,7 +386,8 @@ var dayTimeChips = []struct {
 	{"Night", 0.5}, {"Dawn", 6.3}, {"Day", 10.5}, {"Golden", 17.3}, {"Dusk", 18.6},
 }
 
-func (g *Game) drawDebugWidget(panel ui.Panel, font rl.Font, cursorV rl.Vector2, lmb bool) {
+func (g *Game) drawDebugWidget(panel ui.Panel, font rl.Font, cursorV rl.Vector2, lmb bool,
+	scroll *ui.ScrollState) {
 	simLabel := fmt.Sprintf("tick %d  speed x%d", g.App.TickIndex(), int(g.App.TimeScale))
 	if g.App.TimeScale == 0 {
 		simLabel = fmt.Sprintf("tick %d  PAUSED", g.App.TickIndex())
@@ -433,6 +434,7 @@ func (g *Game) drawDebugWidget(panel ui.Panel, font rl.Font, cursorV rl.Vector2,
 		TimeButtons: timeButtons,
 		DumpLines:   dump,
 		Footer:      "Overlay radius: 2 chunks around camera",
+		Scroll:      scroll,
 	})
 	if weatherIdx >= 0 {
 		g.Res.Atmosphere = components.WeatherSpecs[weatherIdx].Atmo
@@ -536,7 +538,7 @@ func (g *Game) renderFloatingWidget(id ui.PanelID, content rl.Rectangle,
 		ui.DrawBehaviorPanel(syn("Behavior"), g.behaviorCtx(font, cursor, lmbPress, true,
 			g.floatScroll()))
 	case ui.PanelDebug:
-		g.drawDebugWidget(syn("Debug"), font, cursor, lmbPress)
+		g.drawDebugWidget(syn("Debug"), font, cursor, lmbPress, g.floatScroll())
 	case ui.Panel3D:
 		// Not floatable; chevron menu disables Float pane for the 3D leaf.
 	}
