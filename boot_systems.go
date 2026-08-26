@@ -177,6 +177,12 @@ func (g *Game) registerSystems() {
 	// Block B: ControlPoint's first registration, also in the tail.
 	controlPointSys := systems.NewControlPointSystem()
 	controlPointSys.InitUI(app.World)
+	// Block D: ForceArrival / Mission first register here, same tail rule.
+	forceTrafficSys := systems.NewForceTrafficSystem()
+	forceTrafficSys.InitUI(app.World)
+	g.Svc.ForceTraffic = forceTrafficSys
+	missionSys := systems.NewMissionSystem()
+	missionSys.InitUI(app.World)
 
 	app.AddSystem(terrainStreamingSys)
 	app.AddSystem(terrainLoadSys)
@@ -207,6 +213,7 @@ func (g *Game) registerSystems() {
 	app.AddSystem(airReflexSys)
 	app.AddSystem(levelVisSys)
 	app.AddSystem(mapPingDecaySys)
+	app.AddSystem(forceTrafficSys)
 	app.AddSystem(controlPointSys)
 	app.AddSystem(commsSys)
 	app.AddSystem(orderResolverSys)
@@ -221,4 +228,6 @@ func (g *Game) registerSystems() {
 	app.AddSystem(streamingSys)
 	app.AddSystem(orbitSys)
 	app.AddSystem(cameraSys)
+	// Last: the scoreboard reads the world the rest of the tick produced.
+	app.AddSystem(missionSys)
 }

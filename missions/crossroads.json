@@ -1,0 +1,25 @@
+{
+  "name": "Crossroads",
+  "map": "hills",
+  "timeSec": 420,
+  "victory": { "holdPoints": 2, "ofTotal": 3, "forSec": 45 },
+  "relays": [
+    { "x": -220, "z": 0, "side": "player", "rangeM": 800 },
+    { "x": 220, "z": 0, "side": "enemy", "rangeM": 800 }
+  ],
+  "points": [
+    { "x": -70, "z": -60, "owner": "player", "relayRangeM": 450 },
+    { "x": 0,   "z": 0,   "owner": "none",   "relayRangeM": 450 },
+    { "x": 70,  "z": 60,  "owner": "enemy",  "relayRangeM": 450 }
+  ],
+  "forces": [
+    { "side": "player", "atSec": 0,  "kind": "squad",   "template": "motor", "x": -120, "z": -60 },
+    { "side": "player", "atSec": 0,  "kind": "squad",   "template": "motor", "x": -120, "z": 0 },
+    { "side": "player", "atSec": 0,  "kind": "vehicle", "template": "bmp",   "x": -130, "z": -30 },
+    { "side": "player", "atSec": 90, "kind": "vehicle", "template": "btr",   "x": -200, "z": 0 },
+
+    { "side": "enemy",  "atSec": 0,  "kind": "squad",   "template": "motor", "x": 110, "z": 60 },
+    { "side": "enemy",  "atSec": 0,  "kind": "squad",   "template": "at",    "x": 90,  "z": 40 },
+    { "side": "enemy",  "atSec": 60, "kind": "vehicle", "template": "btr",   "x": 190, "z": 20 }
+  ]
+}

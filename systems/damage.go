@@ -178,6 +178,13 @@ func (d *DamageService) pushKIAEvent(unit ecs.Entity) {
 			BaseRadM: 6.0,
 		})
 	}
+	// The mission scoreboard counts DEATHS, not missing survivors: a side that
+	// lost a squad and got a fresh one would otherwise read as untouched.
+	if d.world != nil {
+		if f := d.factionMap.Get(unit); f != nil {
+			MissionLoss(d.world, f.ID)
+		}
+	}
 }
 
 // sweepAwareness clears every LastSeen slot whose Target is `dying`. Runs

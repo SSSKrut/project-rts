@@ -1,0 +1,26 @@
+{
+  "name": "Ridge Hold",
+  "map": "valley",
+  "timeSec": 480,
+  "victory": { "holdPoints": 2, "ofTotal": 2, "forSec": 0 },
+  "relays": [
+    { "x": -180, "z": -60, "side": "player", "rangeM": 700 },
+    { "x": 260,  "z": 40,  "side": "enemy",  "rangeM": 900 }
+  ],
+  "points": [
+    { "x": -40, "z": -20, "owner": "player", "relayRangeM": 450 },
+    { "x": 40,  "z": 30,  "owner": "player", "relayRangeM": 450 }
+  ],
+  "forces": [
+    { "side": "player", "atSec": 0,   "kind": "squad",   "template": "motor", "x": -40, "z": -20 },
+    { "side": "player", "atSec": 0,   "kind": "squad",   "template": "mg",    "x": 40,  "z": 30 },
+    { "side": "player", "atSec": 0,   "kind": "vehicle", "template": "atc",   "x": -20, "z": 0 },
+    { "side": "player", "atSec": 0,   "kind": "vehicle", "template": "command", "x": -60, "z": -30 },
+
+    { "side": "enemy",  "atSec": 60,  "kind": "squad",   "template": "motor", "x": 200, "z": 20 },
+    { "side": "enemy",  "atSec": 60,  "kind": "vehicle", "template": "btr",   "x": 220, "z": 40 },
+    { "side": "enemy",  "atSec": 200, "kind": "squad",   "template": "motor", "x": 200, "z": 60 },
+    { "side": "enemy",  "atSec": 200, "kind": "vehicle", "template": "bmp",   "x": 230, "z": 10 },
+    { "side": "enemy",  "atSec": 340, "kind": "vehicle", "template": "tank",  "x": 240, "z": 30 }
+  ]
+}

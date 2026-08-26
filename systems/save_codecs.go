@@ -41,6 +41,18 @@ func appendResourceSection(w *ecs.World, out *saveBuf) error {
 			return err
 		}
 	}
+	msRes := ecs.NewResource[components.Mission](w)
+	if m := msRes.Get(); m != nil {
+		if err := add("Mission", m); err != nil {
+			return err
+		}
+	}
+	mstRes := ecs.NewResource[components.MissionState](w)
+	if ms := mstRes.Get(); ms != nil {
+		if err := add("MissionState", ms); err != nil {
+			return err
+		}
+	}
 	out.u16(uint16(len(blobs)))
 	for _, b := range blobs {
 		out.str(b.name)
@@ -66,6 +78,12 @@ func readResourceSection(w *ecs.World, r *saveReader) error {
 			err = json.Unmarshal(data, res.Get())
 		case "OrderHistory":
 			res := ecs.NewResource[components.OrderHistory](w)
+			err = json.Unmarshal(data, res.Get())
+		case "Mission":
+			res := ecs.NewResource[components.Mission](w)
+			err = json.Unmarshal(data, res.Get())
+		case "MissionState":
+			res := ecs.NewResource[components.MissionState](w)
 			err = json.Unmarshal(data, res.Get())
 		case "FormationPresets":
 			// Block C removed the editor and its presets. A save written before

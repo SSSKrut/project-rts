@@ -50,7 +50,9 @@ func bootGame() *Game {
 	g := &Game{}
 	g.hudFont, g.hudFontIsCustom = loadHUDFont()
 
-	g.headless = isAIScene() && !*watchFlag
+	// A mission runs headless like a scene (block D P6): the closure criterion
+	// is "passes in both outcomes", and that has to be MEASURED, not watched.
+	g.headless = (isAIScene() || isMission()) && !*watchFlag
 	if g.headless {
 		rl.SetTargetFPS(0)
 	} else {
@@ -125,6 +127,8 @@ func (g *Game) initResources() {
 	ecs.AddResource(g.World, &r.Transitions)
 	r.MapMarkerCache = components.NewMapMarkerCache()
 	ecs.AddResource(g.World, &r.MapMarkerCache)
+	ecs.AddResource(g.World, &r.Mission)
+	ecs.AddResource(g.World, &r.MissionState)
 	// SpatialHash for Unit XZ positions; rebuilt serially before UnitMovement
 	// so this tick's separation steering reads fresh positions. Consumers:
 	// UnitMovement.separation, WeaponSystem.resolveShot/propagateSuppression.

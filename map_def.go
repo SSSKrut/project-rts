@@ -67,6 +67,14 @@ type mapRiver struct {
 var worldMap mapDef
 
 func loadMapDef() mapDef {
+	// A mission NAMES its map (block D P1): the manifest references the world
+	// instead of forking it.
+	if isMission() {
+		if m := activeMission().Map; m != "" {
+			return readMapFile(m)
+		}
+		return defaultMapDef()
+	}
 	if *mapFlag == "" || isAIScene() || isDoorScene() {
 		// Most ai_* scenes pin the default map for reproducibility; a scene
 		// that needs specific relief names its own manifest.

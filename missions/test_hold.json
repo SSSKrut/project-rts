@@ -1,0 +1,17 @@
+{
+  "name": "TestHold",
+  "map": "flat",
+  "timeSec": 120,
+  "victory": { "holdPoints": 2, "ofTotal": 3, "forSec": 20 },
+  "relays": [{ "x": 0, "z": 0, "side": "player", "rangeM": 800 }],
+  "points": [
+    { "x": -60, "z": 0, "owner": "none" },
+    { "x": 0,   "z": 0, "owner": "none" },
+    { "x": 60,  "z": 0, "owner": "enemy" }
+  ],
+  "forces": [
+    { "side": "player", "atSec": 0, "kind": "squad", "template": "light", "x": -60, "z": 0 },
+    { "side": "player", "atSec": 0, "kind": "squad", "template": "light", "x": 0,   "z": 0 },
+    { "side": "enemy",  "atSec": 0, "kind": "squad", "template": "light", "x": 60,  "z": 0 }
+  ]
+}

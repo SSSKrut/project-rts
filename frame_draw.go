@@ -229,6 +229,14 @@ func (g *Game) drawUI() {
 		ui.DrawSquadBar(g.Frame.SquadBar, barCtx)
 	}
 
+	// The result goes over everything, including the panels: the mission is
+	// over, and what is under it is history.
+	ui.DrawMissionOutcome(rl.Rectangle{
+		Width: float32(rl.GetScreenWidth()), Height: float32(rl.GetScreenHeight()),
+	}, ui.MissionOutcomeCtx{
+		Mission: &g.Res.Mission, State: &g.Res.MissionState, Font: g.hudFont,
+	})
+
 	if g.UI.BuildingWidget != nil {
 		rl.BeginScissorMode(int32(g.Frame.Panel3DContent.X), int32(g.Frame.Panel3DContent.Y),
 			int32(g.Frame.Panel3DContent.Width), int32(g.Frame.Panel3DContent.Height))

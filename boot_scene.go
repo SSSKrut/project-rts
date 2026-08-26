@@ -213,6 +213,12 @@ func (g *Game) initGameplayHandles() {
 
 	// RoleService owns UnitRole + per-role Equipment sub-entities.
 	g.Svc.Role = systems.NewRoleService(g.App.World)
+	// After RoleService exists, not before: a nil spawner made every scheduled
+	// squad silently fail to appear.
+	if g.Svc.ForceTraffic != nil {
+		g.Svc.ForceTraffic.SetSpawners(g.Svc.Squad, g.Svc.Role,
+			g.Svc.VehicleFactory, g.unitFactory)
+	}
 }
 
 // spawnScene populates the world: a scripted -scene harness, or the default
@@ -223,6 +229,8 @@ func (g *Game) spawnScene() {
 	aiController := components.Controller{Owner: components.ControllerAI}
 	if *loadFlag != "" {
 		// Snapshot restores all entities; scene / default spawns skipped.
+	} else if isMission() {
+		g.spawnMission(activeMission())
 	} else if isAIScene() {
 		g.Scene.AI = aiSceneSpawn(g.App.World, g.Svc.Squad, g.Svc.Role, g.unitFactory,
 			g.Svc.VehicleFactory, g.Svc.AircraftFactory, g.Svc.Damage, playerFaction,

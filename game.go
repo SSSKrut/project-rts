@@ -47,29 +47,31 @@ type Game struct {
 // worldRes holds the singleton resources. Every field here is handed to
 // ecs.AddResource by address — see the no-copy rule on Game.
 type worldRes struct {
-	Streaming        components.StreamingMap
-	TerrainIndex     systems.TerrainChunkIndex
-	PropRegistry     *components.PropTypeRegistry
-	PropIndex        systems.PropChunkIndex
-	Rivers           components.Rivers
-	RoadGraph        components.RoadGraph
-	RoadSurface      components.RoadSurface
-	BridgeEdges      int
-	BuildingPlans    components.BuildingPlanList
-	BuildingIndex    systems.BuildingChildIndex
-	BuildingPlanIx   systems.BuildingPlanIndex
-	Trenches         components.TrenchNetwork
-	CoverSlotIndex   systems.CoverSlotIndex
-	Transitions      components.TransitionRegistry
-	MapMarkerCache   components.MapMarkerCache
-	UnitHash         *core.SpatialHash
-	VehicleHash      *core.VehicleSpatialHash
-	EventLog         *components.EventLog
-	OrderHistory     *components.OrderHistory
-	ContactRegistry  components.ContactRegistry
-	Symbology        components.SymbologyPresets
-	Atmosphere       components.Atmosphere
-	DayClock         components.DayClock
+	Streaming       components.StreamingMap
+	TerrainIndex    systems.TerrainChunkIndex
+	PropRegistry    *components.PropTypeRegistry
+	PropIndex       systems.PropChunkIndex
+	Rivers          components.Rivers
+	RoadGraph       components.RoadGraph
+	RoadSurface     components.RoadSurface
+	BridgeEdges     int
+	BuildingPlans   components.BuildingPlanList
+	BuildingIndex   systems.BuildingChildIndex
+	BuildingPlanIx  systems.BuildingPlanIndex
+	Trenches        components.TrenchNetwork
+	CoverSlotIndex  systems.CoverSlotIndex
+	Transitions     components.TransitionRegistry
+	MapMarkerCache  components.MapMarkerCache
+	Mission         components.Mission
+	MissionState    components.MissionState
+	UnitHash        *core.SpatialHash
+	VehicleHash     *core.VehicleSpatialHash
+	EventLog        *components.EventLog
+	OrderHistory    *components.OrderHistory
+	ContactRegistry components.ContactRegistry
+	Symbology       components.SymbologyPresets
+	Atmosphere      components.Atmosphere
+	DayClock        components.DayClock
 }
 
 type gameServices struct {
@@ -91,57 +93,58 @@ type gameServices struct {
 	// AirTraffic is held so the factory can be injected after construction:
 	// the system is registered in registerSystems, which runs before the
 	// factory exists.
-	AirTraffic *systems.AirTrafficSystem
+	ForceTraffic *systems.ForceTrafficSystem
+	AirTraffic   *systems.AirTrafficSystem
 }
 
 // gameMaps holds every ecs.Map handle the UI / input / render halves read.
 // Built once — resolving an archetype per frame would allocate.
 type gameMaps struct {
-	Pos                  *ecs.Map[components.WorldPos]
-	LODActive            *ecs.Map[components.LODActive]
-	LODAnchor            *ecs.Map[components.LODAnchor]
-	AlwaysActive         *ecs.Map[components.AlwaysActive]
-	Camera               *ecs.Map[components.Camera]
-	Orbit                *ecs.Map[components.OrbitController]
-	ActiveCam            *ecs.Map[components.ActiveCamera]
-	Building             *ecs.Map[components.Building]
-	BuildingMember       *ecs.Map[components.BuildingMember]
-	Level                *ecs.Map[components.Level]
-	BuildingViewMode     *ecs.Map[components.BuildingViewMode]
-	LevelVisibility      *ecs.Map[components.LevelVisibility]
-	TrenchRoot           *ecs.Map[components.TrenchRoot]
-	Role                 *ecs.Map[components.UnitRole]
-	SquadMember          *ecs.Map[components.SquadMember]
-	Roster               *ecs.Map[components.CommandRoster]
-	FormationData        *ecs.Map[components.FormationData]
-	OrderQueue           *ecs.Map[components.OrderQueueHead]
-	OrderKind            *ecs.Map[components.OrderKind]
-	OrderTarget          *ecs.Map[components.OrderTarget]
-	OrderChain           *ecs.Map[components.OrderChain]
-	OrderState           *ecs.Map[components.OrderState]
-	OrderProgress        *ecs.Map[components.OrderProgress]
-	OrderIssuedAt        *ecs.Map[components.OrderIssuedAt]
-	MovementProfile      *ecs.Map[components.MovementProfile]
-	Stamina              *ecs.Map[components.Stamina]
-	HP                   *ecs.Map[components.HP]
-	Faction              *ecs.Map[components.Faction]
-	Controller           *ecs.Map[components.Controller]
-	Detectability        *ecs.Map[components.Detectability]
-	CirclePatrol         *ecs.Map[components.CirclePatrol]
-	IndividualPos        *ecs.Map[components.IndividualPosition]
-	Turret               *ecs.Map[components.Turret]
-	LevelMember          *ecs.Map[components.LevelMember]
-	CoverDirRead         *ecs.Map[components.CoverDirection]
-	LevelVisRead         *ecs.Map[components.LevelVisibility]
-	Contact              *ecs.Map[components.Contact]
-	ContactOverride      *ecs.Map[components.ContactSymbolOverride]
-	ContactPlayerSet     *ecs.Map[components.ContactPlayerSet]
-	UnitOverride         *ecs.Map[components.UnitSymbolOverride]
-	SquadOverride        *ecs.Map[components.SquadSymbolOverride]
-	Vehicle              *ecs.Map[components.Vehicle]
-	Aircraft             *ecs.Map[components.Aircraft]
-	SquadMarker          *ecs.Map[components.Squad]
-	ActionQueue          *ecs.Map[components.ActionQueue]
+	Pos              *ecs.Map[components.WorldPos]
+	LODActive        *ecs.Map[components.LODActive]
+	LODAnchor        *ecs.Map[components.LODAnchor]
+	AlwaysActive     *ecs.Map[components.AlwaysActive]
+	Camera           *ecs.Map[components.Camera]
+	Orbit            *ecs.Map[components.OrbitController]
+	ActiveCam        *ecs.Map[components.ActiveCamera]
+	Building         *ecs.Map[components.Building]
+	BuildingMember   *ecs.Map[components.BuildingMember]
+	Level            *ecs.Map[components.Level]
+	BuildingViewMode *ecs.Map[components.BuildingViewMode]
+	LevelVisibility  *ecs.Map[components.LevelVisibility]
+	TrenchRoot       *ecs.Map[components.TrenchRoot]
+	Role             *ecs.Map[components.UnitRole]
+	SquadMember      *ecs.Map[components.SquadMember]
+	Roster           *ecs.Map[components.CommandRoster]
+	FormationData    *ecs.Map[components.FormationData]
+	OrderQueue       *ecs.Map[components.OrderQueueHead]
+	OrderKind        *ecs.Map[components.OrderKind]
+	OrderTarget      *ecs.Map[components.OrderTarget]
+	OrderChain       *ecs.Map[components.OrderChain]
+	OrderState       *ecs.Map[components.OrderState]
+	OrderProgress    *ecs.Map[components.OrderProgress]
+	OrderIssuedAt    *ecs.Map[components.OrderIssuedAt]
+	MovementProfile  *ecs.Map[components.MovementProfile]
+	Stamina          *ecs.Map[components.Stamina]
+	HP               *ecs.Map[components.HP]
+	Faction          *ecs.Map[components.Faction]
+	Controller       *ecs.Map[components.Controller]
+	Detectability    *ecs.Map[components.Detectability]
+	CirclePatrol     *ecs.Map[components.CirclePatrol]
+	IndividualPos    *ecs.Map[components.IndividualPosition]
+	Turret           *ecs.Map[components.Turret]
+	LevelMember      *ecs.Map[components.LevelMember]
+	CoverDirRead     *ecs.Map[components.CoverDirection]
+	LevelVisRead     *ecs.Map[components.LevelVisibility]
+	Contact          *ecs.Map[components.Contact]
+	ContactOverride  *ecs.Map[components.ContactSymbolOverride]
+	ContactPlayerSet *ecs.Map[components.ContactPlayerSet]
+	UnitOverride     *ecs.Map[components.UnitSymbolOverride]
+	SquadOverride    *ecs.Map[components.SquadSymbolOverride]
+	Vehicle          *ecs.Map[components.Vehicle]
+	Aircraft         *ecs.Map[components.Aircraft]
+	SquadMarker      *ecs.Map[components.Squad]
+	ActionQueue      *ecs.Map[components.ActionQueue]
 }
 
 // gameFilters holds the query handles used outside the systems.
@@ -320,9 +323,10 @@ type selection struct {
 
 // devState backs the Debug widget: single-step, spawn palette, recovered panic.
 type devState struct {
-	SpawnKind    int // 0 off; 1 rifleman; 2 enemy; 3..7 vehicle kinds
-	PendingSteps int
-	Fatal        *simFatalState
+	SpawnKind       int // 0 off; 1 rifleman; 2 enemy; 3..7 vehicle kinds
+	MissionReported bool
+	PendingSteps    int
+	Fatal           *simFatalState
 }
 
 const (

@@ -70,7 +70,9 @@ func (g *Game) RunFrame() bool {
 	// Before input: the bar must own its rect while clicks are being routed.
 	g.layoutSquadBar()
 	g.handleInput()
-	g.handleOrders()
+	if !g.Res.MissionState.Over() {
+		g.handleOrders()
+	}
 	g.updateHover()
 
 	// Gate orbit/wheel by focus; suppress while a floater owns the cursor.
@@ -94,6 +96,9 @@ func (g *Game) RunFrame() bool {
 	}
 	maybeSaveAt(g.App)
 
+	if g.missionOver() {
+		return false
+	}
 	if g.headless {
 		writeReplayHash(g.App)
 		if *runTicksFlag > 0 {
