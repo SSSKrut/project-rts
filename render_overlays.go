@@ -455,8 +455,17 @@ func drawSelectionCoverage(cs *coverageState) {
 	}
 }
 
-// drawVisFan draws sector quads per visible run. Both windings drawn so the
-// fan reads from any camera side.
+// A run is a radial STRIP, not a quad: only its corners sit on the ground, so
+// one quad spanning 60 m dives under every ridge between them. Subdivide to
+// the terrain's own resolution and lift clear of z-fighting.
+const (
+	fanStepM float32 = 4.0
+	fanLiftM float32 = 0.3
+)
+
+// drawVisFan draws terrain-following sector strips per visible run. Culling is
+// off for the pass so one winding reads from any camera side (the batch is
+// flushed around the state change — rlgl applies it to pending geometry too).
 func drawVisFan(sampler *systems.HeightSampler, wx, wz float32, base rl.Vector3,
 	allRuns [][]components.VisRun, rangeM float32, falloff components.FalloffKind,
 	aBase, aSpan float32) {
@@ -464,15 +473,20 @@ func drawVisFan(sampler *systems.HeightSampler, wx, wz float32, base rl.Vector3,
 	if rays == 0 {
 		return
 	}
-	yAt := func(dx, dz float32) float32 { return sampler.Sample(wx+dx, wz+dz) + 0.15 }
+	yAt := func(dx, dz float32) float32 { return sampler.Sample(wx+dx, wz+dz) + fanLiftM }
 	halfStep := math.Pi / float64(rays)
 	fill := rl.Color{R: 70, G: 210, B: 130}
+	rl.DrawRenderBatchActive()
+	rl.DisableBackfaceCulling()
 	for r, runs := range allRuns {
 		angC := float64(r) * (2 * math.Pi / float64(rays))
 		s0 := float32(math.Sin(angC - halfStep))
 		c0 := float32(math.Cos(angC - halfStep))
 		s1 := float32(math.Sin(angC + halfStep))
 		c1 := float32(math.Cos(angC + halfStep))
+		corner := func(s, c, d float32) rl.Vector3 {
+			return rl.Vector3{X: base.X + s*d, Y: yAt(s*d, c*d), Z: base.Z + c*d}
+		}
 		for _, run := range runs {
 			t0 := run.T0
 			if t0 < 0.6 {
@@ -485,28 +499,32 @@ func drawVisFan(sampler *systems.HeightSampler, wx, wz float32, base rl.Vector3,
 			a := components.Falloff(falloff, (t0+t1)*0.5, rangeM)
 			col := fill
 			col.A = uint8(aBase + aSpan*a)
-			v00 := rl.Vector3{X: base.X + s0*t0, Y: yAt(s0*t0, c0*t0), Z: base.Z + c0*t0}
-			v01 := rl.Vector3{X: base.X + s1*t0, Y: yAt(s1*t0, c1*t0), Z: base.Z + c1*t0}
-			v10 := rl.Vector3{X: base.X + s0*t1, Y: yAt(s0*t1, c0*t1), Z: base.Z + c0*t1}
-			v11 := rl.Vector3{X: base.X + s1*t1, Y: yAt(s1*t1, c1*t1), Z: base.Z + c1*t1}
-			rl.DrawTriangle3D(v00, v01, v11, col)
-			rl.DrawTriangle3D(v00, v11, v10, col)
-			rl.DrawTriangle3D(v00, v11, v01, col)
-			rl.DrawTriangle3D(v00, v10, v11, col)
+			segs := int((t1-t0)/fanStepM) + 1
+			v00, v01 := corner(s0, c0, t0), corner(s1, c1, t0)
+			for s := 1; s <= segs; s++ {
+				d := t0 + (t1-t0)*float32(s)/float32(segs)
+				v10, v11 := corner(s0, c0, d), corner(s1, c1, d)
+				rl.DrawTriangle3D(v00, v01, v11, col)
+				rl.DrawTriangle3D(v00, v11, v10, col)
+				v00, v01 = v10, v11
+			}
 		}
 	}
+	rl.DrawRenderBatchActive()
+	rl.EnableBackfaceCulling()
 }
 
-// drawTerrainRing draws a terrain-following circle; segment count scales with
-// radius so a 700 m ESM ring stays round. Dashed = detection semantics.
+// drawTerrainRing draws a terrain-following circle; segment count is set by ARC
+// length, not radius, so a 700 m ESM ring hugs the ground as closely as a 40 m
+// optical one. Dashed = detection semantics.
 func drawTerrainRing(sampler *systems.HeightSampler, wx, wz float32, base rl.Vector3,
 	radius float32, col rl.Color, dashed bool) {
-	segs := int(radius * 1.5)
+	segs := int(2 * math.Pi * float64(radius) / float64(fanStepM))
 	if segs < 96 {
 		segs = 96
 	}
-	if segs > 288 {
-		segs = 288
+	if segs > 1024 {
+		segs = 1024
 	}
 	segs &^= 1
 	pt := func(i int) rl.Vector3 {
