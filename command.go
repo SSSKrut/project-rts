@@ -248,7 +248,7 @@ func buildBuildingPopupSections(
 				Tooltip: "Fire on the building to suppress its garrison",
 				Glyph:   'S',
 				Kind:    components.OrderKindSuppressFire,
-				Enabled: false,
+				Enabled: true,
 			},
 		},
 	}
@@ -311,6 +311,109 @@ func buildBuildingPopupSections(
 	return []ui.ContextMenuSection{atk, inter}
 }
 
+// buildTerrainPopupSections is the ground half of the RMB-hold menu. A tap
+// still means "go there" — the menu exists for the decisions a tap cannot
+// carry: at what tempo, and whether the point is a destination or a target.
+func buildTerrainPopupSections(hasManual bool) []ui.ContextMenuSection {
+	return []ui.ContextMenuSection{
+		{
+			Header: "Move",
+			Items: []ui.ContextMenuItem{
+				{
+					Label:   "Move here",
+					Tooltip: "March at the squad's standing pace",
+					Glyph:   'M',
+					Kind:    components.OrderKindMoveTo,
+					Enabled: true,
+				},
+				{
+					Label:      "Rush here",
+					Tooltip:    "Run — faster, louder, costs stamina",
+					Glyph:      'R',
+					Kind:       components.OrderKindMoveTo,
+					MovePreset: components.PresetRush,
+					Enabled:    true,
+				},
+			},
+		},
+		{
+			Header: "Attack",
+			Items: []ui.ContextMenuItem{
+				{
+					Label:   "Suppress here",
+					Tooltip: "Fire on this area whether or not anyone is visible",
+					Glyph:   'S',
+					Kind:    components.OrderKindSuppressFire,
+					Enabled: true,
+				},
+				{
+					Label:   "Missile strike",
+					Tooltip: "Release the guided round on this point",
+					Glyph:   'X',
+					Kind:    components.OrderKindMissileStrike,
+					// Greyed rather than hidden when the selection carries no
+					// player-released barrel: a row that silently does nothing
+					// is worse than a row that says why it cannot.
+					Enabled: hasManual,
+				},
+			},
+		},
+	}
+}
+
+// hasManualWeapon reports whether anything in the selection carries a barrel
+// the AI will never fire on its own — the only thing a missile strike can be
+// served by.
+func hasManualWeapon(selected []ecs.Entity, world *ecs.World,
+	equipMap *ecs.Map[components.Equipment],
+	weaponMap *ecs.Map[components.Weapon],
+	rosterMap *ecs.Map[components.CommandRoster],
+	memberMap *ecs.Map[components.SquadMember]) bool {
+	manual := func(ent ecs.Entity) bool {
+		if ent == (ecs.Entity{}) || !world.Alive(ent) {
+			return false
+		}
+		eq := equipMap.Get(ent)
+		if eq == nil {
+			return false
+		}
+		for _, w := range [3]ecs.Entity{eq.Primary, eq.Secondary, eq.Active} {
+			if w == (ecs.Entity{}) || !world.Alive(w) {
+				continue
+			}
+			if wp := weaponMap.Get(w); wp != nil &&
+				components.SpecForWeapon(wp.Kind).Release == components.ReleaseManual {
+				return true
+			}
+		}
+		return false
+	}
+	for _, e := range selected {
+		if manual(e) {
+			return true
+		}
+		// A selected man stands for his whole squad here, the same way every
+		// other order in this menu is issued to the squad and not to him.
+		if memberMap == nil || rosterMap == nil {
+			continue
+		}
+		sm := memberMap.Get(e)
+		if sm == nil || sm.Squad == (ecs.Entity{}) {
+			continue
+		}
+		r := rosterMap.Get(sm.Squad)
+		if r == nil {
+			continue
+		}
+		for i := uint8(0); i < r.Count; i++ {
+			if manual(r.Members[i]) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // pickRoomTarget maps the raw press point to a room of `lvl`: the NEAREST
 // room rect's centre at the storey floor (containment = distance zero). The
 // level AABB centre is only for room-less levels — on a ring building it is
@@ -369,6 +472,13 @@ func issueBuildingPopupOrder(
 	target := pressTarget
 	entity := building
 	kind := item.Kind
+
+	// Tempo is a parameter of the order, not a kind of its own: a second
+	// MoveTo would double the order table to carry one field.
+	if item.MovePreset != components.PresetDefault {
+		profile := components.ApplyPreset(item.MovePreset)
+		params.MovementOverride = &profile
+	}
 
 	if item.LevelEntity != (ecs.Entity{}) && levelMap != nil {
 		if lvl := levelMap.Get(item.LevelEntity); lvl != nil {

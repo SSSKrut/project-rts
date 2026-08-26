@@ -104,9 +104,17 @@ func (g *Game) handleOrders() {
 			} else {
 				now := float32(g.App.Elapsed().Seconds())
 				if (now-g.UI.RMB.PressTimeSec) >= 0.200 &&
-					g.UI.RMB.HoveredBldg != (ecs.Entity{}) &&
-					g.UI.RMB.SourcePanel == ui.Panel3D {
-					sections := buildBuildingPopupSections(g.UI.RMB.HoveredBldg, &g.Res.BuildingPlanIx, g.Maps.Level)
+					g.UI.RMB.SourcePanel == ui.Panel3D && g.UI.RMB.HasSelection {
+					// Over a building the menu is about the building; over
+					// bare ground it is about tempo and fire. A tap is still a
+					// plain move either way — the menu only carries what a tap
+					// cannot say.
+					sections := buildTerrainPopupSections(hasManualWeapon(
+						g.Sel.Units, g.App.World, g.Ctx.Inspector.EquipmentMap,
+						g.Ctx.Inspector.WeaponMap, g.Maps.Roster, g.Maps.SquadMember))
+					if g.UI.RMB.HoveredBldg != (ecs.Entity{}) {
+						sections = buildBuildingPopupSections(g.UI.RMB.HoveredBldg, &g.Res.BuildingPlanIx, g.Maps.Level)
+					}
 					g.UI.CtxMenu.Begin(g.Frame.Cursor, sections, g.UI.RMB.SourcePanel, g.Frame.Panel3DContent)
 				}
 			}
@@ -394,4 +402,3 @@ func containsVehicle(units []ecs.Entity, world *ecs.World) bool {
 	}
 	return false
 }
-

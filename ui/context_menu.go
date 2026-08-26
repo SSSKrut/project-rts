@@ -34,6 +34,10 @@ type ContextMenuItem struct {
 	// HoldFireCrouchPreset is the "Hidden position" flag — caller attaches
 	// MovementProfile{Stance: Crouch, ...} + HoldFire RoE override.
 	HoldFireCrouchPreset bool
+	// MovePreset overrides the squad's standing movement profile for the
+	// duration of THIS order only. PresetDefault (zero) leaves the standing
+	// rule alone, so an item that says nothing about tempo changes nothing.
+	MovePreset components.MovementPreset
 	// Tag is a caller-defined opaque action code. Lets the same widget host
 	// the building popup, the contact popup, and any future variants without
 	// each one needing its own enum field. Zero = not set.
