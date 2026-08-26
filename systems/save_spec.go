@@ -82,6 +82,7 @@ var saveComponents = map[string]saveEntry{
 	"components.MacroPath":            saveReg[components.MacroPath](SaveMemcpy),
 	"components.CommsState":           saveReg[components.CommsState](SaveMemcpy),
 	"components.Relay":                saveReg[components.Relay](SaveMemcpy),
+	"components.ControlPoint":         saveReg[components.ControlPoint](SaveMemcpy),
 	"components.MovementProfile":      saveReg[components.MovementProfile](SaveMemcpy),
 	"components.EngagementRules":      saveReg[components.EngagementRules](SaveMemcpy),
 	"components.BehaviorRules":        saveReg[components.BehaviorRules](SaveMemcpy),

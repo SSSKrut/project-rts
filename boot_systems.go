@@ -174,6 +174,9 @@ func (g *Game) registerSystems() {
 	// Block A: CommsState / Relay are first registered here, in the tail.
 	commsSys := systems.NewCommsSystem()
 	commsSys.InitUI(app.World)
+	// Block B: ControlPoint's first registration, also in the tail.
+	controlPointSys := systems.NewControlPointSystem()
+	controlPointSys.InitUI(app.World)
 
 	app.AddSystem(terrainStreamingSys)
 	app.AddSystem(terrainLoadSys)
@@ -204,6 +207,7 @@ func (g *Game) registerSystems() {
 	app.AddSystem(airReflexSys)
 	app.AddSystem(levelVisSys)
 	app.AddSystem(mapPingDecaySys)
+	app.AddSystem(controlPointSys)
 	app.AddSystem(commsSys)
 	app.AddSystem(orderResolverSys)
 	app.AddSystem(squadBrainSys)

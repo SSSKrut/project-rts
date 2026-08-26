@@ -28,6 +28,7 @@ type ReplayHasher struct {
 	orderFilter   *ecs.Filter1[components.OrderState]
 	planFilter    *ecs.Filter2[components.Squad, components.SquadPlan]
 	commsFilter   *ecs.Filter1[components.CommsState]
+	pointFilter   *ecs.Filter1[components.ControlPoint]
 	contactFilter *ecs.Filter1[components.Contact]
 	sensorsMap    *ecs.Map[components.Sensors]
 	stanceMap     *ecs.Map[components.Stance]
@@ -57,6 +58,7 @@ func NewReplayHasher(w *ecs.World) *ReplayHasher {
 		orderFilter:   ecs.NewFilter1[components.OrderState](w),
 		planFilter:    ecs.NewFilter2[components.Squad, components.SquadPlan](w),
 		commsFilter:   ecs.NewFilter1[components.CommsState](w),
+		pointFilter:   ecs.NewFilter1[components.ControlPoint](w),
 		contactFilter: ecs.NewFilter1[components.Contact](w),
 		sensorsMap:    ecs.NewMap[components.Sensors](w),
 		stanceMap:     ecs.NewMap[components.Stance](w),
@@ -284,6 +286,23 @@ func (r *ReplayHasher) Hash() uint64 {
 		u8(uint8(cs.Band))
 		pos(cs.Anchor)
 		take(qcm.Entity())
+	}
+	fold()
+
+	// A point decides who owns the net around it, so its progress sits
+	// upstream of everything comms already folds.
+	qcp := r.pointFilter.Query()
+	for qcp.Next() {
+		cp := qcp.Get()
+		f32(cp.Progress)
+		u8(cp.Owner)
+		u8(cp.Challenger)
+		if cp.Contested {
+			u8(1)
+		} else {
+			u8(0)
+		}
+		take(qcp.Entity())
 	}
 	fold()
 

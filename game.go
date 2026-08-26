@@ -150,6 +150,7 @@ type gameMaps struct {
 // gameFilters holds the query handles used outside the systems.
 type gameFilters struct {
 	UnitRender     *ecs.Filter3[components.WorldPos, components.Unit, components.Stance]
+	ControlPoint   *ecs.Filter2[components.ControlPoint, components.WorldPos]
 	VehicleRender  *ecs.Filter2[components.WorldPos, components.Vehicle]
 	AircraftRender *ecs.Filter2[components.WorldPos, components.Aircraft]
 	MissileRender  *ecs.Filter2[components.Missile, components.WorldPos]
@@ -193,6 +194,7 @@ type renderCtx struct {
 	HitTest     *HitTester
 	Ghost       *ghostContext
 	Route       *routePreviewCtx
+	Points      controlPointCtx
 	OrderMarker orderMarkerCtx
 	Particle    ParticleRenderCtx
 	Ribbons     ribbonSet

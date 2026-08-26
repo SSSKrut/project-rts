@@ -263,6 +263,22 @@ func (g *Game) spawnScene() {
 		// core mechanic looks broken before it has done anything.
 		systems.SpawnRelay(g.App.World, components.WorldPos{}, playerFaction.ID,
 			components.RelayRangeSpawnM)
+		// Three points to stand on: one held, one the enemy holds, one nobody
+		// does. The playground is where the mechanic has to be legible at a
+		// glance, and one point would not show what the colours mean.
+		for _, cp := range []struct {
+			x, z  float32
+			owner uint8
+		}{
+			{60, -40, playerFaction.ID},
+			{160, 120, components.FactionEnemyRed},
+			{-90, 90, components.FactionNone},
+		} {
+			at := components.WorldPos{}.Add(rl.Vector3{X: cp.x, Z: cp.z})
+			at.Local.Y = systems.GroundHeight(cp.x, cp.z)
+			systems.SpawnControlPoint(g.App.World, at, cp.owner,
+				components.ControlPointRadiusM, components.RelayRangePointM)
+		}
 		// Squads spawn OUTSIDE buildings so formation slots don't land on
 		// wall-rasterised surface cells (which would block path planning).
 		g.Svc.Squad.CreateFromTemplate(
@@ -395,6 +411,7 @@ func (g *Game) loadSnapshot() {
 // maps declared above them.
 func (g *Game) initRenderHandles() {
 	g.Filt.UnitRender = ecs.NewFilter3[components.WorldPos, components.Unit, components.Stance](g.App.World)
+	g.Filt.ControlPoint = ecs.NewFilter2[components.ControlPoint, components.WorldPos](g.App.World)
 	g.Filt.VehicleRender = ecs.NewFilter2[components.WorldPos, components.Vehicle](g.App.World)
 	g.Filt.AircraftRender = ecs.NewFilter2[components.WorldPos, components.Aircraft](g.App.World)
 	g.Filt.MissileRender = ecs.NewFilter2[components.Missile, components.WorldPos](g.App.World)
@@ -488,6 +505,11 @@ func (g *Game) initRenderHandles() {
 		posMap:     g.Maps.Pos,
 		memberMap:  g.Maps.SquadMember,
 		squadColor: g.squadColor,
+	}
+
+	g.Ctx.Points = controlPointCtx{
+		filter:  g.Filt.ControlPoint,
+		sampler: systems.NewHeightSampler(g.App.World),
 	}
 
 	g.Ctx.OrderMarker = orderMarkerCtx{
