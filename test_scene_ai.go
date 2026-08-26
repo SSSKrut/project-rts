@@ -2269,6 +2269,9 @@ type aiTestState struct {
 	balEyesInfAUnits   []ecs.Entity
 	balEyesInfB        ecs.Entity
 	balEyesInfBUnits   []ecs.Entity
+	balSpottedAt       float32
+	balContactMap      *ecs.Map[components.Contact]
+	balRegistry        ecs.Resource[components.ContactRegistry]
 	balEyesVehSees     float32
 	balEyesInfSeesVeh  float32
 	balEyesInfSeesInf  float32

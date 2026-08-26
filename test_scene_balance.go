@@ -58,6 +58,12 @@ const (
 	// advantage is the first volley at a range it chose.
 	balAmbushTriggerM float32 = 40
 
+	// How long after the first volley the player is allowed to still have no
+	// marker anywhere. The complaint this answers is "infantry opens fire and
+	// nothing appears on the map"; a shot IS an emission, so the answer has to
+	// arrive in about the time it takes to notice men dying.
+	balSpotWindow float32 = 3.0
+
 	// Thresholds are deliberately loose. A gate that pins the exact second of
 	// a wipe goes red on every number change, which is the opposite of what a
 	// balance gate is for.
@@ -68,9 +74,9 @@ const (
 
 	// Eyes lanes, far enough apart that neither hears the other (audio is
 	// capped at 64 m, the wall window at one chunk).
-	balEyesVehZ  float32 = 0
-	balEyesInfZ  float32 = 400
-	balEyesGap   float32 = 150
+	balEyesVehZ float32 = 0
+	balEyesInfZ float32 = 400
+	balEyesGap  float32 = 150
 	// Infantry-vs-infantry first contact WANTED, not asserted. 40 m nominal
 	// optics buy 24 m of it, and closing that gap is a combat-range pass
 	// (measured: at 80 m a defended building stops being assaultable), so the
@@ -103,6 +109,8 @@ func aiBalanceSpawn(world *ecs.World, squadService *systems.SquadService,
 		AwareMap:      ecs.NewMap[components.Awareness](world),
 		RulesMap:      ecs.NewMap[components.EngagementRules](world),
 		RosterMap:     rosterMap,
+		balContactMap: ecs.NewMap[components.Contact](world),
+		balRegistry:   ecs.NewResource[components.ContactRegistry](world),
 		orderAt:       balOrderAt,
 		verdictAt:     balVerdictAt,
 		nextSampleAt:  balOrderAt + 2,
@@ -328,6 +336,11 @@ func (s *aiTestState) balSampleFight(elapsed float32) {
 				s.sceneID, elapsed, d)
 		}
 	}
+	if s.balTriggered && s.balSpottedAt == 0 && s.balContacts() > 0 {
+		s.balSpottedAt = elapsed
+		fmt.Printf("[ai-test %s] t=%.1fs AMBUSHER ON THE MAP (%.1fs after the volley)\n",
+			s.sceneID, elapsed, elapsed-s.balTriggerAt)
+	}
 	if infN == 0 && s.balWipeAt == 0 {
 		s.balWipeAt = elapsed
 	}
@@ -342,6 +355,26 @@ func (s *aiTestState) balSampleFight(elapsed float32) {
 	if infN == 0 || hullsN == 0 {
 		s.verdictAt = elapsed
 	}
+}
+
+// balContacts counts ambushers the PLAYER has a live contact on. Firing is the
+// only thing that can produce one here: the hulls never see the prone squad.
+func (s *aiTestState) balContacts() int {
+	reg := s.balRegistry.Get()
+	if reg == nil || reg.Tracked == nil {
+		return 0
+	}
+	n := 0
+	for _, u := range s.balInf {
+		ent, ok := reg.Tracked[u]
+		if !ok || !s.World.Alive(ent) {
+			continue
+		}
+		if c := s.balContactMap.Get(ent); c != nil && !c.BearingOnly {
+			n++
+		}
+	}
+	return n
 }
 
 func (s *aiTestState) balNearestHullRange() float32 {
@@ -459,9 +492,11 @@ func (s *aiTestState) balVerdict(elapsed float32) {
 		hurts := hullsLost >= balAmbHullsKill
 		survives := infN >= balAmbInfMin
 		sprung := s.balTriggered
-		pass = hurts && survives && sprung
-		detail = fmt.Sprintf("hullsLost=%d/%d survivors=%d/%d sprung=%v(%.0fm t=%.1fs)",
-			hullsLost, balAmbHullsKill, infN, balAmbInfMin, sprung, s.balTriggerM, s.balTriggerAt)
+		spotted := s.balSpottedAt > 0 && s.balSpottedAt-s.balTriggerAt <= balSpotWindow
+		pass = hurts && survives && sprung && spotted
+		detail = fmt.Sprintf("hullsLost=%d/%d survivors=%d/%d sprung=%v(%.0fm t=%.1fs) spotted=%v(+%.1fs)",
+			hullsLost, balAmbHullsKill, infN, balAmbInfMin, sprung, s.balTriggerM,
+			s.balTriggerAt, spotted, s.balSpottedAt-s.balTriggerAt)
 	}
 	fmt.Println("============================================================")
 	fmt.Printf("== VERDICT [%s]: %s  (hulls=%d/%d hp=%.0f inf=%d/%d hp=%.0f | %s t=%.1fs)\n",

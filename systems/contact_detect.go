@@ -78,7 +78,8 @@ func (sys *ContactSystem) runDetectPass(dt float32) {
 			x: wx, z: wz, targetY: pos.Local.Y + spec.TargetCenterY,
 			faction: faction.ID, dimMask: components.DimInfantry,
 			concealment: conceal, audioRadius: audio, emitRange: sensors.EmitRangeM(),
-			meter: meter, det: det,
+			shotHeardM: sys.gunshotReach(ent),
+			meter:      meter, det: det,
 		})
 		sys.seersBuf = append(sys.seersBuf, contactSeer{
 			ent: ent, pos: *pos,
@@ -115,8 +116,9 @@ func (sys *ContactSystem) runDetectPass(dt float32) {
 			x: wx, z: wz, targetY: pos.Local.Y + vspec.BoxHgt*0.6,
 			faction: faction.ID, dimMask: components.DimVehicle,
 			concealment: vspec.DetectMul * sys.smokeMulAt(wx, wz), audioRadius: audio,
-			emitRange: sensors.EmitRangeM(),
-			meter:     meter, det: det,
+			emitRange:  sensors.EmitRangeM(),
+			shotHeardM: sys.gunshotReach(ent),
+			meter:      meter, det: det,
 		})
 		sys.seersBuf = append(sys.seersBuf, contactSeer{
 			ent: ent, pos: *pos,
@@ -290,6 +292,7 @@ func (sys *ContactSystem) snapshotAircraft() {
 			concealment: spec.DetectMul * airConcealMul(band) * sys.smokeMulAt(wx, wz),
 			audioRadius: spec.NoiseRadiusM * airNoiseMul(band),
 			emitRange:   sensors.EmitRangeM(),
+			shotHeardM:  sys.gunshotReach(ent),
 			meter:       meter, det: det,
 		})
 		sys.seersBuf = append(sys.seersBuf, contactSeer{

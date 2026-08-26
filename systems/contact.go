@@ -77,6 +77,7 @@ type ContactSystem struct {
 	groupIdx     map[ecs.Entity]int32
 	contactsBuf  []contactRec
 	emitBuf      []emitterRec
+	shotBuf      []gunshotRec
 	// Per-worker collectors (indexed by ParallelForIndexed chunkIdx),
 	// drained in worker order → deterministic contactsBuf ordering.
 	workerContacts [][]contactRec
@@ -110,6 +111,7 @@ type contactUnit struct {
 	concealment float32 // stance × motion, lower = harder to spot
 	audioRadius float32
 	emitRange   float32 // how far an ESM receiver hears this one radiating
+	shotHeardM  float32 // how far its last shot carries; 0 = has not fired
 	meter       [components.FactionCount]float32
 	det         *components.Detectability // serial apply target; nil = instant
 }
@@ -231,7 +233,9 @@ func (sys *ContactSystem) Update(ctx core.UpdateContext) {
 	sys.elapsed = float32(ctx.SimNow)
 	sys.runDetectPass(float32(ctx.Delta.Seconds()))
 	sys.runEmitterPass()
+	sys.runGunfirePass()
 	sys.applyContactUpsert()
 	sys.applyEmitterUpsert()
+	sys.applyGunfireUpsert()
 	sys.applyCombatEvidence()
 }
