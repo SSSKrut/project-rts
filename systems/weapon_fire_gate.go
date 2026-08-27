@@ -203,7 +203,23 @@ const (
 	suppressRoFMul      float32 = 0.4
 	suppressAmmoReserve float32 = 0.34
 	suppressMinSpreadM  float32 = 2.0
+	// Area fire is about VOLUME. A three-round launcher has none to give, and
+	// spending two of its rockets hosing a treeline costs the squad the only
+	// thing it can answer armour with. Rifles, machine guns and tank guns are
+	// in; the RPG and the underbarrel grenade are not.
+	suppressMinMagazine uint16 = 10
+	// Margin on the shooter's OWN radius before a friendly counts as being in
+	// the line. It has to scale with the shooter: a flat number big enough to
+	// ignore a hull parked against the tank also ignores the whole front rank
+	// of a rifle squad, and the squad is exactly who the veto is for.
+	friendClearMarginM float32 = 0.5
 )
+
+// worldDist is the plain XZ length of a segment.
+func worldDist(ax, az, bx, bz float32) float32 {
+	dx, dz := bx-ax, bz-az
+	return float32(math.Sqrt(float64(dx*dx + dz*dz)))
+}
 
 // orderedAim is P1's first question: does this shooter's commander name a
 // PLACE this barrel should service? It OUTRANKS the awareness FIFO — putting
@@ -236,6 +252,9 @@ func (sys *WeaponSystem) orderedAim(shooter ecs.Entity, ownFaction uint8,
 	switch k.Code {
 	case components.OrderKindSuppressFire:
 		if wspec.Release != components.ReleaseAuto {
+			return components.WorldPos{}, false
+		}
+		if wspec.Ammo < suppressMinMagazine {
 			return components.WorldPos{}, false
 		}
 		// A man keeps a third of his magazine for something he can actually see.
@@ -276,7 +295,13 @@ func (sys *WeaponSystem) orderedAim(shooter ecs.Entity, ownFaction uint8,
 			spread = p.Radius
 		}
 	}
-	rng := uint64(shooter.ID())*0x9e3779b97f4a7c15 ^ uint64(now*1000.0)
+	// Seeded on the LAST SHOT, not on now: the aim point must stand still
+	// between rounds. Re-rolling it every tick moved the point ±5.7 deg at
+	// 80 m while a turret slews 0.67 deg per tick against a 3.4 deg firing
+	// tolerance — so a hull chased the scatter and never once reported "on
+	// target". Infantry has no turret gate and never noticed (owner report
+	// 2026-08-27, lite_roe_veh_suppress).
+	rng := uint64(shooter.ID())*0x9e3779b97f4a7c15 ^ uint64(weapon.LastFiredAt*1000.0)
 	dx := (float32(splitmix(&rng))/float32(0x40000000) - 1) * spread
 	dz := (float32(splitmix(&rng))/float32(0x40000000) - 1) * spread
 	aim = aim.Add(rl.Vector3{X: dx, Z: dz})
@@ -309,6 +334,13 @@ func (sys *WeaponSystem) friendInLineOfFire(shooter ecs.Entity, ownFaction uint8
 	az := float32(selfPos.Chunk.Z)*components.ChunkSize + selfPos.Local.Z
 	bx := float32(aim.Chunk.X)*components.ChunkSize + aim.Local.X
 	bz := float32(aim.Chunk.Z)*components.ChunkSize + aim.Local.Z
+	// Anything inside the shooter's own footprint is beside him, not in front:
+	// a scene relay parked on the same spot as a tank was projecting onto the
+	// very start of the segment and vetoing every round it ever tried to fire.
+	standoff := friendClearMarginM
+	if col := sys.colliderMap.Get(shooter); col != nil {
+		standoff += col.Radius
+	}
 	for i := range sys.targetsBuf {
 		t := &sys.targetsBuf[i]
 		if t.ent == shooter || t.faction != ownFaction {
@@ -316,11 +348,23 @@ func (sys *WeaponSystem) friendInLineOfFire(shooter ecs.Entity, ownFaction uint8
 		}
 		px := float32(t.chunk.X)*components.ChunkSize + t.pos.Local.X
 		pz := float32(t.chunk.Z)*components.ChunkSize + t.pos.Local.Z
-		// Clearance, not a hitbox: a round that merely grazes past a mate is
-		// still a round nobody would fire.
-		if _, hit := segmentPointHit(ax, az, bx, bz, px, pz, t.radius+clearM); hit {
-			return true
+		// segmentPointHit reports CLEAR, not hit — every other caller names the
+		// bool `miss`. Reading it the other way made this veto fire on any
+		// friendly anywhere on the map, which silenced every explosive barrel
+		// under a suppression order and hid itself as "splash weapons hold
+		// their fire" (owner report 2026-08-27).
+		hitT, clear := segmentPointHit(ax, az, bx, bz, px, pz, t.radius+clearM)
+		if clear {
+			continue
 		}
+		// Downrange only. A mate standing beside the hull projects onto the
+		// very start of the segment; a gunner does not refuse to shoot because
+		// someone is next to him, he refuses because someone is in the beaten
+		// zone.
+		if seg := worldDist(ax, az, bx, bz); seg > 0 && hitT*seg < standoff {
+			continue
+		}
+		return true
 	}
 	return false
 }

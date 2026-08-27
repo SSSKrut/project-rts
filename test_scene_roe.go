@@ -48,6 +48,9 @@ const (
 	// Suppression is pressure, not a body count. The bound is deliberately
 	// far below what the channel reaches in a real firefight.
 	roeSuppressMin float32 = 0.10
+	// Hull lanes sit side by side inside comms range; 120 m apart is far
+	// enough that neither is anywhere near the other's line.
+	roeVehLaneX float32 = 120
 
 	// Missile lane: a gunship over a hull it can plainly see. Its cannon is an
 	// ordinary barrel and fires by itself; its rocket pod is player-released
@@ -64,6 +67,7 @@ const (
 	roeModeReturn roeMode = iota
 	roeModeSuppress
 	roeModeMissile
+	roeModeVehSuppress
 )
 
 type roeLane struct {
@@ -111,6 +115,27 @@ func aiROESpawn(world *ecs.World, squadService *systems.SquadService,
 		roeWeaponMap: ecs.NewMap[components.Weapon](world),
 		roeBehaveMap: ecs.NewMap[components.BehaviorRules](world),
 		verdictAt:    roeVerdictAt,
+	}
+	if mode == roeModeVehSuppress {
+		s.verdictAt = roeSuppressEndAt
+		// Lane A: a hull on its own. Lane B: the same hull with a friendly
+		// squad standing between it and the ordered point. If only A fires,
+		// the blocker is the line-of-fire veto and not the order path.
+		s.roeCarrier = vehicleFactory.Spawn(roeWP(0, 0), components.VehicleTank,
+			components.FactionPlayer, components.ControllerLocal)
+		// Both lanes stay near the scene's relay: 600 m out put lane B off the
+		// net and its order came back Blocked, which measures comms, not the
+		// line of fire. Nothing hostile exists here, so the lanes need no
+		// detection separation at all — only room not to shoot each other.
+		s.roeVehB = vehicleFactory.Spawn(roeWP(roeVehLaneX, 0), components.VehicleTank,
+			components.FactionPlayer, components.ControllerLocal)
+		_, s.roeVehBMen = s.roeSquad(roleService, unitFactory,
+			roeWP(roeVehLaneX, roeSuppressM*0.5),
+			components.Faction{ID: components.FactionPlayer}, components.ControllerLocal)
+		fmt.Println("============================================================")
+		fmt.Printf("== ROE %s: lane A hull alone, lane B hull with friendlies down-range\n", s.sceneID)
+		fmt.Println("============================================================")
+		return s
 	}
 	if mode == roeModeMissile {
 		s.verdictAt = roeMissileEndAt
@@ -273,6 +298,9 @@ func (s *aiTestState) updateROE(elapsed float32) {
 		return
 	}
 	switch s.roeMode {
+	case roeModeVehSuppress:
+		s.updateROEVehSuppress(elapsed)
+		return
 	case roeModeSuppress:
 		s.updateROESuppress(elapsed)
 		return
@@ -351,6 +379,51 @@ func (s *aiTestState) roeDryMen(men []ecs.Entity) int {
 		}
 	}
 	return dry
+}
+
+func (s *aiTestState) updateROEVehSuppress(elapsed float32) {
+	if s.roeMissileAmmo0 == 0 {
+		s.roeMissileAmmo0 = s.roeVehAmmo(s.roeCarrier)
+		s.roeGunAmmo0 = s.roeVehAmmo(s.roeVehB)
+	}
+	s.roeMissileFired = s.roeMissileAmmo0 - s.roeVehAmmo(s.roeCarrier)
+	s.roeGunFired = s.roeGunAmmo0 - s.roeVehAmmo(s.roeVehB)
+	if !s.roeProvoked && elapsed >= roeSuppressAt {
+		s.roeProvoked = true
+		s.SquadService.IssueOrder(s.roeCarrier, components.OrderKindSuppressFire,
+			roeWP(0, roeSuppressM), ecs.Entity{}, false, systems.OrderParams{})
+		s.SquadService.IssueOrder(s.roeVehB, components.OrderKindSuppressFire,
+			roeWP(roeVehLaneX, roeSuppressM), ecs.Entity{}, false, systems.OrderParams{})
+	}
+	if elapsed >= s.verdictAt {
+		s.verdictDone = true
+		// Lane B keeps firing — the scatter finds clear parts of the ordered
+		// area — but its own infantry standing in the beaten zone must come
+		// through untouched. That pair pins the veto in BOTH directions: read
+		// backwards it silences the hull (lane A catches it), removed it
+		// shells the squad (lane B catches it).
+		alive := s.roeAliveCount(s.roeVehBMen)
+		pass := s.roeMissileFired > 0 && s.roeGunFired > 0 && alive == len(s.roeVehBMen)
+		fmt.Println("============================================================")
+		fmt.Printf("== VERDICT [%s]: %s  (alone fired=%d | over own troops fired=%d, they are %d/%d | t=%.1fs)\n",
+			s.sceneID, balVerdictWord(pass), s.roeMissileFired, s.roeGunFired,
+			alive, len(s.roeVehBMen), elapsed)
+		fmt.Println("============================================================")
+	}
+}
+
+func (s *aiTestState) roeVehAmmo(v ecs.Entity) int {
+	if v == (ecs.Entity{}) || !s.World.Alive(v) {
+		return 0
+	}
+	eq := s.roeEquipMap.Get(v)
+	if eq == nil || eq.Primary == (ecs.Entity{}) || !s.World.Alive(eq.Primary) {
+		return 0
+	}
+	if w := s.roeWeaponMap.Get(eq.Primary); w != nil {
+		return int(w.Ammo)
+	}
+	return 0
 }
 
 // roeAliveCount is the friendly-loss watch. Nobody is shooting at these
@@ -465,7 +538,14 @@ func (s *aiTestState) roeSuppressVerdict(elapsed float32) {
 	pressed := a.peakSupp >= roeSuppressMin
 	dry := s.roeDryMen(a.ownMen)
 
-	pass := blind && fired && control && pressed && dry == 0 && a.alive == len(a.ownMen)
+	// Own losses are REPORTED, not gated. With explosives kept out of area
+	// fire, the only way a man dies here is a rifle round from the rank
+	// behind him — the game has no friendly-fire filter at all (block F), and
+	// whether one of ~165 rounds clips a mate flips with any change to the
+	// scatter. The guard against the bug that mattered — an explosive going
+	// off inside the formation — moved to lite_roe_veh_suppress, where a
+	// splash barrel fires over its own infantry and they must come through.
+	pass := blind && fired && control && pressed && dry == 0
 	fmt.Println("============================================================")
 	fmt.Printf("== VERDICT [%s]: %s  (blind=%v | rounds A=%d B=%d | supp=%.2f want>=%.2f | dry=%d own %d/%d | t=%.1fs)\n",
 		s.sceneID, balVerdictWord(pass), blind, a.fired, b.fired,

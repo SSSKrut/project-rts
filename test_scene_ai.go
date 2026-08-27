@@ -305,6 +305,9 @@ const (
 	// FreeFire with the target in plain sight, and fires exactly one round
 	// when the player names a point.
 	aiSceneROEMissile = "lite_roe_missile"
+	// _roe_veh_suppress: does a HULL obey a suppress order, and does having
+	// friendlies down-range silence it (owner report 2026-08-27).
+	aiSceneROEVehSup = "lite_roe_veh_suppress"
 )
 
 // aiSceneMapName lets a scene demand a specific map manifest ("" = default).
@@ -1845,13 +1848,15 @@ func aiSceneSpawn(
 			vehicleFactory, mode, posMap, rosterMap)
 	}
 	if id := aiSceneID(); id == aiSceneROEReturn || id == aiSceneROESuppress ||
-		id == aiSceneROEMissile {
+		id == aiSceneROEMissile || id == aiSceneROEVehSup {
 		mode := roeModeReturn
 		switch id {
 		case aiSceneROESuppress:
 			mode = roeModeSuppress
 		case aiSceneROEMissile:
 			mode = roeModeMissile
+		case aiSceneROEVehSup:
+			mode = roeModeVehSuppress
 		}
 		return aiROESpawn(world, squadService, roleService, unitFactory,
 			vehicleFactory, aircraftFactory, mode, posMap, rosterMap)
@@ -2397,6 +2402,8 @@ type aiTestState struct {
 	roeQuietA       int
 	roeQuietB       int
 	roeCarrier      ecs.Entity
+	roeVehB         ecs.Entity
+	roeVehBMen      []ecs.Entity
 	roePod          ecs.Entity
 	roeGun          ecs.Entity
 	roeGunAmmo0     int
