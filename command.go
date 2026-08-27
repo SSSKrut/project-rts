@@ -362,8 +362,9 @@ func buildTerrainPopupSections(hasManual bool) []ui.ContextMenuSection {
 }
 
 // hasManualWeapon reports whether anything in the selection carries a barrel
-// the AI will never fire on its own — the only thing a missile strike can be
-// served by.
+// that can service a strike on a NAMED POINT: player-released, and not guided.
+// A guided round needs a body to guide onto — offering the row for one would
+// promise something the order cannot deliver.
 func hasManualWeapon(selected []ecs.Entity, world *ecs.World,
 	equipMap *ecs.Map[components.Equipment],
 	weaponMap *ecs.Map[components.Weapon],
@@ -381,8 +382,12 @@ func hasManualWeapon(selected []ecs.Entity, world *ecs.World,
 			if w == (ecs.Entity{}) || !world.Alive(w) {
 				continue
 			}
-			if wp := weaponMap.Get(w); wp != nil &&
-				components.SpecForWeapon(wp.Kind).Release == components.ReleaseManual {
+			wp := weaponMap.Get(w)
+			if wp == nil {
+				continue
+			}
+			spec := components.SpecForWeapon(wp.Kind)
+			if spec.Release == components.ReleaseManual && spec.MissileSpeedM == 0 {
 				return true
 			}
 		}

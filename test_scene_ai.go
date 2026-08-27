@@ -2412,6 +2412,9 @@ type aiTestState struct {
 	roeVehBMen      []ecs.Entity
 	roePin          [2]roePinLane
 	roePod          ecs.Entity
+	roeGuided       ecs.Entity
+	roeGuidedTube   ecs.Entity
+	roeGuidedAmmo0  int
 	roeGun          ecs.Entity
 	roeGunAmmo0     int
 	roeGunFired     int

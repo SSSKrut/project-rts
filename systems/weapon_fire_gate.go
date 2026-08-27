@@ -274,6 +274,14 @@ func (sys *WeaponSystem) orderedAim(shooter ecs.Entity, ownFaction uint8,
 		if wspec.Release != components.ReleaseManual {
 			return components.WorldPos{}, false
 		}
+		// A GUIDED round needs a body to guide onto. Sent at bare ground it
+		// reached queueMissile with a zero target and took the sim down there;
+		// even past that it would fly to the spot and hurt nobody, having no
+		// blast radius of its own. Guided answers "attack THAT", unguided
+		// answers "put it THERE" — the player reaches the missile either way.
+		if wspec.MissileSpeedM > 0 {
+			return components.WorldPos{}, false
+		}
 	default:
 		return components.WorldPos{}, false
 	}

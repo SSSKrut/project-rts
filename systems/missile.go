@@ -161,17 +161,27 @@ func (sys *MissileSystem) Update(ctx core.UpdateContext) {
 // aimOffsetY lifts the aim point to hull centre for a vehicle; anything else
 // is aimed at where it stands.
 func (sys *MissileSystem) aimOffsetY(target ecs.Entity) float32 {
-	if v := sys.vehicleMap.Get(target); v != nil {
+	if v := sys.liveVehicle(target); v != nil {
 		return components.SpecForVehicle(v.Kind).BoxHgt * 0.5
 	}
 	return 0
+}
+
+// liveVehicle guards the two target reads that run at the FUSE rather than
+// under the chase test: a round outlives its target routinely — someone else
+// kills it mid-flight — and a dead id is a panic, not a nil.
+func (sys *MissileSystem) liveVehicle(target ecs.Entity) *components.Vehicle {
+	if target == (ecs.Entity{}) || !sys.worldRef.Alive(target) {
+		return nil
+	}
+	return sys.vehicleMap.Get(target)
 }
 
 // sectorMul is the armour face the round actually struck. Unlike a hitscan
 // shot, which has to reconstruct the direction from the muzzle, a missile
 // carries its approach in its own velocity.
 func (sys *MissileSystem) sectorMul(target ecs.Entity, velX, velZ float32) float32 {
-	v := sys.vehicleMap.Get(target)
+	v := sys.liveVehicle(target)
 	if v == nil {
 		return 1
 	}

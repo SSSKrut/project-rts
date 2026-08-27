@@ -160,11 +160,14 @@ func (sys *WeaponSystem) SetAirEngageMap(m *ecs.Map[components.AirEngagement]) {
 // is fixed the moment the round leaves. Sector armour is not: that depends on
 // the approach, and a missile knows its own at impact (MissileSystem).
 func (sys *WeaponSystem) missileDamageMul(target ecs.Entity, wspec *components.WeaponSpec) float32 {
-	if sys.aircraftMap.Has(target) {
+	// Zero-safe like every other target read since block G: an ordered aim
+	// point carries no body, and this was the one raw dereference left after
+	// that sweep — reached the day a guided barrel was pointed at bare ground.
+	if sys.targetIsAircraft(target) {
 		return wspec.VsAir
 	}
 	class := components.ArmorClassSoft
-	if tv := sys.vehicleMap.Get(target); tv != nil {
+	if tv := sys.targetVehicleOf(target); tv != nil {
 		class = components.SpecForVehicle(tv.Kind).Class
 	}
 	return components.VsClassMul(wspec, class)

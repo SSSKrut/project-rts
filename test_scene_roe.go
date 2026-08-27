@@ -219,6 +219,22 @@ func aiROESpawn(world *ecs.World, squadService *systems.SquadService,
 			fmt.Printf("[ai-test %s] NO AIRCRAFT FACTORY — aborting\n", s.sceneID)
 			return nil
 		}
+		// Second gunship, same order, GUIDED loadout: a point strike must
+		// bounce off it rather than launch. Sending a guided round at bare
+		// ground crashed the sim in queueMissile (owner report 2026-08-27) and
+		// would have hurt nobody even past that, having no blast of its own.
+		guidedEntry := roeWP(roeLaneGap, -40)
+		guidedEntry.Local.Y = 40
+		aircraftFactory.Arrival(components.AirArrival{
+			At: 1.0, Kind: components.AircraftHeliAttack,
+			FactionID: components.FactionPlayer, Controller: components.ControllerLocal,
+			Entry: guidedEntry, Exit: systems.AirExitFor(guidedEntry, 400),
+			AltRef: components.AltAGL, AltSet: 40, SpeedSet: 10,
+			Loadout: 0,
+			Rules: components.EngagementRules{
+				Mode: components.FreeFire, FireOnInf: true, FireOnArm: true,
+			},
+		})
 		aircraftFactory.Arrival(components.AirArrival{
 			At: 1.0, Kind: components.AircraftHeliAttack,
 			FactionID: components.FactionPlayer, Controller: components.ControllerLocal,
@@ -432,6 +448,17 @@ func (s *aiTestState) updateROESuppress(elapsed float32) {
 	}
 }
 
+// roeAmmoOf is the rounds left in one weapon entity, 0 when it is gone.
+func (s *aiTestState) roeAmmoOf(w ecs.Entity) int {
+	if w == (ecs.Entity{}) || !s.World.Alive(w) {
+		return 0
+	}
+	if wp := s.roeWeaponMap.Get(w); wp != nil {
+		return int(wp.Ammo)
+	}
+	return 0
+}
+
 // roeAmmoEach reports each man's remaining rounds, -1 where he is gone.
 func (s *aiTestState) roeAmmoEach(men []ecs.Entity) []int {
 	out := make([]int, len(men))
@@ -630,9 +657,33 @@ func (s *aiTestState) updateROEMissile(elapsed float32) {
 			}
 			return
 		}
-		if eq := s.roeEquipMap.Get(s.roeCarrier); eq != nil {
-			s.roePod = eq.Primary
-			s.roeGun = eq.Secondary
+		// Two airframes arrive; the one carrying the rocket pod is the subject,
+		// the guided one is the control.
+		q2 := s.roeAirFilter.Query()
+		for q2.Next() {
+			e := q2.Entity()
+			eq := s.roeEquipMap.Get(e)
+			if eq == nil || eq.Primary == (ecs.Entity{}) {
+				continue
+			}
+			w := s.roeWeaponMap.Get(eq.Primary)
+			if w == nil {
+				continue
+			}
+			if components.SpecForWeapon(w.Kind).MissileSpeedM > 0 {
+				s.roeGuided, s.roeGuidedTube = e, eq.Primary
+				continue
+			}
+			s.roeCarrier, s.roePod, s.roeGun = e, eq.Primary, eq.Secondary
+		}
+		if s.roePod == (ecs.Entity{}) {
+			s.roeCarrier = ecs.Entity{}
+			return
+		}
+		if s.roeGuidedTube != (ecs.Entity{}) {
+			if w := s.roeWeaponMap.Get(s.roeGuidedTube); w != nil {
+				s.roeGuidedAmmo0 = int(w.Ammo)
+			}
 		}
 	}
 	ammoOf := func(w ecs.Entity) int {
@@ -662,6 +713,10 @@ func (s *aiTestState) updateROEMissile(elapsed float32) {
 			// killed the one that was there.
 			s.SquadService.IssueOrder(s.roeCarrier, components.OrderKindMissileStrike,
 				roeWP(0, roeMissileM), ecs.Entity{}, false, systems.OrderParams{})
+			if s.roeGuided != (ecs.Entity{}) {
+				s.SquadService.IssueOrder(s.roeGuided, components.OrderKindMissileStrike,
+					roeWP(roeLaneGap, roeMissileM), ecs.Entity{}, false, systems.OrderParams{})
+			}
 		}
 	}
 	s.roeMissileFired = spent
@@ -679,12 +734,15 @@ func (s *aiTestState) roeMissileVerdict(elapsed float32) {
 	// it, a cold pod could just mean a gunship that never got into the fight.
 	gunWorked := s.roeGunFired > 0
 	ordered := s.roeMissileFired > 0
+	// The guided tube must not have moved: a point is not a target for it.
+	guidedHeld := s.roeGuidedTube == (ecs.Entity{}) ||
+		s.roeGuidedAmmo0 == s.roeAmmoOf(s.roeGuidedTube)
 
-	pass := cold && saw && gunWorked && ordered
+	pass := cold && saw && gunWorked && ordered && guidedHeld
 	fmt.Println("============================================================")
-	fmt.Printf("== VERDICT [%s]: %s  (pod cold=%d saw=%v | cannon fired=%d | pod after order=%d | t=%.1fs)\n",
+	fmt.Printf("== VERDICT [%s]: %s  (pod cold=%d saw=%v | cannon fired=%d | pod after order=%d | guided fired=%d want 0 | t=%.1fs)\n",
 		s.sceneID, balVerdictWord(pass), s.roeQuietA, saw, s.roeGunFired,
-		s.roeMissileFired, elapsed)
+		s.roeMissileFired, s.roeGuidedAmmo0-s.roeAmmoOf(s.roeGuidedTube), elapsed)
 	fmt.Println("============================================================")
 }
 
