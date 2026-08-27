@@ -308,6 +308,9 @@ const (
 	// _roe_veh_suppress: does a HULL obey a suppress order, and does having
 	// friendlies down-range silence it (owner report 2026-08-27).
 	aiSceneROEVehSup = "lite_roe_veh_suppress"
+	// _roe_pinned: does suppression DEGRADE the squad it lands on. Lane B is
+	// the same fight with nobody shelling it.
+	aiSceneROEPinned = "lite_roe_pinned"
 )
 
 // aiSceneMapName lets a scene demand a specific map manifest ("" = default).
@@ -1848,7 +1851,8 @@ func aiSceneSpawn(
 			vehicleFactory, mode, posMap, rosterMap)
 	}
 	if id := aiSceneID(); id == aiSceneROEReturn || id == aiSceneROESuppress ||
-		id == aiSceneROEMissile || id == aiSceneROEVehSup {
+		id == aiSceneROEMissile || id == aiSceneROEVehSup ||
+		id == aiSceneROEPinned {
 		mode := roeModeReturn
 		switch id {
 		case aiSceneROESuppress:
@@ -1857,6 +1861,8 @@ func aiSceneSpawn(
 			mode = roeModeMissile
 		case aiSceneROEVehSup:
 			mode = roeModeVehSuppress
+		case aiSceneROEPinned:
+			mode = roeModePinned
 		}
 		return aiROESpawn(world, squadService, roleService, unitFactory,
 			vehicleFactory, aircraftFactory, mode, posMap, rosterMap)
@@ -2404,6 +2410,7 @@ type aiTestState struct {
 	roeCarrier      ecs.Entity
 	roeVehB         ecs.Entity
 	roeVehBMen      []ecs.Entity
+	roePin          [2]roePinLane
 	roePod          ecs.Entity
 	roeGun          ecs.Entity
 	roeGunAmmo0     int

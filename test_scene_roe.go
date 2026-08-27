@@ -52,6 +52,20 @@ const (
 	// enough that neither is anywhere near the other's line.
 	roeVehLaneX float32 = 120
 
+	// Pinned lane: does suppressive fire DEGRADE the man it lands on, or does
+	// it only make noise? The base of fire sits far enough that its rounds
+	// arrive scattered — pressure, not marksmanship — and it cannot see the
+	// squad it is shooting at in the first place.
+	roePinBaseX   float32 = -120
+	roePinVictim  float32 = 22
+	roePinOrderAt float32 = 3.0
+	roePinEndAt   float32 = 34.0
+	// Bound set after measuring, with room — the verdict prints both counts
+	// every run so the margin stays visible.
+	roePinQuietPct int = 60
+	// How much longer the shelled lane's victims must last. Seconds.
+	roePinSavedS float32 = 3.0
+
 	// Missile lane: a gunship over a hull it can plainly see. Its cannon is an
 	// ordinary barrel and fires by itself; its rocket pod is player-released
 	// and must stay cold until a point is named. A launcher with nothing to
@@ -68,7 +82,25 @@ const (
 	roeModeSuppress
 	roeModeMissile
 	roeModeVehSuppress
+	roeModePinned
 )
+
+// roePinLane is one half of the pinned pair: an enemy squad shooting at a
+// punching bag, plus a base of fire that may or may not be shelling it.
+type roePinLane struct {
+	foe         ecs.Entity
+	foeMen      []ecs.Entity
+	victim      ecs.Entity
+	victimMen   []ecs.Entity
+	base        ecs.Entity
+	foeAmmo0    []int
+	foeLast     []int
+	foeFired    int
+	victimWipe  float32
+	foePeakSupp float32
+	foeAlive    int
+	victimAlive int
+}
 
 type roeLane struct {
 	own      ecs.Entity
@@ -115,6 +147,42 @@ func aiROESpawn(world *ecs.World, squadService *systems.SquadService,
 		roeWeaponMap: ecs.NewMap[components.Weapon](world),
 		roeBehaveMap: ecs.NewMap[components.BehaviorRules](world),
 		verdictAt:    roeVerdictAt,
+	}
+	if mode == roeModePinned {
+		s.verdictAt = roePinEndAt
+		for i, z := range [2]float32{0, roeLaneGap} {
+			var l roePinLane
+			l.foe, l.foeMen = s.roeSquad(roleService, unitFactory, roeWP(0, z),
+				components.Faction{ID: components.FactionEnemyRed}, components.ControllerAI)
+			l.victim, l.victimMen = s.roeSquad(roleService, unitFactory,
+				roeWP(roePinVictim, z),
+				components.Faction{ID: components.FactionPlayer}, components.ControllerLocal)
+			l.base, _ = s.roeSquad(roleService, unitFactory, roeWP(roePinBaseX, z),
+				components.Faction{ID: components.FactionPlayer}, components.ControllerLocal)
+			// The victim is a punching bag on purpose: if it shot back, the
+			// enemy's output would fall for two reasons at once and neither
+			// number would mean anything.
+			if r := s.RulesMap.Get(l.victim); r != nil {
+				r.Mode = components.HoldFire
+			}
+			if b := s.roeBehaveMap.Get(l.victim); b != nil {
+				b.AllowReturnFire = false
+			}
+			// The base of fire is 120 m out and blind to the squad it will
+			// shell — anything it does there comes from the order alone.
+			if r := s.RulesMap.Get(l.base); r != nil {
+				r.Mode = components.HoldFire
+			}
+			l.foeAmmo0 = s.roeAmmoEach(l.foeMen)
+			l.foeLast = append([]int(nil), l.foeAmmo0...)
+			l.victimWipe = -1
+			s.roePin[i] = l
+		}
+		fmt.Println("============================================================")
+		fmt.Printf("== ROE %s: lane A pinned by a base of fire at %.0fm, lane B left alone\n",
+			s.sceneID, -roePinBaseX)
+		fmt.Println("============================================================")
+		return s
 	}
 	if mode == roeModeVehSuppress {
 		s.verdictAt = roeSuppressEndAt
@@ -298,6 +366,9 @@ func (s *aiTestState) updateROE(elapsed float32) {
 		return
 	}
 	switch s.roeMode {
+	case roeModePinned:
+		s.updateROEPinned(elapsed)
+		return
 	case roeModeVehSuppress:
 		s.updateROEVehSuppress(elapsed)
 		return
@@ -361,6 +432,25 @@ func (s *aiTestState) updateROESuppress(elapsed float32) {
 	}
 }
 
+// roeAmmoEach reports each man's remaining rounds, -1 where he is gone.
+func (s *aiTestState) roeAmmoEach(men []ecs.Entity) []int {
+	out := make([]int, len(men))
+	for i, m := range men {
+		out[i] = -1
+		if m == (ecs.Entity{}) || !s.World.Alive(m) {
+			continue
+		}
+		eq := s.roeEquipMap.Get(m)
+		if eq == nil || eq.Active == (ecs.Entity{}) || !s.World.Alive(eq.Active) {
+			continue
+		}
+		if w := s.roeWeaponMap.Get(eq.Active); w != nil {
+			out[i] = int(w.Ammo)
+		}
+	}
+	return out
+}
+
 // roeDryMen counts shooters left with an empty weapon. A squad total says
 // nothing — one full machine gun hides five empty rifles — and what the ammo
 // reserve promises is that NOBODY is dry.
@@ -410,6 +500,76 @@ func (s *aiTestState) updateROEVehSuppress(elapsed float32) {
 			alive, len(s.roeVehBMen), elapsed)
 		fmt.Println("============================================================")
 	}
+}
+
+// updateROEPinned: both lanes are identical down to the entity layout; the
+// only difference is that lane A's base of fire receives a suppression order.
+func (s *aiTestState) updateROEPinned(elapsed float32) {
+	for i := range s.roePin {
+		l := &s.roePin[i]
+		// Per man, frozen on death: a squad-total reading counts a dead man's
+		// UNSPENT rounds as fired, which made the shelled lane look like the
+		// busier one.
+		now := s.roeAmmoEach(l.foeMen)
+		spent := 0
+		for k := range l.foeAmmo0 {
+			if now[k] >= 0 {
+				l.foeLast[k] = now[k]
+			}
+			spent += l.foeAmmo0[k] - l.foeLast[k]
+		}
+		l.foeFired = spent
+		if sup := s.roePeakSuppression(l.foeMen); sup > l.foePeakSupp {
+			l.foePeakSupp = sup
+		}
+		l.foeAlive = s.roeAliveCount(l.foeMen)
+		l.victimAlive = s.roeAliveCount(l.victimMen)
+		if l.victimAlive == 0 && l.victimWipe < 0 {
+			l.victimWipe = elapsed
+		}
+	}
+	if !s.roeProvoked && elapsed >= roePinOrderAt {
+		s.roeProvoked = true
+		s.SquadService.IssueOrder(s.roePin[0].base, components.OrderKindSuppressFire,
+			roeWP(0, 0), ecs.Entity{}, false, systems.OrderParams{})
+	}
+	if elapsed >= s.verdictAt {
+		s.roePinnedVerdict(elapsed)
+	}
+}
+
+func (s *aiTestState) roePinnedVerdict(elapsed float32) {
+	s.verdictDone = true
+	a, b := &s.roePin[0], &s.roePin[1]
+	landed := a.foePeakSupp >= roeSuppressMin
+	// The men it was shooting at are the ones who feel it: still standing
+	// when the unshelled lane's are gone, or lasting measurably longer.
+	saved := a.victimAlive > b.victimAlive ||
+		(a.victimWipe < 0 && b.victimWipe >= 0) ||
+		(a.victimWipe > 0 && b.victimWipe > 0 && a.victimWipe-b.victimWipe >= roePinSavedS)
+
+	// VOLUME OF FIRE IS REPORTED, NOT GATED — and the gap is the point. A
+	// squad at Suppression 1.00 keeps shooting at very nearly its usual rate:
+	// the channel is pressed, accuracy is taxed (dispersion x 1+0.5*supp) and
+	// the reactive tier looks for cover, but NOTHING in the model turns "I am
+	// being shot at" into "I stop shooting". The `ModeSuppressed` arm of
+	// shouldFire is written by UtilityEvaluator, which has no live writer for
+	// it. Printed every run the way lite_balance_eyes prints infSeesInf, so
+	// the day it closes is visible rather than assumed.
+	quiet := "OPEN"
+	if a.foeFired*100 < b.foeFired*roePinQuietPct {
+		quiet = "met"
+	}
+
+	pass := landed && saved
+	fmt.Println("============================================================")
+	fmt.Printf("== VERDICT [%s]: %s  (supp=%.2f | victims wiped at %.1f vs %.1f, want +%.1fs | enemy rounds A=%d B=%d want<%d%% %s | enemy %d/%d vs %d/%d | alive A=%d B=%d of %d | t=%.1fs)\n",
+		s.sceneID, balVerdictWord(pass), a.foePeakSupp,
+		a.victimWipe, b.victimWipe, roePinSavedS,
+		a.foeFired, b.foeFired, roePinQuietPct, quiet,
+		a.foeAlive, len(a.foeMen), b.foeAlive, len(b.foeMen),
+		a.victimAlive, b.victimAlive, len(a.victimMen), elapsed)
+	fmt.Println("============================================================")
 }
 
 func (s *aiTestState) roeVehAmmo(v ecs.Entity) int {
