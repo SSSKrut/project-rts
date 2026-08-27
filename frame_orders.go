@@ -80,6 +80,7 @@ func (g *Game) handleOrders() {
 			g.UI.RMB.HoveredBldg = g.Sel.HoveredBuilding
 			g.UI.RMB.HasSelection = true
 			g.UI.RMB.FacingActive = false
+			g.UI.RMB.MenuOpened = false
 			g.UI.RMB.Ctrl = g.Frame.Ctrl
 			g.UI.RMB.Alt = g.Frame.Alt
 			g.UI.RMB.Double = (now - g.UI.LastRMBPressAt) <= rmbDoubleWindow
@@ -116,6 +117,7 @@ func (g *Game) handleOrders() {
 						sections = buildBuildingPopupSections(g.UI.RMB.HoveredBldg, &g.Res.BuildingPlanIx, g.Maps.Level)
 					}
 					g.UI.CtxMenu.Begin(g.Frame.Cursor, sections, g.UI.RMB.SourcePanel, g.Frame.Panel3DContent)
+					g.UI.RMB.MenuOpened = true
 				}
 			}
 		}
@@ -142,7 +144,15 @@ func (g *Game) handleOrders() {
 			}
 		}
 
-		if rmbReleased && !g.UI.CtxMenu.IsActive() {
+		// A popup raised during this press OWNS the release. Committing an item
+		// called Reset() first, so the tap branch saw an inactive menu, decided
+		// the release was unhandled, and issued a second order at the press
+		// point — with appendToQueue=false, which CANCELS the chain the popup
+		// had just made. "Suppress fire" became "walk there", and the building
+		// menu quietly degraded "Clear and occupy" into "Occupy". The flag
+		// spans the whole press, so closing the menu with ESC does not hand the
+		// gesture back either.
+		if rmbReleased && !g.UI.RMB.MenuOpened && !g.UI.CtxMenu.IsActive() {
 			switch {
 			case g.UI.RMB.FacingActive:
 				dx := g.Frame.Cursor.X - g.UI.RMB.PressOrigin.X
@@ -180,6 +190,7 @@ func (g *Game) handleOrders() {
 		if rmbReleased {
 			g.UI.RMB.Active = false
 			g.UI.RMB.FacingActive = false
+			g.UI.RMB.MenuOpened = false
 		}
 	}
 

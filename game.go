@@ -301,8 +301,13 @@ type rmbSession struct {
 	HoveredBldg  ecs.Entity
 	HasSelection bool
 	FacingActive bool // > 8 px drag committed to facing-drag
-	Ctrl, Alt    bool
-	Double       bool
+	// MenuOpened: a popup was raised during THIS press, so the release belongs
+	// to the menu — whether an item was picked, ESC closed it, or nothing was
+	// hovered. Without it the release fell through to the tap branch and
+	// issued a second order that cancelled the first.
+	MenuOpened bool
+	Ctrl, Alt  bool
+	Double     bool
 }
 
 // selection is what the player currently has picked or is hovering.
