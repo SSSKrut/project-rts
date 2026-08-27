@@ -162,20 +162,35 @@ func drawQuickBadges(ctx InspectorCtx, squad ecs.Entity, x, y, width int32) int3
 		components.EngagementModeName(rules.Mode),
 		autonomyLabelFor(ctx.Behavior, squad),
 	}
-	hovered := ctx.in.Hover(row)
+	// Four boxed cells read as four controls, so they behave as four: the row
+	// used to hover and click as ONE link that opened the Behavior panel, and
+	// clicking "Walk" to change the pace opening a window instead is exactly
+	// the surprise the shape promises not to spring. The three cycling values
+	// are edited in place with the same expressions the Behavior panel uses;
+	// autonomy stays a doorway because it is a preset, not a step.
 	for i, label := range labels {
 		cell := SplitX(row, i, len(labels), srChipGap)
 		bg := srChipBG
-		if hovered {
+		if ctx.in.Hover(cell) {
 			bg = srChipHover
 		}
 		rl.DrawRectangleRec(cell, bg)
 		rl.DrawRectangleLinesEx(cell, 1, srChipBorder)
 		TextCentered(&ctx.st, cell, label, ctx.st.TextDim)
-	}
-	if ctx.in.Clicked(row) {
-		OpenWidgetRequest.Active = true
-		OpenWidgetRequest.Panel = PanelBehavior
+		if !ctx.in.Clicked(cell) {
+			continue
+		}
+		switch i {
+		case 0:
+			profile.Pace = (profile.Pace + 1) % 3
+		case 1:
+			profile.Stance = (profile.Stance + 1) % components.StanceCount
+		case 2:
+			rules.Mode = (rules.Mode + 1) % 3
+		default:
+			OpenWidgetRequest.Active = true
+			OpenWidgetRequest.Panel = PanelBehavior
+		}
 	}
 	return int32(col.Y)
 }
