@@ -40,7 +40,6 @@ func drawUnitCubeAlpha(pos rl.Vector3, st components.Stance, role components.Uni
 	rl.DrawCubeWiresV(capPos, rl.Vector3{X: 0.55, Y: capHeight, Z: 0.55}, scale(rl.Color{R: 20, G: 20, B: 20, A: 220}))
 }
 
-
 // drawUnitStaminaBar draws a horizontal Stamina bar above the cap, only when
 // ratio < 0.8. Green / yellow / red by ratio zone (>=0.5 / >=0.2 / below).
 func drawUnitStaminaBar(renderPos rl.Vector3, st components.Stance, role components.UnitRoleKind,
@@ -69,6 +68,9 @@ func drawUnitStaminaBar(renderPos rl.Vector3, st components.Stance, role compone
 	w := int32(panel3DContent.Width)
 	h := int32(panel3DContent.Height)
 	if w < 1 || h < 1 {
+		return
+	}
+	if !inFrontOfCamera(topPos) {
 		return
 	}
 	sp := rl.GetWorldToScreenEx(topPos, systems.CurrentCamera, w, h)
@@ -123,6 +125,9 @@ func drawUnitHPBar(renderPos rl.Vector3, st components.Stance, role components.U
 	if w < 1 || h < 1 {
 		return
 	}
+	if !inFrontOfCamera(topPos) {
+		return
+	}
 	sp := rl.GetWorldToScreenEx(topPos, systems.CurrentCamera, w, h)
 	if sp.X < 0 || sp.Y < 0 || sp.X > panel3DContent.Width || sp.Y > panel3DContent.Height {
 		return
@@ -170,6 +175,9 @@ func drawUnitExposureBar(renderPos rl.Vector3, st components.Stance, role compon
 	w := int32(panel3DContent.Width)
 	h := int32(panel3DContent.Height)
 	if w < 1 || h < 1 {
+		return
+	}
+	if !inFrontOfCamera(topPos) {
 		return
 	}
 	sp := rl.GetWorldToScreenEx(topPos, systems.CurrentCamera, w, h)
@@ -431,6 +439,12 @@ type fieldProjector struct {
 func (p fieldProjector) at(pos components.WorldPos, lift float32) (rl.Vector2, bool) {
 	rp := pos.ToRenderSpace(systems.CurrentOriginChunk)
 	rp.Y += lift
+	// A point behind the viewer projects to a mirrored spot that lands inside
+	// the panel just fine, so the screen-bounds test below cannot catch it on
+	// its own: markers appeared for men standing behind the camera.
+	if !inFrontOfCamera(rp) {
+		return rl.Vector2{}, false
+	}
 	sp := rl.GetWorldToScreenEx(rp, systems.CurrentCamera, p.w, p.h)
 	if sp.X < 0 || sp.Y < 0 || sp.X > p.panel.Width || sp.Y > p.panel.Height {
 		return rl.Vector2{}, false

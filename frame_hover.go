@@ -89,7 +89,7 @@ func (g *Game) updateHover() {
 				rp := above.ToRenderSpace(systems.CurrentOriginChunk)
 				w := int32(g.Frame.Panel3DContent.Width)
 				h := int32(g.Frame.Panel3DContent.Height)
-				if w > 0 && h > 0 {
+				if w > 0 && h > 0 && inFrontOfCamera(rp) {
 					sp := rl.GetWorldToScreenEx(rp, systems.CurrentCamera, w, h)
 					if sp.X >= 0 && sp.X <= g.Frame.Panel3DContent.Width && sp.Y >= 0 && sp.Y <= g.Frame.Panel3DContent.Height {
 						screen := rl.Vector2{
