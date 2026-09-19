@@ -43,6 +43,12 @@ GIF с движущейся камерой весит в разы больше �
 `mass_columns` (16 отрядов и 12 машин выходят со стартовой линии),
 `tank_closeup` (модель танка крупно), `convoy_bridge` (колонна на мосту).
 
+`main_menu` снят не стендом, а своим харнессом стартового экрана —
+`go build -o bin/space ./cmd/space` и затем
+`./bin/space -w=1920 -h=1080 -shot=main_menu.png -shot-at=420`. Кадр 420
+берётся потому, что к нему догорел fade-in и погасла подсказка «not wired
+up yet»; raylib кладёт PNG в рабочую папку, оттуда его переносят в `png/`.
+
 ## Как снят каждый клип
 
 Команды — в `scripts/demo_clips.sh`; флаги камеры и записи описаны в
@@ -70,4 +76,4 @@ GIF с движущейся камерой весит в разы больше �
 | `ui_map` | 12 с | 4.5 МБ | 2.5 МБ |
 | `vehicle_combat` | 10 с | 1.7 МБ | 1.1 МБ |
 
-В `png/`: `air_cas`, `ambush`, `bounding`, `city_aerial`, `city_aerial_evening`, `city_bridge`, `city_orbit`, `city_street`, `clear_building`, `convoy_bridge`, `convoy_road`, `convoy_sunset`, `focus_fire`, `march_column`, `mass_columns`, `open_field`, `shellfire`, `tank_closeup`, `ui_command`, `ui_map`, `vehicle_combat`.
+В `png/`: `air_cas`, `ambush`, `bounding`, `city_aerial`, `city_aerial_evening`, `city_bridge`, `city_orbit`, `city_street`, `clear_building`, `convoy_bridge`, `convoy_road`, `convoy_sunset`, `focus_fire`, `main_menu`, `march_column`, `mass_columns`, `open_field`, `shellfire`, `tank_closeup`, `ui_command`, `ui_map`, `vehicle_combat`.
