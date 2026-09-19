@@ -54,7 +54,7 @@ func (g *Game) handleInput() {
 	sy := float32(math.Sin(float64(orbit.Yaw)))
 	cy := float32(math.Cos(float64(orbit.Yaw)))
 	var inFwd, inRight float32
-	wasdAllowed := g.Frame.Focused == ui.Panel3D || g.Frame.Focused == ui.PanelNone
+	wasdAllowed := (g.Frame.Focused == ui.Panel3D || g.Frame.Focused == ui.PanelNone) && *recPathFlag == ""
 	if wasdAllowed {
 		if rl.IsKeyDown(rl.KeyW) {
 			inFwd += 1

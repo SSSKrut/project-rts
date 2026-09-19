@@ -24,12 +24,30 @@ func (g *Game) initUI() {
 	g.Ctx.Models = newModelSet()
 	g.Ctx.Exhaust = newExhaustField()
 
-	g.UI.ScreenW, g.UI.ScreenH = initialScreenWidth, initialScreenHeight
+	g.UI.ScreenW, g.UI.ScreenH = startScreenSize()
 	g.UI.PanelMgr = ui.NewPanelManager()
 	// Defaults first: a layout file with no attention block leaves them alone.
 	g.UI.Attention.Matrix = ui.DefaultAttentionMatrix()
 	// Restore split ratios from disk before the first Recompute.
 	loadLayout(g.UI.PanelMgr, &g.UI.Attention.Matrix, &g.UI.Cues.Muted)
+	switch *recLayoutFlag {
+	case "field":
+		g.UI.PanelMgr.SetWorkspace(nil)
+	case "command":
+		g.UI.PanelMgr.SetWorkspace(nil)
+		g.UI.PanelMgr.TogglePreset()
+	}
+	if *recCleanFlag {
+		ui.Chromeless = true
+		g.UI.PanelMgr.SetWorkspace(ui.NewLeaf(ui.Panel3D, "Field"))
+	}
+	if *recPathFlag != "" {
+		// A clip must not stop its own clock on the first KIA.
+		g.UI.Attention.Matrix = ui.AttentionMatrix{}
+		g.UI.Cues.Muted = true
+		g.App.TimeScale = float32(*recSpeedFlag)
+		g.App.LastNonZeroScale = g.App.TimeScale
+	}
 	g.UI.PanelMgr.Recompute(g.UI.ScreenW, g.UI.ScreenH)
 	g.UI.Scene3DRT = ui.NewScene3DRT(g.UI.PanelMgr.Get(ui.Panel3D))
 	g.Ctx.Clouds = newCloudRenderer()
@@ -63,6 +81,7 @@ func (g *Game) initUI() {
 // shutdownUI reverses initUI. Deferred after g.Shutdown so it fires first,
 // matching the LIFO order the old main() produced.
 func (g *Game) shutdownUI() {
+	g.shutdownRecorder()
 	g.shutdownAudioCues()
 	g.UI.Underlay.Unload()
 	g.Ctx.FarTerrain.unload()
@@ -71,7 +90,7 @@ func (g *Game) shutdownUI() {
 	g.UI.Scene3DRT.Unload()
 	// A capture run may have swapped a leaf for -shot-panel; persisting that
 	// would leak a throwaway layout into the player's saved one.
-	if *shotPathFlag == "" {
+	if !captureRun() {
 		g.persistLayout()
 	}
 	g.Ctx.Ribbons.unload()

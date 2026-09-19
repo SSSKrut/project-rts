@@ -1,0 +1,3108 @@
+{
+ "name": "city",
+ "terrain": {
+  "seed": 5005,
+  "wavelengthM": 170,
+  "octaves": 3,
+  "lacunarity": 2.0,
+  "persistence": 0.45,
+  "amplitudeM": 2.5
+ },
+ "buildings": [
+  {
+   "template": "house",
+   "seed": 63213,
+   "x": -227.0,
+   "z": -227.0,
+   "stories": 3,
+   "sizeX": 8,
+   "sizeZ": 8,
+   "doorSide": 2
+  },
+  {
+   "template": "house",
+   "seed": 10915,
+   "x": -227.0,
+   "z": -209.2,
+   "stories": 2,
+   "sizeX": 8,
+   "sizeZ": 10,
+   "doorSide": 3
+  },
+  {
+   "template": "house",
+   "seed": 56262,
+   "x": -226.0,
+   "z": -193.6,
+   "stories": 1,
+   "sizeX": 10,
+   "sizeZ": 10,
+   "doorSide": 3
+  },
+  {
+   "template": "house",
+   "seed": 25024,
+   "x": -225.0,
+   "z": -178.1,
+   "stories": 3,
+   "sizeX": 12,
+   "sizeZ": 10,
+   "doorSide": 3
+  },
+  {
+   "template": "courtyard",
+   "seed": 18769,
+   "x": -140.0,
+   "z": -223.0,
+   "stories": 3,
+   "sizeX": 22,
+   "sizeZ": 16
+  },
+  {
+   "template": "courtyard",
+   "seed": 13631,
+   "x": -113.1,
+   "z": -223.0,
+   "stories": 2,
+   "sizeX": 22,
+   "sizeZ": 16
+  },
+  {
+   "template": "house",
+   "seed": 38927,
+   "x": -144.0,
+   "z": -173.0,
+   "stories": 1,
+   "sizeX": 14,
+   "sizeZ": 8,
+   "doorSide": 0
+  },
+  {
+   "template": "house",
+   "seed": 18557,
+   "x": -129.4,
+   "z": -173.0,
+   "stories": 2,
+   "sizeX": 8,
+   "sizeZ": 8,
+   "doorSide": 0
+  },
+  {
+   "template": "house",
+   "seed": 19509,
+   "x": -113.7,
+   "z": -173.0,
+   "stories": 2,
+   "sizeX": 12,
+   "sizeZ": 8,
+   "doorSide": 0
+  },
+  {
+   "template": "office",
+   "seed": 58009,
+   "x": -96.0,
+   "z": -203.4
+  },
+  {
+   "template": "office",
+   "seed": 29292,
+   "x": -96.0,
+   "z": -177.6
+  },
+  {
+   "template": "courtyard",
+   "seed": 25327,
+   "x": -142.0,
+   "z": -197.3,
+   "stories": 3,
+   "sizeX": 18,
+   "sizeZ": 16
+  },
+  {
+   "template": "office",
+   "seed": 35545,
+   "x": -64.0,
+   "z": -226.0
+  },
+  {
+   "template": "house",
+   "seed": 53217,
+   "x": -47.4,
+   "z": -226.0,
+   "stories": 2,
+   "sizeX": 8,
+   "sizeZ": 10,
+   "doorSide": 2
+  },
+  {
+   "template": "courtyard",
+   "seed": 58367,
+   "x": -26.6,
+   "z": -223.0,
+   "stories": 2,
+   "sizeX": 22,
+   "sizeZ": 16
+  },
+  {
+   "template": "house",
+   "seed": 26243,
+   "x": -64.0,
+   "z": -174.0,
+   "stories": 1,
+   "sizeX": 14,
+   "sizeZ": 10,
+   "doorSide": 0
+  },
+  {
+   "template": "office",
+   "seed": 43766,
+   "x": -44.2,
+   "z": -174.0
+  },
+  {
+   "template": "courtyard",
+   "seed": 62686,
+   "x": -22.7,
+   "z": -178.0,
+   "stories": 3,
+   "sizeX": 18,
+   "sizeZ": 18
+  },
+  {
+   "template": "courtyard",
+   "seed": 13513,
+   "x": -60.0,
+   "z": -206.6,
+   "stories": 3,
+   "sizeX": 22,
+   "sizeZ": 16
+  },
+  {
+   "template": "house",
+   "seed": 30538,
+   "x": 14.0,
+   "z": -226.0,
+   "stories": 1,
+   "sizeX": 10,
+   "sizeZ": 10,
+   "doorSide": 2
+  },
+  {
+   "template": "office",
+   "seed": 17905,
+   "x": 29.8,
+   "z": -226.0
+  },
+  {
+   "template": "house",
+   "seed": 26431,
+   "x": 48.5,
+   "z": -226.0,
+   "stories": 2,
+   "sizeX": 14,
+   "sizeZ": 10,
+   "doorSide": 2
+  },
+  {
+   "template": "office",
+   "seed": 37709,
+   "x": 16.0,
+   "z": -174.0
+  },
+  {
+   "template": "house",
+   "seed": 55131,
+   "x": 33.1,
+   "z": -174.0,
+   "stories": 3,
+   "sizeX": 12,
+   "sizeZ": 10,
+   "doorSide": 0
+  },
+  {
+   "template": "house",
+   "seed": 10902,
+   "x": 51.1,
+   "z": -173.0,
+   "stories": 1,
+   "sizeX": 14,
+   "sizeZ": 8,
+   "doorSide": 0
+  },
+  {
+   "template": "house",
+   "seed": 24425,
+   "x": 64.0,
+   "z": -226.0,
+   "stories": 1,
+   "sizeX": 14,
+   "sizeZ": 10,
+   "doorSide": 1
+  },
+  {
+   "template": "office",
+   "seed": 30953,
+   "x": 64.0,
+   "z": -196.0
+  },
+  {
+   "template": "courtyard",
+   "seed": 17518,
+   "x": 20.0,
+   "z": -206.1,
+   "stories": 2,
+   "sizeX": 22,
+   "sizeZ": 16
+  },
+  {
+   "template": "house",
+   "seed": 47340,
+   "x": 120.0,
+   "z": -200.0,
+   "stories": 1,
+   "sizeX": 10,
+   "sizeZ": 8,
+   "doorSide": 4
+  },
+  {
+   "template": "house",
+   "seed": 19431,
+   "x": 200.0,
+   "z": -200.0,
+   "stories": 1,
+   "sizeX": 10,
+   "sizeZ": 8,
+   "doorSide": 4
+  },
+  {
+   "template": "house",
+   "seed": 28797,
+   "x": -181.3,
+   "z": -147.0,
+   "stories": 2,
+   "sizeX": 14,
+   "sizeZ": 8,
+   "doorSide": 2
+  },
+  {
+   "template": "house",
+   "seed": 7146,
+   "x": -173.0,
+   "z": -132.0,
+   "stories": 1,
+   "sizeX": 8,
+   "sizeZ": 10,
+   "doorSide": 1
+  },
+  {
+   "template": "house",
+   "seed": 53775,
+   "x": -174.0,
+   "z": -117.7,
+   "stories": 1,
+   "sizeX": 10,
+   "sizeZ": 10,
+   "doorSide": 1
+  },
+  {
+   "template": "house",
+   "seed": 23512,
+   "x": -173.0,
+   "z": -103.0,
+   "stories": 2,
+   "sizeX": 8,
+   "sizeZ": 8,
+   "doorSide": 1
+  },
+  {
+   "template": "compound_plus",
+   "seed": 24026,
+   "x": -120.0,
+   "z": -120.0
+  },
+  {
+   "template": "house",
+   "seed": 26591,
+   "x": -147.0,
+   "z": -93.0,
+   "stories": 1,
+   "sizeX": 8,
+   "sizeZ": 8,
+   "doorSide": 0
+  },
+  {
+   "template": "house",
+   "seed": 50850,
+   "x": -108.3,
+   "z": -93.0,
+   "stories": 1,
+   "sizeX": 10,
+   "sizeZ": 8,
+   "doorSide": 0
+  },
+  {
+   "template": "house",
+   "seed": 57851,
+   "x": -66.0,
+   "z": -147.0,
+   "stories": 2,
+   "sizeX": 10,
+   "sizeZ": 8,
+   "doorSide": 2
+  },
+  {
+   "template": "courtyard",
+   "seed": 18536,
+   "x": -45.3,
+   "z": -143.0,
+   "stories": 3,
+   "sizeX": 22,
+   "sizeZ": 16
+  },
+  {
+   "template": "house",
+   "seed": 39946,
+   "x": -66.0,
+   "z": -94.0,
+   "stories": 1,
+   "sizeX": 10,
+   "sizeZ": 10,
+   "doorSide": 0
+  },
+  {
+   "template": "office",
+   "seed": 3662,
+   "x": -49.7,
+   "z": -94.0
+  },
+  {
+   "template": "house",
+   "seed": 23048,
+   "x": -33.6,
+   "z": -94.0,
+   "stories": 2,
+   "sizeX": 12,
+   "sizeZ": 10,
+   "doorSide": 0
+  },
+  {
+   "template": "house",
+   "seed": 4739,
+   "x": -18.9,
+   "z": -93.0,
+   "stories": 2,
+   "sizeX": 8,
+   "sizeZ": 8,
+   "doorSide": 0
+  },
+  {
+   "template": "office",
+   "seed": 22729,
+   "x": -16.0,
+   "z": -146.0
+  },
+  {
+   "template": "office",
+   "seed": 15582,
+   "x": -16.0,
+   "z": -114.9
+  },
+  {
+   "template": "house",
+   "seed": 65255,
+   "x": -64.0,
+   "z": -133.4,
+   "stories": 1,
+   "sizeX": 14,
+   "sizeZ": 8,
+   "doorSide": 3
+  },
+  {
+   "template": "house",
+   "seed": 25439,
+   "x": -66.0,
+   "z": -110.4,
+   "stories": 1,
+   "sizeX": 10,
+   "sizeZ": 8,
+   "doorSide": 3
+  },
+  {
+   "template": "office",
+   "seed": 55085,
+   "x": 16.0,
+   "z": -146.0
+  },
+  {
+   "template": "office",
+   "seed": 6012,
+   "x": 35.7,
+   "z": -146.0
+  },
+  {
+   "template": "house",
+   "seed": 1073,
+   "x": 52.0,
+   "z": -147.0,
+   "stories": 1,
+   "sizeX": 12,
+   "sizeZ": 8,
+   "doorSide": 2
+  },
+  {
+   "template": "office",
+   "seed": 21033,
+   "x": 16.0,
+   "z": -94.0
+  },
+  {
+   "template": "house",
+   "seed": 62271,
+   "x": 33.4,
+   "z": -94.0,
+   "stories": 1,
+   "sizeX": 8,
+   "sizeZ": 10,
+   "doorSide": 0
+  },
+  {
+   "template": "office",
+   "seed": 40708,
+   "x": 51.0,
+   "z": -94.0
+  },
+  {
+   "template": "house",
+   "seed": 712,
+   "x": 66.0,
+   "z": -147.0,
+   "stories": 1,
+   "sizeX": 10,
+   "sizeZ": 8,
+   "doorSide": 1
+  },
+  {
+   "template": "house",
+   "seed": 43635,
+   "x": 66.0,
+   "z": -120.4,
+   "stories": 1,
+   "sizeX": 10,
+   "sizeZ": 10,
+   "doorSide": 1
+  },
+  {
+   "template": "house",
+   "seed": 39540,
+   "x": 67.0,
+   "z": -105.4,
+   "stories": 1,
+   "sizeX": 8,
+   "sizeZ": 8,
+   "doorSide": 1
+  },
+  {
+   "template": "house",
+   "seed": 38828,
+   "x": 67.0,
+   "z": -93.0,
+   "stories": 3,
+   "sizeX": 8,
+   "sizeZ": 8,
+   "doorSide": 1
+  },
+  {
+   "template": "house",
+   "seed": 64018,
+   "x": 14.0,
+   "z": -126.7,
+   "stories": 2,
+   "sizeX": 10,
+   "sizeZ": 8,
+   "doorSide": 3
+  },
+  {
+   "template": "house",
+   "seed": 32918,
+   "x": 13.0,
+   "z": -114.0,
+   "stories": 2,
+   "sizeX": 8,
+   "sizeZ": 8,
+   "doorSide": 3
+  },
+  {
+   "template": "office",
+   "seed": 38332,
+   "x": 96.0,
+   "z": -146.0
+  },
+  {
+   "template": "house",
+   "seed": 46603,
+   "x": 115.4,
+   "z": -147.0,
+   "stories": 1,
+   "sizeX": 12,
+   "sizeZ": 8,
+   "doorSide": 2
+  },
+  {
+   "template": "courtyard",
+   "seed": 53573,
+   "x": 136.0,
+   "z": -142.0,
+   "stories": 2,
+   "sizeX": 18,
+   "sizeZ": 18
+  },
+  {
+   "template": "house",
+   "seed": 13328,
+   "x": 96.0,
+   "z": -94.0,
+   "stories": 2,
+   "sizeX": 14,
+   "sizeZ": 10,
+   "doorSide": 0
+  },
+  {
+   "template": "house",
+   "seed": 64211,
+   "x": 114.0,
+   "z": -93.0,
+   "stories": 3,
+   "sizeX": 12,
+   "sizeZ": 8,
+   "doorSide": 0
+  },
+  {
+   "template": "house",
+   "seed": 2764,
+   "x": 128.1,
+   "z": -93.0,
+   "stories": 2,
+   "sizeX": 8,
+   "sizeZ": 8,
+   "doorSide": 0
+  },
+  {
+   "template": "house",
+   "seed": 56492,
+   "x": 144.7,
+   "z": -94.0,
+   "stories": 3,
+   "sizeX": 12,
+   "sizeZ": 10,
+   "doorSide": 0
+  },
+  {
+   "template": "office",
+   "seed": 27231,
+   "x": 108.0,
+   "z": -120.0
+  },
+  {
+   "template": "office",
+   "seed": 43168,
+   "x": 132.0,
+   "z": -120.0
+  },
+  {
+   "template": "house",
+   "seed": 8203,
+   "x": 176.0,
+   "z": -147.0,
+   "stories": 2,
+   "sizeX": 14,
+   "sizeZ": 8,
+   "doorSide": 2
+  },
+  {
+   "template": "house",
+   "seed": 33951,
+   "x": 194.7,
+   "z": -146.0,
+   "stories": 2,
+   "sizeX": 14,
+   "sizeZ": 10,
+   "doorSide": 2
+  },
+  {
+   "template": "office",
+   "seed": 16181,
+   "x": 215.1,
+   "z": -146.0
+  },
+  {
+   "template": "office",
+   "seed": 49304,
+   "x": 176.0,
+   "z": -94.0
+  },
+  {
+   "template": "house",
+   "seed": 58567,
+   "x": 193.0,
+   "z": -93.0,
+   "stories": 2,
+   "sizeX": 10,
+   "sizeZ": 8,
+   "doorSide": 0
+  },
+  {
+   "template": "house",
+   "seed": 12479,
+   "x": 205.1,
+   "z": -94.0,
+   "stories": 1,
+   "sizeX": 8,
+   "sizeZ": 10,
+   "doorSide": 0
+  },
+  {
+   "template": "house",
+   "seed": 21646,
+   "x": 219.6,
+   "z": -94.0,
+   "stories": 1,
+   "sizeX": 8,
+   "sizeZ": 10,
+   "doorSide": 0
+  },
+  {
+   "template": "office",
+   "seed": 43719,
+   "x": 224.0,
+   "z": -131.0
+  },
+  {
+   "template": "house",
+   "seed": 63973,
+   "x": 224.0,
+   "z": -114.5,
+   "stories": 3,
+   "sizeX": 14,
+   "sizeZ": 10,
+   "doorSide": 1
+  },
+  {
+   "template": "courtyard",
+   "seed": 14177,
+   "x": 180.0,
+   "z": -127.7,
+   "stories": 3,
+   "sizeX": 22,
+   "sizeZ": 16
+  },
+  {
+   "template": "house",
+   "seed": 468,
+   "x": -225.0,
+   "z": -67.0,
+   "stories": 2,
+   "sizeX": 12,
+   "sizeZ": 8,
+   "doorSide": 2
+  },
+  {
+   "template": "office",
+   "seed": 4562,
+   "x": -224.0,
+   "z": -14.0
+  },
+  {
+   "template": "office",
+   "seed": 21243,
+   "x": -144.0,
+   "z": -66.0
+  },
+  {
+   "template": "office",
+   "seed": 48580,
+   "x": -125.3,
+   "z": -66.0
+  },
+  {
+   "template": "office",
+   "seed": 53164,
+   "x": -105.2,
+   "z": -66.0
+  },
+  {
+   "template": "house",
+   "seed": 14133,
+   "x": -147.0,
+   "z": -14.0,
+   "stories": 2,
+   "sizeX": 8,
+   "sizeZ": 10,
+   "doorSide": 0
+  },
+  {
+   "template": "courtyard",
+   "seed": 4195,
+   "x": -131.0,
+   "z": -18.0,
+   "stories": 3,
+   "sizeX": 18,
+   "sizeZ": 18
+  },
+  {
+   "template": "office",
+   "seed": 18778,
+   "x": -110.4,
+   "z": -14.0
+  },
+  {
+   "template": "office",
+   "seed": 24268,
+   "x": -96.0,
+   "z": -51.8
+  },
+  {
+   "template": "courtyard",
+   "seed": 37836,
+   "x": -142.0,
+   "z": -45.1,
+   "stories": 3,
+   "sizeX": 18,
+   "sizeZ": 18
+  },
+  {
+   "template": "courtyard",
+   "seed": 14881,
+   "x": -120.0,
+   "z": -40.0,
+   "stories": 2,
+   "sizeX": 22,
+   "sizeZ": 18
+  },
+  {
+   "template": "house",
+   "seed": 48292,
+   "x": -65.0,
+   "z": -66.0,
+   "stories": 1,
+   "sizeX": 12,
+   "sizeZ": 10,
+   "doorSide": 2
+  },
+  {
+   "template": "office",
+   "seed": 33239,
+   "x": -48.8,
+   "z": -66.0
+  },
+  {
+   "template": "office",
+   "seed": 5907,
+   "x": -29.2,
+   "z": -66.0
+  },
+  {
+   "template": "office",
+   "seed": 28522,
+   "x": -64.0,
+   "z": -14.0
+  },
+  {
+   "template": "office",
+   "seed": 1483,
+   "x": -44.6,
+   "z": -14.0
+  },
+  {
+   "template": "courtyard",
+   "seed": 23092,
+   "x": -20.7,
+   "z": -18.0,
+   "stories": 2,
+   "sizeX": 22,
+   "sizeZ": 18
+  },
+  {
+   "template": "house",
+   "seed": 2612,
+   "x": -16.0,
+   "z": -67.0,
+   "stories": 1,
+   "sizeX": 14,
+   "sizeZ": 8,
+   "doorSide": 1
+  },
+  {
+   "template": "house",
+   "seed": 19726,
+   "x": -65.0,
+   "z": -45.1,
+   "stories": 3,
+   "sizeX": 12,
+   "sizeZ": 8,
+   "doorSide": 3
+  },
+  {
+   "template": "courtyard",
+   "seed": 33960,
+   "x": -40.0,
+   "z": -40.0,
+   "stories": 2,
+   "sizeX": 22,
+   "sizeZ": 18
+  },
+  {
+   "template": "house",
+   "seed": 32334,
+   "x": 15.0,
+   "z": -67.0,
+   "stories": 3,
+   "sizeX": 12,
+   "sizeZ": 8,
+   "doorSide": 2
+  },
+  {
+   "template": "office",
+   "seed": 15310,
+   "x": 33.2,
+   "z": -66.0
+  },
+  {
+   "template": "house",
+   "seed": 19995,
+   "x": 52.4,
+   "z": -66.0,
+   "stories": 1,
+   "sizeX": 14,
+   "sizeZ": 10,
+   "doorSide": 2
+  },
+  {
+   "template": "office",
+   "seed": 63986,
+   "x": 16.0,
+   "z": -14.0
+  },
+  {
+   "template": "office",
+   "seed": 23695,
+   "x": 34.5,
+   "z": -14.0
+  },
+  {
+   "template": "house",
+   "seed": 62750,
+   "x": 52.8,
+   "z": -13.0,
+   "stories": 2,
+   "sizeX": 12,
+   "sizeZ": 8,
+   "doorSide": 0
+  },
+  {
+   "template": "house",
+   "seed": 52273,
+   "x": 66.0,
+   "z": -53.7,
+   "stories": 2,
+   "sizeX": 10,
+   "sizeZ": 8,
+   "doorSide": 1
+  },
+  {
+   "template": "office",
+   "seed": 25131,
+   "x": 64.0,
+   "z": -38.4
+  },
+  {
+   "template": "house",
+   "seed": 21166,
+   "x": 14.0,
+   "z": -52.4,
+   "stories": 2,
+   "sizeX": 10,
+   "sizeZ": 8,
+   "doorSide": 3
+  },
+  {
+   "template": "house",
+   "seed": 34143,
+   "x": 13.0,
+   "z": -38.6,
+   "stories": 3,
+   "sizeX": 8,
+   "sizeZ": 8,
+   "doorSide": 3
+  },
+  {
+   "template": "house",
+   "seed": 25929,
+   "x": 94.0,
+   "z": -66.0,
+   "stories": 1,
+   "sizeX": 10,
+   "sizeZ": 10,
+   "doorSide": 2
+  },
+  {
+   "template": "house",
+   "seed": 15811,
+   "x": 112.1,
+   "z": -66.0,
+   "stories": 3,
+   "sizeX": 14,
+   "sizeZ": 10,
+   "doorSide": 2
+  },
+  {
+   "template": "house",
+   "seed": 34815,
+   "x": 128.7,
+   "z": -67.0,
+   "stories": 2,
+   "sizeX": 8,
+   "sizeZ": 8,
+   "doorSide": 2
+  },
+  {
+   "template": "house",
+   "seed": 54678,
+   "x": 95.0,
+   "z": -13.0,
+   "stories": 1,
+   "sizeX": 12,
+   "sizeZ": 8,
+   "doorSide": 0
+  },
+  {
+   "template": "house",
+   "seed": 19734,
+   "x": 111.6,
+   "z": -13.0,
+   "stories": 2,
+   "sizeX": 14,
+   "sizeZ": 8,
+   "doorSide": 0
+  },
+  {
+   "template": "house",
+   "seed": 11209,
+   "x": 128.2,
+   "z": -14.0,
+   "stories": 2,
+   "sizeX": 12,
+   "sizeZ": 10,
+   "doorSide": 0
+  },
+  {
+   "template": "office",
+   "seed": 3730,
+   "x": 108.0,
+   "z": -40.0
+  },
+  {
+   "template": "office",
+   "seed": 15280,
+   "x": 132.0,
+   "z": -40.0
+  },
+  {
+   "template": "house",
+   "seed": 40510,
+   "x": 176.0,
+   "z": -66.0,
+   "stories": 1,
+   "sizeX": 14,
+   "sizeZ": 10,
+   "doorSide": 2
+  },
+  {
+   "template": "office",
+   "seed": 18971,
+   "x": 197.0,
+   "z": -66.0
+  },
+  {
+   "template": "office",
+   "seed": 65180,
+   "x": 216.9,
+   "z": -66.0
+  },
+  {
+   "template": "house",
+   "seed": 374,
+   "x": 176.0,
+   "z": -13.0,
+   "stories": 1,
+   "sizeX": 14,
+   "sizeZ": 8,
+   "doorSide": 0
+  },
+  {
+   "template": "courtyard",
+   "seed": 22987,
+   "x": 199.9,
+   "z": -18.0,
+   "stories": 3,
+   "sizeX": 22,
+   "sizeZ": 18
+  },
+  {
+   "template": "house",
+   "seed": 35618,
+   "x": 226.0,
+   "z": -46.9,
+   "stories": 2,
+   "sizeX": 10,
+   "sizeZ": 10,
+   "doorSide": 1
+  },
+  {
+   "template": "house",
+   "seed": 16487,
+   "x": 227.0,
+   "z": -34.6,
+   "stories": 3,
+   "sizeX": 8,
+   "sizeZ": 8,
+   "doorSide": 1
+  },
+  {
+   "template": "house",
+   "seed": 52244,
+   "x": 174.0,
+   "z": -50.0,
+   "stories": 2,
+   "sizeX": 10,
+   "sizeZ": 10,
+   "doorSide": 3
+  },
+  {
+   "template": "house",
+   "seed": 19361,
+   "x": 173.0,
+   "z": -23.1,
+   "stories": 3,
+   "sizeX": 8,
+   "sizeZ": 8,
+   "doorSide": 3
+  },
+  {
+   "template": "courtyard",
+   "seed": 56451,
+   "x": 200.0,
+   "z": -40.0,
+   "stories": 2,
+   "sizeX": 22,
+   "sizeZ": 18
+  },
+  {
+   "template": "house",
+   "seed": 34629,
+   "x": -145.0,
+   "z": 13.0,
+   "stories": 2,
+   "sizeX": 12,
+   "sizeZ": 8,
+   "doorSide": 2
+  },
+  {
+   "template": "courtyard",
+   "seed": 1163,
+   "x": -124.9,
+   "z": 18.0,
+   "stories": 3,
+   "sizeX": 22,
+   "sizeZ": 18
+  },
+  {
+   "template": "house",
+   "seed": 26720,
+   "x": -103.5,
+   "z": 13.0,
+   "stories": 1,
+   "sizeX": 8,
+   "sizeZ": 8,
+   "doorSide": 2
+  },
+  {
+   "template": "courtyard",
+   "seed": 18058,
+   "x": -142.0,
+   "z": 63.0,
+   "stories": 2,
+   "sizeX": 18,
+   "sizeZ": 16
+  },
+  {
+   "template": "office",
+   "seed": 8080,
+   "x": -120.1,
+   "z": 66.0
+  },
+  {
+   "template": "house",
+   "seed": 24125,
+   "x": -99.9,
+   "z": 67.0,
+   "stories": 3,
+   "sizeX": 14,
+   "sizeZ": 8,
+   "doorSide": 0
+  },
+  {
+   "template": "office",
+   "seed": 6400,
+   "x": -132.0,
+   "z": 40.0
+  },
+  {
+   "template": "office",
+   "seed": 22420,
+   "x": -108.0,
+   "z": 40.0
+  },
+  {
+   "template": "office",
+   "seed": 48937,
+   "x": -64.0,
+   "z": 14.0
+  },
+  {
+   "template": "house",
+   "seed": 64716,
+   "x": -46.4,
+   "z": 14.0,
+   "stories": 2,
+   "sizeX": 14,
+   "sizeZ": 10,
+   "doorSide": 2
+  },
+  {
+   "template": "courtyard",
+   "seed": 28911,
+   "x": -21.7,
+   "z": 17.0,
+   "stories": 3,
+   "sizeX": 22,
+   "sizeZ": 16
+  },
+  {
+   "template": "office",
+   "seed": 26371,
+   "x": -64.0,
+   "z": 66.0
+  },
+  {
+   "template": "house",
+   "seed": 48322,
+   "x": -48.5,
+   "z": 66.0,
+   "stories": 3,
+   "sizeX": 8,
+   "sizeZ": 10,
+   "doorSide": 0
+  },
+  {
+   "template": "house",
+   "seed": 65093,
+   "x": -36.6,
+   "z": 66.0,
+   "stories": 1,
+   "sizeX": 8,
+   "sizeZ": 10,
+   "doorSide": 0
+  },
+  {
+   "template": "office",
+   "seed": 5480,
+   "x": -19.3,
+   "z": 66.0
+  },
+  {
+   "template": "house",
+   "seed": 49436,
+   "x": -13.0,
+   "z": 42.3,
+   "stories": 3,
+   "sizeX": 8,
+   "sizeZ": 10,
+   "doorSide": 1
+  },
+  {
+   "template": "house",
+   "seed": 44376,
+   "x": -66.0,
+   "z": 28.3,
+   "stories": 1,
+   "sizeX": 10,
+   "sizeZ": 8,
+   "doorSide": 3
+  },
+  {
+   "template": "office",
+   "seed": 20363,
+   "x": -64.0,
+   "z": 44.0
+  },
+  {
+   "template": "house",
+   "seed": 54479,
+   "x": 13.0,
+   "z": 13.0,
+   "stories": 2,
+   "sizeX": 8,
+   "sizeZ": 8,
+   "doorSide": 2
+  },
+  {
+   "template": "courtyard",
+   "seed": 24280,
+   "x": 33.5,
+   "z": 18.0,
+   "stories": 3,
+   "sizeX": 22,
+   "sizeZ": 18
+  },
+  {
+   "template": "courtyard",
+   "seed": 38903,
+   "x": 20.0,
+   "z": 63.0,
+   "stories": 2,
+   "sizeX": 22,
+   "sizeZ": 16
+  },
+  {
+   "template": "house",
+   "seed": 10526,
+   "x": 39.7,
+   "z": 66.0,
+   "stories": 1,
+   "sizeX": 8,
+   "sizeZ": 10,
+   "doorSide": 0
+  },
+  {
+   "template": "house",
+   "seed": 9136,
+   "x": 53.0,
+   "z": 67.0,
+   "stories": 2,
+   "sizeX": 12,
+   "sizeZ": 8,
+   "doorSide": 0
+  },
+  {
+   "template": "courtyard",
+   "seed": 13464,
+   "x": 60.0,
+   "z": 17.0,
+   "stories": 2,
+   "sizeX": 22,
+   "sizeZ": 16
+  },
+  {
+   "template": "office",
+   "seed": 9907,
+   "x": 64.0,
+   "z": 48.5
+  },
+  {
+   "template": "office",
+   "seed": 18449,
+   "x": 16.0,
+   "z": 44.8
+  },
+  {
+   "template": "house",
+   "seed": 23630,
+   "x": 96.0,
+   "z": 14.0,
+   "stories": 2,
+   "sizeX": 14,
+   "sizeZ": 10,
+   "doorSide": 2
+  },
+  {
+   "template": "house",
+   "seed": 14131,
+   "x": 111.2,
+   "z": 13.0,
+   "stories": 1,
+   "sizeX": 8,
+   "sizeZ": 8,
+   "doorSide": 2
+  },
+  {
+   "template": "office",
+   "seed": 48182,
+   "x": 128.8,
+   "z": 14.0
+  },
+  {
+   "template": "house",
+   "seed": 47648,
+   "x": 93.0,
+   "z": 67.0,
+   "stories": 2,
+   "sizeX": 8,
+   "sizeZ": 8,
+   "doorSide": 0
+  },
+  {
+   "template": "house",
+   "seed": 24842,
+   "x": 107.3,
+   "z": 67.0,
+   "stories": 1,
+   "sizeX": 10,
+   "sizeZ": 8,
+   "doorSide": 0
+  },
+  {
+   "template": "courtyard",
+   "seed": 25780,
+   "x": 127.8,
+   "z": 63.0,
+   "stories": 2,
+   "sizeX": 18,
+   "sizeZ": 16
+  },
+  {
+   "template": "house",
+   "seed": 57185,
+   "x": 147.0,
+   "z": 14.0,
+   "stories": 2,
+   "sizeX": 8,
+   "sizeZ": 10,
+   "doorSide": 1
+  },
+  {
+   "template": "house",
+   "seed": 56066,
+   "x": 144.0,
+   "z": 28.8,
+   "stories": 1,
+   "sizeX": 14,
+   "sizeZ": 10,
+   "doorSide": 1
+  },
+  {
+   "template": "house",
+   "seed": 30515,
+   "x": 146.0,
+   "z": 56.4,
+   "stories": 2,
+   "sizeX": 10,
+   "sizeZ": 8,
+   "doorSide": 1
+  },
+  {
+   "template": "house",
+   "seed": 9454,
+   "x": 95.0,
+   "z": 35.3,
+   "stories": 3,
+   "sizeX": 12,
+   "sizeZ": 8,
+   "doorSide": 3
+  },
+  {
+   "template": "courtyard",
+   "seed": 42793,
+   "x": 120.0,
+   "z": 40.0,
+   "stories": 2,
+   "sizeX": 22,
+   "sizeZ": 18
+  },
+  {
+   "template": "office",
+   "seed": 55875,
+   "x": 176.0,
+   "z": 14.0
+  },
+  {
+   "template": "courtyard",
+   "seed": 25381,
+   "x": 198.5,
+   "z": 17.0,
+   "stories": 3,
+   "sizeX": 22,
+   "sizeZ": 16
+  },
+  {
+   "template": "office",
+   "seed": 49972,
+   "x": 223.4,
+   "z": 14.0
+  },
+  {
+   "template": "house",
+   "seed": 31377,
+   "x": 174.0,
+   "z": 66.0,
+   "stories": 1,
+   "sizeX": 10,
+   "sizeZ": 10,
+   "doorSide": 0
+  },
+  {
+   "template": "house",
+   "seed": 21605,
+   "x": 188.2,
+   "z": 66.0,
+   "stories": 1,
+   "sizeX": 10,
+   "sizeZ": 10,
+   "doorSide": 0
+  },
+  {
+   "template": "house",
+   "seed": 24181,
+   "x": 204.8,
+   "z": 67.0,
+   "stories": 2,
+   "sizeX": 14,
+   "sizeZ": 8,
+   "doorSide": 0
+  },
+  {
+   "template": "house",
+   "seed": 22077,
+   "x": 222.8,
+   "z": 67.0,
+   "stories": 2,
+   "sizeX": 10,
+   "sizeZ": 8,
+   "doorSide": 0
+  },
+  {
+   "template": "house",
+   "seed": 44011,
+   "x": 225.0,
+   "z": 29.6,
+   "stories": 2,
+   "sizeX": 12,
+   "sizeZ": 8,
+   "doorSide": 1
+  },
+  {
+   "template": "house",
+   "seed": 44176,
+   "x": 176.0,
+   "z": 28.5,
+   "stories": 1,
+   "sizeX": 14,
+   "sizeZ": 10,
+   "doorSide": 3
+  },
+  {
+   "template": "house",
+   "seed": 28438,
+   "x": 174.0,
+   "z": 43.3,
+   "stories": 1,
+   "sizeX": 10,
+   "sizeZ": 8,
+   "doorSide": 3
+  },
+  {
+   "template": "house",
+   "seed": 52060,
+   "x": -225.0,
+   "z": 147.0,
+   "stories": 1,
+   "sizeX": 12,
+   "sizeZ": 8,
+   "doorSide": 0
+  },
+  {
+   "template": "house",
+   "seed": 59523,
+   "x": -144.0,
+   "z": 93.0,
+   "stories": 1,
+   "sizeX": 14,
+   "sizeZ": 8,
+   "doorSide": 2
+  },
+  {
+   "template": "house",
+   "seed": 18361,
+   "x": -128.2,
+   "z": 93.0,
+   "stories": 1,
+   "sizeX": 10,
+   "sizeZ": 8,
+   "doorSide": 2
+  },
+  {
+   "template": "house",
+   "seed": 14265,
+   "x": -112.9,
+   "z": 93.0,
+   "stories": 3,
+   "sizeX": 10,
+   "sizeZ": 8,
+   "doorSide": 2
+  },
+  {
+   "template": "house",
+   "seed": 31473,
+   "x": -96.4,
+   "z": 93.0,
+   "stories": 2,
+   "sizeX": 14,
+   "sizeZ": 8,
+   "doorSide": 2
+  },
+  {
+   "template": "house",
+   "seed": 25694,
+   "x": -145.0,
+   "z": 147.0,
+   "stories": 2,
+   "sizeX": 12,
+   "sizeZ": 8,
+   "doorSide": 0
+  },
+  {
+   "template": "house",
+   "seed": 31872,
+   "x": -127.7,
+   "z": 147.0,
+   "stories": 2,
+   "sizeX": 12,
+   "sizeZ": 8,
+   "doorSide": 0
+  },
+  {
+   "template": "office",
+   "seed": 12820,
+   "x": -111.4,
+   "z": 146.0
+  },
+  {
+   "template": "office",
+   "seed": 56179,
+   "x": -132.0,
+   "z": 120.0
+  },
+  {
+   "template": "office",
+   "seed": 4517,
+   "x": -108.0,
+   "z": 120.0
+  },
+  {
+   "template": "house",
+   "seed": 60099,
+   "x": -65.0,
+   "z": 93.0,
+   "stories": 2,
+   "sizeX": 12,
+   "sizeZ": 8,
+   "doorSide": 2
+  },
+  {
+   "template": "office",
+   "seed": 36622,
+   "x": -47.2,
+   "z": 94.0
+  },
+  {
+   "template": "office",
+   "seed": 62369,
+   "x": -27.9,
+   "z": 94.0
+  },
+  {
+   "template": "house",
+   "seed": 37277,
+   "x": -65.0,
+   "z": 146.0,
+   "stories": 1,
+   "sizeX": 12,
+   "sizeZ": 10,
+   "doorSide": 0
+  },
+  {
+   "template": "office",
+   "seed": 41181,
+   "x": -47.3,
+   "z": 146.0
+  },
+  {
+   "template": "office",
+   "seed": 60587,
+   "x": -29.9,
+   "z": 146.0
+  },
+  {
+   "template": "office",
+   "seed": 7032,
+   "x": -52.0,
+   "z": 120.0
+  },
+  {
+   "template": "office",
+   "seed": 8496,
+   "x": -28.0,
+   "z": 120.0
+  },
+  {
+   "template": "office",
+   "seed": 49741,
+   "x": 16.0,
+   "z": 94.0
+  },
+  {
+   "template": "house",
+   "seed": 13456,
+   "x": 36.6,
+   "z": 93.0,
+   "stories": 2,
+   "sizeX": 14,
+   "sizeZ": 8,
+   "doorSide": 2
+  },
+  {
+   "template": "house",
+   "seed": 47471,
+   "x": 55.7,
+   "z": 94.0,
+   "stories": 3,
+   "sizeX": 14,
+   "sizeZ": 10,
+   "doorSide": 2
+  },
+  {
+   "template": "house",
+   "seed": 2624,
+   "x": 15.0,
+   "z": 147.0,
+   "stories": 1,
+   "sizeX": 12,
+   "sizeZ": 8,
+   "doorSide": 0
+  },
+  {
+   "template": "house",
+   "seed": 44174,
+   "x": 31.5,
+   "z": 147.0,
+   "stories": 3,
+   "sizeX": 8,
+   "sizeZ": 8,
+   "doorSide": 0
+  },
+  {
+   "template": "house",
+   "seed": 53739,
+   "x": 45.8,
+   "z": 147.0,
+   "stories": 1,
+   "sizeX": 12,
+   "sizeZ": 8,
+   "doorSide": 0
+  },
+  {
+   "template": "house",
+   "seed": 49311,
+   "x": 60.0,
+   "z": 147.0,
+   "stories": 3,
+   "sizeX": 8,
+   "sizeZ": 8,
+   "doorSide": 0
+  },
+  {
+   "template": "office",
+   "seed": 26545,
+   "x": 64.0,
+   "z": 108.9
+  },
+  {
+   "template": "house",
+   "seed": 50316,
+   "x": 16.0,
+   "z": 117.1,
+   "stories": 2,
+   "sizeX": 14,
+   "sizeZ": 8,
+   "doorSide": 3
+  },
+  {
+   "template": "courtyard",
+   "seed": 60081,
+   "x": 40.0,
+   "z": 120.0,
+   "stories": 2,
+   "sizeX": 22,
+   "sizeZ": 18
+  },
+  {
+   "template": "courtyard",
+   "seed": 14340,
+   "x": 98.0,
+   "z": 98.0,
+   "stories": 2,
+   "sizeX": 18,
+   "sizeZ": 18
+  },
+  {
+   "template": "house",
+   "seed": 48667,
+   "x": 116.7,
+   "z": 93.0,
+   "stories": 2,
+   "sizeX": 12,
+   "sizeZ": 8,
+   "doorSide": 2
+  },
+  {
+   "template": "house",
+   "seed": 23455,
+   "x": 131.1,
+   "z": 93.0,
+   "stories": 1,
+   "sizeX": 10,
+   "sizeZ": 8,
+   "doorSide": 2
+  },
+  {
+   "template": "courtyard",
+   "seed": 8633,
+   "x": 100.0,
+   "z": 142.0,
+   "stories": 2,
+   "sizeX": 22,
+   "sizeZ": 18
+  },
+  {
+   "template": "office",
+   "seed": 63571,
+   "x": 122.8,
+   "z": 146.0
+  },
+  {
+   "template": "house",
+   "seed": 34399,
+   "x": 139.6,
+   "z": 146.0,
+   "stories": 2,
+   "sizeX": 8,
+   "sizeZ": 10,
+   "doorSide": 0
+  },
+  {
+   "template": "house",
+   "seed": 3207,
+   "x": 147.0,
+   "z": 94.0,
+   "stories": 1,
+   "sizeX": 8,
+   "sizeZ": 10,
+   "doorSide": 1
+  },
+  {
+   "template": "office",
+   "seed": 32098,
+   "x": 144.0,
+   "z": 108.7
+  },
+  {
+   "template": "house",
+   "seed": 36728,
+   "x": 147.0,
+   "z": 122.7,
+   "stories": 1,
+   "sizeX": 8,
+   "sizeZ": 8,
+   "doorSide": 1
+  },
+  {
+   "template": "courtyard",
+   "seed": 51647,
+   "x": 120.0,
+   "z": 120.0,
+   "stories": 2,
+   "sizeX": 22,
+   "sizeZ": 18
+  },
+  {
+   "template": "house",
+   "seed": 49664,
+   "x": 173.0,
+   "z": 94.0,
+   "stories": 3,
+   "sizeX": 8,
+   "sizeZ": 10,
+   "doorSide": 2
+  },
+  {
+   "template": "house",
+   "seed": 13369,
+   "x": 187.3,
+   "z": 94.0,
+   "stories": 3,
+   "sizeX": 10,
+   "sizeZ": 10,
+   "doorSide": 2
+  },
+  {
+   "template": "house",
+   "seed": 29842,
+   "x": 205.7,
+   "z": 94.0,
+   "stories": 2,
+   "sizeX": 14,
+   "sizeZ": 10,
+   "doorSide": 2
+  },
+  {
+   "template": "house",
+   "seed": 1992,
+   "x": 173.0,
+   "z": 147.0,
+   "stories": 2,
+   "sizeX": 8,
+   "sizeZ": 8,
+   "doorSide": 0
+  },
+  {
+   "template": "office",
+   "seed": 43274,
+   "x": 187.8,
+   "z": 146.0
+  },
+  {
+   "template": "courtyard",
+   "seed": 25871,
+   "x": 207.1,
+   "z": 142.0,
+   "stories": 3,
+   "sizeX": 18,
+   "sizeZ": 18
+  },
+  {
+   "template": "house",
+   "seed": 61148,
+   "x": 223.3,
+   "z": 147.0,
+   "stories": 3,
+   "sizeX": 8,
+   "sizeZ": 8,
+   "doorSide": 0
+  },
+  {
+   "template": "office",
+   "seed": 22938,
+   "x": 188.0,
+   "z": 120.0
+  },
+  {
+   "template": "office",
+   "seed": 47389,
+   "x": 212.0,
+   "z": 120.0
+  },
+  {
+   "template": "house",
+   "seed": 33826,
+   "x": -226.0,
+   "z": 174.0,
+   "stories": 3,
+   "sizeX": 10,
+   "sizeZ": 10,
+   "doorSide": 2
+  },
+  {
+   "template": "office",
+   "seed": 61116,
+   "x": -224.0,
+   "z": 190.4
+  },
+  {
+   "template": "office",
+   "seed": 18560,
+   "x": -224.0,
+   "z": 219.5
+  },
+  {
+   "template": "house",
+   "seed": 7249,
+   "x": -145.0,
+   "z": 174.0,
+   "stories": 3,
+   "sizeX": 12,
+   "sizeZ": 10,
+   "doorSide": 2
+  },
+  {
+   "template": "office",
+   "seed": 21367,
+   "x": -125.2,
+   "z": 174.0
+  },
+  {
+   "template": "house",
+   "seed": 11921,
+   "x": -108.4,
+   "z": 174.0,
+   "stories": 3,
+   "sizeX": 12,
+   "sizeZ": 10,
+   "doorSide": 2
+  },
+  {
+   "template": "courtyard",
+   "seed": 29891,
+   "x": -140.0,
+   "z": 223.0,
+   "stories": 2,
+   "sizeX": 22,
+   "sizeZ": 16
+  },
+  {
+   "template": "office",
+   "seed": 54058,
+   "x": -117.8,
+   "z": 226.0
+  },
+  {
+   "template": "house",
+   "seed": 20081,
+   "x": -101.0,
+   "z": 226.0,
+   "stories": 2,
+   "sizeX": 8,
+   "sizeZ": 10,
+   "doorSide": 0
+  },
+  {
+   "template": "office",
+   "seed": 29720,
+   "x": -96.0,
+   "z": 188.3
+  },
+  {
+   "template": "house",
+   "seed": 54095,
+   "x": -94.0,
+   "z": 203.7,
+   "stories": 3,
+   "sizeX": 10,
+   "sizeZ": 10,
+   "doorSide": 1
+  },
+  {
+   "template": "office",
+   "seed": 30886,
+   "x": -144.0,
+   "z": 190.9
+  },
+  {
+   "template": "house",
+   "seed": 56392,
+   "x": -147.0,
+   "z": 204.4,
+   "stories": 3,
+   "sizeX": 8,
+   "sizeZ": 10,
+   "doorSide": 3
+  },
+  {
+   "template": "house",
+   "seed": 56342,
+   "x": -67.0,
+   "z": 173.0,
+   "stories": 2,
+   "sizeX": 8,
+   "sizeZ": 8,
+   "doorSide": 2
+  },
+  {
+   "template": "house",
+   "seed": 20906,
+   "x": -51.7,
+   "z": 173.0,
+   "stories": 2,
+   "sizeX": 14,
+   "sizeZ": 8,
+   "doorSide": 2
+  },
+  {
+   "template": "office",
+   "seed": 13456,
+   "x": -32.3,
+   "z": 174.0
+  },
+  {
+   "template": "house",
+   "seed": 51477,
+   "x": -14.9,
+   "z": 174.0,
+   "stories": 2,
+   "sizeX": 10,
+   "sizeZ": 10,
+   "doorSide": 2
+  },
+  {
+   "template": "house",
+   "seed": 18235,
+   "x": -67.0,
+   "z": 227.0,
+   "stories": 2,
+   "sizeX": 8,
+   "sizeZ": 8,
+   "doorSide": 0
+  },
+  {
+   "template": "office",
+   "seed": 4196,
+   "x": -52.6,
+   "z": 226.0
+  },
+  {
+   "template": "office",
+   "seed": 7023,
+   "x": -32.4,
+   "z": 226.0
+  },
+  {
+   "template": "office",
+   "seed": 47470,
+   "x": -52.0,
+   "z": 200.0
+  },
+  {
+   "template": "office",
+   "seed": 12731,
+   "x": -28.0,
+   "z": 200.0
+  },
+  {
+   "template": "compound_plus",
+   "seed": 5948,
+   "x": 40.0,
+   "z": 200.0
+  },
+  {
+   "template": "house",
+   "seed": 25578,
+   "x": 14.0,
+   "z": 195.6,
+   "stories": 2,
+   "sizeX": 10,
+   "sizeZ": 10,
+   "doorSide": 3
+  },
+  {
+   "template": "office",
+   "seed": 38614,
+   "x": 16.0,
+   "z": 210.5
+  },
+  {
+   "template": "compound_plus",
+   "seed": 43865,
+   "x": 120.0,
+   "z": 200.0
+  },
+  {
+   "template": "house",
+   "seed": 486,
+   "x": 95.0,
+   "z": 174.0,
+   "stories": 2,
+   "sizeX": 12,
+   "sizeZ": 10,
+   "doorSide": 3
+  },
+  {
+   "template": "house",
+   "seed": 22934,
+   "x": 96.0,
+   "z": 189.5,
+   "stories": 2,
+   "sizeX": 14,
+   "sizeZ": 8,
+   "doorSide": 3
+  },
+  {
+   "template": "office",
+   "seed": 61864,
+   "x": 96.0,
+   "z": 217.3
+  },
+  {
+   "template": "compound_plus",
+   "seed": 15112,
+   "x": 200.0,
+   "z": 200.0
+  },
+  {
+   "template": "house",
+   "seed": 32593,
+   "x": 175.0,
+   "z": 196.7,
+   "stories": 1,
+   "sizeX": 12,
+   "sizeZ": 10,
+   "doorSide": 3
+  },
+  {
+   "template": "house",
+   "seed": 40748,
+   "x": 174.0,
+   "z": 222.8,
+   "stories": 1,
+   "sizeX": 10,
+   "sizeZ": 10,
+   "doorSide": 3
+  },
+  {
+   "template": "compound",
+   "seed": 28587,
+   "x": 300,
+   "z": 40
+  },
+  {
+   "template": "compound",
+   "seed": 8245,
+   "x": 300,
+   "z": -35
+  },
+  {
+   "template": "compound",
+   "seed": 24799,
+   "x": -300,
+   "z": 30
+  },
+  {
+   "template": "compound",
+   "seed": 52046,
+   "x": -305,
+   "z": -40
+  },
+  {
+   "template": "compound",
+   "seed": 17936,
+   "x": 40,
+   "z": 300
+  },
+  {
+   "template": "compound",
+   "seed": 37245,
+   "x": -20,
+   "z": -300
+  },
+  {
+   "template": "compound",
+   "seed": 9089,
+   "x": 290,
+   "z": 210
+  },
+  {
+   "template": "compound",
+   "seed": 4325,
+   "x": -290,
+   "z": -210
+  },
+  {
+   "template": "compound",
+   "seed": 32956,
+   "x": 255,
+   "z": 290
+  },
+  {
+   "template": "compound",
+   "seed": 58296,
+   "x": -260,
+   "z": 300
+  },
+  {
+   "template": "house",
+   "seed": 61393,
+   "x": 275,
+   "z": 25,
+   "stories": 1,
+   "sizeX": 10,
+   "sizeZ": 8,
+   "doorSide": 4
+  },
+  {
+   "template": "house",
+   "seed": 14904,
+   "x": -280,
+   "z": -25,
+   "stories": 1,
+   "sizeX": 10,
+   "sizeZ": 8,
+   "doorSide": 4
+  },
+  {
+   "template": "house",
+   "seed": 23015,
+   "x": 15,
+   "z": 285,
+   "stories": 1,
+   "sizeX": 10,
+   "sizeZ": 8,
+   "doorSide": 4
+  },
+  {
+   "template": "house",
+   "seed": 2535,
+   "x": -10,
+   "z": -280,
+   "stories": 1,
+   "sizeX": 10,
+   "sizeZ": 8,
+   "doorSide": 4
+  },
+  {
+   "template": "house",
+   "seed": 11949,
+   "x": 310,
+   "z": 260,
+   "stories": 1,
+   "sizeX": 10,
+   "sizeZ": 8,
+   "doorSide": 4
+  },
+  {
+   "template": "house",
+   "seed": 21457,
+   "x": -310,
+   "z": -255,
+   "stories": 1,
+   "sizeX": 10,
+   "sizeZ": 8,
+   "doorSide": 4
+  }
+ ],
+ "roads": {
+  "nodes": [
+   [
+    -240,
+    -240
+   ],
+   [
+    -160,
+    -240
+   ],
+   [
+    -80,
+    -240
+   ],
+   [
+    0,
+    -240
+   ],
+   [
+    80,
+    -240
+   ],
+   [
+    160,
+    -240
+   ],
+   [
+    240,
+    -240
+   ],
+   [
+    -240,
+    -160
+   ],
+   [
+    -160,
+    -160
+   ],
+   [
+    -80,
+    -160
+   ],
+   [
+    0,
+    -160
+   ],
+   [
+    80,
+    -160
+   ],
+   [
+    160,
+    -160
+   ],
+   [
+    240,
+    -160
+   ],
+   [
+    -240,
+    -80
+   ],
+   [
+    -160,
+    -80
+   ],
+   [
+    -80,
+    -80
+   ],
+   [
+    0,
+    -80
+   ],
+   [
+    80,
+    -80
+   ],
+   [
+    160,
+    -80
+   ],
+   [
+    240,
+    -80
+   ],
+   [
+    -240,
+    0
+   ],
+   [
+    -160,
+    0
+   ],
+   [
+    -80,
+    0
+   ],
+   [
+    0,
+    0
+   ],
+   [
+    80,
+    0
+   ],
+   [
+    160,
+    0
+   ],
+   [
+    240,
+    0
+   ],
+   [
+    -240,
+    80
+   ],
+   [
+    -160,
+    80
+   ],
+   [
+    -80,
+    80
+   ],
+   [
+    0,
+    80
+   ],
+   [
+    80,
+    80
+   ],
+   [
+    160,
+    80
+   ],
+   [
+    240,
+    80
+   ],
+   [
+    -240,
+    160
+   ],
+   [
+    -160,
+    160
+   ],
+   [
+    -80,
+    160
+   ],
+   [
+    0,
+    160
+   ],
+   [
+    80,
+    160
+   ],
+   [
+    160,
+    160
+   ],
+   [
+    240,
+    160
+   ],
+   [
+    -240,
+    240
+   ],
+   [
+    -160,
+    240
+   ],
+   [
+    -80,
+    240
+   ],
+   [
+    0,
+    240
+   ],
+   [
+    80,
+    240
+   ],
+   [
+    160,
+    240
+   ],
+   [
+    240,
+    240
+   ],
+   [
+    335,
+    0
+   ],
+   [
+    -335,
+    0
+   ],
+   [
+    30,
+    335
+   ],
+   [
+    -40,
+    -335
+   ],
+   [
+    330,
+    230
+   ],
+   [
+    -330,
+    -230
+   ]
+  ],
+  "edges": [
+   {
+    "from": 0,
+    "to": 1,
+    "kind": "local",
+    "width": 3
+   },
+   {
+    "from": 1,
+    "to": 2,
+    "kind": "local",
+    "width": 3
+   },
+   {
+    "from": 2,
+    "to": 3,
+    "kind": "local",
+    "width": 3
+   },
+   {
+    "from": 3,
+    "to": 4,
+    "kind": "local",
+    "width": 3
+   },
+   {
+    "from": 4,
+    "to": 5,
+    "kind": "local",
+    "width": 3
+   },
+   {
+    "from": 5,
+    "to": 6,
+    "kind": "local",
+    "width": 3
+   },
+   {
+    "from": 7,
+    "to": 8,
+    "kind": "local",
+    "width": 3
+   },
+   {
+    "from": 8,
+    "to": 9,
+    "kind": "local",
+    "width": 3
+   },
+   {
+    "from": 9,
+    "to": 10,
+    "kind": "local",
+    "width": 3
+   },
+   {
+    "from": 10,
+    "to": 11,
+    "kind": "local",
+    "width": 3
+   },
+   {
+    "from": 11,
+    "to": 12,
+    "kind": "local",
+    "width": 3
+   },
+   {
+    "from": 12,
+    "to": 13,
+    "kind": "local",
+    "width": 3
+   },
+   {
+    "from": 14,
+    "to": 15,
+    "kind": "local",
+    "width": 3
+   },
+   {
+    "from": 15,
+    "to": 16,
+    "kind": "local",
+    "width": 3
+   },
+   {
+    "from": 16,
+    "to": 17,
+    "kind": "local",
+    "width": 3
+   },
+   {
+    "from": 17,
+    "to": 18,
+    "kind": "local",
+    "width": 3
+   },
+   {
+    "from": 18,
+    "to": 19,
+    "kind": "local",
+    "width": 3
+   },
+   {
+    "from": 19,
+    "to": 20,
+    "kind": "local",
+    "width": 3
+   },
+   {
+    "from": 21,
+    "to": 22,
+    "kind": "highway",
+    "width": 4
+   },
+   {
+    "from": 22,
+    "to": 23,
+    "kind": "highway",
+    "width": 4
+   },
+   {
+    "from": 23,
+    "to": 24,
+    "kind": "highway",
+    "width": 4
+   },
+   {
+    "from": 24,
+    "to": 25,
+    "kind": "highway",
+    "width": 4
+   },
+   {
+    "from": 25,
+    "to": 26,
+    "kind": "highway",
+    "width": 4
+   },
+   {
+    "from": 26,
+    "to": 27,
+    "kind": "highway",
+    "width": 4
+   },
+   {
+    "from": 28,
+    "to": 29,
+    "kind": "local",
+    "width": 3
+   },
+   {
+    "from": 29,
+    "to": 30,
+    "kind": "local",
+    "width": 3
+   },
+   {
+    "from": 30,
+    "to": 31,
+    "kind": "local",
+    "width": 3
+   },
+   {
+    "from": 31,
+    "to": 32,
+    "kind": "local",
+    "width": 3
+   },
+   {
+    "from": 32,
+    "to": 33,
+    "kind": "local",
+    "width": 3
+   },
+   {
+    "from": 33,
+    "to": 34,
+    "kind": "local",
+    "width": 3
+   },
+   {
+    "from": 35,
+    "to": 36,
+    "kind": "local",
+    "width": 3
+   },
+   {
+    "from": 36,
+    "to": 37,
+    "kind": "local",
+    "width": 3
+   },
+   {
+    "from": 37,
+    "to": 38,
+    "kind": "local",
+    "width": 3
+   },
+   {
+    "from": 38,
+    "to": 39,
+    "kind": "local",
+    "width": 3
+   },
+   {
+    "from": 39,
+    "to": 40,
+    "kind": "local",
+    "width": 3
+   },
+   {
+    "from": 40,
+    "to": 41,
+    "kind": "local",
+    "width": 3
+   },
+   {
+    "from": 42,
+    "to": 43,
+    "kind": "local",
+    "width": 3
+   },
+   {
+    "from": 43,
+    "to": 44,
+    "kind": "local",
+    "width": 3
+   },
+   {
+    "from": 44,
+    "to": 45,
+    "kind": "local",
+    "width": 3
+   },
+   {
+    "from": 45,
+    "to": 46,
+    "kind": "local",
+    "width": 3
+   },
+   {
+    "from": 46,
+    "to": 47,
+    "kind": "local",
+    "width": 3
+   },
+   {
+    "from": 47,
+    "to": 48,
+    "kind": "local",
+    "width": 3
+   },
+   {
+    "from": 0,
+    "to": 7,
+    "kind": "local",
+    "width": 3
+   },
+   {
+    "from": 7,
+    "to": 14,
+    "kind": "local",
+    "width": 3
+   },
+   {
+    "from": 14,
+    "to": 21,
+    "kind": "local",
+    "width": 3
+   },
+   {
+    "from": 21,
+    "to": 28,
+    "kind": "local",
+    "width": 3
+   },
+   {
+    "from": 28,
+    "to": 35,
+    "kind": "local",
+    "width": 3
+   },
+   {
+    "from": 35,
+    "to": 42,
+    "kind": "local",
+    "width": 3
+   },
+   {
+    "from": 1,
+    "to": 8,
+    "kind": "local",
+    "width": 3
+   },
+   {
+    "from": 8,
+    "to": 15,
+    "kind": "local",
+    "width": 3
+   },
+   {
+    "from": 15,
+    "to": 22,
+    "kind": "local",
+    "width": 3
+   },
+   {
+    "from": 22,
+    "to": 29,
+    "kind": "local",
+    "width": 3
+   },
+   {
+    "from": 29,
+    "to": 36,
+    "kind": "local",
+    "width": 3
+   },
+   {
+    "from": 36,
+    "to": 43,
+    "kind": "local",
+    "width": 3
+   },
+   {
+    "from": 2,
+    "to": 9,
+    "kind": "local",
+    "width": 3
+   },
+   {
+    "from": 9,
+    "to": 16,
+    "kind": "local",
+    "width": 3
+   },
+   {
+    "from": 16,
+    "to": 23,
+    "kind": "local",
+    "width": 3
+   },
+   {
+    "from": 23,
+    "to": 30,
+    "kind": "local",
+    "width": 3
+   },
+   {
+    "from": 30,
+    "to": 37,
+    "kind": "local",
+    "width": 3
+   },
+   {
+    "from": 37,
+    "to": 44,
+    "kind": "local",
+    "width": 3
+   },
+   {
+    "from": 3,
+    "to": 10,
+    "kind": "highway",
+    "width": 4
+   },
+   {
+    "from": 10,
+    "to": 17,
+    "kind": "highway",
+    "width": 4
+   },
+   {
+    "from": 17,
+    "to": 24,
+    "kind": "highway",
+    "width": 4
+   },
+   {
+    "from": 24,
+    "to": 31,
+    "kind": "highway",
+    "width": 4
+   },
+   {
+    "from": 31,
+    "to": 38,
+    "kind": "highway",
+    "width": 4
+   },
+   {
+    "from": 38,
+    "to": 45,
+    "kind": "highway",
+    "width": 4
+   },
+   {
+    "from": 4,
+    "to": 11,
+    "kind": "local",
+    "width": 3
+   },
+   {
+    "from": 11,
+    "to": 18,
+    "kind": "local",
+    "width": 3
+   },
+   {
+    "from": 18,
+    "to": 25,
+    "kind": "local",
+    "width": 3
+   },
+   {
+    "from": 25,
+    "to": 32,
+    "kind": "local",
+    "width": 3
+   },
+   {
+    "from": 32,
+    "to": 39,
+    "kind": "local",
+    "width": 3
+   },
+   {
+    "from": 39,
+    "to": 46,
+    "kind": "local",
+    "width": 3
+   },
+   {
+    "from": 5,
+    "to": 12,
+    "kind": "local",
+    "width": 3
+   },
+   {
+    "from": 12,
+    "to": 19,
+    "kind": "local",
+    "width": 3
+   },
+   {
+    "from": 19,
+    "to": 26,
+    "kind": "local",
+    "width": 3
+   },
+   {
+    "from": 26,
+    "to": 33,
+    "kind": "local",
+    "width": 3
+   },
+   {
+    "from": 33,
+    "to": 40,
+    "kind": "local",
+    "width": 3
+   },
+   {
+    "from": 40,
+    "to": 47,
+    "kind": "local",
+    "width": 3
+   },
+   {
+    "from": 6,
+    "to": 13,
+    "kind": "local",
+    "width": 3
+   },
+   {
+    "from": 13,
+    "to": 20,
+    "kind": "local",
+    "width": 3
+   },
+   {
+    "from": 20,
+    "to": 27,
+    "kind": "local",
+    "width": 3
+   },
+   {
+    "from": 27,
+    "to": 34,
+    "kind": "local",
+    "width": 3
+   },
+   {
+    "from": 34,
+    "to": 41,
+    "kind": "local",
+    "width": 3
+   },
+   {
+    "from": 41,
+    "to": 48,
+    "kind": "local",
+    "width": 3
+   },
+   {
+    "from": 27,
+    "to": 49,
+    "kind": "highway",
+    "width": 4
+   },
+   {
+    "from": 21,
+    "to": 50,
+    "kind": "highway",
+    "width": 4
+   },
+   {
+    "from": 45,
+    "to": 51,
+    "kind": "dirt",
+    "width": 2.5
+   },
+   {
+    "from": 3,
+    "to": 52,
+    "kind": "dirt",
+    "width": 2.5
+   },
+   {
+    "from": 41,
+    "to": 53,
+    "kind": "dirt",
+    "width": 2.5
+   },
+   {
+    "from": 7,
+    "to": 54,
+    "kind": "dirt",
+    "width": 2.5
+   }
+  ]
+ },
+ "trenches": [],
+ "rivers": [
+  {
+   "points": [
+    [
+     -214,
+     -340
+    ],
+    [
+     -200,
+     -272
+    ],
+    [
+     -186,
+     -204
+    ],
+    [
+     -214,
+     -136
+    ],
+    [
+     -200,
+     -68
+    ],
+    [
+     -186,
+     0
+    ],
+    [
+     -214,
+     68
+    ],
+    [
+     -200,
+     136
+    ],
+    [
+     -186,
+     204
+    ],
+    [
+     -214,
+     272
+    ],
+    [
+     -200,
+     340
+    ]
+   ],
+   "width": 8,
+   "depth": 1.5
+  }
+ ]
+}

@@ -157,10 +157,11 @@ func (g *Game) applyShotOrders() {
 		target := components.WorldPos{}.Add(rl.Vector3{
 			X: float32(x), Y: systems.GroundHeight(float32(x), float32(z)), Z: float32(z),
 		})
-		for _, e := range g.Sel.Units {
-			g.Svc.Squad.IssueOrder(e, components.OrderKindMoveTo, target,
-				ecs.Entity{}, g.Sel.OrderShotLegs > 0, systems.OrderParams{})
-		}
+		// Same split as RMB: a selected squad member orders his squad, a
+		// soloist orders himself.
+		issueDirectOrder(g.Sel.Units, components.OrderKindMoveTo, target, ecs.Entity{},
+			g.Sel.OrderShotLegs > 0, systems.OrderParams{},
+			g.Svc.Squad, g.Svc.Nav, g.Maps.SquadMember, g.Maps.Pos, g.Maps.ActionQueue)
 		g.Sel.OrderShotLegs++
 	}
 }

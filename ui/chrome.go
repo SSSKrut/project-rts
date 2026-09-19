@@ -8,6 +8,10 @@ const (
 	titleBarHeight int32 = 24
 )
 
+// Chromeless drops the top bar, borders and title bars so a capture run's
+// field fills the window. Set before the first Recompute.
+var Chromeless bool
+
 var (
 	panelBorderColor = rl.Color{R: 30, G: 30, B: 36, A: 255}
 	titleBarColor    = rl.Color{R: 22, G: 26, B: 34, A: 220}
@@ -75,6 +79,9 @@ func drawChevron(r rl.Rectangle, font rl.Font) {
 // screen when its Bounds collapse (e.g. mid corner-merge).
 func ContentRect(p Panel) rl.Rectangle {
 	b := p.Bounds
+	if Chromeless {
+		return rl.Rectangle{X: b.X, Y: b.Y, Width: max(b.Width, 0), Height: max(b.Height, 0)}
+	}
 	w := b.Width - 2
 	h := b.Height - 2 - float32(titleBarHeight)
 	if w < 0 {
@@ -98,6 +105,9 @@ func PanelBackground(p Panel, fill rl.Color) {
 // PanelChromePadding returns the (top, sides) chrome inset thicknesses.
 // top = title bar + border; sides = border on each edge.
 func PanelChromePadding() (top, sides float32) {
+	if Chromeless {
+		return 0, 0
+	}
 	return float32(titleBarHeight) + 1, 1
 }
 

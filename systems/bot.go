@@ -33,6 +33,9 @@ type BotSystem struct {
 	rulesMap   *ecs.Map[components.EngagementRules]
 	commsMap   *ecs.Map[components.CommsState]
 	relayMap   *ecs.Map[components.Relay]
+	memberMap  *ecs.Map[components.SquadMember]
+
+	vehicleFilter *ecs.Filter2[components.Vehicle, components.WorldPos]
 
 	squads *SquadService
 	world  *ecs.World
@@ -77,6 +80,8 @@ func (sys *BotSystem) InitUI(w *ecs.World) {
 	sys.rulesMap = ecs.NewMap[components.EngagementRules](w)
 	sys.commsMap = ecs.NewMap[components.CommsState](w)
 	sys.relayMap = ecs.NewMap[components.Relay](w)
+	sys.memberMap = ecs.NewMap[components.SquadMember](w)
+	sys.vehicleFilter = ecs.NewFilter2[components.Vehicle, components.WorldPos](w)
 	sys.world = w
 }
 
@@ -120,6 +125,9 @@ func (sys *BotSystem) Update(ctx core.UpdateContext) {
 		return
 	}
 	sys.decideFor(components.FactionEnemyRed, now)
+	// The player's side only has crews here when a mission handed some of
+	// its forces to the bot (force "ctrl": "ai"); otherwise this is a no-op.
+	sys.decideFor(components.FactionPlayer, now)
 }
 
 // snapshotPoints values every point once per decision. A relay is worth more
@@ -144,15 +152,15 @@ func (sys *BotSystem) snapshotPoints() {
 func (sys *BotSystem) decideFor(side uint8, now float32) {
 	sys.crews = sys.crews[:0]
 	sys.adds = sys.adds[:0]
+	for i := range sys.pts {
+		sys.pts[i].takenB = false
+	}
 
 	q := sys.squadFilter.Query()
 	for q.Next() {
 		_, roster := q.Get()
 		squad := q.Entity()
-		if f := sys.factionMap.Get(squad); f == nil || f.ID != side {
-			continue
-		}
-		if c := sys.ctrlMap.Get(squad); c == nil || c.Owner != components.ControllerAI {
+		if !sys.ours(squad, side) {
 			continue
 		}
 		pos, ok := SquadAnchorPos(sys.world, roster, sys.posMap)
@@ -163,6 +171,22 @@ func (sys *BotSystem) decideFor(side uint8, now float32) {
 		sys.crews = append(sys.crews, botCrew{
 			squad: squad, x: x, z: z, assign: sys.assignMap.Get(squad),
 		})
+	}
+	// A solo hull is a crew of one: the order goes through the same
+	// IssueOrder, which makes it commandable on the way.
+	if m := sys.missionRes.Get(); m != nil && m.BotVehicles {
+		qv := sys.vehicleFilter.Query()
+		for qv.Next() {
+			_, pos := qv.Get()
+			hull := qv.Entity()
+			if sys.memberMap.Has(hull) || !sys.ours(hull, side) {
+				continue
+			}
+			x, z := worldXZ(*pos)
+			sys.crews = append(sys.crews, botCrew{
+				squad: hull, x: x, z: z, assign: sys.assignMap.Get(hull),
+			})
+		}
 	}
 	if len(sys.crews) == 0 {
 		return
@@ -253,6 +277,14 @@ func (sys *BotSystem) setVerb(c *botCrew, p *botPoint, verb components.BotVerb,
 	}
 	sys.squads.IssueOrder(c.squad, components.OrderKindMoveTo, p.pos,
 		ecs.Entity{}, false, OrderParams{AttackMove: true})
+}
+
+func (sys *BotSystem) ours(ent ecs.Entity, side uint8) bool {
+	if f := sys.factionMap.Get(ent); f == nil || f.ID != side {
+		return false
+	}
+	c := sys.ctrlMap.Get(ent)
+	return c != nil && c.Owner == components.ControllerAI
 }
 
 func (sys *BotSystem) near(c *botCrew, p *botPoint) bool {

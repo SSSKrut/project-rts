@@ -19,13 +19,14 @@ var missionFlag = flag.String("mission", "", "mission manifest name (missions/<n
 // rather than containing one, so maps stay reusable and a mission is not a fork
 // of the world.
 type missionDef struct {
-	Name    string         `json:"name"`
-	Map     string         `json:"map"`
-	TimeSec float32        `json:"timeSec"`
-	Points  []missionPoint `json:"points"`
-	Forces  []missionForce `json:"forces"`
-	Victory missionVictory `json:"victory"`
-	Relays  []missionRelay `json:"relays"`
+	Name        string         `json:"name"`
+	Map         string         `json:"map"`
+	TimeSec     float32        `json:"timeSec"`
+	Points      []missionPoint `json:"points"`
+	Forces      []missionForce `json:"forces"`
+	Victory     missionVictory `json:"victory"`
+	Relays      []missionRelay `json:"relays"`
+	BotVehicles bool           `json:"botVehicles,omitempty"`
 }
 
 type missionPoint struct {
@@ -50,6 +51,7 @@ type missionForce struct {
 	Template string  `json:"template"` // squad template or vehicle class
 	X        float32 `json:"x"`
 	Z        float32 `json:"z"`
+	Ctrl     string  `json:"ctrl,omitempty"` // "ai" hands a player-side force to the bot
 }
 
 type missionVictory struct {
@@ -167,7 +169,7 @@ func (g *Game) spawnMission(def missionDef) {
 			Ctrl: components.ControllerAI,
 			Pos:  wp(f.X, f.Z),
 		}
-		if a.Side == components.FactionPlayer {
+		if a.Side == components.FactionPlayer && f.Ctrl != "ai" {
 			a.Ctrl = components.ControllerLocal
 		}
 		switch f.Kind {
@@ -182,12 +184,13 @@ func (g *Game) spawnMission(def missionDef) {
 	}
 
 	g.Res.Mission = components.Mission{
-		Name:       def.Name,
-		TimeSec:    def.TimeSec,
-		HoldPoints: def.Victory.HoldPoints,
-		OfTotal:    def.Victory.OfTotal,
-		ForSec:     def.Victory.ForSec,
-		Loaded:     true,
+		Name:        def.Name,
+		TimeSec:     def.TimeSec,
+		HoldPoints:  def.Victory.HoldPoints,
+		OfTotal:     def.Victory.OfTotal,
+		ForSec:      def.Victory.ForSec,
+		Loaded:      true,
+		BotVehicles: def.BotVehicles,
 	}
 	fmt.Printf("mission: %d points, %d forces, hold %d/%d for %.0fs, limit %.0fs\n",
 		len(def.Points), len(def.Forces), def.Victory.HoldPoints,

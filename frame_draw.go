@@ -16,6 +16,10 @@ import (
 // drawUI composites the scene texture and draws the 2D half: panels, widgets,
 // chrome, menus and the profiler HUD.
 func (g *Game) drawUI() {
+	if *recCleanFlag {
+		g.drawUIClean()
+		return
+	}
 	rl.BeginDrawing()
 	rl.ClearBackground(rl.Color{R: 8, G: 10, B: 14, A: 255})
 
@@ -184,40 +188,8 @@ func (g *Game) drawUI() {
 		}
 	}
 
-	if debugOverlay.Clouds && g.UI.Scene3DRT.DepthTex && g.Ctx.Clouds != nil && g.Ctx.Clouds.ok {
-		g.Ctx.Clouds.composite(g.UI.Scene3DRT, g.Frame.Panel3D, &g.Res.Atmosphere,
-			g.Ctx.CloudDrift, &g.Ctx.Daylight)
-	} else {
-		g.UI.Scene3DRT.Composite(g.Frame.Panel3D)
-	}
-
-	// Role labels are 2D screen-projected after RT composite; scissored
-	// to Panel3D so they don't bleed onto neighbouring panels.
-	rl.BeginScissorMode(int32(g.Frame.Panel3DContent.X), int32(g.Frame.Panel3DContent.Y),
-		int32(g.Frame.Panel3DContent.Width), int32(g.Frame.Panel3DContent.Height))
-	quLabels := g.Filt.UnitRender.Query()
-	for quLabels.Next() {
-		pos, _, st := quLabels.Get()
-		ent := quLabels.Entity()
-		renderPos := pos.ToRenderSpace(systems.CurrentOriginChunk)
-		role := components.RoleRifleman
-		if r := g.Maps.Role.Get(ent); r != nil {
-			role = r.Kind
-		}
-		if stam := g.Maps.Stamina.Get(ent); stam != nil {
-			drawUnitStaminaBar(renderPos, *st, role, stam.Current, stam.MaxLevel, g.Frame.Panel3DContent)
-		}
-		if hp := g.Maps.HP.Get(ent); hp != nil {
-			drawUnitHPBar(renderPos, *st, role, hp.Current, hp.Max, g.Frame.Panel3DContent)
-		}
-		if fac := g.Maps.Faction.Get(ent); fac == nil || fac.ID == components.FactionPlayer {
-			if det := g.Maps.Detectability.Get(ent); det != nil {
-				drawUnitExposureBar(renderPos, *st, role, det.Meter[components.FactionEnemyRed], g.Frame.Panel3DContent)
-			}
-		}
-	}
-	g.drawFieldSymbols()
-	rl.EndScissorMode()
+	g.compositeScene()
+	g.drawFieldOverlays()
 
 	// Squad bar over the composited scene: the layout was frozen before the
 	// tick, values are re-read now (a card's owner may have died meanwhile —
@@ -389,16 +361,78 @@ func (g *Game) drawUI() {
 		trenches:     len(g.Res.Trenches.Lines),
 	}
 
-	drawCollapsedProfHUD(&g.App.Prof, g.UI.ScreenW, g.hudFont)
+	// Dev readout; a clip is not the place for frame times.
+	if *recPathFlag == "" {
+		drawCollapsedProfHUD(&g.App.Prof, g.UI.ScreenW, g.hudFont)
+	}
 	if g.UI.ExpandedHUD {
 		drawExpandedProfHUD(&g.App.Prof, g.UI.ScreenW, cen, g.hudFont)
 	}
 
 	g.maybeScreenshot()
+	g.maybeRecord()
 	rl.EndDrawing()
 
 	recordTraceFrame(g.App, rl.GetFrameTime()*1000, rl.GetFPS(), cen)
 	handleTraceHotkeys(g.App)
+}
+
+// drawUIClean is the capture-only frame: the field, its overlays, nothing
+// that belongs to the workspace.
+func (g *Game) drawUIClean() {
+	rl.BeginDrawing()
+	rl.ClearBackground(rl.Color{R: 8, G: 10, B: 14, A: 255})
+	g.compositeScene()
+	if !*recBareFlag {
+		g.drawFieldOverlays()
+	}
+	ui.DrawMissionOutcome(rl.Rectangle{
+		Width: float32(rl.GetScreenWidth()), Height: float32(rl.GetScreenHeight()),
+	}, ui.MissionOutcomeCtx{
+		Mission: &g.Res.Mission, State: &g.Res.MissionState, Font: g.hudFont,
+	})
+	g.maybeScreenshot()
+	g.maybeRecord()
+	rl.EndDrawing()
+}
+
+func (g *Game) compositeScene() {
+	if debugOverlay.Clouds && g.UI.Scene3DRT.DepthTex && g.Ctx.Clouds != nil && g.Ctx.Clouds.ok {
+		g.Ctx.Clouds.composite(g.UI.Scene3DRT, g.Frame.Panel3D, &g.Res.Atmosphere,
+			g.Ctx.CloudDrift, &g.Ctx.Daylight)
+	} else {
+		g.UI.Scene3DRT.Composite(g.Frame.Panel3D)
+	}
+}
+
+// drawFieldOverlays: role labels and bars are 2D screen-projected after the
+// RT composite; scissored to Panel3D so they don't bleed onto neighbours.
+func (g *Game) drawFieldOverlays() {
+	rl.BeginScissorMode(int32(g.Frame.Panel3DContent.X), int32(g.Frame.Panel3DContent.Y),
+		int32(g.Frame.Panel3DContent.Width), int32(g.Frame.Panel3DContent.Height))
+	quLabels := g.Filt.UnitRender.Query()
+	for quLabels.Next() {
+		pos, _, st := quLabels.Get()
+		ent := quLabels.Entity()
+		renderPos := pos.ToRenderSpace(systems.CurrentOriginChunk)
+		role := components.RoleRifleman
+		if r := g.Maps.Role.Get(ent); r != nil {
+			role = r.Kind
+		}
+		if stam := g.Maps.Stamina.Get(ent); stam != nil {
+			drawUnitStaminaBar(renderPos, *st, role, stam.Current, stam.MaxLevel, g.Frame.Panel3DContent)
+		}
+		if hp := g.Maps.HP.Get(ent); hp != nil {
+			drawUnitHPBar(renderPos, *st, role, hp.Current, hp.Max, g.Frame.Panel3DContent)
+		}
+		if fac := g.Maps.Faction.Get(ent); fac == nil || fac.ID == components.FactionPlayer {
+			if det := g.Maps.Detectability.Get(ent); det != nil {
+				drawUnitExposureBar(renderPos, *st, role, det.Meter[components.FactionEnemyRed], g.Frame.Panel3DContent)
+			}
+		}
+	}
+	g.drawFieldSymbols()
+	rl.EndScissorMode()
 }
 
 // soloCommanderName labels a one-body row. "Squad #A3" would be a lie and

@@ -1,0 +1,57 @@
+{
+  "name": "City",
+  "map": "city",
+  "timeSec": 900,
+  "botVehicles": true,
+  "victory": { "holdPoints": 3, "ofTotal": 5, "forSec": 60 },
+  "relays": [
+    { "x": -330, "z": 0, "side": "player", "rangeM": 900 },
+    { "x": 330,  "z": 0, "side": "enemy",  "rangeM": 900 }
+  ],
+  "points": [
+    { "x": -160, "z": -120, "owner": "player", "relayRangeM": 400 },
+    { "x": -120, "z":  120, "owner": "none",   "relayRangeM": 400 },
+    { "x":    0, "z":    0, "owner": "none",   "relayRangeM": 400 },
+    { "x":  120, "z": -120, "owner": "none",   "relayRangeM": 400 },
+    { "x":  160, "z":  120, "owner": "enemy",  "relayRangeM": 400 }
+  ],
+  "forces": [
+    { "side": "player", "ctrl": "ai", "atSec": 0, "kind": "squad", "template": "motor", "x": -300, "z": -200 },
+    { "side": "player", "ctrl": "ai", "atSec": 0, "kind": "squad", "template": "motor", "x": -300, "z": -140 },
+    { "side": "player", "ctrl": "ai", "atSec": 0, "kind": "squad", "template": "light", "x": -300, "z": -80 },
+    { "side": "player", "ctrl": "ai", "atSec": 0, "kind": "squad", "template": "motor", "x": -300, "z": -20 },
+    { "side": "player", "ctrl": "ai", "atSec": 0, "kind": "squad", "template": "at",    "x": -300, "z": 40 },
+    { "side": "player", "ctrl": "ai", "atSec": 0, "kind": "squad", "template": "motor", "x": -300, "z": 100 },
+    { "side": "player", "ctrl": "ai", "atSec": 0, "kind": "squad", "template": "mg",    "x": -300, "z": 160 },
+    { "side": "player", "ctrl": "ai", "atSec": 0, "kind": "squad", "template": "motor", "x": -300, "z": 220 },
+    { "side": "player", "ctrl": "ai", "atSec": 0, "kind": "vehicle", "template": "btr",  "x": -318, "z": -120 },
+    { "side": "player", "ctrl": "ai", "atSec": 0, "kind": "vehicle", "template": "bmp",  "x": -318, "z": -60 },
+    { "side": "player", "ctrl": "ai", "atSec": 0, "kind": "vehicle", "template": "tank", "x": -318, "z": 0 },
+    { "side": "player", "ctrl": "ai", "atSec": 0, "kind": "vehicle", "template": "bmp",  "x": -318, "z": 60 },
+    { "side": "player", "ctrl": "ai", "atSec": 0, "kind": "vehicle", "template": "btr",  "x": -318, "z": 120 },
+    { "side": "player", "ctrl": "ai", "atSec": 0, "kind": "vehicle", "template": "truck","x": -318, "z": 180 },
+    { "side": "player", "ctrl": "ai", "atSec": 150, "kind": "squad", "template": "motor", "x": -300, "z": -110 },
+    { "side": "player", "ctrl": "ai", "atSec": 150, "kind": "squad", "template": "motor", "x": -300, "z": 130 },
+    { "side": "player", "ctrl": "ai", "atSec": 150, "kind": "vehicle", "template": "tank", "x": -318, "z": 30 },
+    { "side": "player", "ctrl": "ai", "atSec": 150, "kind": "vehicle", "template": "btr",  "x": -318, "z": -30 },
+
+    { "side": "enemy", "atSec": 0, "kind": "squad", "template": "motor", "x": 300, "z": -220 },
+    { "side": "enemy", "atSec": 0, "kind": "squad", "template": "motor", "x": 300, "z": -160 },
+    { "side": "enemy", "atSec": 0, "kind": "squad", "template": "mg",    "x": 300, "z": -100 },
+    { "side": "enemy", "atSec": 0, "kind": "squad", "template": "motor", "x": 300, "z": -40 },
+    { "side": "enemy", "atSec": 0, "kind": "squad", "template": "at",    "x": 300, "z": 20 },
+    { "side": "enemy", "atSec": 0, "kind": "squad", "template": "motor", "x": 300, "z": 80 },
+    { "side": "enemy", "atSec": 0, "kind": "squad", "template": "light", "x": 300, "z": 140 },
+    { "side": "enemy", "atSec": 0, "kind": "squad", "template": "motor", "x": 300, "z": 200 },
+    { "side": "enemy", "atSec": 0, "kind": "vehicle", "template": "btr",  "x": 318, "z": -180 },
+    { "side": "enemy", "atSec": 0, "kind": "vehicle", "template": "bmp",  "x": 318, "z": -120 },
+    { "side": "enemy", "atSec": 0, "kind": "vehicle", "template": "bmp",  "x": 318, "z": -60 },
+    { "side": "enemy", "atSec": 0, "kind": "vehicle", "template": "tank", "x": 318, "z": 0 },
+    { "side": "enemy", "atSec": 0, "kind": "vehicle", "template": "btr",  "x": 318, "z": 60 },
+    { "side": "enemy", "atSec": 0, "kind": "vehicle", "template": "truck","x": 318, "z": 120 },
+    { "side": "enemy", "atSec": 150, "kind": "squad", "template": "motor", "x": 300, "z": -130 },
+    { "side": "enemy", "atSec": 150, "kind": "squad", "template": "motor", "x": 300, "z": 110 },
+    { "side": "enemy", "atSec": 150, "kind": "vehicle", "template": "tank", "x": 318, "z": 30 },
+    { "side": "enemy", "atSec": 150, "kind": "vehicle", "template": "btr",  "x": 318, "z": -30 }
+  ]
+}

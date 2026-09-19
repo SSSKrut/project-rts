@@ -54,7 +54,7 @@ func (g *Game) spawnAnchorAndCamera() {
 			Pitch:            shotCamPitch(0.6),
 			Radius:           shotCamRadius(25.0),
 			MinRadius:        5.0,
-			MaxRadius:        100.0,
+			MaxRadius:        max(100.0, shotCamRadius(25.0)),
 			SensitivityYaw:   0.01,
 			SensitivityPitch: 0.01,
 			SensitivityZoom:  4.0,

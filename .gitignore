@@ -43,3 +43,7 @@ go.work.sum
 /rts
 /rts-go
 /particle_sandbox
+
+# Clip masters from scripts/record_clip.sh: multi-MB binaries, regenerable.
+# The gif / png next to them are the README assets and stay tracked.
+/docs/media/mp4/

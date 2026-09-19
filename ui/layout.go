@@ -49,6 +49,9 @@ func presetTree(p LayoutPreset) *LayoutNode {
 }
 
 func WorkspaceRect(screenW, screenH int32) rl.Rectangle {
+	if Chromeless {
+		return rl.Rectangle{Width: float32(screenW), Height: float32(screenH)}
+	}
 	avail := screenH - topBarHeight
 	if avail < 0 {
 		avail = 0
@@ -61,6 +64,9 @@ func WorkspaceRect(screenW, screenH int32) rl.Rectangle {
 }
 
 func TopBarRect(screenW int32) rl.Rectangle {
+	if Chromeless {
+		return rl.Rectangle{}
+	}
 	return rl.Rectangle{X: 0, Y: 0, Width: float32(screenW), Height: float32(topBarHeight)}
 }
 

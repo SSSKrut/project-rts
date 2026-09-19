@@ -309,6 +309,25 @@ identical for static chrome, the shot still *looks* complete. Any widget drawn
 late in `drawUI` was simply invisible to captures before 2026-08-02. Enough to eyeball a render change without a live
 session; it does not replace a playtest for anything interactive.
 
+**Clip capture.** `-rec=<path>` is `-shot` stretched over a frame range
+(`dev_rec.go`): `-rec-from` / `-rec-to` / `-rec-every` pick the frames, a path
+ending in `/` writes one PNG per frame, anything else receives raw RGBA back to
+back — `scripts/record_clip.sh <name> [opts] -- <flags>` feeds that through a
+fifo into ffmpeg and leaves `docs/media/{mp4,gif,png}/<name>.*` (mp4 masters
+are gitignored). Everything is frame-indexed, so a re-run records the same
+clip; `-rec-speed` sets the TimeScale, and the attention layer is silenced so a
+KIA cannot pause the clock mid-clip. Camera: `-shot-cam` frames the start,
+`-rec-anchor=x,z` parks the orbit target, `-rec-track=sel|player|enemy|all`
+follows a centroid, `-rec-orbit=deg/s` and `-rec-dolly=r0,r1` are the two
+cinematic moves. `-rec-clean` drops every panel (`ui.Chromeless`: the field
+fills the window; `-rec-bare` drops the unit bars too), `-rec-layout=field|command`
+forces a workspace preset instead of the saved layout, `-rec-size=WxH` sets the
+window. A capture window opens UNFOCUSED and ignores WASD / orbit input, so the
+launcher's keystrokes cannot leak into the clip. `scripts/demo_clips.sh` is the
+README set; `maps/city.json` (from `scripts/gen_city_map.py`) + `missions/city.json`
+are the scale scene — a mission force with `"ctrl": "ai"` hands a player-side
+unit to the bot, and `"botVehicles": true` lets the bot task solo hulls.
+
 The trace file is written through `bufio.Writer` (4 KiB) — kill -9 may truncate the tail; clean shutdown via `WindowShouldClose` flushes via the deferred `app.Trace.Close()` in `main.go`. Format is JSONL v1; field names match the PHASE-7.5 plan and are stable, so `jq` filters from one capture keep working across optimization runs.
 
 ### Adding a new system

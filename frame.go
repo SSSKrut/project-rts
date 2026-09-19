@@ -63,10 +63,11 @@ func (g *Game) RunFrame() bool {
 
 	g.handleChrome()
 	g.updateTestScenes()
-	if *shotPathFlag != "" {
+	if captureRun() {
 		g.applyShotSelection()
 		g.applyShotOrders()
 	}
+	g.applyRecCamera()
 	// Before input: the bar must own its rect while clicks are being routed.
 	g.layoutSquadBar()
 	g.handleInput()
@@ -77,7 +78,7 @@ func (g *Game) RunFrame() bool {
 
 	// Gate orbit/wheel by focus; suppress while a floater owns the cursor.
 	systems.OrbitInputEnabled = (g.Frame.Focused == ui.Panel3D || g.Frame.Focused == ui.PanelNone) &&
-		!g.UI.Floating.IsBusy(g.Frame.Cursor)
+		!g.UI.Floating.IsBusy(g.Frame.Cursor) && *recPathFlag == ""
 
 	if g.Dev.PendingSteps > 0 && g.App.TimeScale == 0 {
 		g.Dev.Fatal = guardedStepOnce(g.App)

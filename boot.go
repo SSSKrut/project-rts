@@ -41,8 +41,15 @@ func bootGame() *Game {
 		systems.SaveDir = "./save/" + worldMap.Name
 	}
 
-	rl.SetConfigFlags(rl.FlagWindowResizable)
-	rl.InitWindow(initialScreenWidth, initialScreenHeight, "RTS/FPS 3D ECS Prototype")
+	windowFlags := uint32(rl.FlagWindowResizable)
+	if captureRun() {
+		// A capture window that takes focus swallows the keystrokes of
+		// whoever launched it; the clip is driven by flags, never by hand.
+		windowFlags |= rl.FlagWindowUnfocused
+	}
+	rl.SetConfigFlags(windowFlags)
+	screenW, screenH := startScreenSize()
+	rl.InitWindow(screenW, screenH, "RTS/FPS 3D ECS Prototype")
 	// Defaults are 0.01/1000: the far plane cuts the horizon rings, and a
 	// centimetre near plane burns the whole depth range within ~90 m.
 	rl.SetClipPlanes(renderNearPlane, renderFarPlane)

@@ -10,6 +10,8 @@ type Mission struct {
 	OfTotal    uint8
 	ForSec     float32
 	Loaded     bool
+	// BotVehicles lets the bot task solo hulls as well as squads.
+	BotVehicles bool
 }
 
 type MissionOutcome uint8
