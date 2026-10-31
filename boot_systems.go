@@ -20,7 +20,7 @@ func (g *Game) registerSystems() {
 	squadService := g.Svc.Squad
 	damageService := g.Svc.Damage
 
-	terrainStreamingSys := &systems.TerrainStreamingSystem{}
+	terrainStreamingSys := &systems.TerrainStreamingSystem{FixedCenter: landscapeViewer()}
 	terrainStreamingSys.InitUI(app.World)
 
 	terrainLoadSys := &systems.TerrainLoadSystem{}

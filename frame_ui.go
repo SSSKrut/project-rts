@@ -50,7 +50,11 @@ func (g *Game) initUI() {
 	}
 	g.UI.PanelMgr.Recompute(g.UI.ScreenW, g.UI.ScreenH)
 	g.UI.Scene3DRT = ui.NewScene3DRT(g.UI.PanelMgr.Get(ui.Panel3D))
-	g.Ctx.Clouds = newCloudRenderer()
+	if landscapeViewer() {
+		g.Ctx.Clouds = &cloudRenderer{}
+	} else {
+		g.Ctx.Clouds = newCloudRenderer()
+	}
 	g.Ctx.Particle.Puffs = newParticleRenderer()
 	if atmo, ok := weatherFromFlag(); ok {
 		g.Res.Atmosphere = atmo
@@ -61,7 +65,11 @@ func (g *Game) initUI() {
 	if *hourFlag >= 0 {
 		g.Res.DayClock = components.DayClock{StartHours: float32(*hourFlag)}
 	}
-	g.Ctx.Pyramid = systems.BakeHeightPyramid(16384, components.ChunkSize, 1, systems.GroundHeight)
+	if landscapeViewer() {
+		g.Res.Atmosphere.Coverage = 0
+	} else {
+		g.Ctx.Pyramid = systems.BakeHeightPyramid(16384, components.ChunkSize, 1, systems.GroundHeight)
+	}
 	g.Ctx.FarTerrain = newFarTerrain(g.Ctx.Pyramid)
 
 	// Pre-bake the map underlay (2 km x 2 km, 4 m/pixel = 500x500 = 250 KB).

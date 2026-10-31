@@ -221,6 +221,10 @@ func (g *Game) initGameplayHandles() {
 	}
 }
 
+func landscapeViewer() bool {
+	return *loadFlag == "" && !isMission() && !isAIScene() && !isDoorScene()
+}
+
 // spawnScene populates gameplay only for an explicit mission or test scene.
 // Snapshots restore their own entities; the default launch stays a landscape viewer.
 func (g *Game) spawnScene() {

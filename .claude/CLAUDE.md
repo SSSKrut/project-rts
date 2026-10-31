@@ -103,7 +103,7 @@ Where to make a change:
   - Multi-floor nav (Phase 7): `FloorNavGrid{SizeX, SizeZ uint8, Origin Vec3, Cells [1024]NavCell}` on Floor entities, `FloorNavBaked` marker. `NavNode{Kind NavNodeKind, Chunk, Floor, I, J}` and `NavNodeKind` (NodeSurface/NodeFloor) tag the unified A* graph; `TransitionEdge{From, To NavNode, Cost uint8, Owner ecs.Entity}` and `TransitionRegistry{Out map[NavNode][]TransitionEdge}` (resource).
   - Streaming graph (smart-spaces, not terrain): `NodeID`, `StreamNode`, `NodeEntity`, `StreamingMap`.
 - **`systems/`** — Game logic implementing `core.System`:
-  - `TerrainStreamingSystem` — square-ring chunk lifecycle around the anchor; on eviction writes any `Modified` chunk to disk, despawns the chunk's props **and** every building child for any `Building` rooted in that chunk (via `BuildingChildIndex`).
+  - `TerrainStreamingSystem` — square-ring chunk lifecycle around the anchor. In the default landscape viewer `FixedCenter` pins that ring to the origin (13×13 chunks) and the far-terrain/cloud renderers stay disabled; missions, scenes and snapshots keep anchor-following streaming. On eviction writes any `Modified` chunk to disk, despawns the chunk's props **and** every building child for any `Building` rooted in that chunk (via `BuildingChildIndex`).
   - `TerrainLoadSystem` — per `HeightmapDirty` chunk, attempts `ReadChunk` from disk; on hit fills `Heightmap + Modified` and clears dirty (runs *before* gen).
   - `TerrainGenSystem` — fBm-Perlin procgen for any `HeightmapDirty` chunk that load didn't claim.
   - `RiverSystem` — for each pristine chunk that crosses a river polyline, `Stamper.RiverCut`. Marker `RiverProcessed`. The water surface itself is a boot-built ribbon, not per-chunk props.

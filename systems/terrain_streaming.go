@@ -38,6 +38,7 @@ func NewTerrainChunkIndex() TerrainChunkIndex {
 // meshes — sets HeightmapDirty / MeshDirty for downstream systems. Runs at
 // 4 Hz; the anchor can't outrun a chunk in less.
 type TerrainStreamingSystem struct {
+	FixedCenter       bool
 	anchorFilter      *ecs.Filter2[components.LODAnchor, components.WorldPos]
 	chunkFilter       *ecs.Filter2[components.ChunkCoord, components.TerrainChunk]
 	buildingFilter    *ecs.Filter2[components.Building, components.WorldPos]
@@ -170,6 +171,9 @@ func (sys TerrainStreamingSystem) Update(ctx core.UpdateContext) {
 	}
 	if !found {
 		return
+	}
+	if sys.FixedCenter {
+		anchorChunk = components.ChunkCoord{}
 	}
 
 	idx := sys.indexRes.Get()
