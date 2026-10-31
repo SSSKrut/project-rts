@@ -16,13 +16,24 @@ No tests exist yet. No Makefile or task runner.
 
 ## Project state & design context
 
-**Reading order for any non-trivial task:** `.claude/GAMEDESIGN.md` → `.claude/ROADMAP.md` → `.claude/COMMAND-MODEL.md` (if the task touches orders / RoE / movement / UI command surface) → `.claude/PHASE-*.md` (if there's an active phase plan).
+**Reading order for any non-trivial task:** `.claude/lite/GAME.md` → `.claude/lite/MODEL.md` → `.claude/lite/PLAN.md` → this file → `.claude/lite/PLAYTEST.md` for current pain. The root design docs and phase plans are reference/history, not the active product scope.
 
-- `.claude/GAMEDESIGN.md` is the **canonical game design document** — what we're building, genre positioning, architectural principles, 9 design sections (interface / roles / orders / interaction grammar / movement / RoE / engineering / multi-squad / UI panels). Any architectural decision starts here.
-- `.claude/ROADMAP.md` is the **phase tracker** — what's done, what's next, in which order. Derived from GAMEDESIGN; read after GAMEDESIGN.
-- `.claude/COMMAND-MODEL.md` is the **deep dive on command-and-control** — three-layer taxonomy (Orders / Standing rules / Per-weapon intent), order graph with joint barriers (Embark/Dismount), weapon-bar UX, ghost-preview, reactive behavior contract between Phase 13/14/15, ping + event log notification system. Phase 13 / 13.5 / 14 / 15 / 17 / 19 / 21 reference it for details.
-- `.claude/AI-CONTROL-STATUS.md` is the **want-vs-have sheet for behaviour and command** — the three AI tiers and the three control layers as tables with a status per row, plus the drift list (docs that promise what the code no longer does, and vice versa). Read it when the question is "is this already built?"; the three docs above answer "what should it be?". Update the ROWS as milestones close.
-- `.claude/PHASE-*.md` are **working plans for in-progress phases** — read the relevant one before touching the corresponding subsystem. Once a phase is closed, its plan moves to `.claude/old/PHASE-N.md` for reference.
+### Current-state handoff (verified 2026-10-31)
+
+- **The active game is the lite tactical RTT**, not the former "Sea Power with infantry". Its loop is comms-gated orders → capture points that extend the radio net → mission victory/defeat, with a three-verb bot. Frozen features in `lite/GAME.md` must not quietly return.
+- **The loop exists end to end.** `SquadService.issueOrderRaw` builds every order but links it only when comms can deliver it; `ControlPointSystem` runs before `CommsSystem`, so losing a point drops its relay in the same tick; `BotSystem` uses the same `IssueOrder` as the player; `MissionSystem` owns the clock, score and terminal outcome.
+- **Scale and architecture:** ~84k lines of Go, 46 registered systems, Ark ECS + raylib, fixed 60 Hz simulation, deterministic replay and full-world save/load. Pipeline position comes from the `app.AddSystem` block in `boot_systems.go`; new component types register in the tail to avoid changing existing archetype iteration order.
+- **Already substantial, do not rebuild casually:** multi-floor nav, sensor-based FoW and ESM bearings, three shot-resolution paths, squad reactive behaviour, ground vehicles with roads/convoys/reflexes, helicopters and AA/CAS, loaded models, save-aware scripted scenes, map/inspector/behavior/debug surfaces.
+- **Intentionally still present:** three building orders, `ClearSeq` and interior slot planning. Lite calls for replacing them with one simple occupy flow, but the migration rule is replacement first, removal second. Formation presets/custom slots are gone; infantry is loose and hull-containing squads are columns.
+- **Open work:** owner playtests of real missions, complete mouse-only play, block F (general friendly-fire policy, UtilityEvaluator's role, suppression not reducing enemy rate of fire, short infantry detection), and `ai_bounding` reaching no verdict. The save/load gate script still needs stale-output/missing-file hardening.
+- **Docs drift is real.** Phase 20 M3 and map RMB orders already exist although some status text says otherwise. Treat `lite/PLAN.md` plus code as the current contract; update stale status text when touching it.
+- **Verification at this review:** `go test ./...` green; `scripts/mission_gate.sh` 6/6 with identical hashes and verdicts. Full replay and save/load gates were not run in this pass.
+
+- `.claude/GAMEDESIGN.md` is a **design reference**: its architectural principles remain useful, but the lite scope supersedes its product plan.
+- `.claude/ROADMAP.md` is the **archive of phases 0-20**; the active work tracker is `lite/PLAN.md`.
+- `.claude/COMMAND-MODEL.md` is a **command-model reference**. Orders and standing rules remain relevant; per-weapon intent, joint orders and barriers are frozen in lite.
+- `.claude/AI-CONTROL-STATUS.md` is a **snapshot from 2026-08-25**, absorbed by the status tables in `lite/PLAN.md`.
+- `.claude/PHASE-*.md` and `.claude/old/` are **phase archives**, not active plans. Read them for subsystem history and invariants, not for current scope.
 - `.claude/old/` contains archived material: closed phase plans (incl. the 2026-07-20 sweep: `REFACTOR-PLAN` / `PHASE-WS-B` / `PHASE-18.9` / `PHASE-VISION` / `PHASE-DETECTION2` / `PHASE-LOS` / `PHASE-MAPS` — их живые правила канонизированы здесь и в ROADMAP), the stale `CONTROLS.md` input snapshot (2026-05-22; актуальные контролы — раздел Controls ниже), the `UI.md` research notes (суть — в memory + COMMAND-MODEL), the pre-vision `DESIGN-pre-vision.md` (predecessor of GAMEDESIGN.md — some content still relevant for buildings/units architecture, but UI/UX and phase ordering have been superseded), and earlier design drafts (`RTS.md` / `RTS2.md` / `PHASE-3-portals.md` — historical only).
 
 ### Load-bearing design calls (short excerpt — full version in `GAMEDESIGN.md`)
