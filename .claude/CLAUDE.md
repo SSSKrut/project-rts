@@ -33,7 +33,7 @@ No tests exist yet. No Makefile or task runner.
 - `.claude/ROADMAP.md` is the **archive of phases 0-20**; the active work tracker is `lite/PLAN.md`.
 - `.claude/COMMAND-MODEL.md` is a **command-model reference**. Orders and standing rules remain relevant; per-weapon intent, joint orders and barriers are frozen in lite.
 - `.claude/AI-CONTROL-STATUS.md` is a **snapshot from 2026-08-25**, absorbed by the status tables in `lite/PLAN.md`.
-- `.claude/PHASE-*.md` and `.claude/old/` are **phase archives**, not active plans. Read them for subsystem history and invariants, not for current scope.
+- `.claude/old/PHASE-*.md` are **phase archives**, not active plans. Read them for subsystem history and invariants, not for current scope.
 - `.claude/old/` contains archived material: closed phase plans (incl. the 2026-07-20 sweep: `REFACTOR-PLAN` / `PHASE-WS-B` / `PHASE-18.9` / `PHASE-VISION` / `PHASE-DETECTION2` / `PHASE-LOS` / `PHASE-MAPS` — их живые правила канонизированы здесь и в ROADMAP), the stale `CONTROLS.md` input snapshot (2026-05-22; актуальные контролы — раздел Controls ниже), the `UI.md` research notes (суть — в memory + COMMAND-MODEL), the pre-vision `DESIGN-pre-vision.md` (predecessor of GAMEDESIGN.md — some content still relevant for buildings/units architecture, but UI/UX and phase ordering have been superseded), and earlier design drafts (`RTS.md` / `RTS2.md` / `PHASE-3-portals.md` — historical only).
 
 ### Load-bearing design calls (short excerpt — full version in `GAMEDESIGN.md`)
