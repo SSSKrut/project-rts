@@ -230,7 +230,7 @@ Uses `ecs.NewMap[T]` to add components to new entities, with factory bundles in 
 1. `spawnAnchorAndCamera()` — anchor (`WorldPos + LODActive + LODAnchor + AlwaysActive + OnGround`) and the orbit camera (`WorldPos + Camera + OrbitController + ActiveCamera`). Skipped under `-load`.
 2. `spawnWorldRoots()` — one root per `BuildingPlan` (`WorldPos + Building + AlwaysActive`, children spawn lazily per chunk) plus its `Level` entities, and one `TrenchRoot` per polyline so hit-tests can return an entity.
 3. `initGameplayHandles()` — the unit / order / squad Map handles the UI and input halves read, plus `UnitFactory` / `VehicleFactory` / `RoleService`.
-4. `spawnScene()` — a scripted `-scene` harness, or the default playground squads + FoW dummies + one vehicle per class. No-op under `-load`.
+4. `spawnScene()` — an explicit mission or scripted `-scene` harness. Default launch spawns no gameplay entities and stays a landscape viewer; no-op under `-load`.
 5. `loadSnapshot()` — restores a full-world snapshot and re-binds anchor + camera (the snapshot does not preserve those handles by name).
 6. `initRenderHandles()` — query handles and the render context structs (`HitTester`, `ghostContext`, `routePreviewCtx`, `orderMarkerCtx`, `ParticleRenderCtx`).
 

@@ -221,12 +221,11 @@ func (g *Game) initGameplayHandles() {
 	}
 }
 
-// spawnScene populates the world: a scripted -scene harness, or the default
-// playground squads. No-op under -load.
+// spawnScene populates gameplay only for an explicit mission or test scene.
+// Snapshots restore their own entities; the default launch stays a landscape viewer.
 func (g *Game) spawnScene() {
 	playerFaction := components.Faction{ID: components.FactionPlayer}
 	playerController := components.Controller{Owner: components.ControllerLocal}
-	aiController := components.Controller{Owner: components.ControllerAI}
 	if *loadFlag != "" {
 		// Snapshot restores all entities; scene / default spawns skipped.
 	} else if isMission() {
@@ -269,125 +268,7 @@ func (g *Game) spawnScene() {
 			RosterMap:    g.Maps.Roster,
 		}
 	} else {
-		// A base relay, or every squad in the playground reads Silent and the
-		// core mechanic looks broken before it has done anything.
-		systems.SpawnRelay(g.App.World, components.WorldPos{}, playerFaction.ID,
-			components.RelayRangeSpawnM)
-		// Three points to stand on: one held, one the enemy holds, one nobody
-		// does. The playground is where the mechanic has to be legible at a
-		// glance, and one point would not show what the colours mean.
-		for _, cp := range []struct {
-			x, z  float32
-			owner uint8
-		}{
-			{60, -40, playerFaction.ID},
-			{160, 120, components.FactionEnemyRed},
-			{-90, 90, components.FactionNone},
-		} {
-			at := components.WorldPos{}.Add(rl.Vector3{X: cp.x, Z: cp.z})
-			at.Local.Y = systems.GroundHeight(cp.x, cp.z)
-			systems.SpawnControlPoint(g.App.World, at, cp.owner,
-				components.ControlPointRadiusM, components.RelayRangePointM)
-		}
-		// Squads spawn OUTSIDE buildings so formation slots don't land on
-		// wall-rasterised surface cells (which would block path planning).
-		g.Svc.Squad.CreateFromTemplate(
-			systems.TmplLightInfantry,
-			components.WorldPos{}.Add(rl.Vector3{X: -25, Z: -55}),
-			components.FormationLine, playerFaction, playerController, g.Svc.Role, g.unitFactory)
-		g.Svc.Squad.CreateFromTemplate(
-			systems.TmplMGTeam,
-			components.WorldPos{}.Add(rl.Vector3{X: 40, Z: 15}),
-			components.FormationWedge, playerFaction, playerController, g.Svc.Role, g.unitFactory)
-		g.Svc.Squad.CreateFromTemplate(
-			systems.TmplATTeam,
-			components.WorldPos{}.Add(rl.Vector3{X: -30, Z: 40}),
-			components.FormationColumn, playerFaction, playerController, g.Svc.Role, g.unitFactory)
-		g.Svc.Squad.CreateFromTemplate(
-			systems.TmplMotorRifle,
-			components.WorldPos{}.Add(rl.Vector3{X: -20, Z: 0}),
-			components.FormationLoose, playerFaction, playerController, g.Svc.Role, g.unitFactory)
-
-		// Hostile MotorRifle squad parked via DefendPosition.
-		enemySpawn := components.WorldPos{}.Add(rl.Vector3{X: 5, Z: -90})
-		enemySquad := g.Svc.Squad.CreateFromTemplate(
-			systems.TmplMotorRifle, enemySpawn,
-			components.FormationLine, components.Faction{ID: components.FactionEnemyRed},
-			aiController, g.Svc.Role, g.unitFactory)
-		if enemySquad != (ecs.Entity{}) {
-			g.Svc.Squad.IssueOrder(enemySquad,
-				components.OrderKindDefendPosition, enemySpawn, ecs.Entity{},
-				false, systems.OrderParams{})
-		}
-
-		// Phase 18.5 FoW test dummies: stationary + patrolling EnemyFaction +
-		// one WildlifeFaction circle-walker. Not in any squad — exercises
-		// per-unit Faction path. Replace with proper enemy spawners later.
-		spawnDummy := func(pos components.WorldPos, faction uint8, patrol *components.CirclePatrol) {
-			ent := g.unitFactory(pos)
-			if ent == (ecs.Entity{}) {
-				return
-			}
-			// Factory stamps FactionPlayer/ControllerLocal defaults; overwrite.
-			if f := g.Maps.Faction.Get(ent); f != nil {
-				f.ID = faction
-			}
-			if c := g.Maps.Controller.Get(ent); c != nil {
-				c.Owner = components.ControllerAI
-			}
-			if patrol != nil {
-				g.Maps.CirclePatrol.Add(ent, patrol)
-			}
-		}
-		// 3 stationary enemies in a small cluster.
-		spawnDummy(components.WorldPos{}.Add(rl.Vector3{X: 200, Z: 200}), components.FactionEnemyRed, nil)
-		spawnDummy(components.WorldPos{}.Add(rl.Vector3{X: 210, Z: 195}), components.FactionEnemyRed, nil)
-		spawnDummy(components.WorldPos{}.Add(rl.Vector3{X: 220, Z: 205}), components.FactionEnemyRed, nil)
-		// 2 patrolling enemies around different centres.
-		enemyCenterA := components.WorldPos{}.Add(rl.Vector3{X: 180, Z: 180})
-		spawnDummy(enemyCenterA, components.FactionEnemyRed,
-			&components.CirclePatrol{Center: enemyCenterA, RadiusM: 15, Speed: 1.5})
-		enemyCenterB := components.WorldPos{}.Add(rl.Vector3{X: 250, Z: 220})
-		spawnDummy(enemyCenterB, components.FactionEnemyRed,
-			&components.CirclePatrol{Center: enemyCenterB, RadiusM: 20, Speed: 1.2, Phase: 1.5})
-		// 1 wildlife (deer placeholder) circling slowly.
-		wildCenter := components.WorldPos{}.Add(rl.Vector3{X: 200, Z: 260})
-		spawnDummy(wildCenter, components.FactionWildlife,
-			&components.CirclePatrol{Center: wildCenter, RadiusM: 30, Speed: 0.8})
-
-		// Phase 19 M0: one vehicle per class parked west of the squads.
-		for i, vk := range []components.VehicleKind{
-			components.VehicleTruck, components.VehicleBTR, components.VehicleBMP,
-			components.VehicleTank, components.VehicleATCarrier,
-		} {
-			g.Svc.VehicleFactory.Spawn(
-				components.WorldPos{}.Add(rl.Vector3{X: -55, Z: -12 + float32(i)*10}),
-				vk, components.FactionPlayer, components.ControllerLocal)
-		}
-		// The Car parks in front of the starting camera: it is the one class
-		// with a real model, so it is what a look at the playground is for.
-		g.Svc.VehicleFactory.Spawn(components.WorldPos{}.Add(rl.Vector3{X: -14, Z: 4}),
-			components.VehicleCar, components.FactionPlayer, components.ControllerLocal)
-
-		// Phase 20 M0: one of each rotary class, arriving on schedule rather
-		// than spawned, so the playground exercises the same release path the
-		// gate does. They hold station where they appear until ordered.
-		for i, ak := range []components.AircraftKind{
-			components.AircraftHeliAttack, components.AircraftHeliTransport,
-		} {
-			entry := components.WorldPos{}.Add(
-				rl.Vector3{X: -30 + float32(i)*40, Y: 60, Z: 55})
-			g.Svc.AircraftFactory.Arrival(components.AirArrival{
-				At:         2 + float32(i),
-				Kind:       ak,
-				FactionID:  components.FactionPlayer,
-				Controller: components.ControllerLocal,
-				Entry:      entry,
-				Exit:       systems.AirExitFor(entry, 400),
-				AltRef:     components.AltAGL,
-				AltSet:     components.SpecForAircraft(ak).DefaultAltAGL,
-			})
-		}
+		// Default launch is a quiet landscape viewer; gameplay starts explicitly.
 	}
 }
 

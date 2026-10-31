@@ -53,7 +53,7 @@ scripts/mission_gate.sh    # каждая миссия дважды: тот же
 raylib-go](https://github.com/gen2brain/raylib-go#requirements)).
 
 ```bash
-go run .                            # песочница: рельеф, здания, отряды, техника
+go run .                            # просмотр ландшафта с деревьями, без миссии
 go run . -mission=city              # миссия из missions/<name>.json
 go run . -map=hills                 # карта из maps/<name>.json
 go run . -scene=ai_bounding -watch  # посмотреть сцену стенда вместо headless-прогона
