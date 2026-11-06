@@ -31,6 +31,7 @@ var savePathFlag = flag.String("save-path", "save/snapshot.rtss", "snapshot path
 var loadFlag = flag.String("load", "", "load world snapshot and continue")
 var runTicksFlag = flag.Uint64("run-ticks", 0, "headless: exit after tick N (overrides verdict exit)")
 var fpsFlag = flag.Int("fps", 60, "target FPS; 0 = uncapped (for render profiling)")
+var windowPosFlag = flag.String("window-pos", "", "initial window position x,y in screen coordinates")
 
 // watchFlag renders an ai_* scene instead of running it headless. The scripted
 // scenes are the only way to stage a barrage or a sustained firefight — the

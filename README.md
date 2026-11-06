@@ -56,6 +56,7 @@ raylib-go](https://github.com/gen2brain/raylib-go#requirements)).
 go run .                            # конечный участок ландшафта с деревьями, без миссии и облаков
 go run . -mission=city              # миссия из missions/<name>.json
 go run . -map=hills                 # карта из maps/<name>.json
+go run . -window-pos=100,80         # позиция окна; при открытии фокус не захватывается
 go run . -scene=ai_bounding -watch  # посмотреть сцену стенда вместо headless-прогона
 go build -o bin/rts .               # сборка всегда в bin/
 ```

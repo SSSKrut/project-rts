@@ -27,19 +27,20 @@ const (
 	// so it needs no resolution of its own.
 	macroTexSize   = 256
 	macroScale     = 9.0
-	macroWeight    = 0.7
+	macroWeight    = 0.32
 	macroFadeStart = 220
 	macroFadeEnd   = 460
 
-	detailStrength   = 0.7
-	detailAO         = 0.85
-	detailTint       = 0.22
+	detailStrength   = 0.38
+	detailAO         = 0.7
+	detailTint       = 0.16
 	detailFadeStartM = 30
 	detailFadeEndM   = 110
 
-	// How wide a soil / gravel patch runs before it turns back to turf, in
-	// tile multiples.
-	patchScale = 26.0
+	// Soil and grass vary independently, so a dry meadow does not necessarily
+	// become bare earth. Scales are in surface-tile multiples.
+	patchScale  = 29.0
+	meadowScale = 17.0
 
 	surfaceSeed int64 = 0x4E4F524D414C2121
 )
@@ -52,7 +53,10 @@ var (
 	sandBand  = [2]float32{-6.5, -3.0} // full sand below x, none above y
 	rockBand  = [2]float32{5.5, 9.0}   // gravel takes over with altitude
 	slopeBand = [2]float32{0.22, 0.55} // and with steepness
-	patchBand = [2]float32{0.62, 0.16} // soil patch threshold + softness
+	patchBand = [2]float32{0.56, 0.20} // soil patch threshold + softness
+
+	meadowLushColor = [3]float32{0.30, 0.41, 0.20}
+	meadowDryColor  = [3]float32{0.49, 0.49, 0.28}
 )
 
 // Sun low in the north-west: grazing light is what makes micro-relief
@@ -74,20 +78,20 @@ type surfaceSlot struct {
 	mapSlot  int32
 	locIndex int32
 	params   func(size int, seed int64) textures.GroundParams
-	// Colour it pulls the ground towards; W is how strongly, 0 = leave the
-	// height-derived relief colour alone.
+	// Colour target and blend strength. Turf uses the meadow colour ramp
+	// instead of RGB here; its W still controls the blend.
 	color [4]float32
 }
 
 var groundSurfaces = [4]surfaceSlot{
 	{"texture0", rl.MapAlbedo, rl.ShaderLocMapAlbedo, textures.MeadowParams,
-		[4]float32{0.42, 0.55, 0.28, 0.0}},
+		[4]float32{0.40, 0.46, 0.24, 0.88}},
 	{"texture1", rl.MapMetalness, rl.ShaderLocMapMetalness, textures.DrySoilParams,
-		[4]float32{0.46, 0.36, 0.24, 0.72}},
+		[4]float32{0.42, 0.33, 0.23, 0.82}},
 	{"texture3", rl.MapRoughness, rl.ShaderLocMapRoughness, textures.GravelParams,
-		[4]float32{0.44, 0.43, 0.40, 0.78}},
+		[4]float32{0.44, 0.43, 0.40, 0.88}},
 	{"texture4", rl.MapOcclusion, rl.ShaderLocMapOcclusion, textures.SandParams,
-		[4]float32{0.74, 0.68, 0.50, 0.82}},
+		[4]float32{0.68, 0.62, 0.45, 0.85}},
 }
 
 const worldVS = `#version 330
@@ -130,6 +134,9 @@ uniform vec2 uRockBand;
 uniform vec2 uSlopeBand;
 uniform vec2 uPatchBand;
 uniform float uPatchScale;
+uniform float uMeadowScale;
+uniform vec3 uMeadowLush;
+uniform vec3 uMeadowDry;
 
 uniform vec2 uWorldOffset;
 uniform float uTileMeters;
@@ -214,17 +221,18 @@ void main() {
         vec2 world = fragPosition.xz + uWorldOffset;
         float dist = distance(fragPosition, uCamPos);
 
-        // The patch mask reuses the coarse map at a far larger scale — surfaces
-        // have to change over tens of metres, not per texel. Its 133 m period
-        // reads as obvious tiling on the far rings where no detail texture
-        // breaks it up, so the patches dissolve with distance.
+        // Coarse, offset masks form independent grass and bare-earth regions.
+        // World-space sampling keeps both continuous across chunk boundaries.
         float patch = texture(texture2, world / (uTileMeters * uPatchScale)).w;
         patch *= 1.0 - smoothstep(400.0, 1500.0, dist);
         vec4 w = surfaceWeights(fragPosition.y, 1.0 - n.y, patch);
 
-        // Surface colour applies at every distance: a sand flat has to read as
-        // sand from across the map. Relief only survives while it is legible.
-        for (int i = 0; i < 4; i++) {
+        float meadow = texture(texture2,
+            world / (uTileMeters * uMeadowScale) + vec2(0.37, 0.61)).w;
+        vec3 turf = mix(uMeadowLush, uMeadowDry,
+                        smoothstep(0.28, 0.74, meadow));
+        albedo = mix(albedo, turf, uSurfaceColor[0].w * w.x);
+        for (int i = 1; i < 4; i++) {
             albedo = mix(albedo, uSurfaceColor[i].rgb, uSurfaceColor[i].w * w[i]);
         }
 
@@ -269,18 +277,18 @@ type worldShader struct {
 	macro    rl.Texture2D
 	cloudTex rl.Texture2D
 
-	locOffset      int32
-	locGround      int32
-	locCam         int32
-	locCloudWind   int32
-	locShadowOfs   int32
-	locShadowMidY  int32
-	locCloudCover  int32
-	locShadowOn    int32
-	locSunDir      int32
-	locSunColor    int32
-	locSkyColor    int32
-	locBounce      int32
+	locOffset     int32
+	locGround     int32
+	locCam        int32
+	locCloudWind  int32
+	locShadowOfs  int32
+	locShadowMidY int32
+	locCloudCover int32
+	locShadowOn   int32
+	locSunDir     int32
+	locSunColor   int32
+	locSkyColor   int32
+	locBounce     int32
 
 	ok bool
 }
@@ -346,6 +354,9 @@ func newWorldShader() *worldShader {
 	set("uSlopeBand", slopeBand[:], rl.ShaderUniformVec2)
 	set("uPatchBand", patchBand[:], rl.ShaderUniformVec2)
 	set("uPatchScale", []float32{patchScale}, rl.ShaderUniformFloat)
+	set("uMeadowScale", []float32{meadowScale}, rl.ShaderUniformFloat)
+	set("uMeadowLush", meadowLushColor[:], rl.ShaderUniformVec3)
+	set("uMeadowDry", meadowDryColor[:], rl.ShaderUniformVec3)
 
 	ws.ok = true
 	return ws
