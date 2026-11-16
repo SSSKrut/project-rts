@@ -99,7 +99,7 @@ func (g *Game) drawScene3D() {
 	}
 
 	g.Ctx.FarTerrain.ensure(g.Frame.AnchorPos.Chunk)
-	g.Ctx.FarTerrain.draw(g.terrainMaterial)
+	g.Ctx.FarTerrain.draw(g.terrainMaterial, g.Ctx.WorldShader)
 
 	g.Ctx.WorldShader.setGround(false)
 	g.Frame.RibbonsDrawn = g.Ctx.Ribbons.Roads.draw(g.terrainMaterial)

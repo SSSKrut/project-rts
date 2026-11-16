@@ -17,8 +17,57 @@ var skirtColor = [4]uint8{55, 45, 35, 255}
 // vertex resolutions interpolate the shared edge differently).
 const skirtDrop float32 = 2.0
 
-// Height/colour control points (ascending in H). Tuned for
-// terrainAmplitude = 8 — adjust together if amplitude changes meaningfully.
+// SurfaceParams controls material classification and the relief colour ramp.
+// Zero values derive from TerrainParams.AmplitudeM; maps may override them.
+type SurfaceParams struct {
+	SandBand    [2]float32 `json:"sandBand"`
+	RockBand    [2]float32 `json:"rockBand"`
+	SlopeBand   [2]float32 `json:"slopeBand"`
+	ReliefScale float32    `json:"reliefScale"`
+}
+
+func DefaultSurfaceParams() SurfaceParams {
+	return SurfaceParams{
+		SandBand:    [2]float32{-6.5, -3.0},
+		RockBand:    [2]float32{5.5, 9.0},
+		SlopeBand:   [2]float32{0.14, 0.48},
+		ReliefScale: 1,
+	}
+}
+
+var surfaceCfg = DefaultSurfaceParams()
+
+func SetSurfaceParams(p SurfaceParams) {
+	d := DefaultSurfaceParams()
+	scale := float32(terrainCfg.AmplitudeM / 8)
+	if scale <= 0 {
+		scale = 1
+	}
+	d.SandBand = scaleSurfaceBand(d.SandBand, scale)
+	d.RockBand = scaleSurfaceBand(d.RockBand, scale)
+	d.ReliefScale = scale
+	if p.SandBand[1] > p.SandBand[0] {
+		d.SandBand = p.SandBand
+	}
+	if p.RockBand[1] > p.RockBand[0] {
+		d.RockBand = p.RockBand
+	}
+	if p.SlopeBand[1] > p.SlopeBand[0] {
+		d.SlopeBand = p.SlopeBand
+	}
+	if p.ReliefScale > 0 {
+		d.ReliefScale = p.ReliefScale
+	}
+	surfaceCfg = d
+}
+
+func CurrentSurfaceParams() SurfaceParams { return surfaceCfg }
+
+func scaleSurfaceBand(b [2]float32, scale float32) [2]float32 {
+	return [2]float32{b[0] * scale, b[1] * scale}
+}
+
+// Height/colour control points (ascending in H after ReliefScale normalisation).
 var reliefStops = [...]struct {
 	H       float32
 	R, G, B float32
@@ -40,6 +89,7 @@ func ReliefColor(y float32) (uint8, uint8, uint8) { return reliefColor(y) }
 // reliefStops. Pure colour: the slope shade that used to be baked in here now
 // comes from the world shader's sun.
 func reliefColor(y float32) (uint8, uint8, uint8) {
+	y /= surfaceCfg.ReliefScale
 	var rr, gg, bb float32
 	switch {
 	case y <= reliefStops[0].H:
@@ -71,6 +121,10 @@ type TerrainMeshSystem struct {
 	relevantFilter *ecs.Filter3[components.Heightmap, components.MeshDirty, components.LODRelevant]
 	chunkMeshMap   *ecs.Map[components.ChunkMesh]
 	meshDirtyMap   *ecs.Map[components.MeshDirty]
+	chunkCoordMap  *ecs.Map[components.ChunkCoord]
+	heightmapMap   *ecs.Map[components.Heightmap]
+	chunkIndexRes  ecs.Resource[TerrainChunkIndex]
+	riversRes      ecs.Resource[components.Rivers]
 }
 
 func (sys *TerrainMeshSystem) InitUI(w *ecs.World) {
@@ -78,6 +132,10 @@ func (sys *TerrainMeshSystem) InitUI(w *ecs.World) {
 	sys.relevantFilter = ecs.NewFilter3[components.Heightmap, components.MeshDirty, components.LODRelevant](w)
 	sys.chunkMeshMap = ecs.NewMap[components.ChunkMesh](w)
 	sys.meshDirtyMap = ecs.NewMap[components.MeshDirty](w)
+	sys.chunkCoordMap = ecs.NewMap[components.ChunkCoord](w)
+	sys.heightmapMap = ecs.NewMap[components.Heightmap](w)
+	sys.chunkIndexRes = ecs.NewResource[TerrainChunkIndex](w)
+	sys.riversRes = ecs.NewResource[components.Rivers](w)
 }
 
 func (TerrainMeshSystem) Name() string { return "terrain_mesh" }
@@ -99,6 +157,8 @@ type builtMesh struct {
 	verts   []float32
 	norms   []float32
 	colors  []uint8
+	uvs     []float32
+	uvs2    []float32
 	indices []uint16
 	tris    int32
 }
@@ -120,7 +180,13 @@ func (sys TerrainMeshSystem) Update(ctx core.UpdateContext) {
 		q := sys.activeFilter.Query()
 		for q.Next() {
 			hm, _, _ := q.Get()
-			b := buildChunkMesh(hm.Heights, components.ChunkResolution)
+			cc := sys.chunkCoordMap.Get(q.Entity())
+			if cc == nil {
+				continue
+			}
+			heightAt := sys.chunkHeightSampler(*cc, hm)
+			biomeAt := sys.chunkBiomeSampler(*cc)
+			b := buildChunkMeshFromSampler(heightAt, components.ChunkResolution, biomeAt)
 			b.id = q.Entity()
 			built = append(built, b)
 			if len(built) >= meshBudgetPerTick {
@@ -135,8 +201,14 @@ func (sys TerrainMeshSystem) Update(ctx core.UpdateContext) {
 		q := sys.relevantFilter.Query()
 		for q.Next() {
 			hm, _, _ := q.Get()
+			cc := sys.chunkCoordMap.Get(q.Entity())
+			if cc == nil {
+				continue
+			}
 			res := (components.ChunkResolution + 1) / 2
-			b := buildDecimatedMesh(hm.Heights, components.ChunkResolution, res)
+			heightAt := sys.chunkHeightSampler(*cc, hm)
+			biomeAt := sys.chunkBiomeSampler(*cc)
+			b := buildDecimatedMeshFromSampler(heightAt, components.ChunkResolution, res, biomeAt)
 			b.id = q.Entity()
 			built = append(built, b)
 			if len(built) >= meshBudgetPerTick {
@@ -161,6 +233,12 @@ func (sys TerrainMeshSystem) Update(ctx core.UpdateContext) {
 		if len(b.colors) > 0 {
 			mesh.Colors = &b.colors[0]
 		}
+		if len(b.uvs) > 0 {
+			mesh.Texcoords = &b.uvs[0]
+		}
+		if len(b.uvs2) > 0 {
+			mesh.Texcoords2 = &b.uvs2[0]
+		}
 		if len(b.indices) > 0 {
 			mesh.Indices = &b.indices[0]
 		}
@@ -182,35 +260,81 @@ func (sys TerrainMeshSystem) Update(ctx core.UpdateContext) {
 	}
 }
 
-// buildChunkMesh: full source resolution. Vertex local space is
-// [0, ChunkSize] on X/Z so the chunk's WorldPos translates the whole thing
-// into world space at draw time.
-func buildChunkMesh(heights [components.ChunkResolution * components.ChunkResolution]float32, srcRes int) builtMesh {
-	heightAt := func(i, j int) float32 {
-		return heights[j*srcRes+i]
+// chunkHeightSampler resolves local source-grid coordinates, including the
+// one-vertex halo needed by central-difference normals at chunk boundaries.
+// Missing neighbours fall back to procgen until streaming makes them resident.
+func (sys TerrainMeshSystem) chunkHeightSampler(cc components.ChunkCoord, own *components.Heightmap) func(i, j int) float32 {
+	idx := sys.chunkIndexRes.Get()
+	const stride = components.ChunkResolution - 1
+	return func(i, j int) float32 {
+		if i >= 0 && i < components.ChunkResolution && j >= 0 && j < components.ChunkResolution {
+			return own.Heights[j*components.ChunkResolution+i]
+		}
+		di := floorGridChunk(i, stride)
+		dj := floorGridChunk(j, stride)
+		ni := i - int(di)*stride
+		nj := j - int(dj)*stride
+		ncc := components.ChunkCoord{X: cc.X + di, Z: cc.Z + dj}
+		if idx != nil {
+			if ent, ok := idx.Loaded[ncc]; ok {
+				if hm := sys.heightmapMap.Get(ent); hm != nil {
+					return hm.Heights[nj*components.ChunkResolution+ni]
+				}
+			}
+		}
+		step := components.ChunkSize / float32(stride)
+		wx := (float32(ncc.X)*float32(stride) + float32(ni)) * step
+		wz := (float32(ncc.Z)*float32(stride) + float32(nj)) * step
+		return GroundHeight(wx, wz)
 	}
-	return assembleGrid(heightAt, srcRes, srcRes)
 }
 
-// buildDecimatedMesh samples every (srcRes-1)/(dstRes-1) source vertex.
-// Border vertices are sampled exactly so edges join cleanly to neighbours
-// at the same tier; across-tier seams hide behind skirts.
-func buildDecimatedMesh(heights [components.ChunkResolution * components.ChunkResolution]float32, srcRes, dstRes int) builtMesh {
+func (sys TerrainMeshSystem) chunkBiomeSampler(cc components.ChunkCoord) func(i, j int) SurfaceBiome {
+	rivers := sys.riversRes.Get()
+	step := components.ChunkSize / float32(components.ChunkResolution-1)
+	return func(i, j int) SurfaceBiome {
+		wx := (float32(cc.X)*float32(components.ChunkResolution-1) + float32(i)) * step
+		wz := (float32(cc.Z)*float32(components.ChunkResolution-1) + float32(j)) * step
+		return SurfaceBiomeAt(wx, wz, rivers)
+	}
+}
+
+func floorGridChunk(v, stride int) int32 {
+	q := v / stride
+	if v%stride < 0 {
+		q--
+	}
+	return int32(q)
+}
+
+// Vertex local space is [0, ChunkSize] on X/Z so the chunk's WorldPos
+// translates the whole mesh into world space at draw time.
+func buildChunkMeshFromSampler(heightAt func(i, j int) float32, srcRes int, biomeAt func(i, j int) SurfaceBiome) builtMesh {
+	return assembleGrid(heightAt, srcRes, biomeAt)
+}
+
+// buildDecimatedMeshFromSampler samples every (srcRes-1)/(dstRes-1) source
+// vertex. Border vertices are sampled exactly so edges join cleanly to
+// neighbours at the same tier; across-tier seams hide behind skirts.
+func buildDecimatedMeshFromSampler(sample func(i, j int) float32, srcRes, dstRes int, biomeSample func(i, j int) SurfaceBiome) builtMesh {
 	srcStep := (srcRes - 1) / (dstRes - 1)
 	heightAt := func(i, j int) float32 {
-		si := i * srcStep
-		sj := j * srcStep
-		return heights[sj*srcRes+si]
+		return sample(i*srcStep, j*srcStep)
 	}
-	return assembleGrid(heightAt, srcRes, dstRes)
+	var biomeAt func(i, j int) SurfaceBiome
+	if biomeSample != nil {
+		biomeAt = func(i, j int) SurfaceBiome {
+			return biomeSample(i*srcStep, j*srcStep)
+		}
+	}
+	return assembleGrid(heightAt, dstRes, biomeAt)
 }
 
-// assembleGrid is the shared mesh builder. srcRes drives finite-difference
-// normals via true world-spacing even at chunk edges. Skirts = 4 perimeter
-// strips dropped skirtDrop metres below their top vertices.
-func assembleGrid(heightAt func(i, j int) float32, srcRes, dstRes int) builtMesh {
+// assembleGrid is the shared mesh builder. heightAt must provide a one-vertex
+// halo outside the destination grid so normals agree across chunk boundaries.
+// Skirts = 4 perimeter strips dropped skirtDrop metres below their top vertices.
+func assembleGrid(heightAt func(i, j int) float32, dstRes int, biomeAt func(i, j int) SurfaceBiome) builtMesh {
 	step := components.ChunkSize / float32(dstRes-1)
-	srcStep := components.ChunkSize / float32(srcRes-1)
 
 	topVertCount := dstRes * dstRes
 	topQuadSide := dstRes - 1
@@ -224,6 +348,8 @@ func assembleGrid(heightAt func(i, j int) float32, srcRes, dstRes int) builtMesh
 	verts := make([]float32, 0, totalVerts*3)
 	norms := make([]float32, 0, totalVerts*3)
 	colors := make([]uint8, 0, totalVerts*4)
+	uvs := make([]float32, 0, totalVerts*2)
+	uvs2 := make([]float32, 0, totalVerts*2)
 	indices := make([]uint16, 0, totalTris*3)
 
 	for j := 0; j < dstRes; j++ {
@@ -232,34 +358,15 @@ func assembleGrid(heightAt func(i, j int) float32, srcRes, dstRes int) builtMesh
 			x := float32(i) * step
 			y := heightAt(i, j)
 
-			// Central differences with srcStep so the slope isn't distorted
-			// by decimation. Edges fall back to one-sided differences.
-			var hl, hr, hd, hu float32
-			if i > 0 {
-				hl = heightAt(i-1, j)
-			} else {
-				hl = y
-			}
-			if i < dstRes-1 {
-				hr = heightAt(i+1, j)
-			} else {
-				hr = y
-			}
-			if j > 0 {
-				hd = heightAt(i, j-1)
-			} else {
-				hd = y
-			}
-			if j < dstRes-1 {
-				hu = heightAt(i, j+1)
-			} else {
-				hu = y
-			}
-			// dx along +X = (2*srcStep, hr-hl, 0); dz along +Z =
-			// (0, hu-hd, 2*srcStep). Normal = dz × dx (points +Y on flat).
-			nx := -(hr - hl) * (2 * srcStep)
-			ny := (2 * srcStep) * (2 * srcStep)
-			nz := -(hu - hd) * (2 * srcStep)
+			// dx along +X = (2*step, hr-hl, 0); dz along +Z =
+			// (0, hu-hd, 2*step). Normal = dz × dx (points +Y on flat).
+			hl := heightAt(i-1, j)
+			hr := heightAt(i+1, j)
+			hd := heightAt(i, j-1)
+			hu := heightAt(i, j+1)
+			nx := -(hr - hl) * (2 * step)
+			ny := (2 * step) * (2 * step)
+			nz := -(hu - hd) * (2 * step)
 			invLen := 1.0 / float32(math.Sqrt(float64(nx*nx+ny*ny+nz*nz)))
 			nx *= invLen
 			ny *= invLen
@@ -269,6 +376,12 @@ func assembleGrid(heightAt func(i, j int) float32, srcRes, dstRes int) builtMesh
 			norms = append(norms, nx, ny, nz)
 			cr, cg, cb := reliefColor(y)
 			colors = append(colors, cr, cg, cb, 255)
+			var biome SurfaceBiome
+			if biomeAt != nil {
+				biome = biomeAt(i, j)
+			}
+			uvs = append(uvs, biome.Forest, biome.Rocky)
+			uvs2 = append(uvs2, biome.Bushland, biome.Moisture)
 		}
 	}
 
@@ -300,6 +413,8 @@ func assembleGrid(heightAt func(i, j int) float32, srcRes, dstRes int) builtMesh
 			verts = append(verts, tx, ty-skirtDrop, tz)
 			norms = append(norms, normal[0], normal[1], normal[2])
 			colors = append(colors, skirtColor[0], skirtColor[1], skirtColor[2], skirtColor[3])
+			uvs = append(uvs, uvs[topI*2], uvs[topI*2+1])
+			uvs2 = append(uvs2, uvs2[topI*2], uvs2[topI*2+1])
 		}
 		// Winding picks outward-facing tris: (top[t], low[t], top[t+1]) and
 		// (top[t+1], low[t], low[t+1]).
@@ -323,6 +438,8 @@ func assembleGrid(heightAt func(i, j int) float32, srcRes, dstRes int) builtMesh
 		verts:   verts,
 		norms:   norms,
 		colors:  colors,
+		uvs:     uvs,
+		uvs2:    uvs2,
 		indices: indices,
 		tris:    int32(len(indices) / 3),
 	}

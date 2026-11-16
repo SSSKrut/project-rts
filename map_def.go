@@ -16,12 +16,13 @@ import (
 
 var mapFlag = flag.String("map", "", "map manifest name (maps/<name>.json); empty = built-in default")
 
-// mapDef is the hand-authored world manifest: terrain params + generator
+// mapDef is the hand-authored world manifest: terrain/surface params + generator
 // specs. Built in code for the default world or loaded from maps/<name>.json
 // via -map. Scenes (-scene) ignore -map entirely.
 type mapDef struct {
 	Name      string                `json:"name"`
 	Terrain   systems.TerrainParams `json:"terrain"`
+	Surface   systems.SurfaceParams `json:"surface"`
 	Buildings []mapBuilding         `json:"buildings"`
 	Roads     mapRoads              `json:"roads"`
 	Trenches  []mapTrench           `json:"trenches"`

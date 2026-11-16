@@ -70,7 +70,7 @@ func (g *Game) initUI() {
 	} else {
 		g.Ctx.Pyramid = systems.BakeHeightPyramid(16384, components.ChunkSize, 1, systems.GroundHeight)
 	}
-	g.Ctx.FarTerrain = newFarTerrain(g.Ctx.Pyramid)
+	g.Ctx.FarTerrain = newFarTerrain(g.Ctx.Pyramid, &g.Res.Rivers)
 
 	// Pre-bake the map underlay (2 km x 2 km, 4 m/pixel = 500x500 = 250 KB).
 	g.UI.Underlay = ui.BakeUnderlay(0, 0, 2000, 4, func(wx, wz float32) float32 {

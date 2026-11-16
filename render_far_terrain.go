@@ -18,8 +18,8 @@ import (
 //
 // Ring A's hole tracks the streamed chunk square exactly (Chebyshev, chunk
 // grid aligned); Ring B's hole hides under Ring A with a one-cell overlap.
-// Everything is rebuilt when the anchor crosses a chunk boundary — ~2 ms and
-// worth zero bookkeeping.
+// Everything is rebuilt when the anchor crosses a chunk boundary, avoiding
+// any per-frame streaming bookkeeping.
 type farRingSpec struct {
 	level     int
 	cell      float32
@@ -44,20 +44,24 @@ type farRing struct {
 	verts   []float32
 	norms   []float32
 	colors  []uint8
+	uvs     []float32
+	uvs2    []float32
 	indices []uint16
 	mesh    rl.Mesh
+	drop    float32
 	built   bool
 }
 
 type farTerrain struct {
 	pyr    *systems.HeightPyramid
+	rivers *components.Rivers
 	rings  [2]farRing
 	center components.ChunkCoord
 	valid  bool
 }
 
-func newFarTerrain(pyr *systems.HeightPyramid) *farTerrain {
-	return &farTerrain{pyr: pyr}
+func newFarTerrain(pyr *systems.HeightPyramid, rivers *components.Rivers) *farTerrain {
+	return &farTerrain{pyr: pyr, rivers: rivers}
 }
 
 // ensure rebuilds both rings when the anchor's chunk changed.
@@ -75,7 +79,7 @@ func (ft *farTerrain) ensure(anchor components.ChunkCoord) {
 	specA := farRingSpecs[0]
 	baseAX := cxw - float32(specA.halfCells)*specA.cell
 	baseAZ := czw - float32(specA.halfCells)*specA.cell
-	ft.rings[0] = buildFarRing(ft.pyr, specA, baseAX, baseAZ, cxw, czw, func(i, j int) bool {
+	ft.rings[0] = buildFarRing(ft.pyr, ft.rivers, specA, baseAX, baseAZ, cxw, czw, func(i, j int) bool {
 		ci := int32(anchor.X) - int32(specA.halfCells) + int32(i)
 		cj := int32(anchor.Z) - int32(specA.halfCells) + int32(j)
 		return chebI32(ci-anchor.X) <= farHoleChunks && chebI32(cj-anchor.Z) <= farHoleChunks
@@ -84,7 +88,7 @@ func (ft *farTerrain) ensure(anchor components.ChunkCoord) {
 	specB := farRingSpecs[1]
 	baseBX := snapDown(cxw-float32(specB.halfCells)*specB.cell, specB.cell)
 	baseBZ := snapDown(czw-float32(specB.halfCells)*specB.cell, specB.cell)
-	ft.rings[1] = buildFarRing(ft.pyr, specB, baseBX, baseBZ, cxw, czw, func(i, j int) bool {
+	ft.rings[1] = buildFarRing(ft.pyr, ft.rivers, specB, baseBX, baseBZ, cxw, czw, func(i, j int) bool {
 		ccx := baseBX + (float32(i)+0.5)*specB.cell
 		ccz := baseBZ + (float32(j)+0.5)*specB.cell
 		return maxAbs(ccx-cxw, ccz-czw) < farRingBHole
@@ -94,15 +98,18 @@ func (ft *farTerrain) ensure(anchor components.ChunkCoord) {
 	ft.valid = true
 }
 
-func buildFarRing(pyr *systems.HeightPyramid, spec farRingSpec,
+func buildFarRing(pyr *systems.HeightPyramid, rivers *components.Rivers, spec farRingSpec,
 	baseX, baseZ, cxw, czw float32, inHole func(i, j int) bool) farRing {
 
 	n := spec.halfCells * 2
 	nv := n + 1
 	r := farRing{
+		drop:   spec.drop,
 		verts:  make([]float32, 0, nv*nv*3),
 		norms:  make([]float32, 0, nv*nv*3),
 		colors: make([]uint8, 0, nv*nv*4),
+		uvs:    make([]float32, 0, nv*nv*2),
+		uvs2:   make([]float32, 0, nv*nv*2),
 	}
 	for j := 0; j < nv; j++ {
 		z := baseZ + float32(j)*spec.cell
@@ -123,6 +130,9 @@ func buildFarRing(pyr *systems.HeightPyramid, spec farRingSpec,
 			r.norms = append(r.norms, nx*invLen, ny*invLen, nz*invLen)
 			cr, cg, cb := systems.ReliefColor(y)
 			r.colors = append(r.colors, cr, cg, cb, 255)
+			biome := systems.SurfaceBiomeAt(x, z, rivers)
+			r.uvs = append(r.uvs, biome.Forest, biome.Rocky)
+			r.uvs2 = append(r.uvs2, biome.Bushland, biome.Moisture)
 		}
 	}
 	r.indices = make([]uint16, 0, n*n*6)
@@ -157,6 +167,8 @@ func buildFarRing(pyr *systems.HeightPyramid, spec farRingSpec,
 		Vertices:      &r.verts[0],
 		Normals:       &r.norms[0],
 		Colors:        &r.colors[0],
+		Texcoords:     &r.uvs[0],
+		Texcoords2:    &r.uvs2[0],
 		Indices:       &r.indices[0],
 	}
 	rl.UploadMesh(&r.mesh, false)
@@ -166,7 +178,7 @@ func buildFarRing(pyr *systems.HeightPyramid, spec farRingSpec,
 
 // draw rebases world-coordinate meshes onto the current render origin, same
 // translation the ribbons use.
-func (ft *farTerrain) draw(material rl.Material) {
+func (ft *farTerrain) draw(material rl.Material, ws *worldShader) {
 	if ft == nil || !ft.valid {
 		return
 	}
@@ -175,9 +187,11 @@ func (ft *farTerrain) draw(material rl.Material) {
 	xform := rl.MatrixTranslate(-originX, 0, -originZ)
 	for i := range ft.rings {
 		if ft.rings[i].built {
+			ws.setTerrainDrop(ft.rings[i].drop)
 			rl.DrawMesh(ft.rings[i].mesh, material, xform)
 		}
 	}
+	ws.setTerrainDrop(0)
 }
 
 func (ft *farTerrain) unload() {

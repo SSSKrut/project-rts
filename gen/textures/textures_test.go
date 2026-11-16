@@ -13,6 +13,7 @@ func presets() map[string]GroundParams {
 		"soil":   DrySoilParams(testSize, 12345),
 		"gravel": GravelParams(testSize, 12345),
 		"sand":   SandParams(testSize, 12345),
+		"cliff":  CliffParams(testSize, 12345),
 		"soft":   SoftGroundParams(testSize, 12345),
 	}
 }
@@ -102,7 +103,7 @@ func TestGroundHasRelief(t *testing.T) {
 // same look would make the blend pointless.
 func TestGroundPresetsDiffer(t *testing.T) {
 	all := presets()
-	names := []string{"meadow", "soil", "gravel", "sand"}
+	names := []string{"meadow", "soil", "gravel", "sand", "cliff"}
 	for i := 0; i < len(names); i++ {
 		for j := i + 1; j < len(names); j++ {
 			a, b := Ground(all[names[i]]), Ground(all[names[j]])

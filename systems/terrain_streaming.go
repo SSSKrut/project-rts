@@ -391,5 +391,18 @@ func (sys TerrainStreamingSystem) Update(ctx core.UpdateContext) {
 			sys.lodRelevantMap.Add(e, &components.LODRelevant{})
 		}
 		idx.Loaded[sp.cc] = e
+		// Existing border meshes used procgen for their missing halo. Rebuild
+		// them now that the real neighbouring heightmap will be available.
+		for dz := int32(-1); dz <= 1; dz++ {
+			for dx := int32(-1); dx <= 1; dx++ {
+				if dx == 0 && dz == 0 {
+					continue
+				}
+				ncc := components.ChunkCoord{X: sp.cc.X + dx, Z: sp.cc.Z + dz}
+				if neighbor, ok := idx.Loaded[ncc]; ok && !sys.meshDirtyMap.Has(neighbor) {
+					sys.meshDirtyMap.Add(neighbor, &components.MeshDirty{})
+				}
+			}
+		}
 	}
 }

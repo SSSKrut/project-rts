@@ -182,6 +182,34 @@ func SandParams(size int, seed int64) GroundParams {
 	}
 }
 
+// CliffParams is fractured, stratified rock for triplanar steep-face mapping.
+func CliffParams(size int, seed int64) GroundParams {
+	return GroundParams{
+		Size: size,
+		Seed: seed,
+		Grain: []Octave{
+			{Periods: 6, Amplitude: 0.8},
+			{Periods: 14, Amplitude: 0.55},
+			{Periods: 36, Amplitude: 0.25},
+		},
+		Stones: ScatterSpec{
+			Cells: 24, Coverage: 0.22,
+			RadiusMin: 7.0, RadiusMax: 18.0,
+			Height: 0.7, Sharpness: 0.8, Tint: 0.28, RimSoft: 0.2,
+		},
+		Cracks: CrackSpec{
+			Cells: 8, Width: 3.5, Depth: 0.75,
+			Fine: 2, FineDepth: 0.25,
+		},
+		Ripple: RippleSpec{
+			Periods: 9, Amplitude: 0.22, Warp: 0.3, WarpCells: 4,
+		},
+		Strength:   0.8,
+		AOStrength: 0.9,
+		Smooth:     1,
+	}
+}
+
 // SoftGroundParams is the coarse companion surface: broad, gentle undulation
 // only. Stretched over tens of metres it gives the ground a form at working
 // camera range without smearing gravel and cracks into a visible web.

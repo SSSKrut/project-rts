@@ -1,5 +1,61 @@
 package systems
 
+import (
+	"math"
+
+	"rts-go/components"
+)
+
+// SurfaceBiome is the render-side ground cover at a world position. Densities
+// come from the same fields as prop spawning; Moisture follows river banks.
+type SurfaceBiome struct {
+	Forest   float32
+	Bushland float32
+	Rocky    float32
+	Moisture float32
+}
+
+func SurfaceBiomeAt(wx, wz float32, rivers *components.Rivers) SurfaceBiome {
+	b := SurfaceBiome{
+		Forest:   BiomeDensity(terrainSeed, wx, wz, BiomeForest),
+		Bushland: BiomeDensity(terrainSeed, wx, wz, BiomeBushland),
+		Rocky:    BiomeDensity(terrainSeed, wx, wz, BiomeRocky),
+	}
+	if rivers != nil {
+		for i := range rivers.Polylines {
+			pl := &rivers.Polylines[i]
+			if len(pl.Points) < 2 {
+				continue
+			}
+			nearest := float32(math.Inf(1))
+			for j := 0; j+1 < len(pl.Points); j++ {
+				ax, az := worldXZ(pl.Points[j])
+				bx, bz := worldXZ(pl.Points[j+1])
+				d := pointToSegment2D(wx, wz, ax, az, bx, bz)
+				if d < nearest {
+					nearest = d
+				}
+			}
+			bank := pl.Width * 0.5
+			if bank < 1 {
+				bank = 1
+			}
+			reach := bank + 5
+			t := (nearest - bank) / (reach - bank)
+			if t < 0 {
+				t = 0
+			} else if t > 1 {
+				t = 1
+			}
+			wet := 1 - t*t*(3-2*t)
+			if wet > b.Moisture {
+				b.Moisture = wet
+			}
+		}
+	}
+	return b
+}
+
 // BiomeKind selects which density mask to sample. Densities are independent
 // across kinds - bushes can grow inside forests, rocks can sit in plains; the
 // spawner unions independent rolls instead of choosing one biome per cell.

@@ -29,6 +29,7 @@ func bootGame() *Game {
 		worldMap = loadMapDefByName(meta.MapName)
 	}
 	systems.SetTerrainParams(worldMap.Terrain)
+	systems.SetSurfaceParams(worldMap.Surface)
 	if isAIScene() || isDoorScene() {
 		// Scene worlds must be pristine and reproducible: a stale Modified
 		// chunk from the player's world save injects alien heights AND
